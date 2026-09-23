@@ -357,3 +357,65 @@ describe('悬挂（冲突暂停）与模式切换', () => {
     expect(state.suspended).toBe(true)
   })
 })
+
+describe('阅读视图按需挂载观测（#7；jsdom 无布局 = 回退路径）', () => {
+  it('view.state 回报挂载观测字段：回退路径下挂载数 = 块模型总数', () => {
+    const h = makeBridge()
+    const c = mountMode(h)
+    c.handleHostMessage({ kind: 'view.mode.set', mode: 'reading' })
+    const state = viewState(c, h)
+    expect(state.readingVirtualized).toBe(false) // jsdom 无布局：全量回退
+    expect(state.readingTotalBlocks).toBeGreaterThan(0)
+    expect(state.readingMountedBlocks).toBe(state.readingTotalBlocks)
+    expect(state.readingParseCount).toBe(1) // 装载解析一次
+    expect(state.readingContentDomCount).toBeGreaterThan(0)
+  })
+
+  it('reading.perf：非虚拟化（无布局）回报 ok=false 的完整结构', async () => {
+    const h = makeBridge()
+    const c = mountMode(h)
+    c.handleHostMessage({ kind: 'view.mode.set', mode: 'reading' })
+    c.handleHostMessage({ kind: 'reading.perf', scrollRounds: 3 })
+    // 探针异步执行（含 rAF 等待）：失败态同样经 Promise 回报，冲一拍微任务
+    await new Promise((r) => setTimeout(r, 50))
+    const report = h.sent.find((m) => m.kind === 'reading.perf.report') as
+      | Extract<WebviewToHost, { kind: 'reading.perf.report' }>
+      | undefined
+    expect(report).toBeDefined()
+    expect(report!.ok).toBe(false)
+    expect(report!.scrollRounds).toBe(3)
+    expect(report!.baseline.mountedBlocks).toBe(0)
+  })
+
+  it('reading.perf：live 模式同样回报 ok=false（探针不切模式）', () => {
+    const h = makeBridge()
+    const c = mountMode(h)
+    c.handleHostMessage({ kind: 'reading.perf', scrollRounds: 3 })
+    const report = h.sent.find((m) => m.kind === 'reading.perf.report')
+    expect(report).toBeDefined()
+    expect((report as { ok: boolean }).ok).toBe(false)
+  })
+
+  it('reading.test.image：消息被接受且不产生写回/抛错（注入载体）', () => {
+    const h = makeBridge()
+    const c = mountMode(h)
+    c.handleHostMessage({ kind: 'view.mode.set', mode: 'reading' })
+    expect(() =>
+      c.handleHostMessage({
+        kind: 'reading.test.image',
+        srcStart: 0,
+        initialHeightPx: 20,
+        finalHeightPx: 240,
+        delayMs: 0,
+      }),
+    ).not.toThrow()
+    expect(sentEditRequests(h)).toBe(0)
+  })
+
+  it('非法探针消息被协议校验丢弃（scrollRounds 非正整数）', () => {
+    const h = makeBridge()
+    const c = mountMode(h)
+    c.handleHostMessage({ kind: 'reading.perf', scrollRounds: 0 })
+    expect(h.sent.find((m) => m.kind === 'reading.perf.report')).toBeUndefined()
+  })
+})

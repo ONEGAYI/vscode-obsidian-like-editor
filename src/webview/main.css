@@ -99,6 +99,9 @@ body {
   --oile-reading-code-background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.12));
   height: calc(100% - 30px);
   overflow-y: auto;
+  /* #7：滚动锚定由虚拟化视图自研（视口顶块平移补偿），关闭浏览器原生
+     overflow-anchor 防止两套锚定对同一布局变化叠加补偿（实测会滚飞） */
+  overflow-anchor: none;
   box-sizing: border-box;
   padding: 12px 24px 40vh;
   font-size: var(--oile-reading-font-size);
@@ -108,6 +111,14 @@ body {
 #app .oile-view-reading .oile-reading-block {
   max-width: var(--oile-reading-max-width);
   margin: 0 0 0.75em;
+}
+
+/* 视口占位 spacer（#7 按需挂载）：屏外块的布局信息占位（高度 = 块高度表
+   前后缀和），非内容节点；不参与 Obsidian 选择器兼容（见选择器映射表） */
+#app .oile-view-reading .oile-reading-spacer {
+  margin: 0;
+  padding: 0;
+  max-width: var(--oile-reading-max-width);
 }
 
 #app .oile-view-reading .oile-reading-heading-1 { font-size: 1.6em; font-weight: 600; margin: 0.6em 0 0.4em; }

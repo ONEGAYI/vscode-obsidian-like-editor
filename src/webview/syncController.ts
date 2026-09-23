@@ -34,14 +34,9 @@ import {
 import { mapChangeThroughChanges } from '../shared/changeMapping'
 import { headingDecorations } from './headings'
 import { runPerfProbe } from './perfProbe'
-import {
-  createReadingContainer,
-  findReadingAnchor,
-  readingAnchorStartFor,
-  renderReadingBlocks,
-  scrollReadingToOffset,
-  scrollReadingToSrcStart,
-} from './readingView'
+import { runReadingPerfProbe } from './readingProbe'
+import { createReadingContainer } from './readingView'
+import { VirtualReadingView } from './readingVirtualView'
 
 /** webview 与宿主的通信通道（由 acquireVsCodeApi 适配） */
 export interface VsCodeBridge {
@@ -143,6 +138,8 @@ export class WebviewSyncController {
   private liveWrapper: HTMLElement | undefined
   /** 阅读容器（稳定类名 oile-view-reading，块级源锚点结构） */
   private readingContainer: HTMLElement | undefined
+  /** 阅读视图虚拟化控制器（#7：接管阅读容器的按需挂载/回收/锚点定位） */
+  private readingView: VirtualReadingView | undefined
   private toolbar: HTMLElement | undefined
 
   // ---- 冲突暂停状态（#4）----
@@ -185,16 +182,20 @@ export class WebviewSyncController {
     this.liveWrapper.className = 'oile-view-live'
     this.readingContainer = createReadingContainer()
     this.readingContainer.style.display = 'none'
+    this.readingView = new VirtualReadingView(this.readingContainer)
     // 阅读滚动更新锚点（用户滚动即改变"当前位置"语义；短文档滚不动时
-    // 锚点保持进入/定位时的值——视口读取无法表达目标，modeAnchor 是权威）
+    // 锚点保持进入/定位时的值——视口读取无法表达目标，modeAnchor 是权威）。
+    // 同一事件驱动 #7 的窗口重算（rAF 合帧）
     this.readingContainer.addEventListener('scroll', () => {
       const container = this.readingContainer
-      if (container && container.scrollHeight > 0) {
-        const anchor = findReadingAnchor(container)
+      const view = this.readingView
+      if (container && view && container.scrollHeight > 0) {
+        const anchor = view.currentAnchor()
         if (anchor !== null) {
           this.modeAnchor = anchor
         }
       }
+      view?.handleScroll()
     })
     parent.appendChild(this.toolbar)
     parent.appendChild(this.banner)
@@ -225,6 +226,8 @@ export class WebviewSyncController {
     this.toolbar = undefined
     this.liveWrapper?.remove()
     this.liveWrapper = undefined
+    this.readingView?.dispose()
+    this.readingView = undefined
     this.readingContainer?.remove()
     this.readingContainer = undefined
   }
@@ -312,10 +315,10 @@ export class WebviewSyncController {
         // 定位（#10 查找/跳转入口）：光标移到源 offset；reading 滚动到块。
         // 纯视图操作——事务不带 changes，不产生编辑历史
         const pos = this.clampToDoc(message.offset)
-        if (this.viewMode === 'reading' && this.readingContainer) {
-          const start = readingAnchorStartFor(this.readingContainer, pos) ?? pos
+        if (this.viewMode === 'reading' && this.readingView) {
+          const start = this.readingView.anchorStartFor(pos) ?? pos
           this.modeAnchor = start
-          scrollReadingToSrcStart(this.readingContainer, start)
+          this.readingView.scrollToSrcStart(start)
         } else {
           this.modeAnchor = pos
           this.view?.dispatch({
@@ -325,6 +328,45 @@ export class WebviewSyncController {
         }
         break
       }
+      case 'reading.perf': {
+        // 阅读视图性能探针（#7）：往返滚动观测挂载/回收/解析；纯视图滚动
+        const container = this.readingContainer
+        const rview = this.readingView
+        if (this.viewMode === 'reading' && rview && container) {
+          void runReadingPerfProbe(rview, container, {
+            scrollRounds: message.scrollRounds,
+          }).then((report) => this.bridge.postMessage(report))
+        } else {
+          const empty = {
+            mountedBlocks: 0,
+            contentDomCount: 0,
+            scrollTopPx: 0,
+            scrollHeightPx: 0,
+          }
+          this.bridge.postMessage({
+            kind: 'reading.perf.report',
+            scrollRounds: message.scrollRounds,
+            totalBlocks: 0,
+            baseline: empty,
+            afterScroll: empty,
+            parseCount: 0,
+            maxMountedBlocks: 0,
+            ok: false,
+          })
+        }
+        break
+      }
+      case 'reading.test.image':
+        // 测试钩子（#7）：图片加载后布局变化的模拟载体（不产生写回）
+        if (this.viewMode === 'reading' && this.readingView) {
+          this.readingView.injectTestImage(
+            message.srcStart,
+            message.initialHeightPx,
+            message.finalHeightPx,
+            message.delayMs,
+          )
+        }
+        break
       case 'view.state.request': {
         const doc = this.view?.state.doc
         const content = this.view?.dom.querySelector('.cm-content')
@@ -345,7 +387,26 @@ export class WebviewSyncController {
             }
           }
         }
-        const readingActive = this.viewMode === 'reading' && this.readingContainer
+        const readingActive = this.viewMode === 'reading' && this.readingView
+        const rStats = readingActive ? this.readingView!.getStats() : undefined
+        const rScroll = readingActive ? this.readingView!.getScrollObservation() : undefined
+        // 锚点块 start 经源 offset → 块身份的纯数据映射（不依赖布局；
+        // 虚拟化下含未挂载目标——块模型是映射依据）
+        const readingAnchorStart =
+          readingActive && this.modeAnchor !== null
+            ? (this.readingView!.anchorStartFor(this.clampToDoc(this.modeAnchor)) ?? undefined)
+            : undefined
+        // 锚点块的布局顶部位置（挂载时取真实 offsetTop 语义；未挂载为 undefined）
+        let readingAnchorTopPx: number | undefined
+        if (readingActive && readingAnchorStart !== undefined && this.readingContainer) {
+          const el = this.readingContainer.querySelector<HTMLElement>(
+            `.oile-reading-block[data-oile-src-start="${readingAnchorStart}"]`,
+          )
+          if (el) {
+            const box = this.readingContainer.getBoundingClientRect()
+            readingAnchorTopPx = el.getBoundingClientRect().top - box.top + this.readingContainer.scrollTop
+          }
+        }
         this.bridge.postMessage({
           kind: 'view.state',
           text: doc?.toString() ?? '',
@@ -359,17 +420,17 @@ export class WebviewSyncController {
           headingHiddenText,
           viewMode: this.viewMode,
           selectionOffset: this.view?.state.selection.main.from ?? 0,
-          readingBlockCount: readingActive
-            ? this.readingContainer!.querySelectorAll('.oile-reading-block').length
-            : 0,
-          // 锚点块 start 经源 offset → 块身份的纯数据映射（不依赖布局）
-          readingAnchorStart:
-            readingActive && this.modeAnchor !== null
-              ? (readingAnchorStartFor(
-                  this.readingContainer!,
-                  this.clampToDoc(this.modeAnchor),
-                ) ?? undefined)
-              : undefined,
+          readingBlockCount: rStats?.mountedBlocks ?? 0,
+          readingAnchorStart,
+          // #7 按需挂载观测：块模型总量/挂载量/DOM 计数/解析次数/虚拟化状态
+          readingTotalBlocks: rStats?.totalBlocks,
+          readingMountedBlocks: rStats?.mountedBlocks,
+          readingContentDomCount: rStats?.contentDomCount,
+          readingParseCount: rStats?.parseCount,
+          readingVirtualized: rStats?.virtualized,
+          readingAnchorTopPx,
+          readingScrollTopPx: rScroll?.scrollTop,
+          readingScrollHeightPx: rScroll?.scrollHeight,
           cssProbe: this.collectCssProbe(),
         })
         break
@@ -437,8 +498,8 @@ export class WebviewSyncController {
     this.refreshReading()
     if (opts.restoreAnchor) {
       if (this.viewMode === 'reading') {
-        if (this.modeAnchor !== null && this.readingContainer) {
-          scrollReadingToOffset(this.readingContainer, this.clampToDoc(this.modeAnchor))
+        if (this.modeAnchor !== null && this.readingView) {
+          this.readingView.scrollToOffset(this.clampToDoc(this.modeAnchor))
         }
       } else if (this.modeAnchor !== null && this.modeAnchor > 0) {
         // 恢复光标：不带 changes 的事务，不产生编辑历史
@@ -490,20 +551,17 @@ export class WebviewSyncController {
       this.modeAnchor = cursor
       this.applyModeDom('reading') // 先更新模式（refreshReading 依赖它）
       this.refreshReading()
-      if (this.readingContainer) {
-        const start = readingAnchorStartFor(this.readingContainer, this.clampToDoc(cursor)) ?? cursor
+      if (this.readingView) {
+        const start = this.readingView.anchorStartFor(this.clampToDoc(cursor)) ?? cursor
         this.modeAnchor = start
-        scrollReadingToSrcStart(this.readingContainer, start)
+        this.readingView.scrollToSrcStart(start)
       }
       return
     }
     // reading → live：源码位置锚点 = modeAnchor（用户滚动经 scroll 监听
     // 更新；进入/定位时规范化），非滚动百分比
-    if (this.readingContainer && this.modeAnchor !== null) {
-      const mapped = readingAnchorStartFor(
-        this.readingContainer,
-        this.clampToDoc(this.modeAnchor),
-      )
+    if (this.readingView && this.modeAnchor !== null) {
+      const mapped = this.readingView.anchorStartFor(this.clampToDoc(this.modeAnchor))
       if (mapped !== null) {
         this.modeAnchor = mapped
       }
@@ -535,17 +593,17 @@ export class WebviewSyncController {
 
   /** 阅读模式下按当前 CM6 文本重建阅读视图（保留滚动锚点）。
    *  调用点：进入 reading、全文重置（init/resync）、外部增量应用后。
-   *  全量重建是 #6 基础版实现（外部变更不属键入路径）；#7 改按需挂载。 */
+   *  #7 起：全文切块（唯一一次解析）后按需挂载窗口；滚动路径不再进入此处 */
   private refreshReading(): void {
-    if (this.viewMode !== 'reading' || !this.readingContainer || !this.view) {
+    if (this.viewMode !== 'reading' || !this.readingView || !this.view) {
       return
     }
     // 布局可用才读视口锚点（否则保留当前锚点 offset，重建后再映射）
-    const hasLayout = this.readingContainer.scrollHeight > 0
-    const keep = hasLayout ? findReadingAnchor(this.readingContainer) : null
-    renderReadingBlocks(this.readingContainer, this.view.state.doc.toString())
+    const hasLayout = (this.readingContainer?.scrollHeight ?? 0) > 0
+    const keep = hasLayout ? this.readingView.currentAnchor() : null
+    this.readingView.setDocument(this.view.state.doc.toString())
     if (keep !== null) {
-      scrollReadingToSrcStart(this.readingContainer, keep)
+      this.readingView.scrollToSrcStart(keep)
       this.modeAnchor = keep
     }
   }

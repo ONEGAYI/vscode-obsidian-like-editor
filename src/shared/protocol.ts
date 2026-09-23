@@ -42,6 +42,18 @@ export type HostToWebview =
    *  把光标移动到源 offset 并滚动到可见（live）；reading 模式滚动到
    *  对应锚点块。纯视图操作：不写文档、不产生编辑历史 */
   | { kind: 'view.locate'; offset: number }
+  /** 阅读视图性能探针（#7）：reading 模式下对阅读容器往返滚动并回报
+   *  挂载/回收/解析次数。要求当前处于 reading 模式，否则回报失败态 */
+  | { kind: 'reading.perf'; scrollRounds: number }
+  /** 测试钩子（#7）：向包含 srcStart 的挂载块注入无网络图片并延迟改高，
+   *  模拟图片加载后的布局变化（动态尺寸变化机制的验证载体） */
+  | {
+      kind: 'reading.test.image'
+      srcStart: number
+      initialHeightPx: number
+      finalHeightPx: number
+      delayMs: number
+    }
 
 /** webview → 宿主消息 */
 export type WebviewToHost =
@@ -85,12 +97,41 @@ export type WebviewToHost =
       viewMode?: 'live' | 'reading'
       /** live 光标主位置（UTF-16 offset；#6 锚点恢复观测） */
       selectionOffset?: number
-      /** 阅读容器内块元素数（#6） */
+      /** 阅读容器内块元素数（#6；#7 起为挂载块数，屏外块不创建） */
       readingBlockCount?: number
       /** 当前阅读锚点块的源 start（源码位置锚点，非滚动百分比） */
       readingAnchorStart?: number
+      /** 阅读块模型总数（#7：全文切块结果，与挂载无关） */
+      readingTotalBlocks?: number
+      /** 阅读挂载块数（#7：当前窗口内真实创建的块） */
+      readingMountedBlocks?: number
+      /** 阅读容器内全部元素数（#7 DOM 有界性观测，含 spacer） */
+      readingContentDomCount?: number
+      /** 阅读全文解析累计次数（#7：滚动不得使其增长） */
+      readingParseCount?: number
+      /** 阅读视图是否虚拟化（#7：false 为无布局回退全量渲染） */
+      readingVirtualized?: boolean
+      /** 锚点块元素顶部位置（#7：px；锚点块未挂载时为估计位置） */
+      readingAnchorTopPx?: number
+      /** 阅读容器滚动位置与内容总高（#7：px） */
+      readingScrollTopPx?: number
+      readingScrollHeightPx?: number
       /** 稳定样式契约探针（#6 内部测试 CSS 验证入口）：目标元素不存在时字段为 null */
       cssProbe?: CssProbeReport
+    }
+  /** 阅读视图性能探针回报（#7）：滚动往返期间的挂载/回收与解析观测 */
+  | {
+      kind: 'reading.perf.report'
+      scrollRounds: number
+      totalBlocks: number
+      baseline: ReadingPerfSnapshot
+      afterScroll: ReadingPerfSnapshot
+      /** 探针全程的全文解析次数（滚动不得使其增长；装载时为 1 起） */
+      parseCount: number
+      /** 探针期间出现过的最大挂载块数（窗口有界性） */
+      maxMountedBlocks: number
+      /** 非阅读模式下执行探针时为 false（探针未执行） */
+      ok: boolean
     }
   /** 性能探针回报（#5）：快照为 DOM 计数，输入延迟含 rAF 稳定等待 */
   | {
@@ -119,6 +160,18 @@ export interface PerfSnapshot {
   inviewHeadingCount: number
 }
 
+/** 阅读视图性能快照（#7）：一次观测时点的挂载与滚动状态 */
+export interface ReadingPerfSnapshot {
+  /** 挂载块数 */
+  mountedBlocks: number
+  /** 容器内全部元素数（含 spacer） */
+  contentDomCount: number
+  /** 容器 scrollTop（px） */
+  scrollTopPx: number
+  /** 容器 scrollHeight（px） */
+  scrollHeightPx: number
+}
+
 /** CSS 契约探针回报（#6）：一段仅经稳定类名定位的内部测试 CSS 是否生效 */
 export interface CssProbeReport {
   /** live 一级标题行经 `.oile-heading-line-1` 命中的属性值；无目标元素为 null */
@@ -143,6 +196,11 @@ function isPositiveInt(v: unknown): boolean {
 
 function isString(v: unknown): boolean {
   return typeof v === 'string'
+}
+
+/** 非负数值（含小数）：滚动位置/元素位置等亚像素观测量 */
+function isNonNegativeNumber(v: unknown): boolean {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0
 }
 
 export function isSerChange(v: unknown): v is SerChange {
@@ -178,6 +236,16 @@ function isCssProbeReport(v: unknown): v is CssProbeReport {
     isNullOrString(v.liveHeadingDecorationColor) &&
     isNullOrString(v.readingHeadingDecorationColor) &&
     isNullOrString(v.readingVarProbe)
+  )
+}
+
+function isReadingPerfSnapshot(v: unknown): v is ReadingPerfSnapshot {
+  return (
+    isObject(v) &&
+    isNonNegativeInt(v.mountedBlocks) &&
+    isNonNegativeInt(v.contentDomCount) &&
+    isNonNegativeNumber(v.scrollTopPx) &&
+    isNonNegativeNumber(v.scrollHeightPx)
   )
 }
 
@@ -229,7 +297,25 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.selectionOffset === undefined || isNonNegativeInt(v.selectionOffset)) &&
         (v.readingBlockCount === undefined || isNonNegativeInt(v.readingBlockCount)) &&
         (v.readingAnchorStart === undefined || isNonNegativeInt(v.readingAnchorStart)) &&
+        (v.readingTotalBlocks === undefined || isNonNegativeInt(v.readingTotalBlocks)) &&
+        (v.readingMountedBlocks === undefined || isNonNegativeInt(v.readingMountedBlocks)) &&
+        (v.readingContentDomCount === undefined || isNonNegativeInt(v.readingContentDomCount)) &&
+        (v.readingParseCount === undefined || isNonNegativeInt(v.readingParseCount)) &&
+        (v.readingVirtualized === undefined || typeof v.readingVirtualized === 'boolean') &&
+        (v.readingAnchorTopPx === undefined || isNonNegativeNumber(v.readingAnchorTopPx)) &&
+        (v.readingScrollTopPx === undefined || isNonNegativeNumber(v.readingScrollTopPx)) &&
+        (v.readingScrollHeightPx === undefined || isNonNegativeNumber(v.readingScrollHeightPx)) &&
         (v.cssProbe === undefined || isCssProbeReport(v.cssProbe))
+      )
+    case 'reading.perf.report':
+      return (
+        isNonNegativeInt(v.scrollRounds) &&
+        isNonNegativeInt(v.totalBlocks) &&
+        isReadingPerfSnapshot(v.baseline) &&
+        isReadingPerfSnapshot(v.afterScroll) &&
+        isNonNegativeInt(v.parseCount) &&
+        isNonNegativeInt(v.maxMountedBlocks) &&
+        typeof v.ok === 'boolean'
       )
     case 'perf.report':
       return (
@@ -307,6 +393,15 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return v.mode === 'live' || v.mode === 'reading' || v.mode === 'toggle'
     case 'view.locate':
       return isNonNegativeInt(v.offset)
+    case 'reading.perf':
+      return isPositiveInt(v.scrollRounds)
+    case 'reading.test.image':
+      return (
+        isNonNegativeInt(v.srcStart) &&
+        isNonNegativeInt(v.initialHeightPx) &&
+        isNonNegativeInt(v.finalHeightPx) &&
+        isNonNegativeInt(v.delayMs)
+      )
     default:
       return false
   }

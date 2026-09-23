@@ -30,6 +30,10 @@ export const READING_CLASS_NAMES = {
   task: 'oile-reading-task',
   taskCheckbox: 'oile-reading-task-checkbox',
   codeBlock: 'oile-reading-code-block',
+  /** #7 视口占位 spacer（屏外块的高度占位，非内容节点） */
+  spacer: 'oile-reading-spacer',
+  spacerTop: 'oile-reading-spacer-top',
+  spacerBottom: 'oile-reading-spacer-bottom',
 } as const
 
 /** 创建阅读视图容器（稳定类名 + 模式标记；初始由调用方控制显隐） */
@@ -63,34 +67,44 @@ function blockClassNames(block: ReadingBlock): string[] {
 }
 
 /**
+ * 创建单个阅读块元素（#6 结构契约：稳定类名 + data-oile-src-start/end 锚点；
+ * 任务项带 marker 区间锚点的 disabled checkbox）。
+ * #7 起全量渲染（renderReadingBlocks）与按需挂载（readingVirtualView）
+ * 共用此构建器，保证两种路径的块结构逐字节一致。
+ */
+export function createReadingBlockElement(block: ReadingBlock, text: string): HTMLElement {
+  const el = document.createElement('div')
+  el.className = blockClassNames(block).join(' ')
+  el.dataset['oileSrcStart'] = String(block.start)
+  el.dataset['oileSrcEnd'] = String(block.end)
+  if (block.task) {
+    // #9 语义入口：disabled checkbox 携带标记区间锚点；勾选写回由 #9 实现
+    const box = document.createElement('input')
+    box.type = 'checkbox'
+    box.className = READING_CLASS_NAMES.taskCheckbox
+    box.disabled = true
+    box.checked = block.task.checked
+    box.dataset['oileSrcStart'] = String(block.task.markerStart)
+    box.dataset['oileSrcEnd'] = String(block.task.markerEnd)
+    el.appendChild(box)
+    el.appendChild(document.createTextNode(' '))
+    el.appendChild(document.createTextNode(text.slice(block.start, block.end)))
+  } else {
+    el.textContent = text.slice(block.start, block.end)
+  }
+  return el
+}
+
+/**
  * 全量渲染阅读块：清空容器后按块切分重建。
- * 返回渲染块数（#7 引入按需挂载后此函数退化为全量对拍/回退路径）。
+ * 返回渲染块数。#7 起此函数是无布局环境（jsdom/隐藏容器）的回退路径，
+ * 也是虚拟化路径的对拍基线；真实布局可用时由 readingVirtualView 按需挂载。
  */
 export function renderReadingBlocks(container: HTMLElement, text: string): number {
   container.textContent = ''
   const blocks = splitReadingBlocks(text)
   for (const block of blocks) {
-    const el = document.createElement('div')
-    el.className = blockClassNames(block).join(' ')
-    el.dataset['oileSrcStart'] = String(block.start)
-    el.dataset['oileSrcEnd'] = String(block.end)
-    if (block.task) {
-      // #9 语义入口：disabled checkbox 携带标记区间锚点；本票只读，
-      // 勾选写回（edit.request 走共同保存/历史链路）由 #9 实现
-      const box = document.createElement('input')
-      box.type = 'checkbox'
-      box.className = READING_CLASS_NAMES.taskCheckbox
-      box.disabled = true
-      box.checked = block.task.checked
-      box.dataset['oileSrcStart'] = String(block.task.markerStart)
-      box.dataset['oileSrcEnd'] = String(block.task.markerEnd)
-      el.appendChild(box)
-      el.appendChild(document.createTextNode(' '))
-      el.appendChild(document.createTextNode(text.slice(block.start, block.end)))
-    } else {
-      el.textContent = text.slice(block.start, block.end)
-    }
-    container.appendChild(el)
+    container.appendChild(createReadingBlockElement(block, text))
   }
   return blocks.length
 }
