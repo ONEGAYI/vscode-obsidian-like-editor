@@ -34,6 +34,14 @@ export type HostToWebview =
   /** 性能探针（#5）：webview 测量输入延迟/长任务/滚动回收并回报 perf.report。
    *  探针编辑带 externalSync 注解，不产生写回（测量不污染宿主文档） */
   | { kind: 'perf.probe'; typingRounds: number; scrollRounds: number }
+  /** 模式切换指令（#6）：live=实时预览，reading=阅读，toggle=翻转当前。
+   *  模式是 webview 视图状态：不写 TextDocument、不入撤销栈；宿主命令
+   *  与 webview 按钮（内部走同一状态机）共用此消息入口 */
+  | { kind: 'view.mode.set'; mode: 'live' | 'reading' | 'toggle' }
+  /** 定位请求（#6 起，为 #10 查找/跳转预留的宿主 → webview 入口）：
+   *  把光标移动到源 offset 并滚动到可见（live）；reading 模式滚动到
+   *  对应锚点块。纯视图操作：不写文档、不产生编辑历史 */
+  | { kind: 'view.locate'; offset: number }
 
 /** webview → 宿主消息 */
 export type WebviewToHost =
@@ -73,6 +81,16 @@ export type WebviewToHost =
       headingActiveText?: string
       /** 第一个隐藏标记态（非活动）标题行的 DOM 文本 */
       headingHiddenText?: string
+      /** 当前视图模式（#6；缺省 live，向后兼容） */
+      viewMode?: 'live' | 'reading'
+      /** live 光标主位置（UTF-16 offset；#6 锚点恢复观测） */
+      selectionOffset?: number
+      /** 阅读容器内块元素数（#6） */
+      readingBlockCount?: number
+      /** 当前阅读锚点块的源 start（源码位置锚点，非滚动百分比） */
+      readingAnchorStart?: number
+      /** 稳定样式契约探针（#6 内部测试 CSS 验证入口）：目标元素不存在时字段为 null */
+      cssProbe?: CssProbeReport
     }
   /** 性能探针回报（#5）：快照为 DOM 计数，输入延迟含 rAF 稳定等待 */
   | {
@@ -99,6 +117,16 @@ export interface PerfSnapshot {
   headingLineCount: number
   /** .oile-heading-inview 元素数（间接装饰渲染结果） */
   inviewHeadingCount: number
+}
+
+/** CSS 契约探针回报（#6）：一段仅经稳定类名定位的内部测试 CSS 是否生效 */
+export interface CssProbeReport {
+  /** live 一级标题行经 `.oile-heading-line-1` 命中的属性值；无目标元素为 null */
+  liveHeadingDecorationColor: string | null
+  /** 阅读一级标题块经 `.oile-reading-heading-1` 命中的属性值；无目标元素为 null */
+  readingHeadingDecorationColor: string | null
+  /** `.oile-view-reading` 上被外部片段覆盖的探针变量值；未覆盖为空（null） */
+  readingVarProbe: string | null
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -137,6 +165,19 @@ function isPerfSnapshot(v: unknown): v is PerfSnapshot {
     isNonNegativeInt(v.contentDomCount) &&
     isNonNegativeInt(v.headingLineCount) &&
     isNonNegativeInt(v.inviewHeadingCount)
+  )
+}
+
+function isNullOrString(v: unknown): boolean {
+  return v === null || isString(v)
+}
+
+function isCssProbeReport(v: unknown): v is CssProbeReport {
+  return (
+    isObject(v) &&
+    isNullOrString(v.liveHeadingDecorationColor) &&
+    isNullOrString(v.readingHeadingDecorationColor) &&
+    isNullOrString(v.readingVarProbe)
   )
 }
 
@@ -183,7 +224,12 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.contentDomCount === undefined || isNonNegativeInt(v.contentDomCount)) &&
         (v.headingLineCount === undefined || isNonNegativeInt(v.headingLineCount)) &&
         (v.headingActiveText === undefined || isString(v.headingActiveText)) &&
-        (v.headingHiddenText === undefined || isString(v.headingHiddenText))
+        (v.headingHiddenText === undefined || isString(v.headingHiddenText)) &&
+        (v.viewMode === undefined || v.viewMode === 'live' || v.viewMode === 'reading') &&
+        (v.selectionOffset === undefined || isNonNegativeInt(v.selectionOffset)) &&
+        (v.readingBlockCount === undefined || isNonNegativeInt(v.readingBlockCount)) &&
+        (v.readingAnchorStart === undefined || isNonNegativeInt(v.readingAnchorStart)) &&
+        (v.cssProbe === undefined || isCssProbeReport(v.cssProbe))
       )
     case 'perf.report':
       return (
@@ -257,6 +303,10 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return true
     case 'perf.probe':
       return isPositiveInt(v.typingRounds) && isPositiveInt(v.scrollRounds)
+    case 'view.mode.set':
+      return v.mode === 'live' || v.mode === 'reading' || v.mode === 'toggle'
+    case 'view.locate':
+      return isNonNegativeInt(v.offset)
     default:
       return false
   }

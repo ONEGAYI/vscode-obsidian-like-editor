@@ -1,0 +1,26 @@
+/* 稳定样式契约内部测试片段（工单 #6，ADR-0004）。
+ *
+ * 用途：证明一期建立的稳定类名/CSS 变量入口可被外部样式表定位——
+ * 二期的 Obsidian 风格用户片段依赖同一入口。本片段仅用无视觉影响的
+ * 属性（text-decoration-color 在无 text-decoration-line 时不呈现）与
+ * 探针变量，随宿主构建的 webview HTML 一并加载。
+ *
+ * 边界：这是一期内部验证入口，不提供用户 CSS 加载界面（二期实现）；
+ * 不代表兼容 Obsidian 应用 DOM。已核对的映射与不支持项见
+ * docs/design/obsidian-selector-map.md。
+ */
+
+/* live 实时预览：一级标题行（#5 直接装饰类） */
+#app .oile-view-live .oile-heading-line-1 {
+  text-decoration-color: rgb(1, 2, 3);
+}
+
+/* reading 阅读视图：一级标题块 */
+#app .oile-view-reading .oile-reading-heading-1 {
+  text-decoration-color: rgb(4, 5, 6);
+}
+
+/* CSS 变量管道：外部片段可经稳定容器类设置变量并被读取 */
+#app .oile-view-reading {
+  --oile-probe-var-reading: contract-ok;
+}
