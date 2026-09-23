@@ -70,7 +70,7 @@ describe('mapChangeThroughChanges', () => {
   })
 
   it('区间在已应用插入之后整体平移', () => {
-    const applied = [[{ offset: 0, length: 2, text: '插入' }]] // delta = +2
+    const applied = [[{ offset: 0, length: 0, text: '插入' }]] // delta = +2
     const change = { offset: 5, length: 1, text: '替' }
     expect(mapChangeThroughChanges(change, applied)).toEqual({ offset: 7, length: 1, text: '替' })
   })

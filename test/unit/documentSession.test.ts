@@ -2,7 +2,7 @@
 // ready 握手、edit.request 的校验与写回（seq 去重、baseVersion 过期重定位或
 // 拒绝）、自家编辑确认（edit.ack）与外部变更广播（doc.changed）。
 // 权威文档通过 HostDocumentPort 注入（vscode 层实现），此处用假文档驱动。
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { DocumentSession, type HostDocumentPort } from '../../src/host/documentSession'
 import type { HostToWebview, SerChange, WebviewToHost } from '../../src/shared/protocol'
 
@@ -72,11 +72,7 @@ function setup(text = '# 标题\n正文内容') {
 
 const DOC_URI = 'file:///d%3A/notes/a.md'
 
-async function readyPanel(
-  s: ReturnType<typeof setup>,
-  sessionId: string,
-  docUri = DOC_URI,
-): Promise<HostToWebview> {
+async function readyPanel(s: ReturnType<typeof setup>, sessionId: string): Promise<HostToWebview> {
   await s.send(sessionId, { kind: 'ready' })
   const init = s.sent.get(sessionId)!.at(-1)!
   expect(init.kind).toBe('init')
@@ -148,7 +144,8 @@ describe('edit.request 校验与写回', () => {
     })
 
     expect(s.doc.applyCalls).toEqual([[change]])
-    expect(s.doc.content).toBe('# 标插入题\n正文内容')
+    // offset 4 是 '\n' 的位置：插入发生在换行符之前
+    expect(s.doc.content).toBe('# 标题插入\n正文内容')
     const ack = s.sent.get(idA)!.find((m) => m.kind === 'edit.ack')
     expect(ack).toMatchObject({ kind: 'edit.ack', seq: 1, ok: true, version: 2 })
     const broadcast = s.sent.get(idB)!.find((m) => m.kind === 'doc.changed')
@@ -310,6 +307,51 @@ describe('外部变更广播与不写回保证', () => {
     const after = s.sent.get(id)!.length
     await s.send(id, { kind: 'ready' }).catch(() => undefined)
     expect(s.sent.get(id)!.length).toBe(after)
+  })
+})
+
+describe('CRLF 文档的换行协调（CM6 端统一 LF）', () => {
+  function setupCrlf() {
+    const s = setup('# 标题\r\n正文内容\r\n第三行')
+    return s
+  }
+
+  it('init 发送 LF 化全文', async () => {
+    const s = setupCrlf()
+    const id = s.attach()
+    const init = await readyPanel(s, id)
+    expect(init).toMatchObject({ kind: 'init', text: '# 标题\n正文内容\n第三行' })
+  })
+
+  it('webview 的 LF 编辑转换为宿主坐标与 CRLF 文本后应用', async () => {
+    const s = setupCrlf()
+    const id = s.attach()
+    await readyPanel(s, id)
+    // LF 文档 '# 标题\n正文内容\n第三行'：在第二行行首（LF offset 5）插入
+    await s.send(id, {
+      kind: 'edit.request', sessionId: id, docUri: DOC_URI, seq: 1, baseVersion: 1,
+      changes: [{ offset: 5, length: 0, text: '新行\n' }],
+    })
+    // 宿主坐标：第二行行首 = 5 + 1（越过首个 CRLF）= 6；文本换行还原 CRLF
+    expect(s.doc.applyCalls).toEqual([[{ offset: 6, length: 0, text: '新行\r\n' }]])
+    expect(s.doc.content).toBe('# 标题\r\n新行\r\n正文内容\r\n第三行')
+  })
+
+  it('外部变更广播给 webview 前转换为 LF 坐标与文本', async () => {
+    const s = setupCrlf()
+    const id = s.attach()
+    await readyPanel(s, id)
+    // 宿主侧变更：在宿主 offset 5 插入 'X\r\nY'（LF 侧应为 offset 4、text 'X\nY'）
+    const applied = [{ offset: 5, length: 0, text: 'X\r\nY' }]
+    s.doc.content = applyToText(s.doc.content, applied)
+    s.doc.ver++
+    s.session.handleDocChanged(applied, s.doc.ver)
+    const msg = s.sent.get(id)!.find((m) => m.kind === 'doc.changed')
+    expect(msg).toMatchObject({
+      kind: 'doc.changed',
+      changes: [{ offset: 4, length: 0, text: 'X\nY' }],
+      origin: 'external',
+    })
   })
 })
 

@@ -7,7 +7,7 @@
 // - seq 经 bridge.setState 持久化，webview 重载后继续编号（宿主按 seq 去重）
 import { describe, it, expect } from 'vitest'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
-import type { HostToWebview, WebviewToHost } from '../../src/shared/protocol'
+import type { WebviewToHost } from '../../src/shared/protocol'
 
 const DOC_URI = 'file:///d%3A/notes/a.md'
 
@@ -41,11 +41,19 @@ describe('ready 握手与 init', () => {
     expect(sent).toEqual([{ kind: 'ready' }])
   })
 
-  it('init 后 CM6 装载全文（UTF-16 坐标，含中文与换行）', () => {
+  it('init 后 CM6 装载全文（UTF-16 坐标，协议约定宿主发 LF 文本）', () => {
     const { bridge } = makeBridge()
     const c = mount(bridge)
-    init(c, '# 标题\n正文\r\nCRLF 行')
-    expect(c.getView()!.state.doc.toString()).toBe('# 标题\n正文\r\nCRLF 行')
+    init(c, '# 标题\n正文\n第三行')
+    expect(c.getView()!.state.doc.toString()).toBe('# 标题\n正文\n第三行')
+  })
+
+  it('CM6 规范化 \\r\\n：即便宿主误发 CRLF 文本也不崩溃（防御行为记录）', () => {
+    const { bridge } = makeBridge()
+    const c = mount(bridge)
+    init(c, 'a\r\nb')
+    // 已知限制：CM6 内部统一 \n；协议上宿主必须经换行协调发 LF（见 newline.test.ts）
+    expect(c.getView()!.state.doc.toString()).toBe('a\nb')
   })
 })
 
