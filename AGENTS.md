@@ -51,6 +51,10 @@ vscode-obsidian-like-editor/
 │   ├── agents/   # agent 操作约定
 │   │   ├── domain.md        # 领域文档读取与维护约定
 │   │   └── issue-tracker.md # GitHub Issues 操作约定
+│   ├── perf/     # 性能实测数据与测量工具说明
+│   │   ├── 2026-09-title-decoration-viewport.md # 标题切片视口渲染实测数据
+│   │   └── data/                                # 性能探针原始报告数据
+│   │       └── perf-report.json # 性能探针原始报告数据
 │   ├── research/ # 技术调研报告
 │   │   ├── obsidian-live-preview-editor.md # Obsidian 技术栈与选型调研
 │   │   └── obsidian-viewport-rendering.md  # 视口渲染性能补充调研
@@ -72,8 +76,10 @@ vscode-obsidian-like-editor/
 │   │   └── protocol.ts      # 消息协议单一事实源
 │   └── webview/     # webview 端实现
 │       ├── css.d.ts          # CSS 导入类型声明
+│       ├── headings.ts       # 标题装饰：直接/间接分类与增量
 │       ├── main.css          # webview 全局布局样式
 │       ├── main.ts           # webview 启动入口
+│       ├── perfProbe.ts      # webview 性能探针（#5）
 │       └── syncController.ts # CM6 同步控制器
 ├── test/             # 测试根
 │   ├── integration/ # 真宿主集成测试
@@ -81,13 +87,19 @@ vscode-obsidian-like-editor/
 │   │   └── suite/      # 集成测试套件
 │   │       ├── cases.ts # 集成测试用例
 │   │       └── index.ts # 集成测试入口 runner
+│   ├── perf/        # 性能测量脚本与套件（#5）
+│   │   ├── gen-sample.mjs # 性能样例生成器（#5）
+│   │   ├── runPerf.mjs    # 性能测量启动器（#5）
+│   │   └── suite.ts       # 性能测量套件（#5）
 │   └── unit/        # vitest 单元契约测试
 │       ├── changeMapping.test.ts     # 变更重定位契约
 │       ├── compositionBuffer.test.ts # 组合期间缓冲契约测试
 │       ├── conflictRetention.test.ts # 冲突保留与暂停契约测试
 │       ├── documentSession.test.ts   # 文档会话契约
+│       ├── headings.test.ts          # 标题装饰增量契约测试
 │       ├── historyForwarding.test.ts # 撤销重做转发契约测试
 │       ├── newline.test.ts           # 换行协调契约
+│       ├── perfProbe.test.ts         # 性能探针契约测试
 │       ├── protocol.test.ts          # 消息协议校验契约
 │       ├── suspendResume.test.ts     # 暂停恢复契约测试
 │       └── webviewSync.test.ts       # webview 同步契约
