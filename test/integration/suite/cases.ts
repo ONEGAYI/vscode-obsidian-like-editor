@@ -11,6 +11,7 @@ const CMD = {
   viewState: 'onegayi.obsidian-like-editor._test.requestViewState',
   conflictState: 'onegayi.obsidian-like-editor._test.getConflictState',
   resumePanel: 'onegayi.obsidian-like-editor._test.resumePanel',
+  perfProbe: 'onegayi.obsidian-like-editor._test.perfProbe',
 }
 
 const wsDir = process.env['WORKSPACE_DIR'] ?? ''
@@ -75,6 +76,23 @@ interface ViewState {
   lineCount: number
   renderedLines: number
   suspended?: boolean
+  contentDomCount?: number
+  headingLineCount?: number
+  headingActiveText?: string
+  headingHiddenText?: string
+}
+
+/** 性能探针回报（perf.report，结构见 src/shared/protocol.ts） */
+interface PerfReportData {
+  typingRounds: number
+  scrollRounds: number
+  docLines: number
+  baseline: { renderedLines: number; contentDomCount: number; headingLineCount: number; inviewHeadingCount: number }
+  afterTyping: { renderedLines: number; contentDomCount: number; headingLineCount: number; inviewHeadingCount: number }
+  afterScroll: { renderedLines: number; contentDomCount: number; headingLineCount: number; inviewHeadingCount: number }
+  inputDelayMs: { samples: number[]; avgMs: number; maxMs: number }
+  longTasks: { count: number; maxMs: number; totalMs: number } | null
+  headingStats: { totalUpdates: number; lastUpdateScannedLines: number; fullBuildLines: number }
 }
 
 interface ConflictState {
@@ -471,5 +489,74 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const v2 = await waitViewState('splitconflict.md', (v) => v.suspended !== true && v.text === afterExternal, 1)
     assert(v2.suspended !== true, '面板 2 视图不应处于暂停')
     assert(v2.text === afterExternal, `面板 2 文本应与权威一致：${JSON.stringify(v2.text)}`)
+  }],
+
+  ['标题装饰：非活动标题渲染为格式化标题，活动行显示源码（#5 切片）', async () => {
+    await openWithEditor('heading.md')
+    await waitSessionReady('heading.md')
+    // 光标初始在文档头（行 1 标题上）：该行活动显示源码，行 4 标题非活动隐藏标记
+    const view = await waitViewState('heading.md', (v) => (v.headingLineCount ?? 0) >= 2)
+    assert((view.headingActiveText ?? '').startsWith('#'), `活动标题行应显示源码（# 开头）：${JSON.stringify(view.headingActiveText)}`)
+    assert((view.headingHiddenText ?? '').startsWith('#') === false, `非活动标题行应隐藏标记（不以 # 开头）：${JSON.stringify(view.headingHiddenText)}`)
+    assert((view.headingHiddenText ?? '') === '中部二级标题', `非活动标题行 DOM 文本应为标题内容：${JSON.stringify(view.headingHiddenText)}`)
+
+    // 外部编辑把普通行改成标题：装饰随文本增量更新（doc.changed 广播路径）
+    const before = view.headingLineCount ?? 0
+    const extEdit = new vscode.WorkspaceEdit()
+    extEdit.replace(wsUri('heading.md'), new vscode.Range(1, 0, 1, 9), '## 改后二级标题')
+    assert(await vscode.workspace.applyEdit(extEdit), '外部修改应成功')
+    const updated = await waitViewState('heading.md', (v) => (v.headingLineCount ?? 0) === before + 1)
+    assert((updated.headingLineCount ?? 0) === before + 1, '外部把普通行改为标题后，DOM 标题行应 +1')
+    // 文档文本同时同步（同步与装饰互不干扰）
+    assert(updated.text.includes('## 改后二级标题'), '装饰更新不影响文本同步')
+  }],
+
+  ['视口有界：10 万行内容 DOM 不超过 1 千行样例的 2 倍（#5）', async () => {
+    const domCounts: Record<string, number> = {}
+    const rendered: Record<string, number> = {}
+    for (const file of ['perf-1k.md', 'perf-100k.md']) {
+      await openWithEditor(file)
+      await waitSessionReady(file)
+      const totalLines = file === 'perf-1k.md' ? 1_000 : 100_000
+      const v = await waitViewState(file, (s) => (s.contentDomCount ?? -1) > 0 && s.renderedLines > 0)
+      // 全文模型承载全文；视口只渲染附近行（CM6 全文虚拟渲染不因装饰破坏）
+      assert(v.lineCount >= totalLines, `${file} 全文模型行数应 >= ${totalLines}，实际 ${v.lineCount}`)
+      assert(v.renderedLines > 0 && v.renderedLines < 2000, `${file} 视口渲染行数应有界，实际 ${v.renderedLines}`)
+      domCounts[file] = v.contentDomCount ?? 0
+      rendered[file] = v.renderedLines
+    }
+    // 体量增长 100 倍（1k → 100k），内容 DOM 数不超过 2 倍
+    assert(
+      domCounts['perf-100k.md'] <= 2 * domCounts['perf-1k.md'],
+      `内容 DOM 数超界：1k=${domCounts['perf-1k.md']}，100k=${domCounts['perf-100k.md']}`,
+    )
+  }],
+
+  ['滚动回收与输入路径：往返滚动 10 次后 DOM 回到基线附近，键入重扫与体量无关（#5）', async () => {
+    await openWithEditor('perf-100k.md')
+    await waitSessionReady('perf-100k.md')
+    await waitViewState('perf-100k.md', (v) => (v.contentDomCount ?? -1) > 0)
+    const report = (await vscode.commands.executeCommand(
+      CMD.perfProbe,
+      wsUri('perf-100k.md').toString(),
+      { typingRounds: 30, scrollRounds: 10 },
+    )) as PerfReportData | undefined
+    assert(report, '性能探针应产生报告')
+    // 回收：滚动结束后回顶，DOM 应回到基线附近（允许 1.5 倍测量抖动）
+    assert(
+      report.afterScroll.contentDomCount <= Math.ceil(report.baseline.contentDomCount * 1.5),
+      `滚动后 DOM 未回收：基线 ${report.baseline.contentDomCount}，滚动后 ${report.afterScroll.contentDomCount}`,
+    )
+    // 键入路径增量：单字符插入的重扫行数与 10 万行体量无关（远小于全文）
+    assert(
+      report.headingStats.lastUpdateScannedLines <= 3,
+      `键入重扫行数应与体量无关（<=3），实际 ${report.headingStats.lastUpdateScannedLines}`,
+    )
+    assert(report.headingStats.fullBuildLines >= 100_000, `初始全量构建应覆盖全文，实际 ${report.headingStats.fullBuildLines}`)
+    // 输入延迟宽松上限（防极端回归；精确数据由 test/perf/runPerf.mjs 记录）
+    assert(report.inputDelayMs.maxMs > 0 && report.inputDelayMs.maxMs < 500, `单次输入稳定耗时应 <500ms，实际 ${report.inputDelayMs.maxMs}ms`)
+    // 探针不产生写回：宿主文档无 dirty 变化
+    const doc = await vscode.workspace.openTextDocument(wsUri('perf-100k.md'))
+    assert(!doc.isDirty, '性能探针不应污染宿主文档')
   }],
 ]

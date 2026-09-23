@@ -74,6 +74,8 @@ interface PanelEntry {
   /** webview 冲突上报的本地全文快照（conflict.report） */
   conflictWebviewText?: string
   conflictWebviewVersion?: number
+  /** 最近一次性能探针回报（#5：测试钩子 perfProbe 轮询读取） */
+  lastPerfReport?: Extract<WebviewToHost, { kind: 'perf.report' }>
   /** 冲突通知只发一次（避免通知风暴） */
   conflictNotified: boolean
 }
@@ -225,6 +227,9 @@ export class DocumentSession {
       case 'view.state':
         panel.lastViewState = message
         return Promise.resolve()
+      case 'perf.report':
+        panel.lastPerfReport = message
+        return Promise.resolve()
     }
   }
 
@@ -264,6 +269,13 @@ export class DocumentSession {
   /** 最近一次 view.state 诊断（测试钩子与性能观测用） */
   getViewState(sessionId: string): Extract<WebviewToHost, { kind: 'view.state' }> | undefined {
     return this.panels.get(sessionId)?.lastViewState
+  }
+
+  /** 最近一次性能探针回报（#5 测试钩子与测量脚本用） */
+  getLastPerfReport(
+    sessionId: string,
+  ): Extract<WebviewToHost, { kind: 'perf.report' }> | undefined {
+    return this.panels.get(sessionId)?.lastPerfReport
   }
 
   /** 会话观测信息（测试钩子与调试用） */

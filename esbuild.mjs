@@ -47,6 +47,18 @@ if (!production) {
     sourcemap: true,
     logLevel: 'info',
   })
+  targets.push({
+    // 性能测量套件（#5）：由 test/perf/runPerf.mjs 以 extensionTestsPath 启动
+    entryPoints: ['test/perf/suite.ts'],
+    outfile: 'out/test/perf/suite.js',
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    target: 'node18',
+    external: ['vscode'],
+    sourcemap: true,
+    logLevel: 'info',
+  })
 }
 
 async function main() {

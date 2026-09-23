@@ -204,3 +204,80 @@ describe('isHostToWebview', () => {
     expect(isHostToWebview({ kind: 'edit.request', sessionId: 's', docUri: 'u', seq: 1, baseVersion: 1, changes: [] })).toBe(false)
   })
 })
+
+
+describe('perf 探针协议（#5）', () => {
+  const validReport = {
+    kind: 'perf.report',
+    typingRounds: 30,
+    scrollRounds: 10,
+    docLines: 1000,
+    baseline: { renderedLines: 60, contentDomCount: 500, headingLineCount: 3, inviewHeadingCount: 3 },
+    afterTyping: { renderedLines: 60, contentDomCount: 501, headingLineCount: 3, inviewHeadingCount: 3 },
+    afterScroll: { renderedLines: 61, contentDomCount: 505, headingLineCount: 3, inviewHeadingCount: 3 },
+    inputDelayMs: { samples: [4, 5, 6], avgMs: 5, maxMs: 6 },
+    longTasks: { count: 0, maxMs: 0, totalMs: 0 },
+    headingStats: { totalUpdates: 31, lastUpdateScannedLines: 1, fullBuildLines: 1000 },
+  }
+
+  it('接受合法 perf.probe', () => {
+    expect(isHostToWebview({ kind: 'perf.probe', typingRounds: 30, scrollRounds: 10 })).toBe(true)
+  })
+
+  it('拒绝缺字段或非正整数的 perf.probe', () => {
+    expect(isHostToWebview({ kind: 'perf.probe', typingRounds: 0, scrollRounds: 10 })).toBe(false)
+    expect(isHostToWebview({ kind: 'perf.probe', typingRounds: 30 })).toBe(false)
+    expect(isHostToWebview({ kind: 'perf.probe' })).toBe(false)
+  })
+
+  it('接受合法 perf.report', () => {
+    expect(isWebviewToHost(validReport)).toBe(true)
+  })
+
+  it('接受 longTasks 为 null 的 perf.report（宿主不支持 longtask 观测）', () => {
+    expect(isWebviewToHost({ ...validReport, longTasks: null })).toBe(true)
+  })
+
+  it('拒绝缺快照或字段非法的 perf.report', () => {
+    const { baseline: _baseline, ...noBaseline } = validReport
+    expect(isWebviewToHost(noBaseline)).toBe(false)
+    expect(isWebviewToHost({ ...validReport, inputDelayMs: { samples: 'x', avgMs: 1, maxMs: 1 } })).toBe(false)
+    expect(isWebviewToHost({ ...validReport, docLines: '1000' })).toBe(false)
+  })
+
+  it('view.state 接受新增装饰诊断可选字段，拒绝类型错误', () => {
+    expect(
+      isWebviewToHost({
+        kind: 'view.state',
+        text: '# t',
+        docLength: 4,
+        lineCount: 1,
+        renderedLines: 40,
+        contentDomCount: 300,
+        headingLineCount: 1,
+        headingActiveText: '# t',
+        headingHiddenText: '二级',
+      }),
+    ).toBe(true)
+    expect(
+      isWebviewToHost({
+        kind: 'view.state',
+        text: '# t',
+        docLength: 4,
+        lineCount: 1,
+        renderedLines: 40,
+        contentDomCount: '300',
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        kind: 'view.state',
+        text: '# t',
+        docLength: 4,
+        lineCount: 1,
+        renderedLines: 40,
+        headingActiveText: 42,
+      }),
+    ).toBe(false)
+  })
+})
