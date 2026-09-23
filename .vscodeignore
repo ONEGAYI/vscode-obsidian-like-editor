@@ -1,0 +1,17 @@
+# bundle 后产物自包含，源码与测试不进入 VSIX
+.vscode/**
+.agents/**
+.scratch/**
+node_modules/**
+src/**
+test/**
+esbuild.mjs
+tsconfig.json
+vitest.config.ts
+docs/**
+CONTEXT.md
+CLAUDE.md
+AGENTS.md
+out/test/**
+**/*.map
+.gitignore
