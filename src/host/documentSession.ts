@@ -167,6 +167,21 @@ export class DocumentSession {
     return this.panels.get(sessionId)?.lastViewState
   }
 
+  /** 会话观测信息（测试钩子与调试用） */
+  getInfo(): { panels: Array<{ sessionId: string; ready: boolean }> } {
+    return {
+      panels: [...this.panels.values()].map((p) => ({
+        sessionId: p.sessionId,
+        ready: p.ready,
+      })),
+    }
+  }
+
+  /** 向指定面板发送宿主消息（诊断请求等） */
+  postToPanel(sessionId: string, message: HostToWebview): void {
+    this.panels.get(sessionId)?.port.send(message)
+  }
+
   private sendInit(panel: PanelEntry): void {
     panel.ready = true
     panel.port.send({

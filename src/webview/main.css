@@ -1,0 +1,33 @@
+// webview 全局布局样式：颜色与字体跟随 VSCode CSS 变量。
+// CM6 自身的编辑器样式（.cm-editor 等）由 @codemirror/view 内建注入。
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--vscode-font-family);
+  color: var(--vscode-editor-foreground);
+  background-color: var(--vscode-editor-background);
+}
+
+#app {
+  height: 100%;
+}
+
+#app .cm-editor {
+  height: 100%;
+}
+
+#app .cm-editor .cm-scroller {
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size);
+  line-height: var(--vscode-editor-line-height);
+}
+
+#app .cm-editor.cm-focused {
+  outline: none;
+}

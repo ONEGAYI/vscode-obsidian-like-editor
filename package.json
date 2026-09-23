@@ -19,10 +19,10 @@
         "displayName": "Obsidian-like Markdown Editor",
         "selector": [
           {
-            "pattern": "*.md"
+            "filenamePattern": "*.md"
           },
           {
-            "pattern": "*.markdown"
+            "filenamePattern": "*.markdown"
           }
         ],
         "priority": "option"

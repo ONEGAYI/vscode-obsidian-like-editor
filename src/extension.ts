@@ -1,10 +1,17 @@
-// 扩展激活入口（占位）：注册逻辑由集成测试驱动，在实现提交中补齐。
+// 扩展激活入口：注册 CustomTextEditorProvider（priority: option，经
+// "重新打开方式"启用，不接管 .md 默认打开）与文档事件监听、测试钩子。
 import * as vscode from 'vscode'
+import { createTextEditorProvider, VIEW_TYPE } from './host/textEditorProvider'
 
-export function activate(_context: vscode.ExtensionContext): void {
-  void vscode  // 占位引用，保持 esbuild external 配置生效
+export function activate(context: vscode.ExtensionContext): void {
+  const provider = createTextEditorProvider(context)
+  context.subscriptions.push(
+    // enableScripts 在每个面板的 webview.options 上设置（provider 内）；
+    // 注册选项仅接受 retainContextWhenHidden 等（1.86 类型契约）
+    vscode.window.registerCustomEditorProvider(VIEW_TYPE, provider),
+  )
 }
 
 export function deactivate(): void {
-  // 尚无需要释放的资源
+  // 资源经 context.subscriptions 自动释放
 }

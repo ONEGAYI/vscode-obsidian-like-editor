@@ -9,7 +9,7 @@
 //   对其跳过，防止回发死循环）
 // - seq 持久化：经 bridge.setState 保存，webview 重载（retainContextWhenHidden
 //   关闭导致的状态重建）后继续编号，宿主按 seq 幂等去重
-import { Annotation, EditorState } from '@codemirror/state'
+import { Annotation, EditorState, type Extension } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import {
   isHostToWebview,
@@ -36,6 +36,7 @@ export class WebviewSyncController {
   private docUri = ''
   private baseVersion = 0
   private seq: number
+  private extraExtensions: Extension[] = []
 
   constructor(private readonly bridge: VsCodeBridge) {
     const saved = bridge.getState<{ seq?: unknown }>()
@@ -43,10 +44,11 @@ export class WebviewSyncController {
   }
 
   /** 创建编辑器视图并向宿主发送 ready（HTML 加载完成后调用一次） */
-  mount(parent: HTMLElement): void {
+  mount(parent: HTMLElement, extraExtensions: Extension[] = []): void {
     if (this.view) {
       return
     }
+    this.extraExtensions = extraExtensions
     this.view = new EditorView({
       parent,
       state: EditorState.create({ doc: '', extensions: this.extensions() }),
@@ -116,6 +118,7 @@ export class WebviewSyncController {
   private extensions() {
     return [
       EditorView.lineWrapping,
+      ...this.extraExtensions,
       EditorView.updateListener.of((update) => {
         if (!update.docChanged) {
           return
