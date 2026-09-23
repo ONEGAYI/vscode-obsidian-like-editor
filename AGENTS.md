@@ -84,10 +84,12 @@ vscode-obsidian-like-editor/
 │   └── unit/        # vitest 单元契约测试
 │       ├── changeMapping.test.ts     # 变更重定位契约
 │       ├── compositionBuffer.test.ts # 组合期间缓冲契约测试
+│       ├── conflictRetention.test.ts # 冲突保留与暂停契约测试
 │       ├── documentSession.test.ts   # 文档会话契约
 │       ├── historyForwarding.test.ts # 撤销重做转发契约测试
 │       ├── newline.test.ts           # 换行协调契约
 │       ├── protocol.test.ts          # 消息协议校验契约
+│       ├── suspendResume.test.ts     # 暂停恢复契约测试
 │       └── webviewSync.test.ts       # webview 同步契约
 ├── tsconfig.json     # TypeScript 类型检查配置
 └── vitest.config.ts  # vitest 单元测试配置

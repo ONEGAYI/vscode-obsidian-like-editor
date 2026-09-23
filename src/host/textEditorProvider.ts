@@ -7,7 +7,7 @@
 // WorkspaceEdit 写回；文档事件回流经 session 识别自家确认与外部变更。
 import * as vscode from 'vscode'
 import { randomUUID } from 'node:crypto'
-import { DocumentSession, type HostDocumentPort } from './documentSession'
+import { DocumentSession, type HostDocumentPort, type SessionNotice } from './documentSession'
 import type { HostToWebview, SerChange } from '../shared/protocol'
 
 export const VIEW_TYPE = 'onegayi.obsidian-like-markdown-editor'
@@ -27,6 +27,100 @@ export function createTextEditorProvider(
 
   const getEntry = (uri: vscode.Uri): SessionEntry | undefined =>
     sessions.get(uri.toString())
+
+  /** 向面板请求最新 view.state（面板存活时的最可靠未确认输入来源） */
+  const fetchPanelText = async (
+    entry: SessionEntry,
+    sessionId: string,
+    timeoutMs = 3000,
+  ): Promise<string | undefined> => {
+    const before = entry.session.getViewState(sessionId)
+    entry.session.postToPanel(sessionId, { kind: 'view.state.request' })
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      const state = entry.session.getViewState(sessionId)
+      if (state && state !== before) {
+        return state.text
+      }
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    return entry.session.getViewState(sessionId)?.text
+  }
+
+  /** 复制未确认输入：优先面板最新文本，回退宿主快照（fragments / report 全文） */
+  const copyConflictInput = async (uriStr: string, sessionId: string): Promise<void> => {
+    const entry = sessions.get(uriStr)
+    if (!entry) {
+      return
+    }
+    const state = entry.session.getConflictState(sessionId)
+    const live = await fetchPanelText(entry, sessionId)
+    const text = live ?? state?.webviewText ?? state?.fragments.join('\n') ?? ''
+    if (text) {
+      await vscode.env.clipboard.writeText(text)
+      void vscode.window.showInformationMessage('未确认输入已复制到剪贴板')
+    } else {
+      void vscode.window.showWarningMessage('没有可复制的未确认输入')
+    }
+  }
+
+  /** 恢复（放弃本地修改重新同步）：二次确认避免误丢输入 */
+  const confirmResume = async (uriStr: string, sessionId: string): Promise<void> => {
+    const entry = sessions.get(uriStr)
+    if (!entry) {
+      return
+    }
+    const name = vscode.workspace.asRelativePath(entry.doc.uri)
+    const pick = await vscode.window.showWarningMessage(
+      `将放弃“${name}”编辑器中未确认的本地修改，并以磁盘/权威内容重新同步。建议先复制未确认输入。`,
+      '放弃本地修改并重新同步',
+    )
+    if (pick === '放弃本地修改并重新同步') {
+      entry.session.resumePanel(sessionId)
+    }
+  }
+
+  /** 会话通知呈现（#4）：冲突暂停、复制请求、面板关闭/断连时的未确认输入提醒 */
+  const handleNotice = (uriStr: string, notice: SessionNotice): void => {
+    const entry = sessions.get(uriStr)
+    const name = entry ? vscode.workspace.asRelativePath(entry.doc.uri) : uriStr
+    if (notice.type === 'conflict') {
+      void vscode.window
+        .showWarningMessage(
+          `“${name}”的编辑已暂停：外部修改与未确认输入无法安全合并。未确认输入已保留，可随时取回。`,
+          '复制未确认输入',
+          '放弃本地修改并重新同步',
+        )
+        .then((pick) => {
+          if (pick === '复制未确认输入') {
+            void copyConflictInput(uriStr, notice.sessionId)
+          } else if (pick === '放弃本地修改并重新同步') {
+            void confirmResume(uriStr, notice.sessionId)
+          }
+        })
+      return
+    }
+    if (notice.type === 'copy-request') {
+      void copyConflictInput(uriStr, notice.sessionId)
+      return
+    }
+    // panel-closed-with-input：面板关闭（或 SSH 断连触发的 dispose）时未确认
+    // 输入仍在宿主快照中——提示取回，不得误报已保存
+    const preview = notice.fragments.join('\n')
+    void vscode.window
+      .showWarningMessage(
+        `“${name}”的编辑器已关闭（或连接断开），存在未保存的未确认输入：${preview.slice(0, 120)}`,
+        '复制未确认输入',
+      )
+      .then((pick) => {
+        if (pick === '复制未确认输入') {
+          const state = sessions.get(uriStr)?.session.getConflictState(notice.sessionId)
+          void vscode.env.clipboard.writeText(
+            state?.fragments.join('\n') ?? notice.fragments.join('\n'),
+          )
+        }
+      })
+  }
 
   const openEntry = (doc: vscode.TextDocument): SessionEntry => {
     const key = doc.uri.toString()
@@ -62,7 +156,10 @@ export function createTextEditorProvider(
       undo: () => Promise.resolve(vscode.commands.executeCommand('undo')).then(() => true, () => false),
       redo: () => Promise.resolve(vscode.commands.executeCommand('redo')).then(() => true, () => false),
     }
-    fresh.session = new DocumentSession(port, { docUri: key })
+    fresh.session = new DocumentSession(port, {
+      docUri: key,
+      onNotice: (notice) => handleNotice(key, notice),
+    })
     sessions.set(key, fresh)
     return fresh
   }
@@ -135,18 +232,40 @@ export function createTextEditorProvider(
     }),
     vscode.commands.registerCommand(
       'onegayi.obsidian-like-editor._test.injectWebviewMessage',
-      async (uriStr: string, message: Record<string, unknown>) => {
+      async (uriStr: string, message: Record<string, unknown>, panelIndex = 0) => {
         const entry = getEntry(vscode.Uri.parse(uriStr))
-        const firstPanel = entry?.session.getInfo().panels[0]
-        if (!entry || !firstPanel) {
+        const panel = entry?.session.getInfo().panels[panelIndex]
+        if (!entry || !panel) {
           throw new Error(`无可用会话面板：${uriStr}`)
         }
         // 测试注入的消息与真实 webview 消息走同一校验与处理入口；
         // sessionId 由钩子按目标面板填充
         await entry.session.handleWebviewMessage(
-          { ...message, sessionId: firstPanel.sessionId },
-          firstPanel.sessionId,
+          { ...message, sessionId: panel.sessionId },
+          panel.sessionId,
         )
+      },
+    ),
+    vscode.commands.registerCommand(
+      'onegayi.obsidian-like-editor._test.getConflictState',
+      (uriStr: string, panelIndex = 0) => {
+        const entry = getEntry(vscode.Uri.parse(uriStr))
+        const panel = entry?.session.getInfo().panels[panelIndex]
+        if (!entry || !panel) {
+          return { found: false }
+        }
+        return { found: true, sessionId: panel.sessionId, ...entry.session.getConflictState(panel.sessionId) }
+      },
+    ),
+    vscode.commands.registerCommand(
+      'onegayi.obsidian-like-editor._test.resumePanel',
+      (uriStr: string, panelIndex = 0) => {
+        const entry = getEntry(vscode.Uri.parse(uriStr))
+        const panel = entry?.session.getInfo().panels[panelIndex]
+        if (!entry || !panel) {
+          return false
+        }
+        return entry.session.resumePanel(panel.sessionId)
       },
     ),
     vscode.commands.registerCommand(

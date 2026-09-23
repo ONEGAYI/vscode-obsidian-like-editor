@@ -9,6 +9,8 @@ const CMD = {
   sessionState: 'onegayi.obsidian-like-editor._test.getSessionState',
   injectMessage: 'onegayi.obsidian-like-editor._test.injectWebviewMessage',
   viewState: 'onegayi.obsidian-like-editor._test.requestViewState',
+  conflictState: 'onegayi.obsidian-like-editor._test.getConflictState',
+  resumePanel: 'onegayi.obsidian-like-editor._test.resumePanel',
 }
 
 const wsDir = process.env['WORKSPACE_DIR'] ?? ''
@@ -72,6 +74,16 @@ interface ViewState {
   docLength: number
   lineCount: number
   renderedLines: number
+  suspended?: boolean
+}
+
+interface ConflictState {
+  found: boolean
+  sessionId?: string
+  suspended?: boolean
+  fragments?: string[]
+  webviewText?: string
+  webviewVersion?: number
 }
 
 async function waitSessionReady(file: string): Promise<SessionState> {
@@ -339,5 +351,125 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // resync 不产生写回
     const st = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
     assert(st.appliedEdits === 0, `resync 不应产生 applyEdit，实际 ${st.appliedEdits}`)
+  }],
+
+  ['外部修改覆盖过期请求区间：保留输入并暂停写回（#4 冲突链路）', async () => {
+    await openWithEditor('conflict.md')
+    await waitSessionReady('conflict.md')
+    const uri = wsUri('conflict.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('conflict.md'))
+
+    // 外部修改（模拟另一来源）：替换第一行整行 [0,7)（LF 坐标）
+    const extEdit = new vscode.WorkspaceEdit()
+    extEdit.replace(wsUri('conflict.md'), new vscode.Range(0, 0, 0, 7), '外部改写行')
+    const appliedExternal = await vscode.workspace.applyEdit(extEdit)
+    assert(appliedExternal, '外部修改应成功')
+    const afterExternal = '外部改写行\n第二段原文乙\n'
+    await poll('外部修改生效', () => (doc.getText() === afterExternal ? true : undefined))
+
+    // 注入基于初始版本的过期请求，区间 [2,4) 落入被替换区：不可安全重定位
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, {
+      kind: 'edit.request',
+      sessionId: '',
+      docUri: uri,
+      seq: 1,
+      baseVersion: 1,
+      changes: [{ offset: 2, length: 2, text: '未确认输入' }],
+    })
+    // 权威文档不被污染：过期内容不得写入
+    assert(doc.getText() === afterExternal, `权威文本被过期请求污染：${JSON.stringify(doc.getText())}`)
+    const conflict = (await vscode.commands.executeCommand(CMD.conflictState, uri)) as ConflictState
+    assert(conflict.found && conflict.suspended === true, `面板应处于暂停：${JSON.stringify(conflict)}`)
+    assert(
+      JSON.stringify(conflict.fragments) === JSON.stringify(['未确认输入']),
+      `未确认输入片段应被保留：${JSON.stringify(conflict.fragments)}`,
+    )
+
+    // 真实 webview 收到 conflict ack：装载权威全文并进入暂停（横幅状态可观测）
+    const suspendedView = await waitViewState('conflict.md', (v) => v.suspended === true && v.text === afterExternal)
+    assert(suspendedView.text === afterExternal, `webview 应装载权威全文：${JSON.stringify(suspendedView.text)}`)
+
+    // 暂停期间后续请求被拒绝且不写回
+    const appliedBefore = ((await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState).appliedEdits
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, {
+      kind: 'edit.request',
+      sessionId: '',
+      docUri: uri,
+      seq: 2,
+      baseVersion: 2,
+      changes: [{ offset: 0, length: 0, text: '暂停期输入' }],
+    })
+    assert(doc.getText() === afterExternal, '暂停期间不得写回权威文档')
+    const afterState = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterState.appliedEdits === appliedBefore, `暂停期间不得 applyEdit，实际 ${afterState.appliedEdits}`)
+
+    // 恢复：resumePanel 发 doc.resync，webview 解除暂停并恢复写回
+    const resumed = (await vscode.commands.executeCommand(CMD.resumePanel, uri)) as boolean
+    assert(resumed === true, 'resumePanel 应成功')
+    const recovered = await waitViewState('conflict.md', (v) => v.suspended !== true && v.text === afterExternal)
+    assert(recovered.suspended !== true, '恢复后视图不应处于暂停')
+    const versionNow = ((await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState).version
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, {
+      kind: 'edit.request',
+      sessionId: '',
+      docUri: uri,
+      seq: 3,
+      baseVersion: versionNow,
+      changes: [{ offset: 0, length: 0, text: '恢复后输入' }],
+    })
+    await poll('恢复后写回生效', () => (doc.getText() === `恢复后输入${afterExternal}` ? true : undefined))
+    const conflictAfter = (await vscode.commands.executeCommand(CMD.conflictState, uri)) as ConflictState
+    assert(conflictAfter.suspended === false, '恢复后不应处于暂停')
+  }],
+
+  ['split 双面板冲突暂停只隔离冲突面板，第二面板正常写回（#4）', async () => {
+    await openWithEditor('splitconflict.md')
+    await waitSessionReady('splitconflict.md')
+    await openWithEditor('splitconflict.md', true)
+    await poll('双面板就绪', async () => {
+      const state = (await vscode.commands.executeCommand(CMD.sessionState, wsUri('splitconflict.md').toString())) as SessionState | undefined
+      return state && state.panels.filter((p) => p.ready).length >= 2 ? state : undefined
+    })
+    const uri = wsUri('splitconflict.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('splitconflict.md'))
+
+    // 外部修改第二行（LF [7,7+6) '分裂测试行二' → '外部第二行'）
+    const extEdit = new vscode.WorkspaceEdit()
+    extEdit.replace(wsUri('splitconflict.md'), new vscode.Range(1, 0, 1, 6), '外部第二行')
+    assert(await vscode.workspace.applyEdit(extEdit), '外部修改应成功')
+    const afterExternal = '分裂测试行一\n外部第二行\n'
+    await poll('外部修改生效', () => (doc.getText() === afterExternal ? true : undefined))
+
+    // 面板 1 注入过期冲突请求（区间落入被替换的第二行）：暂停只作用于面板 1
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, {
+      kind: 'edit.request',
+      sessionId: '',
+      docUri: uri,
+      seq: 1,
+      baseVersion: 1,
+      changes: [{ offset: 9, length: 2, text: '面板一输入' }],
+    }, 0)
+    const p1 = (await vscode.commands.executeCommand(CMD.conflictState, uri, 0)) as ConflictState
+    assert(p1.found && p1.suspended === true, `面板 1 应暂停：${JSON.stringify(p1)}`)
+    assert(doc.getText() === afterExternal, '权威文本不被过期请求污染')
+
+    // 面板 2 的正常编辑仍可应用（广播同步面板 1，其暂停期忽略增量属预期）
+    const versionNow = ((await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState).version
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, {
+      kind: 'edit.request',
+      sessionId: '',
+      docUri: uri,
+      seq: 1,
+      baseVersion: versionNow,
+      changes: [{ offset: 0, length: 0, text: '二面板前缀' }],
+    }, 1)
+    await poll('面板 2 编辑生效', () => (doc.getText() === `二面板前缀${afterExternal}` ? true : undefined))
+    const p2 = (await vscode.commands.executeCommand(CMD.conflictState, uri, 1)) as ConflictState
+    assert(p2.found && p2.suspended === false, `面板 2 不应受冲突影响：${JSON.stringify(p2)}`)
+    // 面板 2（真实 webview）视图保持可用：未进入暂停，且仍持有外部修改后的
+    // 权威文本（注入路径面板 2 自身不回显，其文本来自外部变更广播）
+    const v2 = await waitViewState('splitconflict.md', (v) => v.suspended !== true && v.text === afterExternal, 1)
+    assert(v2.suspended !== true, '面板 2 视图不应处于暂停')
+    assert(v2.text === afterExternal, `面板 2 文本应与权威一致：${JSON.stringify(v2.text)}`)
   }],
 ]

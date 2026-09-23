@@ -68,6 +68,32 @@ describe('isWebviewToHost', () => {
     expect(isWebviewToHost({ kind: 'sync.request' })).toBe(true)
   })
 
+  it('接受合法 conflict.report，拒绝缺字段或类型错误', () => {
+    const base = { kind: 'conflict.report', sessionId: 's1', docUri: 'file:///a.md', version: 3, text: '本地全文' }
+    expect(isWebviewToHost(base)).toBe(true)
+    expect(isWebviewToHost({ ...base, sessionId: 1 })).toBe(false)
+    expect(isWebviewToHost({ ...base, docUri: null })).toBe(false)
+    expect(isWebviewToHost({ ...base, version: -1 })).toBe(false)
+    expect(isWebviewToHost({ ...base, text: 42 })).toBe(false)
+    expect(isWebviewToHost({ kind: 'conflict.report', sessionId: 's1', docUri: 'u', version: 1 })).toBe(false)
+  })
+
+  it('接受合法 conflict.action，拒绝非法 action 或缺字段', () => {
+    const base = { kind: 'conflict.action', sessionId: 's1', docUri: 'file:///a.md', action: 'copy' as const }
+    expect(isWebviewToHost(base)).toBe(true)
+    expect(isWebviewToHost({ ...base, action: 'resume' })).toBe(true)
+    expect(isWebviewToHost({ ...base, action: 'other' })).toBe(false)
+    expect(isWebviewToHost({ ...base, action: 1 })).toBe(false)
+    expect(isWebviewToHost({ kind: 'conflict.action', sessionId: 's1', docUri: 'u' })).toBe(false)
+  })
+
+  it('view.state 的 suspended 为可选布尔', () => {
+    const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
+    expect(isWebviewToHost({ ...base, suspended: true })).toBe(true)
+    expect(isWebviewToHost(base)).toBe(true)
+    expect(isWebviewToHost({ ...base, suspended: 'yes' })).toBe(false)
+  })
+
   it('拒绝 null、非对象与数组', () => {
     expect(isWebviewToHost(null)).toBe(false)
     expect(isWebviewToHost(undefined)).toBe(false)
@@ -125,8 +151,21 @@ describe('isHostToWebview', () => {
 
   it('接受成功与失败的 edit.ack', () => {
     expect(isHostToWebview({ kind: 'edit.ack', seq: 1, ok: true, version: 4 })).toBe(true)
-    expect(isHostToWebview({ kind: 'edit.ack', seq: 1, ok: false, reason: 'stale', version: 4, text: '全文' })).toBe(true)
+    expect(isHostToWebview({ kind: 'edit.ack', seq: 1, ok: false, reason: 'conflict', version: 4, text: '全文' })).toBe(true)
     expect(isHostToWebview({ kind: 'edit.ack', seq: 1, ok: false, reason: 'error', version: 4 })).toBe(true)
+  })
+
+  it('拒绝已废除的 stale reason 与非法 conflict 字段', () => {
+    expect(isHostToWebview({ kind: 'edit.ack', seq: 1, ok: false, reason: 'stale', version: 4, text: '全文' })).toBe(false)
+    expect(isHostToWebview({ kind: 'edit.ack', seq: 1, ok: false, reason: 'conflict', version: -1 })).toBe(false)
+  })
+
+  it('接受合法 session.suspended，拒绝非法 reason 或缺字段', () => {
+    expect(isHostToWebview({ kind: 'session.suspended', version: 4, reason: 'conflict' })).toBe(true)
+    expect(isHostToWebview({ kind: 'session.suspended', version: 4, reason: 'host-error' })).toBe(true)
+    expect(isHostToWebview({ kind: 'session.suspended', version: 4, reason: 'other' })).toBe(false)
+    expect(isHostToWebview({ kind: 'session.suspended', reason: 'conflict' })).toBe(false)
+    expect(isHostToWebview({ kind: 'session.suspended', version: '4', reason: 'conflict' })).toBe(false)
   })
 
   it('拒绝未知 reason 的失败 ack', () => {

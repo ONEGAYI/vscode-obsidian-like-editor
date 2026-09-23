@@ -146,7 +146,7 @@ describe('组合期间外部增量缓冲', () => {
     expect(c.getView()!.state.doc.toString()).toBe('bc中文def')
   })
 
-  it('外部区间与组合编辑重叠时请求全文重同步（保守不丢宿主权威文本）', async () => {
+  it('外部区间与组合编辑重叠时保留组合输入并暂停（#4：不再全文覆盖丢字）', async () => {
     const { bridge, sent } = makeBridge()
     const c = mount(bridge)
     init(c, 'abcdef', 1)
@@ -160,9 +160,16 @@ describe('组合期间外部增量缓冲', () => {
     endComposition(c)
     commitCompositionText(c, 3, '中文') // 组合文本同样上屏于旧坐标 3
     await waitFlush()
-    // 插入点重合：两侧插入顺序二义，无法安全映射 → 请求宿主全文
-    expect(sent.filter((m) => m.kind === 'sync.request')).toHaveLength(1)
-    // 宿主回复全文：装载后与宿主一致，baseVersion 推进
+    // 插入点重合：两侧插入顺序二义，无法安全映射 → 保留组合输入并暂停写回，
+    // 上报冲突快照（不再发送 sync.request 全文覆盖——那是 #3 的保守最小实现）
+    expect(sent.filter((m) => m.kind === 'sync.request')).toHaveLength(0)
+    expect(c.getView()!.state.doc.toString()).toBe('abc中文def')
+    const report = sent.find((m) => m.kind === 'conflict.report') as Extract<
+      WebviewToHost,
+      { kind: 'conflict.report' }
+    >
+    expect(report).toMatchObject({ text: 'abc中文def' })
+    // 宿主恢复（doc.resync）：装载后与宿主一致，baseVersion 推进
     c.handleHostMessage({ kind: 'doc.resync', version: 5, text: 'abc中文def' })
     expect(c.getView()!.state.doc.toString()).toBe('abc中文def')
     c.getView()!.dispatch({ changes: { from: 0, insert: '前' } })
@@ -220,7 +227,7 @@ describe('组合期间外部增量缓冲', () => {
       kind: 'edit.ack',
       seq: 1,
       ok: false,
-      reason: 'stale',
+      reason: 'conflict',
       version: 9,
       text: '权威全文',
     })

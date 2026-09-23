@@ -15,6 +15,8 @@ const SPLIT_DOC = 'split 起始行\n'
 const UNDO_DOC = '撤销链路第一行\n撤销链路第二行\n'
 const UNDO2_DOC = '全局命令撤销甲行\n全局命令撤销乙行\n'
 const RESYNC_DOC = '重同步起始内容\n重同步第二段\n'
+const CONFLICT_DOC = '第一段原文甲\n第二段原文乙\n'
+const SPLIT_CONFLICT_DOC = '分裂测试行一\n分裂测试行二\n'
 const LARGE_LINES = 100_000
 
 const wsDir = mkdtempSync(path.join(tmpdir(), 'oile-itest-'))
@@ -26,6 +28,8 @@ try {
   writeFileSync(path.join(wsDir, 'undo.md'), UNDO_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'undo2.md'), UNDO2_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'resync.md'), RESYNC_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'conflict.md'), CONFLICT_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'splitconflict.md'), SPLIT_CONFLICT_DOC, 'utf8')
   const largeLines = Array.from({ length: LARGE_LINES }, (_, i) => `第 ${i + 1} 行 ——固定宽度填充文本，用于长文档视口渲染验证——`)
   writeFileSync(path.join(wsDir, 'large.md'), largeLines.join('\n') + '\n', 'utf8')
 
