@@ -21,6 +21,8 @@ export type HostToWebview =
   | { kind: 'edit.ack'; seq: number; ok: false; reason: 'stale' | 'error'; version: number; text?: string }
   /** 权威文档发生变更：变更增量（同指变更前文档） */
   | { kind: 'doc.changed'; version: number; changes: SerChange[]; origin: 'external' }
+  /** 全文重同步（应 sync.request 或宿主主动）：webview 以全文重置本地文档 */
+  | { kind: 'doc.resync'; version: number; text: string }
   /** 请求 webview 回报视图诊断（文本与渲染行数，供测试与性能观测） */
   | { kind: 'view.state.request' }
 
@@ -37,6 +39,10 @@ export type WebviewToHost =
       baseVersion: number
       changes: SerChange[]
     }
+  /** 撤销/重做请求：作用于宿主 TextDocument 权威历史（探索笔记 03 §4） */
+  | { kind: 'history.request'; op: 'undo' | 'redo' }
+  /** 请求宿主回发全文重同步（外部变更与本地状态无法安全对齐时） */
+  | { kind: 'sync.request' }
   /** 视图诊断回报 */
   | {
       kind: 'view.state'
@@ -91,6 +97,10 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         isNonNegativeInt(v.baseVersion) &&
         isSerChangeArray(v.changes)
       )
+    case 'history.request':
+      return v.op === 'undo' || v.op === 'redo'
+    case 'sync.request':
+      return true
     case 'view.state':
       return (
         isString(v.text) &&
@@ -136,6 +146,8 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
         isSerChangeArray(v.changes) &&
         v.origin === 'external'
       )
+    case 'doc.resync':
+      return isNonNegativeInt(v.version) && isString(v.text)
     case 'view.state.request':
       return true
     default:

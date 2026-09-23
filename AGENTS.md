@@ -82,11 +82,13 @@ vscode-obsidian-like-editor/
 │   │       ├── cases.ts # 集成测试用例
 │   │       └── index.ts # 集成测试入口 runner
 │   └── unit/        # vitest 单元契约测试
-│       ├── changeMapping.test.ts   # 变更重定位契约
-│       ├── documentSession.test.ts # 文档会话契约
-│       ├── newline.test.ts         # 换行协调契约
-│       ├── protocol.test.ts        # 消息协议校验契约
-│       └── webviewSync.test.ts     # webview 同步契约
+│       ├── changeMapping.test.ts     # 变更重定位契约
+│       ├── compositionBuffer.test.ts # 组合期间缓冲契约测试
+│       ├── documentSession.test.ts   # 文档会话契约
+│       ├── historyForwarding.test.ts # 撤销重做转发契约测试
+│       ├── newline.test.ts           # 换行协调契约
+│       ├── protocol.test.ts          # 消息协议校验契约
+│       └── webviewSync.test.ts       # webview 同步契约
 ├── tsconfig.json     # TypeScript 类型检查配置
 └── vitest.config.ts  # vitest 单元测试配置
 <!-- file-tree:tree:end -->

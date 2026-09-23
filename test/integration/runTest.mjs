@@ -12,6 +12,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const LF_DOC = '中文编辑测试\n\n包含 emoji：🎉 与组合 emoji 👨‍👩‍👧‍👦\n\n- 列表项一\n- 列表项二\n'
 const CRLF_DOC = '标题一\r\n正文 A 行\r\n正文 B 行\r\n'
 const SPLIT_DOC = 'split 起始行\n'
+const UNDO_DOC = '撤销链路第一行\n撤销链路第二行\n'
+const UNDO2_DOC = '全局命令撤销甲行\n全局命令撤销乙行\n'
+const RESYNC_DOC = '重同步起始内容\n重同步第二段\n'
 const LARGE_LINES = 100_000
 
 const wsDir = mkdtempSync(path.join(tmpdir(), 'oile-itest-'))
@@ -20,6 +23,9 @@ try {
   writeFileSync(path.join(wsDir, 'untouched.md'), '未触碰文档\n保持原样\n', 'utf8')
   writeFileSync(path.join(wsDir, 'crlf.md'), CRLF_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'split.md'), SPLIT_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'undo.md'), UNDO_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'undo2.md'), UNDO2_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'resync.md'), RESYNC_DOC, 'utf8')
   const largeLines = Array.from({ length: LARGE_LINES }, (_, i) => `第 ${i + 1} 行 ——固定宽度填充文本，用于长文档视口渲染验证——`)
   writeFileSync(path.join(wsDir, 'large.md'), largeLines.join('\n') + '\n', 'utf8')
 
