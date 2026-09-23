@@ -84,9 +84,13 @@ async function waitSessionReady(file: string): Promise<SessionState> {
   })
 }
 
-async function waitViewState(file: string, match?: (v: ViewState) => boolean): Promise<ViewState> {
+async function waitViewState(
+  file: string,
+  match?: (v: ViewState) => boolean,
+  panelIndex = 0,
+): Promise<ViewState> {
   return poll(`视图状态 ${file}`, async () => {
-    const state = (await vscode.commands.executeCommand(CMD.viewState, wsUri(file).toString())) as ViewState | undefined
+    const state = (await vscode.commands.executeCommand(CMD.viewState, wsUri(file).toString(), panelIndex)) as ViewState | undefined
     if (state && (!match || match(state))) {
       return state
     }
@@ -230,5 +234,110 @@ export const cases: Array<[string, () => Promise<void>]> = [
     })
     const doc = await vscode.workspace.openTextDocument(wsUri('split.md'))
     assert(doc.getText() === expected, '宿主文档应更新')
+  }],
+
+  ['webview 撤销/重做请求作用于宿主权威历史且无回声（转发链路）', async () => {
+    // 双面板：注入的编辑经 doc.changed 广播让面板 2（真实 webview）同步到
+    // 已编辑状态——单面板注入走确认路径只回 ack，真实 webview 未本地应用
+    // 注入内容，无法验证回流后的视图回退
+    await openWithEditor('undo.md')
+    await waitSessionReady('undo.md')
+    await openWithEditor('undo.md', true)
+    await poll('双面板就绪', async () => {
+      const state = (await vscode.commands.executeCommand(CMD.sessionState, wsUri('undo.md').toString())) as SessionState | undefined
+      return state && state.panels.filter((p) => p.ready).length >= 2 ? state : undefined
+    })
+    const uri = wsUri('undo.md').toString()
+    const original = '撤销链路第一行\n撤销链路第二行\n'
+    const doc = await vscode.workspace.openTextDocument(wsUri('undo.md'))
+    const edited = '撤销链路第一行【插入】\n撤销链路第二行\n'
+
+    // 编辑：第一行末（LF offset 7）插入；面板 2 经广播同步
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, {
+      kind: 'edit.request',
+      sessionId: '',
+      docUri: uri,
+      seq: 1,
+      baseVersion: 1,
+      changes: [{ offset: 7, length: 0, text: '【插入】' }],
+    })
+    await poll('编辑写入宿主文档', () => (doc.getText() === edited ? true : undefined))
+    await waitViewState('undo.md', (v) => v.text === edited, 1)
+
+    // webview 发起 undo（keymap 转发路径的消息形态）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('undo 回退宿主文档', () => (doc.getText() === original ? true : undefined))
+    // undo 的逆变更广播给全部面板：webview 视图同步回退（以面板 1 断言）
+    await waitViewState('undo.md', (v) => v.text === original, 1)
+
+    // 无回声：undo/redo 作用于宿主历史，回流增量不得再次经 applyEdit 写回
+    const afterUndo = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterUndo.appliedEdits === 1, `undo 后 appliedEdits 应保持 1（无回声写回），实际 ${afterUndo.appliedEdits}`)
+
+    // redo 恢复
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'redo' })
+    await poll('redo 恢复宿主文档', () => (doc.getText() === edited ? true : undefined))
+    await waitViewState('undo.md', (v) => v.text === edited, 1)
+    const afterRedo = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterRedo.appliedEdits === 1, `redo 后 appliedEdits 应保持 1，实际 ${afterRedo.appliedEdits}`)
+  }],
+
+  ['宿主全局 undo/redo 命令作用于同一文档历史（命令面板路径）', async () => {
+    await openWithEditor('undo2.md')
+    const session = await waitSessionReady('undo2.md')
+    const uri = wsUri('undo2.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('undo2.md'))
+    const oneEdit = '全局命令撤销甲行A\n全局命令撤销乙行\n'
+    const twoEdits = '全局命令撤销甲行AB\n全局命令撤销乙行\n'
+
+    // 两笔编辑（逐笔等待生效，第二笔携带推进后的版本）。
+    // '全局命令撤销甲行'为 8 字符，行末插入点为 LF offset 8
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, {
+      kind: 'edit.request',
+      sessionId: '',
+      docUri: uri,
+      seq: 1,
+      baseVersion: session.version,
+      changes: [{ offset: 8, length: 0, text: 'A' }],
+    })
+    await poll('第一笔编辑生效', () => (doc.getText() === oneEdit ? true : undefined))
+    const s2 = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, {
+      kind: 'edit.request',
+      sessionId: '',
+      docUri: uri,
+      seq: 2,
+      baseVersion: s2.version,
+      changes: [{ offset: 9, length: 0, text: 'B' }],
+    })
+    await poll('第二笔编辑生效', () => (doc.getText() === twoEdits ? true : undefined))
+
+    // 全局 undo 命令（命令面板/Ctrl+Z 同一落点，不经 webview 消息）：
+    // 活动编辑器为 custom editor 时应作用于其 TextDocument 权威栈
+    await vscode.commands.executeCommand('undo')
+    await poll('全局 undo 撤销最后一笔', () => (doc.getText() === oneEdit ? true : undefined))
+
+    await vscode.commands.executeCommand('redo')
+    await poll('全局 redo 恢复', () => (doc.getText() === twoEdits ? true : undefined))
+
+    // 全程不得产生回声写回
+    const st = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(st.appliedEdits === 2, `appliedEdits 应保持 2，实际 ${st.appliedEdits}`)
+    // 还原
+    await vscode.commands.executeCommand('undo')
+    await vscode.commands.executeCommand('undo')
+    await poll('还原到已保存状态', () => (doc.getText() === '全局命令撤销甲行\n全局命令撤销乙行\n' ? true : undefined))
+  }],
+
+  ['webview 请求全文重同步获得权威全文（组合缓冲保守路径的宿主侧）', async () => {
+    await openWithEditor('resync.md')
+    await waitSessionReady('resync.md')
+    const uri = wsUri('resync.md').toString()
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'sync.request' })
+    const view = await waitViewState('resync.md', (v) => v.text === '重同步起始内容\n重同步第二段\n')
+    assert(view.text === '重同步起始内容\n重同步第二段\n', `resync 后视图应装载宿主全文：${JSON.stringify(view.text)}`)
+    // resync 不产生写回
+    const st = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(st.appliedEdits === 0, `resync 不应产生 applyEdit，实际 ${st.appliedEdits}`)
   }],
 ]

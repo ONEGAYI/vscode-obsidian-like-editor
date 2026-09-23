@@ -52,6 +52,22 @@ describe('isWebviewToHost', () => {
     ).toBe(true)
   })
 
+  it('接受合法 history.request（undo/redo）', () => {
+    expect(isWebviewToHost({ kind: 'history.request', op: 'undo' })).toBe(true)
+    expect(isWebviewToHost({ kind: 'history.request', op: 'redo' })).toBe(true)
+  })
+
+  it('拒绝非法 op 或缺字段的 history.request', () => {
+    expect(isWebviewToHost({ kind: 'history.request' })).toBe(false)
+    expect(isWebviewToHost({ kind: 'history.request', op: 'Undo' })).toBe(false)
+    expect(isWebviewToHost({ kind: 'history.request', op: 'other' })).toBe(false)
+    expect(isWebviewToHost({ kind: 'history.request', op: 1 })).toBe(false)
+  })
+
+  it('接受合法 sync.request', () => {
+    expect(isWebviewToHost({ kind: 'sync.request' })).toBe(true)
+  })
+
   it('拒绝 null、非对象与数组', () => {
     expect(isWebviewToHost(null)).toBe(false)
     expect(isWebviewToHost(undefined)).toBe(false)
@@ -133,6 +149,14 @@ describe('isHostToWebview', () => {
   it('拒绝 changes 非法的 doc.changed 与未知 origin', () => {
     expect(isHostToWebview({ kind: 'doc.changed', version: 5, changes: null, origin: 'external' })).toBe(false)
     expect(isHostToWebview({ kind: 'doc.changed', version: 5, changes: [], origin: 'other' })).toBe(false)
+  })
+
+  it('接受合法 doc.resync，拒绝缺失或非法字段', () => {
+    expect(isHostToWebview({ kind: 'doc.resync', version: 7, text: '权威全文' })).toBe(true)
+    expect(isHostToWebview({ kind: 'doc.resync', version: 7 })).toBe(false)
+    expect(isHostToWebview({ kind: 'doc.resync', version: -1, text: 'x' })).toBe(false)
+    expect(isHostToWebview({ kind: 'doc.resync', version: 1.5, text: 'x' })).toBe(false)
+    expect(isHostToWebview({ kind: 'doc.resync', version: 7, text: 42 })).toBe(false)
   })
 
   it('拒绝 null、非对象与 webview 方向的消息', () => {

@@ -23,6 +23,10 @@ class FakeDoc implements HostDocumentPort {
   applyCalls: SerChange[][] = []
   applyResult = true
   fireChangeOnApply = true
+  undoCalls = 0
+  redoCalls = 0
+  private undoStack: { changes: SerChange[]; before: string }[] = []
+  private redoStack: { changes: SerChange[]; before: string }[] = []
   private listener: ((changes: SerChange[], version: number) => void) | undefined
 
   constructor(text: string) {
@@ -45,11 +49,56 @@ class FakeDoc implements HostDocumentPort {
   async applyChanges(changes: SerChange[]): Promise<boolean> {
     this.applyCalls.push(changes)
     if (!this.applyResult) return false
+    this.undoStack.push({ changes, before: this.content })
+    this.redoStack = []
     this.content = applyToText(this.content, changes)
     this.ver++
     if (this.fireChangeOnApply) {
       this.listener?.(changes, this.ver)
     }
+    return true
+  }
+
+  /** 对已 pop 的编辑组计算精确逆（组内变更互不重叠时；基于其 before 文本） */
+  private invertFor(entry: { changes: SerChange[]; before: string }): SerChange[] {
+    const out: SerChange[] = []
+    for (const c of entry.changes) {
+      let delta = 0
+      for (const other of entry.changes) {
+        if (other !== c && other.offset + other.length <= c.offset) {
+          delta += other.text.length - other.length
+        }
+      }
+      const at = c.offset + delta
+      out.push({
+        offset: at,
+        length: c.text.length,
+        text: entry.before.slice(c.offset, c.offset + c.length),
+      })
+    }
+    return out
+  }
+
+  async undo(): Promise<boolean> {
+    this.undoCalls++
+    const top = this.undoStack.pop()
+    if (!top) return false
+    this.redoStack.push(top)
+    const inverse = this.invertFor(top)
+    this.content = top.before
+    this.ver++
+    this.listener?.(inverse, this.ver)
+    return true
+  }
+
+  async redo(): Promise<boolean> {
+    this.redoCalls++
+    const top = this.redoStack.pop()
+    if (!top) return false
+    this.undoStack.push(top)
+    this.content = applyToText(this.content, top.changes)
+    this.ver++
+    this.listener?.(top.changes, this.ver)
     return true
   }
 }
@@ -365,5 +414,100 @@ describe('view.state 诊断缓存', () => {
     })
     expect(s.session.getViewState(id)).toMatchObject({ renderedLines: 12, text: '# t' })
     expect(s.session.getViewState('other')).toBeUndefined()
+  })
+})
+
+describe('history.request（撤销/重做转发到权威栈）', () => {
+  async function editOnce(s: ReturnType<typeof setup>, id: string, seq: number, text: string) {
+    await s.send(id, {
+      kind: 'edit.request', sessionId: id, docUri: DOC_URI, seq, baseVersion: s.doc.ver,
+      changes: [{ offset: s.doc.content.length, length: 0, text }],
+    })
+  }
+
+  it('undo 请求调用 port.undo，逆变更作为外部变更广播给发起面板', async () => {
+    const s = setup('abc')
+    const id = s.attach()
+    await readyPanel(s, id)
+    await editOnce(s, id, 1, 'X') // 'abcX' v2
+    const ackCountBefore = s.sent.get(id)!.filter((m) => m.kind === 'edit.ack').length
+    await s.send(id, { kind: 'history.request', op: 'undo' })
+    expect(s.doc.undoCalls).toBe(1)
+    expect(s.doc.content).toBe('abc')
+    const msgs = s.sent.get(id)!
+    const changed = msgs.filter((m) => m.kind === 'doc.changed').at(-1)
+    expect(changed).toMatchObject({
+      kind: 'doc.changed',
+      version: 3,
+      changes: [{ offset: 3, length: 1, text: '' }],
+      origin: 'external',
+    })
+    // undo 不产生新 ack（不把逆变更误判为本会话编辑确认，防回声）
+    expect(msgs.filter((m) => m.kind === 'edit.ack')).toHaveLength(ackCountBefore)
+  })
+
+  it('redo 请求调用 port.redo 并把正向变更广播给面板', async () => {
+    const s = setup('abc')
+    const id = s.attach()
+    await readyPanel(s, id)
+    await editOnce(s, id, 1, 'X')
+    await s.send(id, { kind: 'history.request', op: 'undo' })
+    await s.send(id, { kind: 'history.request', op: 'redo' })
+    expect(s.doc.redoCalls).toBe(1)
+    expect(s.doc.content).toBe('abcX')
+    const changed = s.sent.get(id)!.filter((m) => m.kind === 'doc.changed').at(-1)
+    expect(changed).toMatchObject({
+      kind: 'doc.changed',
+      changes: [{ offset: 3, length: 0, text: 'X' }],
+      origin: 'external',
+    })
+  })
+
+  it('history 请求排在在途 edit.request 之后：编辑先应用再撤销', async () => {
+    const s = setup('abc')
+    const id = s.attach()
+    await readyPanel(s, id)
+    const p1 = editOnce(s, id, 1, 'X')
+    const p2 = s.send(id, { kind: 'history.request', op: 'undo' })
+    await Promise.all([p1, p2])
+    expect(s.doc.undoCalls).toBe(1)
+    // 编辑应用后立即被撤销：文本回到原文，且 undo 的逆变更广播出去
+    expect(s.doc.content).toBe('abc')
+  })
+
+  it('非法 op 的 history.request 被协议校验整体丢弃', async () => {
+    const s = setup('abc')
+    const id = s.attach()
+    await readyPanel(s, id)
+    await s.session.handleWebviewMessage({ kind: 'history.request', op: 'wrong' }, id)
+    expect(s.doc.undoCalls + s.doc.redoCalls).toBe(0)
+  })
+
+  it('未 ready 面板的 history.request 被忽略', async () => {
+    const s = setup('abc')
+    const id = s.attach()
+    await s.session.handleWebviewMessage({ kind: 'history.request', op: 'undo' }, id)
+    expect(s.doc.undoCalls).toBe(0)
+  })
+})
+
+describe('sync.request（webview 发起的全文重同步）', () => {
+  it('回复 doc.resync：附当前版本与 LF 化全文', async () => {
+    const s = setup('# 标题\r\n正文')
+    const id = s.attach()
+    await readyPanel(s, id)
+    s.doc.content = '# 标题\r\n外部改写'
+    s.doc.ver++
+    s.session.handleDocChanged([{ offset: 4, length: 2, text: '外部改写' }], 2)
+    await s.send(id, { kind: 'sync.request' })
+    const resync = s.sent.get(id)!.at(-1)
+    expect(resync).toMatchObject({ kind: 'doc.resync', version: 2, text: '# 标题\n外部改写' })
+  })
+
+  it('未 ready 面板的 sync.request 被忽略', async () => {
+    const s = setup('abc')
+    const id = s.attach()
+    await s.session.handleWebviewMessage({ kind: 'sync.request' }, id)
+    expect(s.sent.get(id)!.length).toBe(0)
   })
 })

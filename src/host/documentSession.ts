@@ -25,6 +25,10 @@ export interface HostDocumentPort {
   getText(): string
   /** 应用一组全文偏移变更；返回是否成功 */
   applyChanges(changes: SerChange[]): Promise<boolean>
+  /** 对权威文档执行宿主撤销（undoRedoService 文本栈）；返回是否执行 */
+  undo(): Promise<boolean>
+  /** 对权威文档执行宿主重做；返回是否执行 */
+  redo(): Promise<boolean>
 }
 
 /** 面板发送通道 */
@@ -122,6 +126,30 @@ export class DocumentSession {
         const task = this.queue.then(() => this.processEditRequest(panel, message))
         this.queue = task.catch(() => undefined)
         return task
+      }
+      case 'history.request': {
+        // 撤销/重做经队列串行：排在在途 edit.request 之后，保证撤销的是
+        // 已完整应用（含回流确认）的编辑；undo/redo 的文档变更经
+        // handleDocChanged 回流广播（逆变更不匹配任何 pending 正向变更，
+        // 天然走 external 分支，不会作为确认吞掉）
+        if (!panel.ready) {
+          return Promise.resolve()
+        }
+        const op = message.op
+        const task = this.queue.then(() => (op === 'undo' ? this.doc.undo() : this.doc.redo()))
+        this.queue = task.then(() => undefined, () => undefined)
+        return task.then(() => undefined)
+      }
+      case 'sync.request': {
+        if (!panel.ready) {
+          return Promise.resolve()
+        }
+        panel.port.send({
+          kind: 'doc.resync',
+          version: this.doc.version,
+          text: this.newline.toLfText(this.doc.getText()),
+        })
+        return Promise.resolve()
       }
       case 'view.state':
         panel.lastViewState = message

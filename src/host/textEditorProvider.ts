@@ -55,6 +55,12 @@ export function createTextEditorProvider(
         }
         return ok
       },
+      // 撤销/重做走宿主全局命令：活动编辑器为 CustomEditorInput 时，VSCode
+      // 1.86 的 undo MultiCommand 含 custom-editor 实现（priority 105），直接
+      // 调 undoRedoService.undo(resource) 作用于本文档的权威文本栈；产生的
+      // 变更经 onDidChangeTextDocument 回流广播，不经过 applyEdit（无回声）
+      undo: () => Promise.resolve(vscode.commands.executeCommand('undo')).then(() => true, () => false),
+      redo: () => Promise.resolve(vscode.commands.executeCommand('redo')).then(() => true, () => false),
     }
     fresh.session = new DocumentSession(port, { docUri: key })
     sessions.set(key, fresh)
