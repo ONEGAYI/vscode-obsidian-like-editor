@@ -32,6 +32,29 @@ body {
   outline: none;
 }
 
+/* 标题实时预览（#5 切片）：类名为稳定样式入口（ADR-0004），字号/字重
+   改变行高——因此必须是直接装饰（StateField），见 headings.ts */
+#app .cm-editor .cm-scroller .oile-heading-line {
+  font-weight: 600;
+  color: var(--vscode-editor-foreground);
+}
+
+#app .cm-editor .cm-scroller .oile-heading-line-1 { font-size: 1.55em; }
+#app .cm-editor .cm-scroller .oile-heading-line-2 { font-size: 1.35em; }
+#app .cm-editor .cm-scroller .oile-heading-line-3 { font-size: 1.2em; }
+#app .cm-editor .cm-scroller .oile-heading-line-4 { font-size: 1.1em; }
+#app .cm-editor .cm-scroller .oile-heading-line-5 { font-size: 1em; }
+#app .cm-editor .cm-scroller .oile-heading-line-6 { font-size: 1em; }
+
+/* 间接装饰（视口内纯样式，不改变高度）：标题行左缘强调与活动行源码态提示 */
+#app .cm-editor .cm-scroller .oile-heading-inview {
+  box-shadow: inset 3px 0 0 var(--vscode-textLink-foreground, #4fc1ff);
+}
+
+#app .cm-editor .cm-scroller .oile-heading-inview.oile-heading-active {
+  background-color: var(--vscode-editor-lineHighlightBackground, rgba(128, 128, 128, 0.12));
+}
+
 /* 冲突暂停横幅（#4）：稳定类名入口，颜色跟随 VSCode CSS 变量 */
 .oile-suspend-banner {
   align-items: center;

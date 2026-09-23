@@ -31,6 +31,8 @@ import {
   type SerChange,
 } from '../shared/protocol'
 import { mapChangeThroughChanges } from '../shared/changeMapping'
+import { headingDecorations } from './headings'
+import { runPerfProbe } from './perfProbe'
 
 /** webview 与宿主的通信通道（由 acquireVsCodeApi 适配） */
 export interface VsCodeBridge {
@@ -39,8 +41,9 @@ export interface VsCodeBridge {
   setState(state: unknown): void
 }
 
-/** 外部同步事务标记：updateListener 见到它即跳过（不回发） */
-const externalSync = Annotation.define<boolean>()
+/** 外部同步事务标记：updateListener 见到它即跳过（不回发）。
+ *  性能探针（#5）复用同一注解——探针编辑走渲染路径但不写回宿主 */
+export const externalSync = Annotation.define<boolean>()
 
 /**
  * 把一组外部增量（坐标基于缓冲开始前的文档）映射穿过缓冲挂起期间累积的
@@ -244,6 +247,24 @@ export class WebviewSyncController {
         break
       case 'view.state.request': {
         const doc = this.view?.state.doc
+        const content = this.view?.dom.querySelector('.cm-content')
+        // 标题装饰的可观测 DOM 文本：活动（源码态）与非活动（隐藏标记）
+        // 各取第一个样本，供集成测试断言 Live Preview 语义
+        let headingActiveText: string | undefined
+        let headingHiddenText: string | undefined
+        if (content) {
+          for (const el of Array.from(content.querySelectorAll<HTMLElement>('.oile-heading-line'))) {
+            const text = el.textContent ?? ''
+            if (text.startsWith('#')) {
+              headingActiveText ??= text
+            } else {
+              headingHiddenText ??= text
+            }
+            if (headingActiveText !== undefined && headingHiddenText !== undefined) {
+              break
+            }
+          }
+        }
         this.bridge.postMessage({
           kind: 'view.state',
           text: doc?.toString() ?? '',
@@ -251,7 +272,22 @@ export class WebviewSyncController {
           lineCount: doc?.lines ?? 0,
           renderedLines: this.view?.dom.querySelectorAll('.cm-line').length ?? 0,
           suspended: this.suspended,
+          contentDomCount: content ? content.querySelectorAll('*').length : 0,
+          headingLineCount: content ? content.querySelectorAll('.oile-heading-line').length : 0,
+          headingActiveText,
+          headingHiddenText,
         })
+        break
+      }
+      case 'perf.probe': {
+        // 异步执行（含 rAF 等待），完成后回报 perf.report（#5 性能测量通道）
+        const view = this.view
+        if (view) {
+          void runPerfProbe(view, {
+            typingRounds: message.typingRounds,
+            scrollRounds: message.scrollRounds,
+          }).then((report) => this.bridge.postMessage(report))
+        }
         break
       }
     }
@@ -482,6 +518,9 @@ export class WebviewSyncController {
   private extensions() {
     return [
       EditorView.lineWrapping,
+      // 标题实时预览装饰（#5 切片）：直接装饰（StateField）+ 间接装饰
+      // （ViewPlugin 按 visibleRanges），见 headings.ts 头注释
+      headingDecorations,
       ...this.extraExtensions,
       EditorView.updateListener.of((update) => {
         if (!update.docChanged) {
