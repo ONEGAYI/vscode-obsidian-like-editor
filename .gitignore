@@ -1,0 +1,14 @@
+# Node
+node_modules/
+
+# 构建产物
+out/
+dist/
+
+# VSCode 扩展打包
+*.vsix
+
+# 日志与系统文件
+*.log
+.DS_Store
+Thumbs.db
