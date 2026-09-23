@@ -27,6 +27,13 @@
         ],
         "priority": "option"
       }
+    ],
+    "commands": [
+      {
+        "command": "onegayi.obsidian-like-editor.toggleViewMode",
+        "title": "切换实时预览与阅读模式",
+        "category": "Obsidian-like Markdown Editor"
+      }
     ]
   },
   "scripts": {

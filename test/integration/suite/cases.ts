@@ -8,6 +8,7 @@ const EXT_ID = 'onegayi.vscode-obsidian-like-editor'
 const CMD = {
   sessionState: 'onegayi.obsidian-like-editor._test.getSessionState',
   injectMessage: 'onegayi.obsidian-like-editor._test.injectWebviewMessage',
+  postToPanel: 'onegayi.obsidian-like-editor._test.postToPanel',
   viewState: 'onegayi.obsidian-like-editor._test.requestViewState',
   conflictState: 'onegayi.obsidian-like-editor._test.getConflictState',
   resumePanel: 'onegayi.obsidian-like-editor._test.resumePanel',
@@ -23,6 +24,25 @@ const LF_DOC = '中文编辑测试\n\n包含 emoji：🎉 与组合 emoji 👨�
 const CRLF_DOC = '标题一\r\n正文 A 行\r\n正文 B 行\r\n'
 // 在 '- 列表项一' 行首插入 '插入的新段落\n' 后的期望全文
 const LF_DOC_AFTER_EDIT = '中文编辑测试\n\n包含 emoji：🎉 与组合 emoji 👨‍👩‍👧‍👦\n\n插入的新段落\n- 列表项一\n- 列表项二\n'
+// #6 模式切换 fixture（与 runTest.mjs 的 MODE_DOC 一致）
+const MODE_DOC_TEXT = [
+  '# 模式切换标题一',
+  '',
+  '第一段普通文本，包含中文与 emoji 🎉。',
+  '',
+  '## 中部二级标题',
+  '',
+  '- 普通列表项',
+  '- [ ] 未完成任务',
+  '- [x] 已完成任务',
+  '',
+  '```code',
+  '代码块内容（含 # 伪标题 与 - [ ] 伪任务）',
+  '```',
+  '',
+  '结尾段落。',
+  '',
+].join('\n')
 
 function wsUri(name: string): vscode.Uri {
   return vscode.Uri.file(`${wsDir}/${name}`)
@@ -80,6 +100,16 @@ interface ViewState {
   headingLineCount?: number
   headingActiveText?: string
   headingHiddenText?: string
+  /** #6 模式切换观测 */
+  viewMode?: 'live' | 'reading'
+  selectionOffset?: number
+  readingBlockCount?: number
+  readingAnchorStart?: number
+  cssProbe?: {
+    liveHeadingDecorationColor: string | null
+    readingHeadingDecorationColor: string | null
+    readingVarProbe: string | null
+  }
 }
 
 /** 性能探针回报（perf.report，结构见 src/shared/protocol.ts） */
@@ -558,5 +588,151 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // 探针不产生写回：宿主文档无 dirty 变化
     const doc = await vscode.workspace.openTextDocument(wsUri('perf-100k.md'))
     assert(!doc.isDirty, '性能探针不应污染宿主文档')
+  }],
+
+  // ---- 工单 #6：模式切换 / 源锚点 / 稳定样式契约 ----
+
+  ['模式切换：命令入口切换、未保存内容保留、不产生编辑历史（#6）', async () => {
+    await openWithEditor('mode.md')
+    await waitSessionReady('mode.md')
+    const uri = wsUri('mode.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('mode.md'))
+    const diskBefore = await readDisk('mode.md')
+
+    const liveView = await waitViewState('mode.md', (v) => v.viewMode === 'live')
+    assert(liveView.viewMode === 'live', '初始应为实时预览模式')
+
+    // 一笔未保存编辑：外部 applyEdit 写权威文档（dirty 未保存）并广播
+    // doc.changed——真实 webview 经此同步到编辑后文本（注入 edit.request
+    // 路径下真实面板不本地回显，无法验证未保存内容保留）
+    const extEdit = new vscode.WorkspaceEdit()
+    extEdit.replace(wsUri('mode.md'), new vscode.Range(0, 0, 0, 0), '未保存新段落\n\n')
+    assert(await vscode.workspace.applyEdit(extEdit), '外部修改应成功')
+    const editedText = `未保存新段落\n\n${MODE_DOC_TEXT}`
+    await poll('编辑生效', () => (doc.getText() === editedText ? true : undefined))
+    await waitViewState('mode.md', (v) => v.text === editedText)
+    assert(doc.isDirty, '编辑后文档应 dirty（未保存）')
+    const stateAfterEdit = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+
+    // 正式命令切换到阅读模式（活动 tab 为本编辑器）
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    const readingView = await poll('切换到阅读模式', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' ? v : undefined
+    })
+    // 未保存内容保留：阅读视图展示同一未保存文本
+    assert(readingView.text === editedText, `阅读模式文本应为未保存全文：${JSON.stringify(readingView.text.slice(0, 40))}…`)
+    assert((readingView.readingBlockCount ?? 0) >= 6, `阅读块数应 >=6（标题/段落/列表/任务/代码块），实际 ${readingView.readingBlockCount}`)
+    // 切换不产生编辑历史、不触发保存
+    const stateAfterToggle = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(stateAfterToggle.version === stateAfterEdit.version, `切换不得改变文档版本（${stateAfterEdit.version} → ${stateAfterToggle.version}）`)
+    assert(stateAfterToggle.appliedEdits === stateAfterEdit.appliedEdits, `切换不得产生 applyEdit（${stateAfterEdit.appliedEdits} → ${stateAfterToggle.appliedEdits}）`)
+    assert(doc.isDirty, '切换后文档仍应 dirty（未触发保存）')
+    const diskMid = await readDisk('mode.md')
+    assert(diskMid === diskBefore, '切换不得写磁盘')
+
+    // 切回实时预览：内容与光标语义保留
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    const backView = await poll('切回实时预览', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'live' ? v : undefined
+    })
+    assert(backView.text === editedText, '切回实时预览后未保存内容不丢失')
+
+    // 切换不在撤销栈：一次 undo 恰好回退那笔编辑（期间经历了 2 次模式切换）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('undo 回退唯一一笔编辑', () => (doc.getText() === MODE_DOC_TEXT ? true : undefined))
+    assert(doc.getText() === MODE_DOC_TEXT, 'undo 应回到编辑前原文（切换未入撤销栈）')
+  }],
+
+  ['模式切换锚点：以源码位置锚点恢复段落与光标，非滚动百分比（#6）', async () => {
+    await openWithEditor('mode-anchor.md')
+    await waitSessionReady('mode-anchor.md')
+    const uri = wsUri('mode-anchor.md').toString()
+
+    // 初始光标在文档首（offset 0）
+    const initial = await waitViewState('mode-anchor.md', (v) => v.selectionOffset !== undefined)
+    assert(initial.selectionOffset === 0, `初始光标应在 0，实际 ${initial.selectionOffset}`)
+
+    // 经 view.locate（#10 查找/跳转入口）把光标定位到第三段块首：
+    // '模式锚点第一段文字\n\n中间段落文本\n\n' 长度 21
+    const target = '模式锚点第一段文字\n\n中间段落文本\n\n'.length
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: target })
+    const located = await poll('view.locate 定位光标', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.selectionOffset === target ? v : undefined
+    })
+    assert(located.selectionOffset === target, `定位后光标应在 ${target}，实际 ${located.selectionOffset}`)
+
+    // 切到阅读：锚点映射到包含 target 的块（'最后段落结束' start=21）
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    const readingView = await poll('阅读模式锚点', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' && v.readingAnchorStart !== undefined ? v : undefined
+    })
+    assert(readingView.readingAnchorStart === target, `阅读锚点应为源块 start=${target}，实际 ${readingView.readingAnchorStart}`)
+    assert(readingView.readingBlockCount === 3, `锚点文档应 3 块，实际 ${readingView.readingBlockCount}`)
+    assert(readingView.text.includes('最后段落结束'), '阅读视图文本同步')
+
+    // 切回实时预览：光标恢复到锚点块源 start（对应段落与光标，非百分比）
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    const backView = await poll('恢复光标', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'live' && v.selectionOffset === target ? v : undefined
+    })
+    assert(backView.selectionOffset === target, `切回后光标应恢复 ${target}，实际 ${backView.selectionOffset}`)
+    // 全程无写回（定位与切换都不产生编辑历史）
+    const st = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(st.appliedEdits === 0, `锚点链路不应产生写回，实际 ${st.appliedEdits}`)
+  }],
+
+  ['稳定样式契约：内部测试 CSS 片段经稳定类名/变量命中两种视图（#6）', async () => {
+    await openWithEditor('mode.md')
+    await waitSessionReady('mode.md')
+    const uri = wsUri('mode.md').toString()
+
+    // live：探针片段经 .oile-heading-line-1 命中（text-decoration-color 无视觉影响）
+    const liveView = await waitViewState('mode.md', (v) => v.cssProbe?.liveHeadingDecorationColor !== undefined && v.viewMode === 'live')
+    assert(
+      liveView.cssProbe!.liveHeadingDecorationColor === 'rgb(1, 2, 3)',
+      `live 一级标题应被测试片段命中 rgb(1, 2, 3)，实际 ${liveView.cssProbe!.liveHeadingDecorationColor}`,
+    )
+
+    // reading：.oile-reading-heading-1 命中 + .oile-view-reading 变量可被覆盖读取
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    const readingView = await poll('阅读模式样式探针', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' && v.cssProbe?.readingHeadingDecorationColor !== undefined ? v : undefined
+    })
+    assert(
+      readingView.cssProbe!.readingHeadingDecorationColor === 'rgb(4, 5, 6)',
+      `阅读一级标题应被测试片段命中 rgb(4, 5, 6)，实际 ${readingView.cssProbe!.readingHeadingDecorationColor}`,
+    )
+    assert(
+      readingView.cssProbe!.readingVarProbe === 'contract-ok',
+      `阅读容器探针变量应被外部片段覆盖为 contract-ok，实际 ${readingView.cssProbe!.readingVarProbe}`,
+    )
+  }],
+
+  ['webview 重载后恢复阅读模式（webview 状态持久化，#6）', async () => {
+    await openWithEditor('mode.md')
+    await waitSessionReady('mode.md')
+    const uri = wsUri('mode.md').toString()
+
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await poll('进入阅读模式', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' ? true : undefined
+    })
+
+    // 重载 webview（Developer: Reload Webviews；retainContextWhenHidden 关闭：
+    // 销毁重建同一 panel，走 getState 恢复）
+    await vscode.commands.executeCommand('workbench.action.webview.reloadWebviewAction')
+    const restored = await poll('重载后恢复阅读模式', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' && v.text === MODE_DOC_TEXT && (v.readingBlockCount ?? 0) > 0 ? v : undefined
+    }, 30000)
+    assert(restored.viewMode === 'reading', '重载后应恢复阅读模式')
+    assert((restored.readingBlockCount ?? 0) >= 6, '重载后阅读视图应重建块结构')
   }],
 ]

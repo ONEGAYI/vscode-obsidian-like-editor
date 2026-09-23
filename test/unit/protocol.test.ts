@@ -281,3 +281,61 @@ describe('perf 探针协议（#5）', () => {
     ).toBe(false)
   })
 })
+
+describe('模式切换协议（#6）', () => {
+  const baseViewState = {
+    kind: 'view.state' as const,
+    text: '# t\n正文',
+    docLength: 5,
+    lineCount: 2,
+    renderedLines: 2,
+  }
+
+  it('接受合法 view.mode.set（live/reading/toggle）', () => {
+    expect(isHostToWebview({ kind: 'view.mode.set', mode: 'live' })).toBe(true)
+    expect(isHostToWebview({ kind: 'view.mode.set', mode: 'reading' })).toBe(true)
+    expect(isHostToWebview({ kind: 'view.mode.set', mode: 'toggle' })).toBe(true)
+  })
+
+  it('拒绝非法 mode、缺字段与方向颠倒', () => {
+    expect(isHostToWebview({ kind: 'view.mode.set', mode: 'preview' })).toBe(false)
+    expect(isHostToWebview({ kind: 'view.mode.set', mode: 1 })).toBe(false)
+    expect(isHostToWebview({ kind: 'view.mode.set' })).toBe(false)
+    // view.mode.set 是宿主方向：不得经 webview → 宿主校验
+    expect(isWebviewToHost({ kind: 'view.mode.set', mode: 'toggle' })).toBe(false)
+  })
+
+  it('接受合法 view.locate，拒绝负数/非整数/缺字段', () => {
+    expect(isHostToWebview({ kind: 'view.locate', offset: 12 })).toBe(true)
+    expect(isHostToWebview({ kind: 'view.locate', offset: 0 })).toBe(true)
+    expect(isHostToWebview({ kind: 'view.locate', offset: -1 })).toBe(false)
+    expect(isHostToWebview({ kind: 'view.locate', offset: 1.5 })).toBe(false)
+    expect(isHostToWebview({ kind: 'view.locate', offset: '12' })).toBe(false)
+    expect(isHostToWebview({ kind: 'view.locate' })).toBe(false)
+  })
+
+  it('view.state 接受模式诊断可选字段，拒绝类型错误', () => {
+    expect(
+      isWebviewToHost({ ...baseViewState, viewMode: 'reading', selectionOffset: 3, readingBlockCount: 5, readingAnchorStart: 0 }),
+    ).toBe(true)
+    expect(isWebviewToHost({ ...baseViewState, viewMode: 'preview' })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, viewMode: 1 })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, selectionOffset: -1 })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, selectionOffset: '3' })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, readingBlockCount: 1.5 })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, readingAnchorStart: null })).toBe(false)
+  })
+
+  it('view.state 接受合法 cssProbe（字段可为 null），拒绝结构错误', () => {
+    const probe = {
+      liveHeadingDecorationColor: 'rgb(1, 2, 3)',
+      readingHeadingDecorationColor: null,
+      readingVarProbe: 'contract-ok',
+    }
+    expect(isWebviewToHost({ ...baseViewState, cssProbe: probe })).toBe(true)
+    expect(isWebviewToHost({ ...baseViewState, cssProbe: { ...probe, readingVarProbe: 42 } })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, cssProbe: { liveHeadingDecorationColor: 'x' } })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, cssProbe: null })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, cssProbe: 'x' })).toBe(false)
+  })
+})

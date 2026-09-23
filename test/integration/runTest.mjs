@@ -19,6 +19,27 @@ const RESYNC_DOC = '重同步起始内容\n重同步第二段\n'
 const CONFLICT_DOC = '第一段原文甲\n第二段原文乙\n'
 const SPLIT_CONFLICT_DOC = '分裂测试行一\n分裂测试行二\n'
 const HEADING_DOC = '# 顶部一级标题\n普通段落第一行内容\n普通段落第二行内容\n## 中部二级标题\n另一段普通内容结尾\n'
+// #6 模式切换：标题/段落/任务列表/代码围栏（围栏内含伪语法）
+const MODE_DOC = [
+  '# 模式切换标题一',
+  '',
+  '第一段普通文本，包含中文与 emoji 🎉。',
+  '',
+  '## 中部二级标题',
+  '',
+  '- 普通列表项',
+  '- [ ] 未完成任务',
+  '- [x] 已完成任务',
+  '',
+  '```code',
+  '代码块内容（含 # 伪标题 与 - [ ] 伪任务）',
+  '```',
+  '',
+  '结尾段落。',
+  '',
+].join('\n')
+// #6 锚点恢复：无特殊语法的多段落（块边界清晰）
+const MODE_ANCHOR_DOC = '模式锚点第一段文字\n\n中间段落文本\n\n最后段落结束\n'
 const LARGE_LINES = 100_000
 
 const wsDir = mkdtempSync(path.join(tmpdir(), 'oile-itest-'))
@@ -33,6 +54,8 @@ try {
   writeFileSync(path.join(wsDir, 'conflict.md'), CONFLICT_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'splitconflict.md'), SPLIT_CONFLICT_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'heading.md'), HEADING_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'mode.md'), MODE_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'mode-anchor.md'), MODE_ANCHOR_DOC, 'utf8')
   const largeLines = Array.from({ length: LARGE_LINES }, (_, i) => `第 ${i + 1} 行 ——固定宽度填充文本，用于长文档视口渲染验证——`)
   writeFileSync(path.join(wsDir, 'large.md'), largeLines.join('\n') + '\n', 'utf8')
   // 性能体量对比样例（#5）：同构普通段落 + 每 50 行一个二级标题

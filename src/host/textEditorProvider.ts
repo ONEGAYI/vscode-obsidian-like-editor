@@ -216,6 +216,36 @@ export function createTextEditorProvider(
     }),
   )
 
+  // ---- 模式切换命令（#6）：活动 tab 为本扩展 custom editor 时向其面板
+  // 发送 view.mode.set；模式是 webview 视图状态，不写 TextDocument ----
+  context.subscriptions.push(
+    vscode.commands.registerCommand('onegayi.obsidian-like-editor.toggleViewMode', async () => {
+      const tab = vscode.window.tabGroups.activeTabGroup.activeTab
+      const input = tab?.input
+      // 1.86 类型契约：custom editor 的 tab input 为 TabInputCustom（uri + viewType）
+      if (
+        input instanceof vscode.TabInputCustom &&
+        input.viewType === VIEW_TYPE
+      ) {
+        const entry = getEntry(input.uri)
+        const panels = entry?.session.getInfo().panels.filter((p) => p.ready) ?? []
+        if (panels.length > 0) {
+          for (const panel of panels) {
+            entry!.session.postToPanel(panel.sessionId, {
+              kind: 'view.mode.set',
+              mode: 'toggle',
+            })
+          }
+          return true
+        }
+      }
+      await vscode.window.showWarningMessage(
+        '请先聚焦一个 Obsidian-like Markdown Editor 编辑器面板，再切换实时预览/阅读模式',
+      )
+      return false
+    }),
+  )
+
   // ---- 测试钩子命令：仅用于集成测试观测与注入，生产无副作用 ----
   context.subscriptions.push(
     vscode.commands.registerCommand('onegayi.obsidian-like-editor._test.getSessionState', (uriStr: string) => {
@@ -244,6 +274,21 @@ export function createTextEditorProvider(
           { ...message, sessionId: panel.sessionId },
           panel.sessionId,
         )
+      },
+    ),
+    vscode.commands.registerCommand(
+      // 宿主 → webview 方向的消息注入钩子：与 injectWebviewMessage（webview →
+      // 宿主）对称，供集成测试驱动 view.mode.set / view.locate 等正式消息
+      'onegayi.obsidian-like-editor._test.postToPanel',
+      async (uriStr: string, message: Record<string, unknown>, panelIndex = 0) => {
+        const entry = getEntry(vscode.Uri.parse(uriStr))
+        const panels = entry?.session.getInfo().panels.filter((p) => p.ready) ?? []
+        const panel = panels[panelIndex]
+        if (!entry || !panel) {
+          throw new Error(`无可用会话面板：${uriStr}`)
+        }
+        entry.session.postToPanel(panel.sessionId, message as HostToWebview)
+        return true
       },
     ),
     vscode.commands.registerCommand(
@@ -334,6 +379,11 @@ function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): st
   const styleUri = webview.asWebviewUri(
     vscode.Uri.joinPath(extensionUri, 'out', 'webview', 'main.css'),
   )
+  // 稳定样式契约内部测试片段（#6）：验证外部样式表可经稳定类名/变量
+  // 定位两种视图；一期不提供用户 CSS 加载（见 docs/design/obsidian-selector-map.md）
+  const probeCssUri = webview.asWebviewUri(
+    vscode.Uri.joinPath(extensionUri, 'media', 'css-contract-probe.css'),
+  )
   const csp = [
     `default-src 'none'`,
     `img-src ${webview.cspSource} https:`,
@@ -348,6 +398,7 @@ function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): st
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link href="${styleUri}" rel="stylesheet">
+<link href="${probeCssUri}" rel="stylesheet">
 <title>Obsidian-like Markdown Editor</title>
 </head>
 <body>

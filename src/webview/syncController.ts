@@ -28,17 +28,37 @@ import { Annotation, ChangeSet, EditorState, type Extension } from '@codemirror/
 import { EditorView, keymap } from '@codemirror/view'
 import {
   isHostToWebview,
+  type CssProbeReport,
   type SerChange,
 } from '../shared/protocol'
 import { mapChangeThroughChanges } from '../shared/changeMapping'
 import { headingDecorations } from './headings'
 import { runPerfProbe } from './perfProbe'
+import {
+  createReadingContainer,
+  findReadingAnchor,
+  readingAnchorStartFor,
+  renderReadingBlocks,
+  scrollReadingToOffset,
+  scrollReadingToSrcStart,
+} from './readingView'
 
 /** webview 与宿主的通信通道（由 acquireVsCodeApi 适配） */
 export interface VsCodeBridge {
   postMessage(message: unknown): void
   getState<T>(): T | undefined
   setState(state: unknown): void
+}
+
+/** 视图模式（#6）：live=实时预览（CM6 编辑），reading=阅读（只读渲染） */
+export type ViewMode = 'live' | 'reading'
+
+/** webview 持久化状态（retainContextWhenHidden 关闭时重载恢复） */
+interface PersistedState {
+  seq?: number
+  viewMode?: ViewMode
+  /** 最近一次模式锚点（UTF-16 offset）：live=光标主位，reading=锚点块 start */
+  anchor?: number
 }
 
 /** 外部同步事务标记：updateListener 见到它即跳过（不回发）。
@@ -114,6 +134,17 @@ export class WebviewSyncController {
   private seq: number
   private extraExtensions: Extension[] = []
 
+  // ---- 视图模式状态（#6）----
+  /** 当前模式：不写 TextDocument、不入撤销栈，切换只 dispatch 选区/effects */
+  private viewMode: ViewMode
+  /** 最近模式锚点：live=光标主位；reading=锚点块 src-start（源码位置锚点） */
+  private modeAnchor: number | null
+  /** live 容器（稳定类名 oile-view-live，内含 CM6 编辑器） */
+  private liveWrapper: HTMLElement | undefined
+  /** 阅读容器（稳定类名 oile-view-reading，块级源锚点结构） */
+  private readingContainer: HTMLElement | undefined
+  private toolbar: HTMLElement | undefined
+
   // ---- 冲突暂停状态（#4）----
   /** 暂停写回：保留本地文本、忽略外部增量、不再发送 edit.request */
   private suspended = false
@@ -136,8 +167,10 @@ export class WebviewSyncController {
   private flushTimer: ReturnType<typeof setTimeout> | undefined
 
   constructor(private readonly bridge: VsCodeBridge) {
-    const saved = bridge.getState<{ seq?: unknown }>()
+    const saved = bridge.getState<PersistedState>()
     this.seq = typeof saved?.seq === 'number' && saved.seq >= 0 ? Math.floor(saved.seq) : 0
+    this.viewMode = saved?.viewMode === 'reading' ? 'reading' : 'live'
+    this.modeAnchor = typeof saved?.anchor === 'number' && saved.anchor >= 0 ? Math.floor(saved.anchor) : null
   }
 
   /** 创建编辑器视图并向宿主发送 ready（HTML 加载完成后调用一次） */
@@ -146,12 +179,32 @@ export class WebviewSyncController {
       return
     }
     this.extraExtensions = extraExtensions
+    this.toolbar = this.buildToolbar()
     this.banner = this.buildBanner()
+    this.liveWrapper = document.createElement('div')
+    this.liveWrapper.className = 'oile-view-live'
+    this.readingContainer = createReadingContainer()
+    this.readingContainer.style.display = 'none'
+    // 阅读滚动更新锚点（用户滚动即改变"当前位置"语义；短文档滚不动时
+    // 锚点保持进入/定位时的值——视口读取无法表达目标，modeAnchor 是权威）
+    this.readingContainer.addEventListener('scroll', () => {
+      const container = this.readingContainer
+      if (container && container.scrollHeight > 0) {
+        const anchor = findReadingAnchor(container)
+        if (anchor !== null) {
+          this.modeAnchor = anchor
+        }
+      }
+    })
+    parent.appendChild(this.toolbar)
     parent.appendChild(this.banner)
+    parent.appendChild(this.liveWrapper)
+    parent.appendChild(this.readingContainer)
     this.view = new EditorView({
-      parent,
+      parent: this.liveWrapper,
       state: EditorState.create({ doc: '', extensions: this.extensions() }),
     })
+    this.applyModeDom(this.viewMode)
     this.bridge.postMessage({ kind: 'ready' })
   }
 
@@ -168,6 +221,12 @@ export class WebviewSyncController {
     this.view = undefined
     this.banner?.remove()
     this.banner = undefined
+    this.toolbar?.remove()
+    this.toolbar = undefined
+    this.liveWrapper?.remove()
+    this.liveWrapper = undefined
+    this.readingContainer?.remove()
+    this.readingContainer = undefined
   }
 
   /** 宿主消息入口（window message 事件转发） */
@@ -179,7 +238,7 @@ export class WebviewSyncController {
       case 'init':
         this.sessionId = message.sessionId
         this.docUri = message.docUri
-        this.handleFullSync(message.version, message.text)
+        this.handleFullSync(message.version, message.text, { restoreAnchor: true })
         break
       case 'edit.ack': {
         if (this.suspended) {
@@ -245,6 +304,27 @@ export class WebviewSyncController {
         // 宿主通知：面板处于暂停状态（典型为 webview 重载后的状态恢复）
         this.enterSuspended()
         break
+      case 'view.mode.set':
+        // 模式切换指令（宿主命令路径；webview 按钮走同一状态机）
+        this.setViewMode(message.mode)
+        break
+      case 'view.locate': {
+        // 定位（#10 查找/跳转入口）：光标移到源 offset；reading 滚动到块。
+        // 纯视图操作——事务不带 changes，不产生编辑历史
+        const pos = this.clampToDoc(message.offset)
+        if (this.viewMode === 'reading' && this.readingContainer) {
+          const start = readingAnchorStartFor(this.readingContainer, pos) ?? pos
+          this.modeAnchor = start
+          scrollReadingToSrcStart(this.readingContainer, start)
+        } else {
+          this.modeAnchor = pos
+          this.view?.dispatch({
+            selection: { anchor: pos },
+            effects: EditorView.scrollIntoView(pos, { y: 'center' }),
+          })
+        }
+        break
+      }
       case 'view.state.request': {
         const doc = this.view?.state.doc
         const content = this.view?.dom.querySelector('.cm-content')
@@ -265,6 +345,7 @@ export class WebviewSyncController {
             }
           }
         }
+        const readingActive = this.viewMode === 'reading' && this.readingContainer
         this.bridge.postMessage({
           kind: 'view.state',
           text: doc?.toString() ?? '',
@@ -276,6 +357,20 @@ export class WebviewSyncController {
           headingLineCount: content ? content.querySelectorAll('.oile-heading-line').length : 0,
           headingActiveText,
           headingHiddenText,
+          viewMode: this.viewMode,
+          selectionOffset: this.view?.state.selection.main.from ?? 0,
+          readingBlockCount: readingActive
+            ? this.readingContainer!.querySelectorAll('.oile-reading-block').length
+            : 0,
+          // 锚点块 start 经源 offset → 块身份的纯数据映射（不依赖布局）
+          readingAnchorStart:
+            readingActive && this.modeAnchor !== null
+              ? (readingAnchorStartFor(
+                  this.readingContainer!,
+                  this.clampToDoc(this.modeAnchor),
+                ) ?? undefined)
+              : undefined,
+          cssProbe: this.collectCssProbe(),
         })
         break
       }
@@ -323,15 +418,33 @@ export class WebviewSyncController {
 
   /** 全文同步（init / doc.resync）：组合中缓冲，否则立即重置。
    *  doc.resync 对暂停面板兼作恢复信号：重置文本并解除暂停（#4）。
-   *  组合中的恢复（含暂停解除）延后到 flush。 */
-  private handleFullSync(version: number, text: string): void {
+   *  组合中的恢复（含暂停解除）延后到 flush。
+   *  init 路径（restoreAnchor）额外恢复持久化的模式锚点：reading 滚动到
+   *  锚点块，live 恢复光标（webview 重载场景，#6）。 */
+  private handleFullSync(
+    version: number,
+    text: string,
+    opts: { restoreAnchor?: boolean } = {},
+  ): void {
     if (this.composing || this.hasBufferedSync()) {
       this.pendingFull = { version, text }
       this.pendingExternal = []
-    } else {
-      this.baseVersion = version
-      this.replaceDoc(text)
-      this.exitSuspended()
+      return
+    }
+    this.baseVersion = version
+    this.replaceDoc(text)
+    this.exitSuspended()
+    this.refreshReading()
+    if (opts.restoreAnchor) {
+      if (this.viewMode === 'reading') {
+        if (this.modeAnchor !== null && this.readingContainer) {
+          scrollReadingToOffset(this.readingContainer, this.clampToDoc(this.modeAnchor))
+        }
+      } else if (this.modeAnchor !== null && this.modeAnchor > 0) {
+        // 恢复光标：不带 changes 的事务，不产生编辑历史
+        const pos = this.clampToDoc(this.modeAnchor)
+        this.view?.dispatch({ selection: { anchor: pos } })
+      }
     }
   }
 
@@ -353,6 +466,140 @@ export class WebviewSyncController {
     return this.pendingExternal.length > 0 || this.pendingFull !== undefined
   }
 
+  // ---- 视图模式状态机（#6）----
+  // 模式是纯 webview 视图状态：切换绝不 dispatch 文本变更（不入撤销栈、
+  // 不触发保存、未保存内容原地保留），只做容器显隐、锚点映射与选区恢复。
+  // 宿主 TextDocument 版本因此不受切换影响。
+
+  /** 切换入口（宿主 view.mode.set 消息与工具栏按钮共用） */
+  private setViewMode(target: 'live' | 'reading' | 'toggle'): void {
+    const next: ViewMode =
+      target === 'toggle' ? (this.viewMode === 'live' ? 'reading' : 'live') : target
+    if (next === this.viewMode) {
+      this.persistState()
+      return
+    }
+    if (next === 'reading') {
+      // 锚点 = live 光标主位（选区最小 from）；阅读视图按当前 CM6 文本渲染
+      // （含未确认输入），不依赖宿主权威。锚点随即规范化为块 start——
+      // 短文档滚动无法表达目标时 modeAnchor 仍是权威锚点
+      const sel = this.view?.state.selection
+      const cursor = sel
+        ? Math.min(...sel.ranges.map((r) => r.from))
+        : this.modeAnchor ?? 0
+      this.modeAnchor = cursor
+      this.applyModeDom('reading') // 先更新模式（refreshReading 依赖它）
+      this.refreshReading()
+      if (this.readingContainer) {
+        const start = readingAnchorStartFor(this.readingContainer, this.clampToDoc(cursor)) ?? cursor
+        this.modeAnchor = start
+        scrollReadingToSrcStart(this.readingContainer, start)
+      }
+      return
+    }
+    // reading → live：源码位置锚点 = modeAnchor（用户滚动经 scroll 监听
+    // 更新；进入/定位时规范化），非滚动百分比
+    if (this.readingContainer && this.modeAnchor !== null) {
+      const mapped = readingAnchorStartFor(
+        this.readingContainer,
+        this.clampToDoc(this.modeAnchor),
+      )
+      if (mapped !== null) {
+        this.modeAnchor = mapped
+      }
+    }
+    this.applyModeDom('live')
+    // 恢复光标到锚点并滚动到视口中部；事务不带 changes → 不产生编辑历史
+    const pos = this.clampToDoc(this.modeAnchor ?? 0)
+    this.view?.dispatch({
+      selection: { anchor: pos },
+      effects: EditorView.scrollIntoView(pos, { y: 'center' }),
+    })
+  }
+
+  /** 容器显隐与按钮文案（稳定类名 oile-view-live / oile-view-reading） */
+  private applyModeDom(mode: ViewMode): void {
+    this.viewMode = mode
+    if (this.liveWrapper) {
+      this.liveWrapper.style.display = mode === 'live' ? '' : 'none'
+    }
+    if (this.readingContainer) {
+      this.readingContainer.style.display = mode === 'reading' ? '' : 'none'
+    }
+    const btn = this.toolbar?.querySelector<HTMLButtonElement>('button.oile-mode-toggle')
+    if (btn) {
+      btn.textContent = mode === 'live' ? '切换到阅读模式' : '切换到实时预览'
+    }
+    this.persistState()
+  }
+
+  /** 阅读模式下按当前 CM6 文本重建阅读视图（保留滚动锚点）。
+   *  调用点：进入 reading、全文重置（init/resync）、外部增量应用后。
+   *  全量重建是 #6 基础版实现（外部变更不属键入路径）；#7 改按需挂载。 */
+  private refreshReading(): void {
+    if (this.viewMode !== 'reading' || !this.readingContainer || !this.view) {
+      return
+    }
+    // 布局可用才读视口锚点（否则保留当前锚点 offset，重建后再映射）
+    const hasLayout = this.readingContainer.scrollHeight > 0
+    const keep = hasLayout ? findReadingAnchor(this.readingContainer) : null
+    renderReadingBlocks(this.readingContainer, this.view.state.doc.toString())
+    if (keep !== null) {
+      scrollReadingToSrcStart(this.readingContainer, keep)
+      this.modeAnchor = keep
+    }
+  }
+
+  private clampToDoc(offset: number): number {
+    return Math.max(0, Math.min(offset, this.view?.state.doc.length ?? 0))
+  }
+
+  /** CSS 契约探针（#6 内部测试验证入口）：宿主注入的测试片段仅经稳定
+   *  类名定位；此处在 view.state 请求时读取 computed style 回报。
+   *  jsdom 无样式表计算，值可为空串/空变量（返回 null），真实断言在集成。 */
+  private collectCssProbe(): CssProbeReport {
+    const liveEl = this.liveWrapper?.querySelector('.oile-heading-line-1') ?? null
+    const readingEl = this.readingContainer?.querySelector('.oile-reading-heading-1') ?? null
+    const read = (el: Element | null): string | null =>
+      el ? getComputedStyle(el).textDecorationColor : null
+    let readingVarProbe: string | null = null
+    if (this.readingContainer) {
+      const value = getComputedStyle(this.readingContainer)
+        .getPropertyValue('--oile-probe-var-reading')
+        .trim()
+      readingVarProbe = value === '' ? null : value
+    }
+    return {
+      liveHeadingDecorationColor: read(liveEl),
+      readingHeadingDecorationColor: read(readingEl),
+      readingVarProbe,
+    }
+  }
+
+  /** 持久化（合并写入）：seq、viewMode、anchor 共存互不覆盖 */
+  private persistState(): void {
+    const saved = this.bridge.getState<PersistedState>() ?? {}
+    this.bridge.setState({
+      ...saved,
+      seq: this.seq,
+      viewMode: this.viewMode,
+      anchor: this.modeAnchor ?? undefined,
+    })
+  }
+
+  /** 切换入口工具栏（#6）：按钮与宿主命令走同一状态机 */
+  private buildToolbar(): HTMLElement {
+    const bar = document.createElement('div')
+    bar.className = 'oile-toolbar'
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'oile-mode-toggle'
+    btn.textContent = '切换到阅读模式'
+    btn.addEventListener('click', () => this.setViewMode('toggle'))
+    bar.appendChild(btn)
+    return bar
+  }
+
   /** 把 SerChange 组转为 clamp 到当前文档长度的 CM change spec */
   private clampedSpec(changes: readonly SerChange[]) {
     const len = this.view?.state.doc.length ?? 0
@@ -366,7 +613,7 @@ export class WebviewSyncController {
   /**
    * 外部增量以单事务应用（externalSync 注解，不回发）；
    * 区间 clamp 到当前文档长度（宿主与本地状态的毫秒级竞态防御，
-   * 避免超范围坐标抛错）
+   * 避免超范围坐标抛错）。阅读模式下随后重建阅读视图（保留滚动锚点）。
    */
   private dispatchExternal(changes: readonly SerChange[]): void {
     const view = this.view
@@ -374,6 +621,7 @@ export class WebviewSyncController {
       return
     }
     view.dispatch({ changes: this.clampedSpec(changes), annotations: externalSync.of(true) })
+    this.refreshReading()
   }
 
   /**
@@ -410,6 +658,7 @@ export class WebviewSyncController {
       this.pendingExternal = []
       this.unconfirmed = null
       this.replaceDoc(text)
+      this.refreshReading()
       this.baseVersion = Math.max(version, ackVersion ?? version)
       return
     }
@@ -446,6 +695,7 @@ export class WebviewSyncController {
       // 缓冲应用完且无在途请求：本地与权威一致
       this.unconfirmed = null
     }
+    this.refreshReading()
     this.baseVersion = Math.max(lastVersion, ackVersion ?? lastVersion)
   }
 
@@ -548,7 +798,7 @@ export class WebviewSyncController {
             continue
           }
           this.seq += 1
-          this.bridge.setState({ seq: this.seq })
+          this.persistState() // 合并写入：保留 viewMode/anchor（#6）
           this.inFlight.add(this.seq)
           this.bridge.postMessage({
             kind: 'edit.request',
