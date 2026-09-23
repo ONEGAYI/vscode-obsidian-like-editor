@@ -164,12 +164,23 @@ describe('外部变更与重同步', () => {
     expect(req.baseVersion).toBe(5)
   })
 
-  it('ack 失败携带全文时重置文档为宿主文本', () => {
-    const { bridge } = makeBridge()
+  it('ack 失败且本地有未确认输入时保留本地文本（#4：不覆盖）', () => {
+    const { bridge, sent } = makeBridge()
     const c = mount(bridge)
     init(c, '本地草稿', 1)
     c.getView()!.dispatch({ changes: { from: 4, insert: '更多' } })
-    c.handleHostMessage({ kind: 'edit.ack', seq: 1, ok: false, reason: 'stale', version: 9, text: '权威文本' })
+    c.handleHostMessage({ kind: 'edit.ack', seq: 1, ok: false, reason: 'conflict', version: 9, text: '权威文本' })
+    // 未确认输入保留，不被权威全文覆盖；进入暂停并上报
+    expect(c.getView()!.state.doc.toString()).toBe('本地草稿更多')
+    const report = sent.find((m) => m.kind === 'conflict.report')
+    expect(report).toMatchObject({ text: '本地草稿更多' })
+  })
+
+  it('ack 失败且本地无未确认输入时以全文重置（干净恢复路径）', () => {
+    const { bridge } = makeBridge()
+    const c = mount(bridge)
+    init(c, '旧文本', 1)
+    c.handleHostMessage({ kind: 'edit.ack', seq: 3, ok: false, reason: 'conflict', version: 9, text: '权威文本' })
     expect(c.getView()!.state.doc.toString()).toBe('权威文本')
   })
 

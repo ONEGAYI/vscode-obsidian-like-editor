@@ -244,7 +244,7 @@ describe('edit.request 校验与写回', () => {
     expect(ack2).toMatchObject({ seq: 2, ok: true, version: 3 })
   })
 
-  it('baseVersion 过期且区间被覆盖时拒绝并附全文', async () => {
+  it('baseVersion 过期且区间被覆盖时拒绝并附全文（#4 起进入 conflict 暂停保留）', async () => {
     const s = setup()
     const id = s.attach()
     await readyPanel(s, id)
@@ -258,7 +258,7 @@ describe('edit.request 校验与写回', () => {
     })
     expect(s.doc.applyCalls).toHaveLength(1)
     const ack2 = s.sent.get(id)!.filter((m) => m.kind === 'edit.ack')[1]
-    expect(ack2).toMatchObject({ seq: 2, ok: false, reason: 'stale' })
+    expect(ack2).toMatchObject({ seq: 2, ok: false, reason: 'conflict' })
     if (ack2?.kind === 'edit.ack' && !ack2.ok) {
       expect(ack2.text).toBe(s.doc.content)
     }
