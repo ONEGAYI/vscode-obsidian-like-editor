@@ -3,6 +3,7 @@
   "displayName": "Obsidian-like Markdown Editor",
   "description": "在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验",
   "version": "0.1.0",
+  "publisher": "onegayi",
   "engines": {
     "vscode": "^1.86.0"
   },
