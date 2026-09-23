@@ -1,5 +1,7 @@
-// 性能测量启动器（工单 #5）：生成 1千/1万/10万行样例 fixture，启动
-// VSCode 1.86.2 宿主执行 test/perf/suite.ts，报告写入 docs/perf/data/。
+// 性能测量启动器（工单 #5/#7）：生成样例 fixture，启动 VSCode 1.86.2 宿主
+// 执行 test/perf/suite.ts，报告写入 docs/perf/data/。
+// - perf-{size}.md（#5）：同构普通段落（相邻行合并为大段），CM6 视口测量
+// - reading-{size}.md（#7）：每行一块（空行分隔），阅读视图按需挂载测量
 //
 // 用法：node test/perf/runPerf.mjs [输出目录=docs/perf/data]
 import { runTests } from '@vscode/test-electron'
@@ -7,10 +9,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { generatePerfSample } from './gen-sample.mjs'
+import { generatePerfSample, generateReadingSample, generateGiantBlockSample } from './gen-sample.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
-const outDir = path.resolve(process.argv[2] ?? path.join(root, 'docs', 'perf', 'data'))
+const outDir = process.argv[2] ?? path.join(root, 'docs', 'perf', 'data')
 const SIZES = [
   ['1k', 1_000],
   ['10k', 10_000],
@@ -21,7 +23,10 @@ const wsDir = mkdtempSync(path.join(tmpdir(), 'oile-perf-'))
 try {
   for (const [name, lines] of SIZES) {
     writeFileSync(path.join(wsDir, `perf-${name}.md`), generatePerfSample(lines), 'utf8')
+    writeFileSync(path.join(wsDir, `reading-${name}.md`), generateReadingSample(lines), 'utf8')
   }
+  // 超大单块（#7 限制记录）：2 万行未拆分围栏
+  writeFileSync(path.join(wsDir, 'reading-giant.md'), generateGiantBlockSample(20_000), 'utf8')
   mkdirSync(outDir, { recursive: true })
   console.log(`[runPerf] fixture 工作区：${wsDir}`)
   console.log(`[runPerf] 报告目录：${outDir}`)

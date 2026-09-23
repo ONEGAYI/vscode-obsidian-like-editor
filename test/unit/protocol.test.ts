@@ -339,3 +339,92 @@ describe('模式切换协议（#6）', () => {
     expect(isWebviewToHost({ ...baseViewState, cssProbe: 'x' })).toBe(false)
   })
 })
+
+describe('阅读视图按需挂载协议（#7）', () => {
+  const baseViewState = {
+    kind: 'view.state' as const,
+    text: '# t\n正文',
+    docLength: 5,
+    lineCount: 2,
+    renderedLines: 2,
+  }
+  const emptySnapshot = { mountedBlocks: 0, contentDomCount: 0, scrollTopPx: 0, scrollHeightPx: 0 }
+  const validSnapshot = { mountedBlocks: 28, contentDomCount: 30, scrollTopPx: 1200.5, scrollHeightPx: 3700.25 }
+
+  it('接受合法 reading.perf，拒绝非正整数轮数', () => {
+    expect(isHostToWebview({ kind: 'reading.perf', scrollRounds: 10 })).toBe(true)
+    expect(isHostToWebview({ kind: 'reading.perf', scrollRounds: 0 })).toBe(false)
+    expect(isHostToWebview({ kind: 'reading.perf', scrollRounds: 1.5 })).toBe(false)
+    expect(isHostToWebview({ kind: 'reading.perf' })).toBe(false)
+  })
+
+  it('接受合法 reading.test.image，拒绝负数/缺字段', () => {
+    expect(
+      isHostToWebview({ kind: 'reading.test.image', srcStart: 12, initialHeightPx: 20, finalHeightPx: 240, delayMs: 300 }),
+    ).toBe(true)
+    expect(
+      isHostToWebview({ kind: 'reading.test.image', srcStart: -1, initialHeightPx: 20, finalHeightPx: 240, delayMs: 300 }),
+    ).toBe(false)
+    expect(isHostToWebview({ kind: 'reading.test.image', srcStart: 12 })).toBe(false)
+  })
+
+  it('接受合法 reading.perf.report（px 允许小数），拒绝结构错误', () => {
+    const report = {
+      kind: 'reading.perf.report' as const,
+      scrollRounds: 10,
+      totalBlocks: 1000,
+      baseline: validSnapshot,
+      afterScroll: validSnapshot,
+      parseCount: 1,
+      maxMountedBlocks: 46,
+      ok: true,
+    }
+    expect(isWebviewToHost(report)).toBe(true)
+    // 滚动位置为亚像素小数是常态：不得因此丢弃整条回报
+    expect(isWebviewToHost({ ...report, afterScroll: { ...validSnapshot, scrollTopPx: 1234.75 } })).toBe(true)
+    expect(isWebviewToHost({ ...report, parseCount: -1 })).toBe(false)
+    expect(isWebviewToHost({ ...report, ok: 'yes' })).toBe(false)
+    expect(isWebviewToHost({ ...report, baseline: emptySnapshot, afterScroll: { ...emptySnapshot, mountedBlocks: 1.5 } })).toBe(false)
+    // 失败态报告（非 reading 模式）合法
+    expect(
+      isWebviewToHost({
+        kind: 'reading.perf.report',
+        scrollRounds: 10,
+        totalBlocks: 0,
+        baseline: emptySnapshot,
+        afterScroll: emptySnapshot,
+        parseCount: 0,
+        maxMountedBlocks: 0,
+        ok: false,
+      }),
+    ).toBe(true)
+  })
+
+  it('view.state 接受 #7 挂载观测可选字段，拒绝类型错误', () => {
+    expect(
+      isWebviewToHost({
+        ...baseViewState,
+        viewMode: 'reading',
+        readingTotalBlocks: 1000,
+        readingMountedBlocks: 46,
+        readingContentDomCount: 48,
+        readingParseCount: 1,
+        readingVirtualized: true,
+        readingAnchorTopPx: 1200.5,
+        readingScrollTopPx: 1188.25,
+        readingScrollHeightPx: 36000,
+      }),
+    ).toBe(true)
+    expect(isWebviewToHost({ ...baseViewState, readingTotalBlocks: 1.5 })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, readingVirtualized: 'yes' })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, readingParseCount: -1 })).toBe(false)
+    // px 观测允许小数（亚像素滚动）
+    expect(isWebviewToHost({ ...baseViewState, readingScrollTopPx: 12.5 })).toBe(true)
+    expect(isWebviewToHost({ ...baseViewState, readingScrollTopPx: -0.1 })).toBe(false)
+  })
+
+  it('方向校验：reading.perf 系宿主方向、report 系 webview 方向，互不接受', () => {
+    expect(isWebviewToHost({ kind: 'reading.perf', scrollRounds: 10 })).toBe(false)
+    expect(isHostToWebview({ kind: 'reading.perf.report', scrollRounds: 10, totalBlocks: 0, baseline: emptySnapshot, afterScroll: emptySnapshot, parseCount: 0, maxMountedBlocks: 0, ok: true })).toBe(false)
+  })
+})

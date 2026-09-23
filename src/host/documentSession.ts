@@ -76,6 +76,8 @@ interface PanelEntry {
   conflictWebviewVersion?: number
   /** 最近一次性能探针回报（#5：测试钩子 perfProbe 轮询读取） */
   lastPerfReport?: Extract<WebviewToHost, { kind: 'perf.report' }>
+  /** 最近一次阅读视图探针回报（#7：测试钩子 readingPerf 轮询读取） */
+  lastReadingPerfReport?: Extract<WebviewToHost, { kind: 'reading.perf.report' }>
   /** 冲突通知只发一次（避免通知风暴） */
   conflictNotified: boolean
 }
@@ -230,6 +232,9 @@ export class DocumentSession {
       case 'perf.report':
         panel.lastPerfReport = message
         return Promise.resolve()
+      case 'reading.perf.report':
+        panel.lastReadingPerfReport = message
+        return Promise.resolve()
     }
   }
 
@@ -276,6 +281,13 @@ export class DocumentSession {
     sessionId: string,
   ): Extract<WebviewToHost, { kind: 'perf.report' }> | undefined {
     return this.panels.get(sessionId)?.lastPerfReport
+  }
+
+  /** 最近一次阅读视图探针回报（#7 测试钩子与测量脚本用） */
+  getLastReadingPerfReport(
+    sessionId: string,
+  ): Extract<WebviewToHost, { kind: 'reading.perf.report' }> | undefined {
+    return this.panels.get(sessionId)?.lastReadingPerfReport
   }
 
   /** 会话观测信息（测试钩子与调试用） */

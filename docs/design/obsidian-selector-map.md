@@ -27,6 +27,8 @@
 
 阅读容器内每个内容块为 `div.oile-reading-block` + 细分类，并携带源位置锚点属性 `data-oile-src-start` / `data-oile-src-end`（LF 全文 UTF-16 offset，与消息协议坐标同构；#7 按需挂载与 #9 任务定位依赖）。
 
+**#7 按需挂载后的结构变化**：阅读容器不再常驻全部块元素——只挂载视口及缓冲窗口内的块，窗口外的屏外内容以两个占位 spacer（`div.oile-reading-spacer`、`-top`/`-bottom` 修饰）承载高度估计。块级类名与锚点属性不变，但依赖"全文 DOM 常驻"的片段（全局 `:nth-child` 定位、跨屏兄弟选择器、对完整滚动高度的假设）不再成立；spacer 为本项目自有结构，Obsidian 无对应选择器，不参与兼容承诺。
+
 | 本项目稳定类名 | 本项目用途 | Obsidian 对应选择器 | 核对结果 |
 | --- | --- | --- | --- |
 | `.oile-reading-heading-{1..6}` | 阅读标题块 | `.markdown-preview-view h{1..6}` | 已验证：测试片段经 `.oile-reading-heading-1` 命中 |
@@ -35,6 +37,7 @@
 | `.oile-reading-task` | 任务列表项块（附加在 list-item 上） | `.markdown-preview-view .task-list-item` | 类等价；`data-task` 扩展勾选状态（`[/]`、`[!]` 等）一期不支持 |
 | `.oile-reading-task-checkbox` | 任务复选框（`input[type=checkbox]`，一期 disabled） | `.markdown-preview-view .task-list-item input[type="checkbox"]` | 结构等价；#9 实现勾选写回后启用 |
 | `.oile-reading-code-block` | 围栏代码块（含围栏行整块） | `.markdown-preview-view pre` | 部分等价：一期整块渲染（含围栏标记文本），无内部 `code` 元素与语法高亮 token；#8 引入 markdown-it 后细分 |
+| `.oile-reading-spacer`（`-top` / `-bottom`） | #7 视口占位：屏外块的高度占位（非内容节点，高度为块高度表前后缀和） | 无对应（Obsidian 虚拟化由内部机制承担） | 本项目自有结构，不参与兼容承诺；出现在片段中不影响内容块定位 |
 
 ## 悬浮提示等既有稳定类（沿用 #4/#5，与 Obsidian 无对应）
 
@@ -72,7 +75,7 @@
 - frontmatter：`.markdown-frontmatter`（#8 及以后）
 - 标签/双链：`.cm-hashtag` / `.cm-hmd-internal-link` / `.internal-link`（#8/#10 双链票）
 - 语法高亮 token：`.token-*` / HyperMD codeblock 行类 `.HyperMD-codeblock-*`（#8）
-- 虚拟化结构差异：#7 阅读按需挂载后，视口外块不存在于 DOM——依赖"全文 DOM 常驻"的片段（如全局 `:nth-child` 定位、跨屏滚动条计算）会与虚拟化冲突，届时在本表补充说明
+- 虚拟化结构差异（#7 已生效）：阅读视图视口外块不存在于 DOM——依赖"全文 DOM 常驻"的片段（全局 `:nth-child` 定位、跨屏兄弟/后代选择器、假设完整内容高度的滚动条计算）与按需挂载冲突；正文块结构见上文 #7 说明
 
 ## 核对来源
 

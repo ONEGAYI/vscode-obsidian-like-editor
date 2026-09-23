@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { generatePerfSample } from '../perf/gen-sample.mjs'
+import { generatePerfSample, generateReadingSample } from '../perf/gen-sample.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -63,6 +63,12 @@ try {
   for (const [name, lines] of perfSizes) {
     writeFileSync(path.join(wsDir, `perf-${name}.md`), generatePerfSample(lines), 'utf8')
   }
+  // #7 阅读视图按需挂载：每行一块的样例（空行分隔），1k 与 100k 只差体量
+  for (const [name, blocks] of [['reading-1k', 1_000], ['reading-100k', 100_000]]) {
+    writeFileSync(path.join(wsDir, `${name}.md`), generateReadingSample(blocks), 'utf8')
+  }
+  // #7 图片尺寸变化定位样例：400 块中等体量，目标块上方有充足的已挂载缓冲块
+  writeFileSync(path.join(wsDir, 'reading-image.md'), generateReadingSample(400), 'utf8')
 
   console.log(`[runTest] fixture 工作区：${wsDir}`)
   await runTests({

@@ -366,6 +366,32 @@ export function createTextEditorProvider(
         return entry.session.getLastPerfReport(panel.sessionId)
       },
     ),
+    vscode.commands.registerCommand(
+      // 阅读视图性能探针（#7）：与 perfProbe 同构的轮询通道
+      'onegayi.obsidian-like-editor._test.readingPerf',
+      async (uriStr: string, options: { scrollRounds: number }, panelIndex = 0) => {
+        const entry = getEntry(vscode.Uri.parse(uriStr))
+        const panels = entry?.session.getInfo().panels.filter((p) => p.ready) ?? []
+        const panel = panels[panelIndex]
+        if (!entry || !panel) {
+          return undefined
+        }
+        const before = entry.session.getLastReadingPerfReport(panel.sessionId)
+        entry.session.postToPanel(panel.sessionId, {
+          kind: 'reading.perf',
+          scrollRounds: options.scrollRounds,
+        })
+        const deadline = Date.now() + 60000
+        while (Date.now() < deadline) {
+          const report = entry.session.getLastReadingPerfReport(panel.sessionId)
+          if (report && report !== before) {
+            return report
+          }
+          await new Promise((r) => setTimeout(r, 200))
+        }
+        return entry.session.getLastReadingPerfReport(panel.sessionId)
+      },
+    ),
   )
 
   return provider

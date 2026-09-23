@@ -13,6 +13,7 @@ const CMD = {
   conflictState: 'onegayi.obsidian-like-editor._test.getConflictState',
   resumePanel: 'onegayi.obsidian-like-editor._test.resumePanel',
   perfProbe: 'onegayi.obsidian-like-editor._test.perfProbe',
+  readingPerf: 'onegayi.obsidian-like-editor._test.readingPerf',
 }
 
 const wsDir = process.env['WORKSPACE_DIR'] ?? ''
@@ -105,11 +106,31 @@ interface ViewState {
   selectionOffset?: number
   readingBlockCount?: number
   readingAnchorStart?: number
+  /** #7 按需挂载观测 */
+  readingTotalBlocks?: number
+  readingMountedBlocks?: number
+  readingContentDomCount?: number
+  readingParseCount?: number
+  readingVirtualized?: boolean
+  readingAnchorTopPx?: number
+  readingScrollTopPx?: number
+  readingScrollHeightPx?: number
   cssProbe?: {
     liveHeadingDecorationColor: string | null
     readingHeadingDecorationColor: string | null
     readingVarProbe: string | null
   }
+}
+
+/** #7 阅读视图探针回报（reading.perf.report） */
+interface ReadingPerfReportData {
+  scrollRounds: number
+  totalBlocks: number
+  baseline: { mountedBlocks: number; contentDomCount: number; scrollTopPx: number; scrollHeightPx: number }
+  afterScroll: { mountedBlocks: number; contentDomCount: number; scrollTopPx: number; scrollHeightPx: number }
+  parseCount: number
+  maxMountedBlocks: number
+  ok: boolean
 }
 
 /** 性能探针回报（perf.report，结构见 src/shared/protocol.ts） */
@@ -734,5 +755,175 @@ export const cases: Array<[string, () => Promise<void>]> = [
     }, 30000)
     assert(restored.viewMode === 'reading', '重载后应恢复阅读模式')
     assert((restored.readingBlockCount ?? 0) >= 6, '重载后阅读视图应重建块结构')
+  }],
+
+  // ---- 工单 #7：阅读视图分块按需挂载与回收 ----
+
+  ['阅读视图按需挂载：长文档只挂载窗口内块，屏外块无内容节点（#7）', async () => {
+    await openWithEditor('reading-1k.md')
+    await waitSessionReady('reading-1k.md')
+    const uri = wsUri('reading-1k.md').toString()
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    const view = await poll('切换并虚拟化', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' && v.readingVirtualized === true ? v : undefined
+    })
+    // 1000 块只挂载窗口：挂载量远小于块模型总量，容器元素数有界
+    assert((view.readingTotalBlocks ?? 0) === 1000, `块模型应为 1000 块，实际 ${view.readingTotalBlocks}`)
+    assert((view.readingMountedBlocks ?? 0) > 10, `挂载块数应非平凡（>10），实际 ${view.readingMountedBlocks}`)
+    assert(
+      (view.readingMountedBlocks ?? 0) < (view.readingTotalBlocks ?? 1) / 2,
+      `挂载块数应远小于总量（按需挂载非全量渲染），实际 ${view.readingMountedBlocks}/${view.readingTotalBlocks}`,
+    )
+    assert((view.readingContentDomCount ?? 0) < (view.readingTotalBlocks ?? 1), '容器元素数应小于块总数')
+    // 挂载块数即 DOM 块数（无隐藏副本）
+    assert(view.readingBlockCount === view.readingMountedBlocks, 'readingBlockCount 应等于挂载块数（无隐藏整篇）')
+  }],
+
+  ['阅读视图 DOM 有界：体量增长 100 倍内容 DOM 不超过 2 倍（#7）', async () => {
+    const domCounts: Record<string, number> = {}
+    const mounted: Record<string, number> = {}
+    for (const file of ['reading-1k.md', 'reading-100k.md']) {
+      await openWithEditor(file)
+      await waitSessionReady(file)
+      const uri = wsUri(file).toString()
+      await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+      const v = await poll(`切换并虚拟化 ${file}`, async () => {
+        const s = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+        return s?.viewMode === 'reading' && s.readingVirtualized === true ? s : undefined
+      })
+      const total = file === 'reading-1k.md' ? 1_000 : 100_000
+      assert((v.readingTotalBlocks ?? 0) === total, `${file} 块模型应为 ${total}，实际 ${v.readingTotalBlocks}`)
+      assert((v.readingMountedBlocks ?? 0) > 0, `${file} 应有挂载块`)
+      domCounts[file] = v.readingContentDomCount ?? 0
+      mounted[file] = v.readingMountedBlocks ?? 0
+    }
+    // 体量增长 100 倍（1k → 100k 块），内容 DOM 数不超过 2 倍
+    assert(
+      domCounts['reading-100k.md'] <= 2 * domCounts['reading-1k.md'],
+      `阅读内容 DOM 超界：1k=${domCounts['reading-1k.md']}，100k=${domCounts['reading-100k.md']}`,
+    )
+    assert(
+      mounted['reading-100k.md'] <= 2 * mounted['reading-1k.md'],
+      `挂载块数超界：1k=${mounted['reading-1k.md']}，100k=${mounted['reading-100k.md']}`,
+    )
+  }],
+
+  ['阅读视图滚动回收：往返滚动 10 次回基线附近且零重复解析、零写回（#7）', async () => {
+    await openWithEditor('reading-100k.md')
+    await waitSessionReady('reading-100k.md')
+    const uri = wsUri('reading-100k.md').toString()
+    const sessionBefore = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await poll('切换并虚拟化', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' && v.readingVirtualized === true ? true : undefined
+    })
+    const report = (await vscode.commands.executeCommand(
+      CMD.readingPerf,
+      uri,
+      { scrollRounds: 10 },
+    )) as ReadingPerfReportData | undefined
+    assert(report && report.ok === true, `阅读探针应成功执行：${JSON.stringify(report)}`)
+    assert(report!.totalBlocks === 100_000, `块模型应为 100000，实际 ${report!.totalBlocks}`)
+    // 回收：滚动结束回顶，挂载块回到基线附近（允许 1.5 倍测量抖动）
+    assert(
+      report!.afterScroll.mountedBlocks <= Math.ceil(report!.baseline.mountedBlocks * 1.5),
+      `滚动后挂载块未回收：基线 ${report!.baseline.mountedBlocks}，滚动后 ${report!.afterScroll.mountedBlocks}`,
+    )
+    assert(
+      report!.afterScroll.contentDomCount <= Math.ceil(report!.baseline.contentDomCount * 1.5),
+      `滚动后 DOM 未回收：基线 ${report!.baseline.contentDomCount}，滚动后 ${report!.afterScroll.contentDomCount}`,
+    )
+    assert(report!.afterScroll.scrollTopPx === 0, `回顶后 scrollTop 应为 0，实际 ${report!.afterScroll.scrollTopPx}`)
+    // 解析与挂载分离：10 轮滚动全程解析次数不增（装载时 1 次）
+    assert(report!.parseCount === 1, `滚动不得触发全文重解析，解析次数应为 1，实际 ${report!.parseCount}`)
+    // 窗口有界：滚动全程最大挂载块数远小于块模型总量
+    assert(report!.maxMountedBlocks < 1000, `最大挂载块数应有界（<1000），实际 ${report!.maxMountedBlocks}`)
+    // 视图滚动零写回：文档版本与 applyEdit 数不变
+    const sessionAfter = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(sessionAfter.version === sessionBefore.version, `滚动不得改变文档版本（${sessionBefore.version} → ${sessionAfter.version}）`)
+    assert(sessionAfter.appliedEdits === sessionBefore.appliedEdits, `滚动不得产生写回（${sessionBefore.appliedEdits} → ${sessionAfter.appliedEdits}）`)
+  }],
+
+  ['阅读视图标题跳转：定位屏外标题块并真实挂载（#7）', async () => {
+    await openWithEditor('reading-100k.md')
+    await waitSessionReady('reading-100k.md')
+    const uri = wsUri('reading-100k.md').toString()
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await poll('切换并虚拟化', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' && v.readingVirtualized === true ? true : undefined
+    })
+    // 文档尾部附近的标题块（第 99950 块，屏外；不取最后一块——末块的理想
+    // 滚动位置超出 maxScroll，浏览器 clamp 后无法置于视口顶，属正常布局行为）
+    const headingText = '## 第 99950 节 阅读标题样本行'
+    const doc = await vscode.workspace.openTextDocument(wsUri('reading-100k.md'))
+    const headingOffset = doc.getText().indexOf(headingText)
+    assert(headingOffset > 0, 'fixture 中应能找到末尾标题')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: headingOffset + 3 })
+    const located = await poll('定位屏外标题', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.readingAnchorStart === headingOffset ? v : undefined
+    })
+    // 锚点是源码位置（标题块的源 start），且目标块已真实挂载（有布局顶位置）
+    assert(located.readingAnchorStart === headingOffset, `锚点应为标题块 start=${headingOffset}，实际 ${located.readingAnchorStart}`)
+    assert(located.readingAnchorTopPx !== undefined, '定位后目标块应已挂载（有布局顶位置）')
+    assert((located.readingScrollTopPx ?? 0) > 0, `定位到文档尾部应发生滚动，实际 scrollTop=${located.readingScrollTopPx}`)
+    // 仍保持按需挂载（定位不触发全量渲染）
+    assert((located.readingMountedBlocks ?? 0) < (located.readingTotalBlocks ?? 1), '定位后仍应只挂载窗口块')
+  }],
+
+  ['阅读视图动态图片尺寸变化：布局偏移后锚点视觉位置稳定（#7）', async () => {
+    await openWithEditor('reading-image.md')
+    await waitSessionReady('reading-image.md')
+    const uri = wsUri('reading-image.md').toString()
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await poll('切换并虚拟化', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' && v.readingVirtualized === true ? true : undefined
+    })
+    // 定位到第 201 块（中部段落；每 50 块是标题，201 为普通段落）
+    const anchorText = '第 201 段 阅读段落样本文本，固定宽度内容，用于体量对比测试。'
+    const doc = await vscode.workspace.openTextDocument(wsUri('reading-image.md'))
+    const anchorOffset = doc.getText().indexOf(anchorText)
+    assert(anchorOffset > 0, 'fixture 中应能找到锚点段')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: anchorOffset })
+    const before = await poll('定位锚点段', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.readingAnchorStart === anchorOffset && v.readingAnchorTopPx !== undefined ? v : undefined
+    })
+    // 注入图片到锚点上方 10 块（普通段落，仍在挂载窗口内、位于视口上方）：20px → 240px
+    const imageText = '第 191 段 阅读段落样本文本，固定宽度内容，用于体量对比测试。'
+    const imageOffset = doc.getText().indexOf(imageText)
+    const grow = 240 // 初始占位 20px + 加载后增长 220px = 内容总高增量
+    const ok = (await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'reading.test.image',
+      srcStart: imageOffset,
+      initialHeightPx: 20,
+      finalHeightPx: 240,
+      delayMs: 200,
+    })) as boolean
+    assert(ok === true, '图片注入消息应送达面板')
+    const after = await poll('图片尺寸变化生效', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      const grew = (v?.readingScrollHeightPx ?? 0) - (before.readingScrollHeightPx ?? 0)
+      return v && grew >= grow - 4 ? v : undefined
+    }, 15000)
+    // 源位置锚点不变（仍是同一块的 start）
+    assert(after.readingAnchorStart === anchorOffset, `图片变化后锚点块不应漂移：${before.readingAnchorStart} → ${after.readingAnchorStart}`)
+    // 视觉位置稳定：锚点块顶与 scrollTop 的差保持不变（上方内容增高由滚动补偿）
+    const offsetBefore = (before.readingAnchorTopPx ?? 0) - (before.readingScrollTopPx ?? 0)
+    const offsetAfter = (after.readingAnchorTopPx ?? 0) - (after.readingScrollTopPx ?? 0)
+    assert(
+      Math.abs(offsetAfter - offsetBefore) <= 2,
+      `图片增高 ${grow}px 后锚点视觉位置应稳定：${offsetBefore} → ${offsetAfter}`,
+    )
+    // 内容总高按图片增量增长（高度表已按实测修正）
+    const grew = (after.readingScrollHeightPx ?? 0) - (before.readingScrollHeightPx ?? 0)
+    assert(Math.abs(grew - grow) <= 4, `内容总高应增长约 ${grow}px，实际 ${grew}`)
+    // 零写回
+    const st = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(st.appliedEdits === 0, `图片尺寸变化链路不应产生写回，实际 ${st.appliedEdits}`)
   }],
 ]
