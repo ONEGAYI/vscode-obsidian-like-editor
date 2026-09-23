@@ -51,6 +51,8 @@ vscode-obsidian-like-editor/
 │   ├── agents/   # agent 操作约定
 │   │   ├── domain.md        # 领域文档读取与维护约定
 │   │   └── issue-tracker.md # GitHub Issues 操作约定
+│   ├── design/   # 设计文档（选择器映射等）
+│   │   └── obsidian-selector-map.md # Obsidian 选择器映射表
 │   ├── perf/     # 性能实测数据与测量工具说明
 │   │   ├── 2026-09-title-decoration-viewport.md # 标题切片视口渲染实测数据
 │   │   └── data/                                # 性能探针原始报告数据
@@ -62,6 +64,8 @@ vscode-obsidian-like-editor/
 │       ├── mvp-issues.md # MVP GitHub Issue 索引
 │       └── mvp.md        # MVP 规格主文档
 ├── esbuild.mjs       # esbuild 双产物构建脚本
+├── media/            # 随扩展打包的静态资源
+│   └── css-contract-probe.css # 样式契约内部测试片段
 ├── package-lock.json # npm 依赖锁定文件
 ├── package.json      # 扩展清单与锁定依赖
 ├── README.md         # 项目门面说明
@@ -80,6 +84,8 @@ vscode-obsidian-like-editor/
 │       ├── main.css          # webview 全局布局样式
 │       ├── main.ts           # webview 启动入口
 │       ├── perfProbe.ts      # webview 性能探针（#5）
+│       ├── readingBlocks.ts  # 阅读块切分与源锚点映射
+│       ├── readingView.ts    # 阅读视图 DOM 构建与锚点定位
 │       └── syncController.ts # CM6 同步控制器
 ├── test/             # 测试根
 │   ├── integration/ # 真宿主集成测试
@@ -101,7 +107,10 @@ vscode-obsidian-like-editor/
 │       ├── newline.test.ts           # 换行协调契约
 │       ├── perfProbe.test.ts         # 性能探针契约测试
 │       ├── protocol.test.ts          # 消息协议校验契约
+│       ├── readingBlocks.test.ts     # 阅读块切分契约测试
+│       ├── readingView.test.ts       # 阅读视图 DOM 契约测试
 │       ├── suspendResume.test.ts     # 暂停恢复契约测试
+│       ├── viewMode.test.ts          # 模式切换状态机契约测试
 │       └── webviewSync.test.ts       # webview 同步契约
 ├── tsconfig.json     # TypeScript 类型检查配置
 └── vitest.config.ts  # vitest 单元测试配置
