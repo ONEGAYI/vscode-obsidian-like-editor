@@ -511,3 +511,35 @@ describe('sync.request（webview 发起的全文重同步）', () => {
     expect(s.sent.get(id)!.length).toBe(0)
   })
 })
+
+describe('perf.report 缓存（#5 性能测量通道）', () => {
+  const report: Extract<WebviewToHost, { kind: 'perf.report' }> = {
+    kind: 'perf.report',
+    typingRounds: 2,
+    scrollRounds: 1,
+    docLines: 10,
+    baseline: { renderedLines: 5, contentDomCount: 40, headingLineCount: 1, inviewHeadingCount: 1 },
+    afterTyping: { renderedLines: 5, contentDomCount: 41, headingLineCount: 1, inviewHeadingCount: 1 },
+    afterScroll: { renderedLines: 5, contentDomCount: 40, headingLineCount: 1, inviewHeadingCount: 1 },
+    inputDelayMs: { samples: [4, 6], avgMs: 5, maxMs: 6 },
+    longTasks: null,
+    headingStats: { totalUpdates: 3, lastUpdateScannedLines: 1, fullBuildLines: 10 },
+  }
+
+  it('缓存最近一次 perf.report 并可按面板读取', async () => {
+    const s = setup()
+    const id = s.attach()
+    await readyPanel(s, id)
+    expect(s.session.getLastPerfReport(id)).toBeUndefined()
+    await s.send(id, report)
+    expect(s.session.getLastPerfReport(id)?.docLines).toBe(10)
+  })
+
+  it('结构非法的 perf.report 被整体丢弃', async () => {
+    const s = setup()
+    const id = s.attach()
+    await readyPanel(s, id)
+    await s.send(id, { ...report, baseline: null } as unknown as WebviewToHost)
+    expect(s.session.getLastPerfReport(id)).toBeUndefined()
+  })
+})

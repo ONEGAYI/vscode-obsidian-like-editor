@@ -31,6 +31,9 @@ export type HostToWebview =
   | { kind: 'session.suspended'; version: number; reason: 'conflict' | 'host-error' }
   /** 请求 webview 回报视图诊断（文本与渲染行数，供测试与性能观测） */
   | { kind: 'view.state.request' }
+  /** 性能探针（#5）：webview 测量输入延迟/长任务/滚动回收并回报 perf.report。
+   *  探针编辑带 externalSync 注解，不产生写回（测量不污染宿主文档） */
+  | { kind: 'perf.probe'; typingRounds: number; scrollRounds: number }
 
 /** webview → 宿主消息 */
 export type WebviewToHost =
@@ -62,7 +65,41 @@ export type WebviewToHost =
       renderedLines: number
       /** 面板是否处于暂停写回状态（#4；可选字段向后兼容） */
       suspended?: boolean
+      /** .cm-content 内全部元素数（#5 视口渲染 DOM 有界性观测） */
+      contentDomCount?: number
+      /** DOM 中标题行数（直接装饰渲染结果） */
+      headingLineCount?: number
+      /** 第一个源码态（活动）标题行的 DOM 文本 */
+      headingActiveText?: string
+      /** 第一个隐藏标记态（非活动）标题行的 DOM 文本 */
+      headingHiddenText?: string
     }
+  /** 性能探针回报（#5）：快照为 DOM 计数，输入延迟含 rAF 稳定等待 */
+  | {
+      kind: 'perf.report'
+      typingRounds: number
+      scrollRounds: number
+      docLines: number
+      baseline: PerfSnapshot
+      afterTyping: PerfSnapshot
+      afterScroll: PerfSnapshot
+      inputDelayMs: { samples: number[]; avgMs: number; maxMs: number }
+      /** 宿主不支持 PerformanceObserver('longtask') 时为 null */
+      longTasks: { count: number; maxMs: number; totalMs: number } | null
+      headingStats: { totalUpdates: number; lastUpdateScannedLines: number; fullBuildLines: number }
+    }
+
+/** 性能快照（#5）：一次观测时点的 DOM 计数 */
+export interface PerfSnapshot {
+  /** .cm-line 行元素数 */
+  renderedLines: number
+  /** .cm-content 内全部元素数 */
+  contentDomCount: number
+  /** .oile-heading-line 元素数 */
+  headingLineCount: number
+  /** .oile-heading-inview 元素数（间接装饰渲染结果） */
+  inviewHeadingCount: number
+}
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -91,6 +128,16 @@ export function isSerChange(v: unknown): v is SerChange {
 
 function isSerChangeArray(v: unknown): v is SerChange[] {
   return Array.isArray(v) && v.every(isSerChange)
+}
+
+function isPerfSnapshot(v: unknown): v is PerfSnapshot {
+  return (
+    isObject(v) &&
+    isNonNegativeInt(v.renderedLines) &&
+    isNonNegativeInt(v.contentDomCount) &&
+    isNonNegativeInt(v.headingLineCount) &&
+    isNonNegativeInt(v.inviewHeadingCount)
+  )
 }
 
 /** 宿主侧校验 webview 消息；非法消息必须整体丢弃，不部分读取字段 */
@@ -132,7 +179,34 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         isNonNegativeInt(v.docLength) &&
         isNonNegativeInt(v.lineCount) &&
         isNonNegativeInt(v.renderedLines) &&
-        (v.suspended === undefined || typeof v.suspended === 'boolean')
+        (v.suspended === undefined || typeof v.suspended === 'boolean') &&
+        (v.contentDomCount === undefined || isNonNegativeInt(v.contentDomCount)) &&
+        (v.headingLineCount === undefined || isNonNegativeInt(v.headingLineCount)) &&
+        (v.headingActiveText === undefined || isString(v.headingActiveText)) &&
+        (v.headingHiddenText === undefined || isString(v.headingHiddenText))
+      )
+    case 'perf.report':
+      return (
+        isNonNegativeInt(v.typingRounds) &&
+        isNonNegativeInt(v.scrollRounds) &&
+        isNonNegativeInt(v.docLines) &&
+        isPerfSnapshot(v.baseline) &&
+        isPerfSnapshot(v.afterTyping) &&
+        isPerfSnapshot(v.afterScroll) &&
+        isObject(v.inputDelayMs) &&
+        Array.isArray(v.inputDelayMs.samples) &&
+        v.inputDelayMs.samples.every((s) => typeof s === 'number' && s >= 0) &&
+        typeof v.inputDelayMs.avgMs === 'number' &&
+        typeof v.inputDelayMs.maxMs === 'number' &&
+        (v.longTasks === null ||
+          (isObject(v.longTasks) &&
+            isNonNegativeInt(v.longTasks.count) &&
+            typeof v.longTasks.maxMs === 'number' &&
+            typeof v.longTasks.totalMs === 'number')) &&
+        isObject(v.headingStats) &&
+        isNonNegativeInt(v.headingStats.totalUpdates) &&
+        isNonNegativeInt(v.headingStats.lastUpdateScannedLines) &&
+        isNonNegativeInt(v.headingStats.fullBuildLines)
       )
     default:
       return false
@@ -181,6 +255,8 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       )
     case 'view.state.request':
       return true
+    case 'perf.probe':
+      return isPositiveInt(v.typingRounds) && isPositiveInt(v.scrollRounds)
     default:
       return false
   }

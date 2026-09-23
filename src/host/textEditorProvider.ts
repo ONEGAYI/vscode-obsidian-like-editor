@@ -290,6 +290,37 @@ export function createTextEditorProvider(
         return entry.session.getViewState(panel.sessionId)
       },
     ),
+    vscode.commands.registerCommand(
+      'onegayi.obsidian-like-editor._test.perfProbe',
+      async (
+        uriStr: string,
+        options: { typingRounds: number; scrollRounds: number },
+        panelIndex = 0,
+      ) => {
+        const entry = getEntry(vscode.Uri.parse(uriStr))
+        const panels = entry?.session.getInfo().panels.filter((p) => p.ready) ?? []
+        const panel = panels[panelIndex]
+        if (!entry || !panel) {
+          return undefined
+        }
+        // 首次探针可能发生在上一报告之后：先记录旧值，轮询到新报告
+        const before = entry.session.getLastPerfReport(panel.sessionId)
+        entry.session.postToPanel(panel.sessionId, {
+          kind: 'perf.probe',
+          typingRounds: options.typingRounds,
+          scrollRounds: options.scrollRounds,
+        })
+        const deadline = Date.now() + 60000
+        while (Date.now() < deadline) {
+          const report = entry.session.getLastPerfReport(panel.sessionId)
+          if (report && report !== before) {
+            return report
+          }
+          await new Promise((r) => setTimeout(r, 200))
+        }
+        return entry.session.getLastPerfReport(panel.sessionId)
+      },
+    ),
   )
 
   return provider
