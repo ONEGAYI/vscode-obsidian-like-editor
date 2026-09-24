@@ -54,6 +54,17 @@ export type HostToWebview =
       finalHeightPx: number
       delayMs: number
     }
+  /** 图片解析结果（#10）：reqId 对应 image.request。ok 时 src 为可直接作
+   *  img.src 的地址——工作区文件经 asWebviewUri 的 webview 资源 URI
+   *  （本地与远程工作区同通道）；失败附原因码供错误态与重试呈现 */
+  | { kind: 'image.result'; reqId: number; ok: true; src: string }
+  | {
+      kind: 'image.result'
+      reqId: number
+      ok: false
+      reason: 'blocked' | 'outside-workspace' | 'not-found' | 'read-error'
+      detail?: string
+    }
 
 /** webview → 宿主消息 */
 export type WebviewToHost =
@@ -125,8 +136,18 @@ export type WebviewToHost =
       liveSyntax?: LiveSyntaxProbe
       /** reading 侧渲染语义统计（#8 双视图语义一致性观测；小文档全量挂载时有效） */
       readingSyntax?: ReadingSyntaxProbe
+      /** live 视口内链接 span 数（#10；间接装饰渲染结果，限于视口） */
+      liveLinkCount?: number
+      /** live 视口内图片 widget 数（#10） */
+      liveImageCount?: number
+      /** 阅读挂载块内链接数（#10；屏外块不创建，无 DOM） */
+      readingLinkCount?: number
+      /** 阅读挂载块内图片数（#10） */
+      readingImageCount?: number
+      /** 图片槽位状态计数（#10：当前视图内 loading/loaded/error） */
+      imageStates?: ImageStateCounts
     }
-  /** 阅读视图性能探针回报（#7）：滚动往返期间的挂载/回收与解析观测 */
+      /** 阅读视图性能探针回报（#7）：滚动往返期间的挂载/回收与解析观测 */
   | {
       kind: 'reading.perf.report'
       scrollRounds: number
@@ -140,6 +161,20 @@ export type WebviewToHost =
       /** 非阅读模式下执行探针时为 false（探针未执行） */
       ok: boolean
     }
+  /** 链接跳转意图（#10）：webview 只上报原始 URI 与源位置，执行归宿主——
+   *  URI 解析与路径拼接（含 Windows/远程语义）只在宿主侧进行。阅读视图
+   *  单击、实时预览 Ctrl/Cmd+单击产生；href 为源文原样（未解码/未规范化） */
+  | {
+      kind: 'link.activate'
+      sessionId: string
+      docUri: string
+      href: string
+      srcStart: number
+      srcEnd: number
+    }
+  /** 图片资源解析请求（#10）：非 http(s) 直连的工作区图源经宿主解析为
+   *  webview 可加载地址（reqId 会话面板内自增，对应 image.result） */
+  | { kind: 'image.request'; sessionId: string; docUri: string; reqId: number; src: string }
   /** 性能探针回报（#5）：快照为 DOM 计数，输入延迟含 rAF 稳定等待 */
   | {
       kind: 'perf.report'
@@ -179,6 +214,13 @@ export interface ReadingPerfSnapshot {
   scrollHeightPx: number
 }
 
+/** 图片槽位状态计数（#10：图片生命周期观测，当前视图内计数） */
+export interface ImageStateCounts {
+  loading: number
+  loaded: number
+  error: number
+}
+
 /** CSS 契约探针回报（#6）：一段仅经稳定类名定位的内部测试 CSS 是否生效 */
 export interface CssProbeReport {
   /** live 一级标题行经 `.oile-heading-line-1` 命中的属性值；无目标元素为 null */
@@ -195,6 +237,12 @@ export interface CssProbeReport {
   liveCodeLineDecorationColor: string | null
   /** #8：阅读视图内语义 strong 经 `.oile-view-reading strong` 命中的属性值 */
   readingStrongDecorationColor: string | null
+  /** #10：live 链接 span 经 `.oile-link` 命中的属性值；无目标为 null */
+  liveLinkDecorationColor: string | null
+  /** #10：阅读链接经 `.oile-reading-block a` 命中的属性值；无目标为 null */
+  readingLinkDecorationColor: string | null
+  /** #10：阅读图片经 `.oile-reading-block img.oile-image` 命中的属性值 */
+  readingImageDecorationColor: string | null
 }
 
 /** live 侧语法装饰统计（#8：装饰集合计数，覆盖标题/行内/块级/任务/降级观测） */
@@ -287,7 +335,19 @@ function isCssProbeReport(v: unknown): v is CssProbeReport {
     isNullOrString(v.liveStrongDecorationColor) &&
     isNullOrString(v.liveInlineCodeDecorationColor) &&
     isNullOrString(v.liveCodeLineDecorationColor) &&
-    isNullOrString(v.readingStrongDecorationColor)
+    isNullOrString(v.readingStrongDecorationColor) &&
+    isNullOrString(v.liveLinkDecorationColor) &&
+    isNullOrString(v.readingLinkDecorationColor) &&
+    isNullOrString(v.readingImageDecorationColor)
+  )
+}
+
+function isImageStateCounts(v: unknown): v is ImageStateCounts {
+  return (
+    isObject(v) &&
+    isNonNegativeInt(v.loading) &&
+    isNonNegativeInt(v.loaded) &&
+    isNonNegativeInt(v.error)
   )
 }
 
@@ -393,7 +453,12 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.readingScrollHeightPx === undefined || isNonNegativeNumber(v.readingScrollHeightPx)) &&
         (v.cssProbe === undefined || isCssProbeReport(v.cssProbe)) &&
         (v.liveSyntax === undefined || isLiveSyntaxProbe(v.liveSyntax)) &&
-        (v.readingSyntax === undefined || isReadingSyntaxProbe(v.readingSyntax))
+        (v.readingSyntax === undefined || isReadingSyntaxProbe(v.readingSyntax)) &&
+        (v.liveLinkCount === undefined || isNonNegativeInt(v.liveLinkCount)) &&
+        (v.liveImageCount === undefined || isNonNegativeInt(v.liveImageCount)) &&
+        (v.readingLinkCount === undefined || isNonNegativeInt(v.readingLinkCount)) &&
+        (v.readingImageCount === undefined || isNonNegativeInt(v.readingImageCount)) &&
+        (v.imageStates === undefined || isImageStateCounts(v.imageStates))
       )
     case 'reading.perf.report':
       return (
@@ -404,6 +469,21 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         isNonNegativeInt(v.parseCount) &&
         isNonNegativeInt(v.maxMountedBlocks) &&
         typeof v.ok === 'boolean'
+      )
+    case 'link.activate':
+      return (
+        isString(v.sessionId) &&
+        isString(v.docUri) &&
+        isString(v.href) &&
+        isNonNegativeInt(v.srcStart) &&
+        isNonNegativeInt(v.srcEnd)
+      )
+    case 'image.request':
+      return (
+        isString(v.sessionId) &&
+        isString(v.docUri) &&
+        isPositiveInt(v.reqId) &&
+        isString(v.src)
       )
     case 'perf.report':
       return (
@@ -490,6 +570,23 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
         isNonNegativeInt(v.finalHeightPx) &&
         isNonNegativeInt(v.delayMs)
       )
+    case 'image.result':
+      if (!isPositiveInt(v.reqId)) {
+        return false
+      }
+      if (v.ok === true) {
+        return isString(v.src)
+      }
+      if (v.ok === false) {
+        return (
+          (v.reason === 'blocked' ||
+            v.reason === 'outside-workspace' ||
+            v.reason === 'not-found' ||
+            v.reason === 'read-error') &&
+          (v.detail === undefined || isString(v.detail))
+        )
+      }
+      return false
     default:
       return false
   }

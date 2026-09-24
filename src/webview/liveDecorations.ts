@@ -129,8 +129,9 @@ const taskGlyphDecos = [
   Decoration.replace({ widget: new TaskGlyphWidget(true) }),
 ]
 
-/** 行是否被选区覆盖（任一 range 的行区间覆盖该行即视为活动，显示源码） */
-function isLineActive(selection: EditorSelection, doc: Text, lineNumber: number): boolean {
+/** 行是否被选区覆盖（任一 range 的行区间覆盖该行即视为活动，显示源码）。
+ *  #10 起 liveLinks 的链接/图片装饰复用同一活动语义 */
+export function isLineActive(selection: EditorSelection, doc: Text, lineNumber: number): boolean {
   for (const r of selection.ranges) {
     if (doc.lineAt(r.from).number <= lineNumber && lineNumber <= doc.lineAt(r.to).number) {
       return true

@@ -23,6 +23,7 @@ import {
 } from '../shared/protocol'
 import { mapChangeThroughChanges } from '../shared/changeMapping'
 import { NewlineCoordinator } from '../shared/newline'
+import type { ImageResolution } from './linkTarget'
 
 /** 权威文档适配器：vscode 层实现 */
 export interface HostDocumentPort {
@@ -39,6 +40,11 @@ export interface HostDocumentPort {
 /** 面板发送通道 */
 export interface PanelPort {
   send(message: HostToWebview): void
+  /** #10 链接跳转执行（vscode 层注入：URI 解析白名单 + openExternal/
+   *  showTextDocument/用户反馈）；只读交互，暂停态同样放行 */
+  openLink?(intent: { href: string; srcStart: number; srcEnd: number }): void
+  /** #10 图片资源解析（vscode 层注入：classifyImageTarget + asWebviewUri） */
+  resolveImage?(src: string): Promise<ImageResolution>
 }
 
 /** 会话通知（#4）：冲突暂停、复制请求、面板关闭时存在未确认输入等需要
@@ -115,6 +121,9 @@ export class DocumentSession {
   private queue: Promise<void> = Promise.resolve()
   private nextPanelId = 1
   private disposed = false
+  /** #10 图片解析：同 src 在途去重与成功结果缓存（失败不缓存，重试重解析） */
+  private readonly imageInFlight = new Map<string, Promise<ImageResolution>>()
+  private readonly imageCache = new Map<string, ImageResolution>()
 
   constructor(
     private readonly doc: HostDocumentPort,
@@ -169,6 +178,8 @@ export class DocumentSession {
     this.panels.clear()
     this.versionLog.length = 0
     this.confirmedEchoes.length = 0
+    this.imageInFlight.clear()
+    this.imageCache.clear()
   }
 
   /** webview 消息入口（provider 接到 webview.onDidReceiveMessage 后调用） */
@@ -258,6 +269,27 @@ export class DocumentSession {
       case 'view.state':
         panel.lastViewState = message
         return Promise.resolve()
+      case 'link.activate': {
+        // #10 链接跳转意图：校验归属与 ready 后交面板端口执行。只读交互，
+        // 不受写回暂停影响（暂停面板照样可以点链接）
+        if (!panel.ready || message.docUri !== this.docUri) {
+          return Promise.resolve()
+        }
+        panel.port.openLink?.({
+          href: message.href,
+          srcStart: message.srcStart,
+          srcEnd: message.srcEnd,
+        })
+        return Promise.resolve()
+      }
+      case 'image.request': {
+        // #10 图片解析请求：同 src 在途去重 + 成功缓存（失败重试重解析）。
+        // 返回完成 Promise（image.result 已回发才算处理完，调用方可等待）
+        if (!panel.ready || message.docUri !== this.docUri) {
+          return Promise.resolve()
+        }
+        return this.resolveImageRequest(panel, message.reqId, message.src)
+      }
       case 'perf.report':
         panel.lastPerfReport = message
         return Promise.resolve()
@@ -323,6 +355,56 @@ export class DocumentSession {
     sessionId: string,
   ): Extract<WebviewToHost, { kind: 'reading.perf.report' }> | undefined {
     return this.panels.get(sessionId)?.lastReadingPerfReport
+  }
+
+  /** #10 图片解析请求处理（去重/缓存/回发） */
+  private async resolveImageRequest(
+    panel: PanelEntry,
+    reqId: number,
+    src: string,
+  ): Promise<void> {
+    const send = (resolution: ImageResolution): void => {
+      if (resolution.ok) {
+        panel.port.send({ kind: 'image.result', reqId, ok: true, src: resolution.src })
+      } else {
+        panel.port.send({
+          kind: 'image.result',
+          reqId,
+          ok: false,
+          reason: resolution.reason,
+          detail: resolution.detail,
+        })
+      }
+    }
+    const cached = this.imageCache.get(src)
+    if (cached) {
+      send(cached)
+      return
+    }
+    let pending = this.imageInFlight.get(src)
+    if (!pending) {
+      const resolver = panel.port.resolveImage
+      pending = resolver
+        ? resolver(src).catch((): ImageResolution => ({ ok: false, reason: 'read-error' }))
+        : Promise.resolve({ ok: false, reason: 'read-error', detail: '未注入解析器' } as ImageResolution)
+      this.imageInFlight.set(src, pending)
+      // 完成后清理在途表；成功结果进入小容量缓存（滚动回视口的重复请求
+      // 直接命中，避免反复读盘；失败不缓存，保留重试语义）
+      void pending.then((resolution) => {
+        this.imageInFlight.delete(src)
+        if (resolution.ok) {
+          this.imageCache.set(src, resolution)
+          while (this.imageCache.size > 16) {
+            const oldest = this.imageCache.keys().next().value
+            if (oldest === undefined) {
+              break
+            }
+            this.imageCache.delete(oldest)
+          }
+        }
+      })
+    }
+    send(await pending)
   }
 
   /** 会话观测信息（测试钩子与调试用） */

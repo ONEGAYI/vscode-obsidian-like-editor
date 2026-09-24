@@ -75,6 +75,7 @@ vscode-obsidian-like-editor/
 │   ├── extension.ts # 扩展激活入口
 │   ├── host/        # 宿主端实现
 │   │   ├── documentSession.ts    # 文档会话与写回同步
+│   │   ├── linkTarget.ts         # 宿主侧链接/图片目标分类纯逻辑（#10）
 │   │   └── textEditorProvider.ts # 自定义文本编辑器提供者
 │   ├── shared/      # 两端共享纯逻辑
 │   │   ├── changeMapping.ts # 变更重定位纯函数
@@ -82,7 +83,9 @@ vscode-obsidian-like-editor/
 │   │   └── protocol.ts      # 消息协议单一事实源
 │   └── webview/     # webview 端实现
 │       ├── css.d.ts              # CSS 导入类型声明
+│       ├── imageResource.ts      # webview 图片资源管理器状态机（#10）
 │       ├── liveDecorations.ts    # 语法树驱动 Live 装饰（#8）
+│       ├── liveLinks.ts          # live 链接/图片间接装饰与跳转上报（#10）
 │       ├── main.css              # webview 全局布局样式
 │       ├── main.ts               # webview 启动入口
 │       ├── markdownDoc.ts        # Markdown 文档工具与树查询
@@ -110,6 +113,9 @@ vscode-obsidian-like-editor/
 │       ├── conflictRetention.test.ts  # 冲突保留与暂停契约测试
 │       ├── documentSession.test.ts    # 文档会话契约
 │       ├── historyForwarding.test.ts  # 撤销重做转发契约测试
+│       ├── imageResource.test.ts      # 图片资源管理器契约测试
+│       ├── linkInteraction.test.ts    # 链接点击与图片显示 webview 契约测试（#10）
+│       ├── linkTarget.test.ts         # 链接/图片目标分类契约测试
 │       ├── liveDecorations.test.ts    # Live 装饰契约测试
 │       ├── markdownDoc.test.ts        # 文档工具契约测试
 │       ├── newline.test.ts            # 换行协调契约

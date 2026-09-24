@@ -1,6 +1,6 @@
 # Obsidian 选择器映射表（一期稳定样式契约）
 
-状态：工单 #6 交付物，2026-09-23；#8 补 span 级映射与阅读语义标签结构（2026-09-24）。依据 [ADR-0004](../adr/0004-stable-styling-contract.md)。
+状态：工单 #6 交付物，2026-09-23；#8 补 span 级映射与阅读语义标签结构（2026-09-24）；#10 补链接/图片映射（2026-09-24）。依据 [ADR-0004](../adr/0004-stable-styling-contract.md)。
 
 本文记录一期已建立的稳定类名/CSS 变量入口与 Obsidian 同款选择器的核对结果，供二期自定义 CSS 片段兼容使用。**边界声明**：
 
@@ -63,6 +63,23 @@
 
 阅读行内格式（`em`/`strong`/`code`/`a`）为 markdown-it 渲染的语义标签，与 Obsidian 阅读视图同形态（`.markdown-preview-view strong` 等标签选择器可命中；本项目片段经 `.oile-reading-block strong` 定位亦命中，已验证探针 `rgb(16, 17, 18)`）。
 
+## 链接与图片（#10）
+
+#10 起两种视图贯通链接点击与图片显示。链接跳转执行归宿主（webview 只上报意图：阅读单击、live Ctrl/Cmd+单击）；图片为双视图共用的生命周期状态机（`loading`/`loaded`/`error` 三态，`error` 态点击可重试）。
+
+| 本项目稳定类名 | 本项目用途 | Obsidian 对应选择器 | 核对结果 |
+| --- | --- | --- | --- |
+| `.oile-link`（live，mark span） | 链接**内容** span（活动与非活动行都标记；非活动行隐藏 `](url)` 尾部，活动行显示源码） | `.cm-link`（Obsidian 链接内容 token） | 语义等价（span 级）。已验证：测试片段经 `.oile-link` 命中（`rgb(19, 20, 21)`，真实宿主断言）。隐藏的 `](url)` 尾部对应 Obsidian `.cm-formatting-link` / `.cm-string.cm-url` 方向——本项目以隐藏呈现，无独立样式类 |
+| 阅读链接（无自有类） | markdown-it 渲染的语义 `<a>` | `.markdown-preview-view a` | 标签等价。已验证：探针 `rgb(22, 23, 24)`。单击经容器级委托上报 `link.activate`（`preventDefault`，不做 webview 原生导航） |
+| `.oile-image`（双视图） | 图片槽位基类：阅读视图为 `<img>` 元素本体；live 视图为 widget 容器 `span`（内部 `<img>` 由资源管理器装载） | `.markdown-preview-view img`（阅读）/ `.cm-image`（live 方向） | 阅读侧标签等价 + 类命中（探针 `rgb(25, 26, 27)`）；live 侧为本项目自有 widget 形态（Obsidian 图片 widget 无公开稳定类） |
+| `.oile-image-loading` / `.oile-image-loaded` / `.oile-image-error`（状态修饰，与 `data-oile-img-state` 同步） | 图片三态：占位（alt 文本）/ 已加载（`img load` 事件确认）/ 失败（点击重试） | 无直接对应（Obsidian 无公开加载状态类） | 本项目自有状态机形态；`oile-image-error` 提供可重试的可见错误轮廓 |
+
+行为边界（非样式映射，随 #10 记录）：
+
+- live 视图链接为**间接装饰**（按 `visibleRanges` 构建）：视口外的链接行按源码呈现，滚动进入视口后应用装饰；阅读视图链接在挂载块内（虚拟化窗口外无 DOM）。
+- 图片进入视口（阅读块挂载 / live widget 创建）才发起装载；工作区图源经宿主 `image.request` → `asWebviewUri` 通道解析（本地与远程工作区同通道），`https` 图源直连（可加载性由 webview CSP 决定）。离开视口卸载并释放（`src` 清空、资源条目回收）。
+- 引用式链接/图片（`[t][ref]`）：**阅读视图**由 markdown-it 完整解析（可点击）；**live 视图**不解析引用定义、按源码呈现（Ctrl+单击不跳转）——跨视图行为差异如实记录，统一收口属后续工单。
+
 ## 悬浮提示等既有稳定类（沿用 #4/#5，与 Obsidian 无对应）
 
 `.oile-suspend-banner`（冲突暂停横幅）、`.oile-toolbar` 与 `.oile-mode-toggle`（模式切换工具栏）：本项目自有 UI，无 Obsidian 对应物，不参与兼容承诺。
@@ -83,15 +100,15 @@
 
 ## 内部测试 CSS 验证入口
 
-- 片段：`media/css-contract-probe.css`，随 webview HTML 加载（CSP `style-src` 允许的扩展资源）。仅用无视觉影响的属性（`text-decoration-color`，在无 `text-decoration-line` 时不呈现）与探针变量。#8 追加 span 级类与阅读语义标签的探针规则（`.oile-strong`/`.oile-inline-code`/`.oile-code-line`/`.oile-reading-block strong`）。
-- 观测：`view.state` 回报的 `cssProbe` 字段（`liveHeadingDecorationColor` / `readingHeadingDecorationColor` / `readingVarProbe`；#8 追加 `liveStrongDecorationColor` / `liveInlineCodeDecorationColor` / `liveCodeLineDecorationColor` / `readingStrongDecorationColor`），由 webview 读取目标元素 computed style 填充；目标元素不存在时为 `null`。
+- 片段：`media/css-contract-probe.css`，随 webview HTML 加载（CSP `style-src` 允许的扩展资源）。仅用无视觉影响的属性（`text-decoration-color`，在无 `text-decoration-line` 时不呈现）与探针变量。#8 追加 span 级类与阅读语义标签的探针规则（`.oile-strong`/`.oile-inline-code`/`.oile-code-line`/`.oile-reading-block strong`）；#10 追加链接/图片探针规则（`.oile-link`/`.oile-reading-block a`/`.oile-reading-block img.oile-image`）。
+- 观测：`view.state` 回报的 `cssProbe` 字段（`liveHeadingDecorationColor` / `readingHeadingDecorationColor` / `readingVarProbe`；#8 追加 `liveStrongDecorationColor` / `liveInlineCodeDecorationColor` / `liveCodeLineDecorationColor` / `readingStrongDecorationColor`；#10 追加 `liveLinkDecorationColor` / `readingLinkDecorationColor` / `readingImageDecorationColor`），由 webview 读取目标元素 computed style 填充；目标元素不存在时为 `null`。
 - 断言：集成用例「稳定样式契约」（`test/integration/suite/cases.ts`）在真实 VSCode 1.86.2 宿主内验证两种视图的类名命中与变量管道。
 
 ## 已知不支持项（如实清单）
 
 以下 Obsidian 常用选择器/结构**一期不提供**，出现在用户片段中不会命中（不会报错，也不会生效）：
 
-- ~~行内格式 token：`.cm-strong` / `.cm-emphasis` / `.cm-inline-code`~~（#8 已建立 `oile-` 对应类，见上文 live 表；`.cm-link`/`.cm-highlight` 待 #10 链接票）
+- ~~行内格式 token：`.cm-strong` / `.cm-emphasis` / `.cm-inline-code`~~（#8 已建立 `oile-` 对应类，见上文 live 表；~~`.cm-link` 待 #10 链接票~~ 已建立 `.oile-link`；`.cm-highlight` 高亮 `==文字==` 仍不支持）
 - 表格：`.markdown-preview-view table` 及其子结构（#12 表格票）。如实记录跨视图差异：**阅读视图已按 markdown-it 默认 GFM 渲染真实 `<table>`**，live 视图无表格装饰（源文呈现）——表格的显示一致性与单元格交互由 #12 收口
 - 引用块：~~`.markdown-embed` / `blockquote` 结构~~（#8 已提供 blockquote；`.markdown-embed` 嵌入结构仍属二期）
 - Callout：`.callout` 及其 data 属性（二期）

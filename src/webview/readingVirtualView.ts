@@ -26,7 +26,6 @@ import {
   createReadingBlockElement,
   findReadingAnchor,
   readingAnchorStartFor,
-  renderReadingBlocks,
 } from './readingView'
 import {
   DEFAULT_LINE_HEIGHT_PX,
@@ -60,6 +59,10 @@ export interface ReadingViewStats {
 export interface VirtualReadingViewOptions {
   /** 挂载缓冲（px）：窗口在视口两侧外扩的距离；缺省按视口高度自适应 */
   bufferPx?: number
+  /** #10 图片生命周期钩子：块挂载后预备其内图片（发起装载）；块卸载/容器
+   *  重建前释放其内图片槽位（src 清空、条目回收） */
+  onBlockMounted?: (el: HTMLElement) => void
+  onBlockUnmounted?: (el: HTMLElement) => void
 }
 
 /** 实测块外高：offsetHeight + 上下 margin（jsdom 无计算值时 margin 记 0） */
@@ -106,12 +109,15 @@ export class VirtualReadingView {
   private spacerBottom: HTMLElement
   private observer: ResizeObserver | null = null
   private pendingFrame = false
+  /** #10 图片生命周期钩子（构造注入） */
+  private hooks: VirtualReadingViewOptions
 /** 最近一次有效视口高度（隐藏期保持虚拟模式用） */
   private lastViewportHeight = 0
 
   constructor(container: HTMLElement, options: VirtualReadingViewOptions = {}) {
     this.container = container ?? createReadingContainer()
     this.fixedBufferPx = options.bufferPx
+    this.hooks = options
     this.spacerTop = document.createElement('div')
     this.spacerTop.className = `${READING_CLASS_NAMES.spacer} ${READING_CLASS_NAMES.spacerTop}`
     this.spacerBottom = document.createElement('div')
@@ -130,7 +136,9 @@ export class VirtualReadingView {
     this.heights = estimateHeights(this.blocks, text, this.calib)
     this.tops = blockTops(this.heights)
     // C-9：旧挂载元素逐个解除观察后再丢弃——ResizeObserver 对元素是
-    // 强引用，直接清空会留下游离观察并阻碍节点回收
+    // 强引用，直接清空会留下游离观察并阻碍节点回收；同时释放块内图片
+    // 槽位（#10：旧文档节点连同其资源状态一并回收）
+    this.releaseAllBlocks()
     if (this.observer) {
       for (const el of this.elements.values()) {
         this.observer.unobserve(el)
@@ -141,9 +149,13 @@ export class VirtualReadingView {
     this.detachSpacers()
     this.container.textContent = '' // 旧文档的全部节点（含 spacer）先行移除
     if (!this.layoutAvailable()) {
-      // 无布局回退：#6 全量渲染路径（结构与锚点语义不变）
+      // 无布局回退：#6 全量渲染路径（结构与锚点语义不变；图片照常预备）
       this.virtualized = false
-      renderReadingBlocks(this.container, text)
+      for (const block of this.blocks) {
+        const el = createReadingBlockElement(block, text)
+        this.container.appendChild(el)
+        this.hooks.onBlockMounted?.(el)
+      }
       return
     }
     this.virtualized = true
@@ -374,6 +386,7 @@ export class VirtualReadingView {
 
   private clearAll(): void {
     this.observer && this.disconnectElements()
+    this.releaseAllBlocks()
     this.elements.clear()
     this.mounted = null
     this.detachSpacers()
@@ -399,14 +412,33 @@ export class VirtualReadingView {
     const el = createReadingBlockElement(block, this.text)
     this.elements.set(i, el)
     this.observer?.observe(el)
+    // #10：挂载即预备图片（进入挂载窗口 = 进入装载时机）
+    this.hooks.onBlockMounted?.(el)
   }
 
   private unmountBlock(i: number): void {
     const el = this.elements.get(i)
     if (el) {
+      // #10：卸载前释放块内图片槽位（src 清空、资源条目回收）
+      this.hooks.onBlockUnmounted?.(el)
       this.observer?.unobserve(el)
       el.remove()
       this.elements.delete(i)
+    }
+  }
+
+  /** 既有内容块的图片释放（虚拟化与回退两条路径共用；不改动 DOM 结构） */
+  private releaseAllBlocks(): void {
+    if (this.virtualized) {
+      for (const el of this.elements.values()) {
+        this.hooks.onBlockUnmounted?.(el)
+      }
+      return
+    }
+    for (const el of Array.from(
+      this.container.querySelectorAll<HTMLElement>(`.${READING_CLASS_NAMES.block}`),
+    )) {
+      this.hooks.onBlockUnmounted?.(el)
     }
   }
 
@@ -510,6 +542,8 @@ export class VirtualReadingView {
       idx += 1
     }
     this.tops = blockTops(this.heights)
+    // 全量块退场：释放图片槽位（后续由窗口挂载路径重新预备）
+    this.releaseAllBlocks()
     this.container.textContent = ''
     this.elements.clear()
     this.mounted = null

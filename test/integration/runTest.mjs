@@ -91,6 +91,40 @@ const FENCE_CHUNK_DOC = (() => {
   out.push('```', '', '结尾段。', '')
   return out.join('\n')
 })()
+// #10 链接样例：中文/空格目录（%20 编码形态——CommonMark 无尖括号目标
+// 不允许裸空格）、无扩展名目标、危险 scheme、自动链接与本地图片
+const LINKS_DOC = [
+  '# 链接样例',
+  '',
+  '[外部链接](https://example.com/obsidian-like) 与 [本地目标](./链接目标.md)。',
+  '',
+  '[空格目录目标](./子%20目录/目标%20二.md) 与自动链接 <https://autolink.example.com/x>。',
+  '',
+  '[无扩展名目标](./无扩展名目标)（省略扩展名按 Markdown 处理）。',
+  '',
+  '危险：[file](file:///d:/x.md) 与 [js](javascript:alert(1))。',
+  '',
+  '![好图](assets/图片%20一.png)',
+  '',
+].join('\n')
+// #10 图片样例：工作区图片（中文+空格文件名，%20 形态）与缺失图
+const IMAGES_DOC = [
+  '# 图片样例',
+  '',
+  '正常图片（中文与空格文件名）：',
+  '',
+  '![好图](assets/图片%20一.png)',
+  '',
+  '缺失图片（可重试错误态）：',
+  '',
+  '![缺失图](assets/不存在.png)',
+  '',
+  '结尾段。',
+  '',
+].join('\n')
+// 1x1 透明 PNG（合法可解码位图，供真实 webview 装载断言）
+const TINY_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
 const LARGE_LINES = 100_000
 
 const wsDir = mkdtempSync(path.join(tmpdir(), 'oile-itest-'))
@@ -124,6 +158,17 @@ try {
   }
   // #7 图片尺寸变化定位样例：400 块中等体量，目标块上方有充足的已挂载缓冲块
   writeFileSync(path.join(wsDir, 'reading-image.md'), generateReadingSample(400), 'utf8')
+  // #10 链接/图片样例：中文目标、空格目录（磁盘真实空格 + 文档内 %20 形态）、
+  // 无扩展名目标与本地图片资源
+  writeFileSync(path.join(wsDir, 'links.md'), LINKS_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'links2.md'), LINKS_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, '链接目标.md'), '# 链接目标\n中文目标文档内容。\n', 'utf8')
+  writeFileSync(path.join(wsDir, '无扩展名目标.md'), '# 无扩展名目标\n省略扩展名解析目标。\n', 'utf8')
+  mkdirSync(path.join(wsDir, '子 目录'), { recursive: true })
+  writeFileSync(path.join(wsDir, '子 目录', '目标 二.md'), '# 目标 二\n含空格路径的目标文档。\n', 'utf8')
+  writeFileSync(path.join(wsDir, 'images.md'), IMAGES_DOC, 'utf8')
+  mkdirSync(path.join(wsDir, 'assets'), { recursive: true })
+  writeFileSync(path.join(wsDir, 'assets', '图片 一.png'), Buffer.from(TINY_PNG_BASE64, 'base64'))
 
   console.log(`[runTest] fixture 工作区：${wsDir}`)
   await runTests({
