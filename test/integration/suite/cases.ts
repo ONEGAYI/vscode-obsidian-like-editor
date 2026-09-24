@@ -49,6 +49,19 @@ function wsUri(name: string): vscode.Uri {
   return vscode.Uri.file(`${wsDir}/${name}`)
 }
 
+// #12 表格 fixture 内容（与 runTest.mjs 的 TABLE_DOC 字节一致）
+const TABLE_DOC_TEXT = [
+  '# 表格样例',
+  '',
+  '| 名字 | 数量 | 备注 |',
+  '| --- | :---: | ---: |',
+  '| 苹果 | 3 | 甲 |',
+  '| `x|y` | 4 | 乙\\|丙 |',
+  '',
+  '结尾段落。',
+  '',
+].join('\n')
+
 async function poll<T>(
   label: string,
   fn: () => T | undefined | Promise<T | undefined>,
@@ -123,6 +136,8 @@ interface ViewState {
     liveInlineCodeDecorationColor: string | null
     liveCodeLineDecorationColor: string | null
     readingStrongDecorationColor: string | null
+    liveTablePipeDecorationColor?: string | null
+    readingTableDecorationColor?: string | null
   }
   /** #8 双视图语法一致性观测 */
   liveSyntax?: {
@@ -138,6 +153,8 @@ interface ViewState {
     frontmatterLines: number
     taskGlyphs: number
     taskChecked: number
+    tableLines?: number
+    tableCells?: number
   }
   readingSyntax?: {
     headings: number
@@ -150,6 +167,7 @@ interface ViewState {
     listItems: number
     taskCheckboxes: number
     taskChecked: number
+    tables?: number
   }
 }
 
@@ -1196,5 +1214,73 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(panel1.text === panel1Expected, `面板 1 应正确应用外部增量：${JSON.stringify(panel1.text)}`)
     const finalState = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
     assert(finalState.version > afterFirst.version, `外部增量版本必须大于 ack 版本（${finalState.version} <= ${afterFirst.version}）`)
+  }],
+
+  // ---- 工单 #12：表格单元格编辑与双视图呈现 ----
+
+  ['表格装饰与单元格编辑写回：转义管道保存回读保真、一次撤销一笔提交（#12）', async () => {
+    await openWithEditor('table.md')
+    await waitSessionReady('table.md')
+    const uri = wsUri('table.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('table.md'))
+    const original = TABLE_DOC_TEXT
+    const edited = TABLE_DOC_TEXT.replace('| 苹果 | 3 | 甲 |', '| 香蕉\\|果 | 3 | 甲 |')
+
+    // live 装饰语义：4 行表格行（表头/分隔/2 数据行）、9 个单元格内容
+    // mark（GFM 拆分：`x|y` 与 乙\|丙 均为单格）
+    const view = await waitViewState('table.md', (v) => v.liveSyntax?.tableLines === 4 && v.liveSyntax?.tableCells === 9)
+    assert(view.liveSyntax!.tableLines === 4, `表格行装饰应为 4，实际 ${view.liveSyntax!.tableLines}`)
+    assert(view.liveSyntax!.tableCells === 9, `单元格装饰应为 9，实际 ${view.liveSyntax!.tableCells}`)
+
+    // 单元格编辑（webview 键入钩子的输出形态：含管道符的新内容带转义）
+    const at = original.indexOf('苹果')
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, {
+      kind: 'edit.request',
+      sessionId: '',
+      docUri: uri,
+      seq: 1,
+      baseVersion: 1,
+      changes: [{ offset: at, length: 2, text: '香蕉\\|果' }],
+    })
+    await poll('单元格编辑写入权威', () => (doc.getText() === edited ? true : undefined))
+    const saved = await doc.save()
+    assert(saved, '保存失败')
+    const disk = await readDisk('table.md')
+    assert(disk === edited, `保存回读应保持转义管道：${JSON.stringify(disk.slice(0, 80))}`)
+    assert(disk.includes('香蕉\\|果'), '磁盘内容应含转义管道')
+
+    // 一次撤销 = 一笔单元格提交（宿主权威栈回流）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('undo 回退单元格编辑', () => (doc.getText() === original ? true : undefined))
+    const state = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(state.appliedEdits === 1, `undo 不得产生回声写回，实际 ${state.appliedEdits}`)
+
+    // live 表格管道符样式入口命中
+    const liveProbe = await waitViewState('table.md', (v) => v.viewMode === 'live' && v.cssProbe?.liveTablePipeDecorationColor !== undefined)
+    assert(
+      liveProbe.cssProbe!.liveTablePipeDecorationColor === 'rgb(19, 20, 21)',
+      `live 表格管道符应被测试片段命中 rgb(19, 20, 21)，实际 ${liveProbe.cssProbe!.liveTablePipeDecorationColor}`,
+    )
+  }],
+
+  ['阅读视图表格：真实 table 只读呈现与样式入口（#12）', async () => {
+    await openWithEditor('table.md')
+    await waitSessionReady('table.md')
+    const uri = wsUri('table.md').toString()
+    await waitViewState('table.md', (v) => v.viewMode === 'live')
+
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const reading = await waitViewState('table.md', (v) => v.viewMode === 'reading' && v.readingSyntax?.tables !== undefined)
+    assert(reading.readingSyntax!.tables === 1, `阅读视图应渲染 1 张表格，实际 ${reading.readingSyntax!.tables}`)
+    // 只读语义：表格为语义标签渲染，无输入控件（任务勾选外的交互均不提供）
+    assert(
+      reading.cssProbe?.readingTableDecorationColor === 'rgb(22, 23, 24)',
+      `阅读表格应被测试片段命中 rgb(22, 23, 24)，实际 ${reading.cssProbe?.readingTableDecorationColor}`,
+    )
+    // 切回 live：同一文本两视图共用（文本不变）
+    const backText = reading.text
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'live' })
+    const liveAgain = await waitViewState('table.md', (v) => v.viewMode === 'live')
+    assert(liveAgain.text === backText, '两种视图共用同一文本，切换不得改变内容')
   }],
 ]

@@ -56,6 +56,7 @@ vscode-obsidian-like-editor/
 │   ├── perf/     # 性能实测数据与测量工具说明
 │   │   ├── 2026-09-live-syntax-decorations.md   # 语法树装饰与大围栏细分实测（#8）
 │   │   ├── 2026-09-reading-viewport-mount.md    # 阅读按需挂载实测数据
+│   │   ├── 2026-09-table-cell-editing.md        # 表格单元格编辑性能边界与已知限制
 │   │   ├── 2026-09-title-decoration-viewport.md # 标题切片视口渲染实测数据
 │   │   └── data/                                # 性能探针原始报告数据
 │   │       └── perf-report.json # 性能探针原始报告数据
@@ -93,7 +94,9 @@ vscode-obsidian-like-editor/
 │       ├── readingView.ts        # 阅读视图 DOM 构建与锚点定位
 │       ├── readingViewport.ts    # 阅读视口挂载窗口纯函数
 │       ├── readingVirtualView.ts # 阅读视图虚拟化装配层
-│       └── syncController.ts     # CM6 同步控制器
+│       ├── syncController.ts     # CM6 同步控制器
+│       ├── tableCells.ts         # 表格单元格 GFM 边界拆分与写回转义（纯函数）
+│       └── tableEditing.ts       # 表格单元格输入钩子（| 键转义，CM6 扩展）
 ├── test/             # 测试根
 │   ├── integration/ # 真宿主集成测试
 │   │   ├── runTest.mjs # 集成测试启动器
@@ -111,16 +114,19 @@ vscode-obsidian-like-editor/
 │       ├── documentSession.test.ts    # 文档会话契约
 │       ├── historyForwarding.test.ts  # 撤销重做转发契约测试
 │       ├── liveDecorations.test.ts    # Live 装饰契约测试
+│       ├── liveTable.test.ts          # live 表格装饰与单元格编辑权威链路测试
 │       ├── markdownDoc.test.ts        # 文档工具契约测试
 │       ├── newline.test.ts            # 换行协调契约
 │       ├── perfProbe.test.ts          # 性能探针契约测试
 │       ├── protocol.test.ts           # 消息协议校验契约
 │       ├── readingBlocks.test.ts      # 阅读块切分契约测试
 │       ├── readingMarkdown.test.ts    # 渲染层契约测试
+│       ├── readingTable.test.ts       # 阅读视图表格只读呈现与虚拟化测试
 │       ├── readingView.test.ts        # 阅读视图 DOM 契约测试
 │       ├── readingViewport.test.ts    # 视口窗口纯函数契约测试
 │       ├── readingVirtualView.test.ts # 虚拟化装配契约测试
 │       ├── suspendResume.test.ts      # 暂停恢复契约测试
+│       ├── tableCells.test.ts         # 单元格拆分/转义契约测试
 │       ├── viewMode.test.ts           # 模式切换状态机契约测试
 │       └── webviewSync.test.ts        # webview 同步契约
 ├── tsconfig.json     # TypeScript 类型检查配置
