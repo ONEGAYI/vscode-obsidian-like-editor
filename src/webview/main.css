@@ -58,6 +58,40 @@ body {
   outline: none;
 }
 
+/* ---- #34 行号栏：#32 留白带内叠加，不动正文基线 ----
+   CM6 默认 gutter 是 scroller flex 流的占位列（会把 .cm-content 右移）。
+   此处改为负左外边距把栏移入 --vsidian-content-padding-inline 留白带并
+   固定栏宽 = 带宽：净占位为 0，正文左缘基线（留白带右缘）在开关行号
+   前后均不变（对齐 Obsidian 行为）。
+   - 溢出方向：justify-content: flex-end 使超宽行号向左溢出，被
+     overflow: hidden 裁掉高位一侧，右缘（贴正文侧）永不越出带宽
+   - 宽编号（≥4 位）降级：JS 按视口最大行号位数设 --vsidian-ln-scale
+     做水平压缩（公式见 syncController.syncLineNumberScale），scaleX
+     保持数字高度可读、行号值完整；overflow 裁剪仅作极端字体的兜底 */
+#app .cm-editor .cm-scroller .cm-gutters {
+  margin-left: calc(-1 * var(--vsidian-content-padding-inline));
+  width: var(--vsidian-content-padding-inline);
+  justify-content: flex-end;
+  overflow: hidden;
+  background-color: transparent;
+  border: none;
+  color: var(--vscode-editorLineNumber-foreground, rgba(127, 127, 127, 0.6));
+}
+
+/* 行号单元格：字号公式 min(0.75 × 正文基准, 12px)——与
+   syncController.syncLineNumberScale 的 JS 复刻绑定，两处须同步修改；
+   右缘 2px 间隙含在带宽内（正文自留白带右缘起，行号不侵入）。
+   flex 右对齐 + 垂直居中：小字号行号在行高单元格内与正文行对齐 */
+#app .cm-editor .cm-scroller .cm-lineNumbers .cm-gutterElement {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 2px 0 0;
+  font-size: min(calc(var(--vsidian-content-font-size, 14px) * 0.75), 12px);
+  transform: scaleX(var(--vsidian-ln-scale, 1));
+  transform-origin: right center;
+}
+
 /* 标题实时预览（#5 切片）：类名为稳定样式入口（ADR-0004），字号/字重
    改变行高——因此必须是直接装饰（StateField），见 liveDecorations.ts */
 #app .cm-editor .cm-scroller .vsidian-heading-line {

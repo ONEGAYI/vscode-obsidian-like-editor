@@ -24,18 +24,23 @@
 //   （不再发送 edit.request、忽略 doc.changed）；doc.resync 兼作恢复信号
 // - seq 持久化：经 bridge.setState 保存，webview 重载（retainContextWhenHidden
 //   关闭导致的状态重建）后继续编号，宿主按 seq 幂等去重
-import { Annotation, ChangeSet, EditorState, type Extension, type Text } from '@codemirror/state'
-import { EditorView, keymap } from '@codemirror/view'
+import { Annotation, ChangeSet, Compartment, EditorState, type Extension, type Text } from '@codemirror/state'
+import { EditorView, keymap, lineNumbers } from '@codemirror/view'
 import {
   isHostToWebview,
   type CssProbeReport,
   type FindSessionProbe,
+  type LineGutterProbe,
   type LiveSyntaxProbe,
   type ReadingSyntaxProbe,
   type SerChange,
   type WebviewToHost,
 } from '../shared/protocol'
-import type { SettingsPayload } from '../shared/settings'
+import {
+  SHOW_LINE_NUMBERS_DEFAULT,
+  SHOW_LINE_NUMBERS_KEY,
+  type SettingsPayload,
+} from '../shared/settings'
 import {
   FIND_CLASS_NAMES,
   computeFindMatches,
@@ -62,6 +67,27 @@ function scheduleFrame(fn: () => void): void {
   } else {
     setTimeout(fn, 16)
   }
+}
+
+// ---- #34 行号降级公式常量（推导见 syncLineNumberScale 注释）----
+/** 留白带宽度（px）：与 #32 的 --vsidian-content-padding-inline 一致 */
+const LN_BAND_PX = 24
+/** 行号与正文的最小间隙（px，含在带宽内） */
+const LN_GAP_PX = 2
+/** 等宽字体数字 advance 宽度与字号之比（通行值 0.6，见注释兜底说明） */
+const LN_CHAR_RATIO = 0.6
+
+/**
+ * #34 宽编号降级公式（纯函数，契约测试直测）：
+ * scale = min(1, (带宽 − 间隙) / (0.6 × 行号字号 × 行号位数))
+ * 行号栏落在 #32 留白带内且带宽固定，超出容量的位数以水平压缩保全
+ * 完整行号值（数字高度不变、可读性优先于宽度）。
+ */
+export function lineNumberScale(digits: number, fontPx: number): number {
+  if (!Number.isFinite(digits) || !Number.isFinite(fontPx) || digits < 1 || fontPx <= 0) {
+    return 1
+  }
+  return Math.min(1, (LN_BAND_PX - LN_GAP_PX) / (LN_CHAR_RATIO * fontPx * digits))
 }
 
 /** webview 与宿主的通信通道（由 acquireVsCodeApi 适配） */
@@ -355,6 +381,15 @@ export class WebviewSyncController {
    *  持久化设置——每次装载（init）后经 settings.get 向宿主拉取 */
   private settings: SettingsPayload | undefined
 
+  // ---- 行号栏状态（#34）----
+  /** 行号开关生效态：mount 时按定义默认装配（默认开），设置快照/变更
+   *  到达后经 Compartment 热重配——不重建 EditorView */
+  private lineNumbersOn = SHOW_LINE_NUMBERS_DEFAULT
+  /** 行号扩展的运行时开关通道（extensions 装配点） */
+  private readonly lineNumbersCompartment = new Compartment()
+  /** 当前降级档位（视口最大行号十进制位数；-1 = 未初始化，触发首次计算） */
+  private lnScaleDigits = -1
+
   // ---- 冲突暂停状态（#4）----
   /** 暂停写回：保留本地文本、忽略外部增量、不再发送 edit.request */
   private suspended = false
@@ -599,13 +634,16 @@ export class WebviewSyncController {
         this.bridge.postMessage({ kind: 'settings.get' })
         break
       case 'settings.snapshot':
-        // 设置快照缓存（#33）：设置页请求-响应与编辑器拉取共用同一形态
+        // 设置快照缓存（#33）：设置页请求-响应与编辑器拉取共用同一形态；
+        // #34：行号开关经 Compartment 热重配应用（缺键回默认、非法形态忽略）
         this.settings = message.values
+        this.applyLineNumbersSetting()
         break
       case 'settings.changed':
         // 设置变更广播（#33）：缓存后由 #34 等消费方按需读取关心的键
-        // （如 editor.lineNumbers 触发 CM6 扩展热重配）
+        // （editor.lineNumbers 触发 CM6 扩展热重配）
         this.settings = message.values
+        this.applyLineNumbersSetting()
         break
       case 'edit.ack': {
         if (this.suspended) {
@@ -973,6 +1011,8 @@ export class WebviewSyncController {
       typography: this.collectTypography(),
       // #33 设置快照缓存（宿主下发过才有值；缺省向后兼容）
       settings: this.settings,
+      // #34 行号栏观测（开关态与视口内渲染结果）
+      lineGutter: this.collectLineGutter(),
     }
     this.bridge.postMessage(state)
   }
@@ -2016,6 +2056,91 @@ export class WebviewSyncController {
     })
   }
 
+  // ---- 行号栏（#34）----
+
+  /**
+   * 应用行号设置（settings.snapshot / settings.changed 到达时）：
+   * - 源文件行号语义：CM6 对 \r\n→\n 的规范化不改行数，lineNumbers() 从
+   *   doc 直算即源文件行号——不写换行映射代码（共享笔记 34 号推论）
+   * - 缺键回定义默认（向后兼容）；非布尔形态忽略（协议是宽标量容器，
+   *   类型语义校验归宿主，webview 侧防御）
+   * - 经 Compartment.reconfigure 增删扩展，EditorView 不重建；阅读模式
+   *   天然无行号（gutter 挂在 liveWrapper 内的 EditorView 上，reading
+   *   时整体隐藏），切回 live 按本状态恢复
+   */
+  private applyLineNumbersSetting(): void {
+    const raw = this.settings?.[SHOW_LINE_NUMBERS_KEY]
+    const on = typeof raw === 'boolean' ? raw : SHOW_LINE_NUMBERS_DEFAULT
+    if (on === this.lineNumbersOn) {
+      return
+    }
+    this.lineNumbersOn = on
+    if (on) {
+      // 重开后降级档位强制重算：关闭期间文档/字号可能已变化
+      this.lnScaleDigits = -1
+    }
+    this.view?.dispatch({
+      effects: this.lineNumbersCompartment.reconfigure(on ? lineNumbers() : []),
+    })
+    this.syncLineNumberScale()
+  }
+
+  /**
+   * 宽编号降级档位（docChanged / viewportChanged / 重开行号时调用）：
+   * 行号栏落在 #32 留白带（--vsidian-content-padding-inline，默认 24px）
+   * 内且不得覆盖正文、不得右移正文基线——带宽固定，超出 3 位数字的行号
+   * 无法以原字号完整显示。降级策略为水平压缩（scaleX，origin 贴右缘）：
+   * 保持数字高度可读、行号值完整无歧义（优于裁剪高位的歧义显示与缩小
+   * 字号到 6px 的不可读），公式可复核：
+   *   scale = min(1, (带宽 − 右缘间隙) / (0.6 × 行号字号 × 位数))
+   * - 位数取视口最大行号（gutter 只渲染视口行，滚动跨越位数边界时更新）
+   * - 行号字号公式 min(0.75 × 正文基准, 12px) 与 main.css 的
+   *   .cm-lineNumbers 字号规则绑定，两处须同步修改
+   * - 等宽数字宽比 0.6 为通行值（0.55–0.62），配合栏 overflow: hidden
+   *   兜底（极端字体下最多裁左缘极小部分，不覆盖正文）
+   */
+  private syncLineNumberScale(): void {
+    const view = this.view
+    if (!view) {
+      return
+    }
+    const doc = view.state.doc
+    const lastLineNo = doc.lineAt(Math.min(view.viewport.to, doc.length)).number
+    const digits = String(lastLineNo).length
+    if (digits === this.lnScaleDigits) {
+      return
+    }
+    this.lnScaleDigits = digits
+    const scroller = view.dom.querySelector('.cm-scroller')
+    const basePx = Number.parseFloat(scroller ? getComputedStyle(scroller).fontSize : '')
+    const base = Number.isFinite(basePx) && basePx > 0 ? basePx : 14
+    const fontPx = Math.min(base * 0.75, 12)
+    view.dom.style.setProperty('--vsidian-ln-scale', String(lineNumberScale(digits, fontPx)))
+  }
+
+  /** 行号栏观测（#34 view.state 扩展字段）。过滤 CM6 的隐藏测量探针
+   *  单元格（visibility:hidden、用于测量 gutter 文本宽度的 dummy——真实
+   *  宿主与 jsdom 均存在，不是行号） */
+  private collectLineGutter(): LineGutterProbe {
+    const view = this.view
+    if (!view || !this.lineNumbersOn) {
+      return { on: this.lineNumbersOn, count: 0, first: null, last: null, scaleX: null }
+    }
+    const texts = Array.from(
+      view.dom.querySelectorAll('.cm-lineNumbers .cm-gutterElement'),
+    )
+      .filter((el) => (el as HTMLElement).style.visibility !== 'hidden')
+      .map((el) => el.textContent ?? '')
+    const raw = Number.parseFloat(view.dom.style.getPropertyValue('--vsidian-ln-scale'))
+    return {
+      on: this.lineNumbersOn,
+      count: texts.length,
+      first: texts.length > 0 ? texts[0] : null,
+      last: texts.length > 0 ? texts[texts.length - 1] : null,
+      scaleX: Number.isFinite(raw) && raw > 0 ? raw : 1,
+    }
+  }
+
   /** 暂停提示横幅：说明输入已保留、写回已暂停，提供取回与恢复按钮 */
   private buildBanner(): HTMLElement {
     const banner = document.createElement('div')
@@ -2059,6 +2184,10 @@ export class WebviewSyncController {
   private extensions() {
     return [
       EditorView.lineWrapping,
+      // 行号栏（#34）：源文件行号经 Compartment 装配（设置开关热重配，
+      // mount 时按定义默认开）；栏落在留白带内的定位与宽编号降级样式
+      // 见 main.css 的 #34 段与 syncLineNumberScale
+      this.lineNumbersCompartment.of(this.lineNumbersOn ? lineNumbers() : []),
       // 标题实时预览装饰（#5 切片）：直接装饰（StateField）+ 间接装饰
       // （ViewPlugin 按 visibleRanges），见 liveDecorations.ts 头注释
       livePreviewDecorations,
@@ -2098,6 +2227,11 @@ export class WebviewSyncController {
       findDecorations,
       ...this.extraExtensions,
       EditorView.updateListener.of((update) => {
+        // #34 宽编号降级档位：文档增删行或视口滚动跨越位数边界时更新
+        // （纯 CSS 变量写入，无事务、无写回）
+        if (update.docChanged || update.viewportChanged) {
+          this.syncLineNumberScale()
+        }
         if (!update.docChanged) {
           return
         }

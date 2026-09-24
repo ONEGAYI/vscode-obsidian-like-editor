@@ -202,6 +202,8 @@ export type WebviewToHost =
       find?: FindSessionProbe
       /** 当前生效设置快照（#33 起缓存宿主下发的值；#34 行号等设置的观测面） */
       settings?: SettingsPayload
+      /** #34 行号栏观测（设置开关态与视口内渲染结果；旧 webview 缺省） */
+      lineGutter?: LineGutterProbe
     }
       /** 阅读视图性能探针回报（#7）：滚动往返期间的挂载/回收与解析观测 */
   | {
@@ -344,6 +346,20 @@ export interface CssProbeReport {
   readingWikilinkDecorationColor: string | null
 }
 
+/** #34 行号栏观测（view.state 扩展字段）：开关生效态与视口内渲染结果 */
+export interface LineGutterProbe {
+  /** 设置开关生效态（快照缺键时为定义默认 true） */
+  on: boolean
+  /** `.cm-lineNumbers .cm-gutterElement` 数（CM6 原生视口有界，远小于全文行数） */
+  count: number
+  /** 首个行号单元格文本（源行编号起点观测；栏未装配为 null） */
+  first: string | null
+  /** 末个行号单元格文本（视口尾行号观测；栏未装配为 null） */
+  last: string | null
+  /** 当前宽编号降级的水平压缩系数（1 = 无压缩；栏未装配为 null） */
+  scaleX: number | null
+}
+
 /** live 侧语法装饰统计（#8：装饰集合计数，覆盖标题/行内/块级/任务/降级观测） */
 export interface LiveSyntaxProbe {
   /** 标题行数（#5 类） */
@@ -446,6 +462,19 @@ function isSettingsPayload(v: unknown): v is SettingsPayload {
 
 function isNonNegativeInt(v: unknown): boolean {
   return typeof v === 'number' && Number.isInteger(v) && v >= 0
+}
+
+/** #34 行号栏观测校验：on 布尔、count 非负整数、first/last 字符串或 null、
+ *  scaleX 正数（1 = 无压缩）或 null（栏未装配） */
+function isLineGutterProbe(v: unknown): v is LineGutterProbe {
+  return (
+    isObject(v) &&
+    typeof v.on === 'boolean' &&
+    isNonNegativeInt(v.count) &&
+    (v.first === null || isString(v.first)) &&
+    (v.last === null || isString(v.last)) &&
+    (v.scaleX === null || (typeof v.scaleX === 'number' && v.scaleX > 0))
+  )
 }
 
 function isPositiveInt(v: unknown): boolean {
@@ -650,7 +679,8 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.readingWikilinkCount === undefined || isNonNegativeInt(v.readingWikilinkCount)) &&
         (v.imageStates === undefined || isImageStateCounts(v.imageStates)) &&
         (v.find === undefined || isFindSessionProbe(v.find)) &&
-        (v.settings === undefined || isSettingsPayload(v.settings))
+        (v.settings === undefined || isSettingsPayload(v.settings)) &&
+        (v.lineGutter === undefined || isLineGutterProbe(v.lineGutter))
       )
     case 'reading.perf.report':
       return (

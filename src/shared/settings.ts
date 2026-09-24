@@ -34,10 +34,26 @@ export interface SettingDefinition {
 }
 
 /**
- * 生产设置定义注册表：初始为空（#33 交付空状态页面与完整数据链路，
- * 首个实际设置项「显示源文件行号」由 #34 加入）。
+ * #34「显示行号」：实时预览侧 CM6 行号栏开关。键与消费方常量成对导出——
+ * webview（syncController 的 Compartment 装配）与宿主（无直接消费，经快照
+ * 透传）读同一键，避免字面量漂移。默认开启（首次安装即显示，工单 #34）。
  */
-export const PRODUCTION_SETTING_DEFINITIONS: readonly SettingDefinition[] = []
+export const SHOW_LINE_NUMBERS_KEY = 'editor.lineNumbers'
+export const SHOW_LINE_NUMBERS_DEFAULT = true
+
+/**
+ * 生产设置定义注册表：#33 交付空状态页面与完整数据链路，#34 加入首个
+ * 实际设置项「显示行号」（设置页自此渲染真实开关）。
+ */
+export const PRODUCTION_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
+  {
+    key: SHOW_LINE_NUMBERS_KEY,
+    type: 'boolean',
+    default: SHOW_LINE_NUMBERS_DEFAULT,
+    title: '显示行号',
+    description: '在实时预览左侧留白带内显示源文件行号（阅读模式不显示）。',
+  },
+]
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)

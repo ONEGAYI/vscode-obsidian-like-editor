@@ -40,14 +40,28 @@ describe('页面结构（#33 归属与空状态）', () => {
     expect(title?.textContent).toContain('设置')
   })
 
-  it('空定义表渲染空状态，不出现任何开关（生产注册表初始为空）', () => {
-    expect(PRODUCTION_SETTING_DEFINITIONS).toHaveLength(0)
-    const { parent } = makeView(PRODUCTION_SETTING_DEFINITIONS)
+  it('空定义表渲染空状态，不出现任何开关（渲染层空状态路径）', () => {
+    const { parent } = makeView([])
     const empty = parent.querySelector(`.${SETTINGS_PAGE_CLASS_NAMES.empty}`)
     expect(empty, '应渲染空状态元素').toBeTruthy()
     expect(empty!.textContent).toContain('暂无可配置项')
     expect(parent.querySelectorAll('input')).toHaveLength(0)
     expect(parent.querySelectorAll('button')).toHaveLength(0)
+  })
+
+  it('生产注册表（#34 起）渲染真实开关：显示行号、默认勾选', () => {
+    // #34：首个实际设置项接入后设置页不再是空状态——注册表追加定义即
+    // 出现开关（#33 设计的预期演进），此处以生产定义直测渲染结果
+    expect(PRODUCTION_SETTING_DEFINITIONS.length).toBeGreaterThan(0)
+    const { parent } = makeView(PRODUCTION_SETTING_DEFINITIONS)
+    expect(parent.querySelector(`.${SETTINGS_PAGE_CLASS_NAMES.empty}`)).toBeNull()
+    const boxes = parent.querySelectorAll<HTMLInputElement>(
+      `input.${SETTINGS_PAGE_CLASS_NAMES.checkbox}`,
+    )
+    expect(boxes).toHaveLength(PRODUCTION_SETTING_DEFINITIONS.length)
+    const first = parent.querySelector(`.${SETTINGS_PAGE_CLASS_NAMES.itemTitle}`)
+    expect(first?.textContent).toBe('显示行号')
+    expect(boxes[0]!.checked).toBe(true) // 默认开启
   })
 })
 

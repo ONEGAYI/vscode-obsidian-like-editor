@@ -1,10 +1,12 @@
 // 设置定义与读写纯逻辑契约（#33）：设置项定义（键/类型/默认值/校验内建于
 // 类型）、默认快照、存量清洗（无效值恢复默认、未知键忽略）与补丁应用
-// （有效值可保存回读、无效值整批拒绝）。生产注册表初始为空——设置页
-// 空状态与「不展示占位开关」的依据；契约测试全部用 fixture 定义覆盖。
+// （有效值可保存回读、无效值整批拒绝）。#34 起生产注册表含首个实际设置项
+// 「显示行号」；其余读写语义仍以 fixture 定义覆盖。
 import { describe, it, expect } from 'vitest'
 import {
   PRODUCTION_SETTING_DEFINITIONS,
+  SHOW_LINE_NUMBERS_DEFAULT,
+  SHOW_LINE_NUMBERS_KEY,
   applySettingsPatch,
   isSettingDefinition,
   sanitizeStoredSettings,
@@ -18,9 +20,21 @@ const FIXTURE_DEFS: readonly SettingDefinition[] = [
   { key: 'editor.spellcheck', type: 'boolean', default: true, title: '拼写检查' },
 ]
 
-describe('生产注册表（#33 空状态依据）', () => {
-  it('初始为空：无任何已定义设置项', () => {
-    expect(PRODUCTION_SETTING_DEFINITIONS).toEqual([])
+describe('生产注册表（#34 起含实际设置项）', () => {
+  it('注册「显示行号」：键 editor.lineNumbers、boolean、默认开启', () => {
+    // #34：首个实际设置项接入，设置页不再是空状态（#33 设计的预期演进）
+    expect(PRODUCTION_SETTING_DEFINITIONS).toHaveLength(1)
+    const def = PRODUCTION_SETTING_DEFINITIONS[0]
+    expect(def.key).toBe('editor.lineNumbers')
+    expect(def.type).toBe('boolean')
+    expect(def.default).toBe(true)
+    expect(def.title).toBe('显示行号')
+    expect(isSettingDefinition(def)).toBe(true)
+  })
+
+  it('键与消费方常量一致：webview/宿主经 SHOW_LINE_NUMBERS_KEY 读同一键', () => {
+    expect(SHOW_LINE_NUMBERS_KEY).toBe('editor.lineNumbers')
+    expect(SHOW_LINE_NUMBERS_DEFAULT).toBe(true)
   })
 })
 
