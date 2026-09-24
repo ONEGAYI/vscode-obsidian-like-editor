@@ -57,6 +57,27 @@ describe('createMarkdownRenderer：安全配置', () => {
   })
 })
 
+describe('行尾双空格与末尾无换行（mvp.md 文档样例清单）', () => {
+  it('行尾双空格渲染为硬换行 <br>（CommonMark 语义），行尾单空格不产生', () => {
+    const md = createMarkdownRenderer()
+    const hard = renderToDom(md, '第一行  \n第二行\n')
+    expect(hard.querySelector('p')!.innerHTML).toContain('<br')
+    const soft = renderToDom(md, '第一行 \n第二行\n')
+    expect(soft.querySelector('p')!.innerHTML).not.toContain('<br')
+  })
+
+  it('单行无换行文档渲染不崩、文本保真；渲染层吞块尾空格是 CommonMark 标准（保真责任在编辑路径）', () => {
+    const md = createMarkdownRenderer()
+    const host = renderToDom(md, 'abc')
+    sanitizeReadingDom(host) // 净化层同时跑通
+    expect(host.textContent!.trim()).toBe('abc') // 块级 HTML 尾随 \n 不计入
+    const tail = renderToDom(md, 'a  \nb ') // 段内双空格硬换行保留，块尾单空格按标准剥离
+    sanitizeReadingDom(tail)
+    expect(tail.querySelector('br')).not.toBeNull()
+    expect(tail.textContent!.trim()).toBe('a\nb')
+  })
+})
+
 describe('列表项源锚点（list_item_open 自定义规则）', () => {
   it('每个 li 携带其首行起止 offset（含嵌套项）', () => {
     const md = createMarkdownRenderer()

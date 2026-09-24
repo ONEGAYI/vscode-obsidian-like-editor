@@ -91,3 +91,23 @@ describe('混合行尾文档 a\\r\\nb\\nc', () => {
     ])
   })
 })
+
+describe('单行无换行文档（末尾无 \\n，mvp.md 文档样例清单）', () => {
+  const c = new NewlineCoordinator('abc')
+
+  it('无 CRLF 标记，末位置（=== 长度）坐标恒等不越界', () => {
+    expect(c.hasCrlf()).toBe(false)
+    expect(c.isCrlfDoc).toBe(false)
+    expect(c.hostOffsetToLf(3)).toBe(3)
+    expect(c.lfOffsetToHost(3)).toBe(3)
+  })
+
+  it('末位置插入直通（CRLF 文档的末位置编辑同此换算路径，不产生漂移）', () => {
+    const crlfEnd = new NewlineCoordinator('a\r\nbc') // CRLF 文档、末尾无换行
+    expect(c.lfChangesToHost([{ offset: 3, length: 0, text: '！' }])).toEqual([
+      { offset: 3, length: 0, text: '！' },
+    ])
+    // LF 'a\nbc' 末位 4 → 宿主坐标 5（越过 1 个 CRLF 行尾 +1）
+    expect(crlfEnd.lfOffsetToHost(4)).toBe(5)
+  })
+})

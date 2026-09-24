@@ -235,6 +235,20 @@ describe('buildLivePreviewDecorations：全量构建（树驱动语义）', () =
       expect(item.to <= footnotePos).toBe(true)
     }
   })
+
+  it('行尾双空格、行尾空格与末尾无换行：装饰构建不崩且尾部空格不参与隐藏（渲染降级安全）', () => {
+    // mvp.md 文档样例清单边角：构建路径必须容忍这些形态（源文呈现，空格原样）
+    const trailing = '第一行  \n第二行 \n第三行' // 双空格（硬换行）/ 单空格 / 末尾无换行
+    let trailingSet: DecorationSet
+    expect(() => {
+      trailingSet = build(trailing)
+    }).not.toThrow()
+    // 行尾空格区间不被隐藏/替换（所见即所键：空格原样呈现）
+    for (const [from, to] of hiddenRanges(trailingSet!)) {
+      expect(trailing.slice(from, to).trim()).not.toBe('')
+    }
+    expect(() => build('abc')).not.toThrow() // 单行无换行文档
+  })
 })
 
 describe('活动语义（#5 选区联动沿用）：光标行显示源码', () => {

@@ -2,6 +2,8 @@
 // 执行性能探针并把报告写盘。由 test/perf/runPerf.mjs 启动，不经 npm test。
 //
 // 测量项（对应 mvp.md「MVP 性能契约」）：
+// - 打开耗时（#15 档位补全）：openWith 命令发出 → webview ready 握手
+//   （宿主侧 Date.now 轮询，档位口径非微基准；25ms 轮询压缩量化粒度）
 // - 打开装载后的基线 DOM 数（view.state 快照）
 // - 输入延迟（50 轮逐字符插入+删除，每轮含 2×rAF 稳定等待）
 // - 长任务（PerformanceObserver longtask）
@@ -90,6 +92,33 @@ async function poll<T>(
   }
 }
 
+/**
+ * #15 打开档位：openWith 命令发出 → webview ready 握手的耗时。
+ * 口径为宿主侧 Date.now（含命令派发、面板创建与 webview 脚本加载；档位
+ * 口径非微基准），25ms 轮询与模式切换同粒度以压缩量化误差。不含 ready
+ * 之后 init 全文装载（装载量另由基线 DOM 快照与切换档位覆盖）。
+ */
+async function openWithTiming(
+  file: string,
+): Promise<{ uri: vscode.Uri; openToReadyMs: number; pollIntervalMs: number }> {
+  const uri = vscode.Uri.file(`${wsDir}/${file}`)
+  const pollMs = 25
+  const t0 = Date.now()
+  await vscode.commands.executeCommand('vscode.openWith', uri, VIEW_TYPE)
+  await poll(
+    `会话就绪 ${file}`,
+    async () => {
+      const state = (await vscode.commands.executeCommand(CMD.sessionState, uri.toString())) as
+        | { found: boolean; panels: Array<{ ready: boolean }> }
+        | undefined
+      return state?.found && state.panels.some((p) => p.ready) ? state : undefined
+    },
+    30000,
+    pollMs,
+  )
+  return { uri, openToReadyMs: Date.now() - t0, pollIntervalMs: pollMs }
+}
+
 export async function run(): Promise<void> {
   const samples = process.env['PERF_SIZES']?.split(',').map((s) => s.trim()) ?? ['1k', '10k', '100k']
   const results: Record<string, unknown> = { startedAt: new Date().toISOString(), samples: {} }
@@ -97,14 +126,7 @@ export async function run(): Promise<void> {
 
   for (const size of samples) {
     const file = `perf-${size}.md`
-    const uri = vscode.Uri.file(`${wsDir}/${file}`)
-    await vscode.commands.executeCommand('vscode.openWith', uri, VIEW_TYPE)
-    await poll(`会话就绪 ${file}`, async () => {
-      const state = (await vscode.commands.executeCommand(CMD.sessionState, uri.toString())) as
-        | { found: boolean; panels: Array<{ ready: boolean }> }
-        | undefined
-      return state?.found && state.panels.some((p) => p.ready) ? state : undefined
-    })
+    const { uri, openToReadyMs, pollIntervalMs } = await openWithTiming(file)
     // 装载后的基线快照（view.state 含 DOM 计数）
     const view = await poll(`视图状态 ${file}`, async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri.toString())) as ViewState | undefined
@@ -120,6 +142,7 @@ export async function run(): Promise<void> {
     }
     sampleStore[size] = {
       file,
+      open: { openToReadyMs, pollIntervalMs },
       lineCount: view.lineCount,
       docLength: view.docLength,
       baselineViewState: {
@@ -129,18 +152,16 @@ export async function run(): Promise<void> {
       },
       report,
     }
+    console.log(`[perf] ${size} 打开：openWith → ready ${openToReadyMs}ms（轮询粒度 ${pollIntervalMs}ms）`)
     console.log(`[perf] ${size} 完成：基线 DOM ${report.baseline.contentDomCount}，输入 avg ${report.inputDelayMs.avgMs.toFixed(1)}ms / max ${report.inputDelayMs.maxMs.toFixed(1)}ms`)
 
     // #7 阅读视图按需挂载：同体量的每行一块样例，切换 reading 后测量
     const readingFile = `reading-${size}.md`
-    const readingUri = vscode.Uri.file(`${wsDir}/${readingFile}`)
-    await vscode.commands.executeCommand('vscode.openWith', readingUri, VIEW_TYPE)
-    await poll(`会话就绪 ${readingFile}`, async () => {
-      const state = (await vscode.commands.executeCommand(CMD.sessionState, readingUri.toString())) as
-        | { found: boolean; panels: Array<{ ready: boolean }> }
-        | undefined
-      return state?.found && state.panels.some((p) => p.ready) ? state : undefined
-    })
+    const {
+      uri: readingUri,
+      openToReadyMs: readingOpenMs,
+      pollIntervalMs: readingPollMs,
+    } = await openWithTiming(readingFile)
     // #15 模式切换档位：live → reading（细粒度轮询压缩计时量化误差）
     const switchPollMs = 25
     await vscode.commands.executeCommand(CMD.toggleViewMode)
@@ -182,6 +203,7 @@ export async function run(): Promise<void> {
     const toLiveMs = Date.now() - tToLive
     sampleStore[size]!['reading'] = {
       file: readingFile,
+      open: { openToReadyMs: readingOpenMs, pollIntervalMs: readingPollMs },
       totalBlocks: readingView.readingTotalBlocks,
       mountedBaseline: readingView.readingMountedBlocks,
       domBaseline: readingView.readingContentDomCount,
@@ -190,7 +212,7 @@ export async function run(): Promise<void> {
     }
     sampleStore[size]!['modeSwitch'] = { toReadingMs, toLiveMs, pollIntervalMs: switchPollMs }
     console.log(`[perf] ${size} 阅读视图：块模型 ${readingReport.totalBlocks}，挂载基线 ${readingReport.baseline.mountedBlocks}，滚动后 ${readingReport.afterScroll.mountedBlocks}，解析 ${readingReport.parseCount} 次，最大挂载 ${readingReport.maxMountedBlocks}`)
-    console.log(`[perf] ${size} 模式切换：→reading ${toReadingMs}ms，→live ${toLiveMs}ms（轮询粒度 ${switchPollMs}ms）`)
+    console.log(`[perf] ${size} 模式切换：→reading ${toReadingMs}ms，→live ${toLiveMs}ms（轮询粒度 ${switchPollMs}ms）；${readingFile} 打开 ${readingOpenMs}ms`)
     await vscode.commands.executeCommand('workbench.action.closeAllEditors')
   }
 
@@ -199,14 +221,7 @@ export async function run(): Promise<void> {
   // 首屏挂载成本与整块文本布局成本解耦（对照 #7 的整块实测记录）
   {
     const file = 'reading-giant.md'
-    const uri = vscode.Uri.file(`${wsDir}/${file}`)
-    await vscode.commands.executeCommand('vscode.openWith', uri, VIEW_TYPE)
-    await poll(`会话就绪 ${file}`, async () => {
-      const state = (await vscode.commands.executeCommand(CMD.sessionState, uri.toString())) as
-        | { found: boolean; panels: Array<{ ready: boolean }> }
-        | undefined
-      return state?.found && state.panels.some((p) => p.ready) ? state : undefined
-    })
+    const { uri } = await openWithTiming(file) // 打开等待统一走计时辅助（耗时字段本段不采用）
     await vscode.commands.executeCommand(CMD.toggleViewMode)
     const t0 = Date.now()
     const giantView = await poll(`阅读模式虚拟化 ${file}`, async () => {

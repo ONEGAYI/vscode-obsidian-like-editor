@@ -324,73 +324,75 @@ describe('出站与入站的未确认参考系（C-2）', () => {
   })
 })
 
+/** 内联权威文档：applyChanges 即宿主写入路径（content 等价保存后回读文本） */
+class InlineDoc implements HostDocumentPort {
+  content: string
+  ver = 1
+  private listener: ((changes: SerChange[], version: number) => void) | undefined
+  constructor(text: string) {
+    this.content = text
+  }
+  onDocChanged(cb: (changes: SerChange[], version: number) => void): void {
+    this.listener = cb
+  }
+  get version(): number {
+    return this.ver
+  }
+  getText(): string {
+    return this.content
+  }
+  async applyChanges(changes: SerChange[]): Promise<boolean> {
+    let out = this.content
+    let shift = 0
+    for (const c of [...changes].sort((a, b) => a.offset - b.offset)) {
+      out = out.slice(0, c.offset + shift) + c.text + out.slice(c.offset + shift + c.length)
+      shift += c.text.length - c.length
+    }
+    this.content = out
+    this.ver++
+    this.listener?.(changes, this.ver)
+    return true
+  }
+  async undo(): Promise<boolean> {
+    return false
+  }
+  async redo(): Promise<boolean> {
+    return false
+  }
+}
+
+/** Controller ↔ DocumentSession 配对（C-2 与文档边角用例共用的端到端基建） */
+function setupPair(text: string) {
+  const doc = new InlineDoc(text)
+  const toWebview: HostToWebview[] = []
+  const session = new DocumentSession(doc, { docUri: DOC_URI })
+  doc.onDocChanged((changes, version) => session.handleDocChanged(changes, version))
+  const sessionId = session.attachPanel({ send: (m) => toWebview.push(m) })
+  const bridge: VsCodeBridge = {
+    postMessage: (m) => {
+      void session.handleWebviewMessage(m, sessionId)
+    },
+    getState: <T,>() => undefined as T | undefined,
+    setState: () => undefined,
+  }
+  const controller = new WebviewSyncController(bridge)
+  controller.mount(document.createElement('div'))
+  session.handleWebviewMessage({ kind: 'ready' }, sessionId)
+  controller.handleHostMessage(toWebview.at(-1)!)
+  toWebview.length = 0
+  const settle = async () => {
+    let idle = 0
+    for (let i = 0; i < 20 && idle < 2; i++) {
+      await new Promise((r) => setTimeout(r, 0))
+      const messages = toWebview.splice(0)
+      for (const message of messages) controller.handleHostMessage(message)
+      idle = messages.length === 0 ? idle + 1 : 0
+    }
+  }
+  return { doc, controller, settle }
+}
+
 describe('C-2 端到端：未确认期间连续输入经宿主重定位后与本地一致', () => {
-  class InlineDoc implements HostDocumentPort {
-    content: string
-    ver = 1
-    private listener: ((changes: SerChange[], version: number) => void) | undefined
-    constructor(text: string) {
-      this.content = text
-    }
-    onDocChanged(cb: (changes: SerChange[], version: number) => void): void {
-      this.listener = cb
-    }
-    get version(): number {
-      return this.ver
-    }
-    getText(): string {
-      return this.content
-    }
-    async applyChanges(changes: SerChange[]): Promise<boolean> {
-      let out = this.content
-      let shift = 0
-      for (const c of [...changes].sort((a, b) => a.offset - b.offset)) {
-        out = out.slice(0, c.offset + shift) + c.text + out.slice(c.offset + shift + c.length)
-        shift += c.text.length - c.length
-      }
-      this.content = out
-      this.ver++
-      this.listener?.(changes, this.ver)
-      return true
-    }
-    async undo(): Promise<boolean> {
-      return false
-    }
-    async redo(): Promise<boolean> {
-      return false
-    }
-  }
-
-  function setupPair(text: string) {
-    const doc = new InlineDoc(text)
-    const toWebview: HostToWebview[] = []
-    const session = new DocumentSession(doc, { docUri: DOC_URI })
-    doc.onDocChanged((changes, version) => session.handleDocChanged(changes, version))
-    const sessionId = session.attachPanel({ send: (m) => toWebview.push(m) })
-    const bridge: VsCodeBridge = {
-      postMessage: (m) => {
-        void session.handleWebviewMessage(m, sessionId)
-      },
-      getState: <T,>() => undefined as T | undefined,
-      setState: () => undefined,
-    }
-    const controller = new WebviewSyncController(bridge)
-    controller.mount(document.createElement('div'))
-    session.handleWebviewMessage({ kind: 'ready' }, sessionId)
-    controller.handleHostMessage(toWebview.at(-1)!)
-    toWebview.length = 0
-    const settle = async () => {
-      let idle = 0
-      for (let i = 0; i < 20 && idle < 2; i++) {
-        await new Promise((r) => setTimeout(r, 0))
-        const messages = toWebview.splice(0)
-        for (const message of messages) controller.handleHostMessage(message)
-        idle = messages.length === 0 ? idle + 1 : 0
-      }
-    }
-    return { doc, controller, settle }
-  }
-
   it('两笔不等 ack 的连续输入：宿主权威文本与本地视图最终一致', async () => {
     const { doc, controller } = setupPair('abcdef')
     const view = controller.getView()!
@@ -420,6 +422,27 @@ describe('C-2 端到端：未确认期间连续输入经宿主重定位后与本
     await settle()
     expect(doc.content).toBe(expected)
     expect(view.state.doc.toString()).toBe(doc.content)
+  })
+})
+
+describe('文档边角保真：末尾无换行与尾部空格（mvp.md 文档样例清单）', () => {
+  it('单行无换行文档：末位置（=== 文档长度）编辑不越界，权威文本与本地一致（保存回读基准）', async () => {
+    const { doc, controller, settle } = setupPair('abc') // 无 \n：单行，末位置 = 3
+    const view = controller.getView()!
+    view.dispatch({ changes: { from: 3, insert: '末' } })
+    await settle()
+    expect(doc.content).toBe('abc末')
+    expect(view.state.doc.toString()).toBe('abc末')
+  })
+
+  it('行尾双空格（CommonMark 硬换行）与行尾单空格：装载保真、编辑后不被吞', async () => {
+    const src = '第一行  \n第二行 ' // 行 1 尾双空格、行 2 尾单空格、文档末尾无换行
+    const { doc, controller, settle } = setupPair(src)
+    const view = controller.getView()!
+    expect(view.state.doc.toString()).toBe(src) // CM6 装载不规范化尾部空格
+    view.dispatch({ changes: { from: 10, insert: '!' } }) // 文档末位置（行尾单空格之后）
+    await settle()
+    expect(doc.content).toBe('第一行  \n第二行 !') // 宿主写回原样保留双空格与尾空格
   })
 })
 
