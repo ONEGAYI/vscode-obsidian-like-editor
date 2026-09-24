@@ -285,6 +285,32 @@ export function createTextEditorProvider(
     }),
   )
 
+  // ---- 查找命令（#14）：活动 tab 为本扩展 custom editor 时向其面板发送
+  // view.find.open（webview 内浮动查找面板）。查找是纯只读视图操作 ----
+  context.subscriptions.push(
+    vscode.commands.registerCommand('onegayi.obsidian-like-editor.find', async () => {
+      const tab = vscode.window.tabGroups.activeTabGroup.activeTab
+      const input = tab?.input
+      if (
+        input instanceof vscode.TabInputCustom &&
+        input.viewType === VIEW_TYPE
+      ) {
+        const entry = getEntry(input.uri)
+        const panels = entry?.session.getInfo().panels.filter((p) => p.ready) ?? []
+        if (panels.length > 0) {
+          for (const panel of panels) {
+            entry!.session.postToPanel(panel.sessionId, { kind: 'view.find.open' })
+          }
+          return true
+        }
+      }
+      await vscode.window.showWarningMessage(
+        '请先聚焦一个 Obsidian-like Markdown Editor 编辑器面板，再使用编辑区查找',
+      )
+      return false
+    }),
+  )
+
   // ---- 测试钩子命令：仅集成测试经 runTest.mjs 注入 OILE_TEST_HOOKS=1 时
   // 注册（C-11），生产 VSIX 与常规 F5 开发不暴露 ----
   if (process.env.OILE_TEST_HOOKS === '1') {

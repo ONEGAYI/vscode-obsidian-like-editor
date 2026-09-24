@@ -102,6 +102,9 @@ export class VirtualReadingView {
   private mounted: MountWindow | null = null
   private elements = new Map<number, HTMLElement>()
 
+  /** #14 查找命中块的源 start（null 无高亮）：挂载/重建后自动重新施加 */
+  private highlightSrcStart: number | null = null
+
   private spacerTop: HTMLElement
   private spacerBottom: HTMLElement
   private observer: ResizeObserver | null = null
@@ -144,6 +147,7 @@ export class VirtualReadingView {
       // 无布局回退：#6 全量渲染路径（结构与锚点语义不变）
       this.virtualized = false
       renderReadingBlocks(this.container, text)
+      this.applyHighlightToDom()
       return
     }
     this.virtualized = true
@@ -263,15 +267,43 @@ export class VirtualReadingView {
     }
     // 终校准：目标块已挂载时按其真实布局位置吸附（消除残余估计误差；
     // 吸附后目标块恰在视口顶，锚点判定稳定命中目标）
+    this.snapToBlockTop(idx)
+    // 异步兜底（#14）：挂载窗口的后续重算（滚动事件/rAF/RO 触发的
+    // updateNow）中，实测回填与滚动锚定补偿以模型 tops 为基准——与真实
+    // 布局（容器 padding、边距合并）存在系统性残差，可能把同步校准好的
+    // 位置再次拖偏且无人纠正（锚点监听随即读取错位视口）。帧+宏任务后
+    // 按目标块真实位置再吸附，未命中（仍偏）则再补一轮
+    this.scheduleLocateSnap(idx, 2)
+  }
+
+  /** 目标块真实布局位置吸附 scrollTop（返回是否发生了校正） */
+  private snapToBlockTop(idx: number): boolean {
     const el = this.elements.get(idx)
-    if (el) {
-      const box = this.container.getBoundingClientRect()
-      const realTop = el.getBoundingClientRect().top - box.top + this.container.scrollTop
-      if (Math.abs(realTop - this.container.scrollTop) > 0.5) {
-        this.container.scrollTop = realTop
-        this.updateNow()
-      }
+    if (!el || this.blocks[idx] === undefined) {
+      return false
     }
+    const box = this.container.getBoundingClientRect()
+    if (box.height <= 0) {
+      return false
+    }
+    const realTop = el.getBoundingClientRect().top - box.top + this.container.scrollTop
+    if (Math.abs(realTop - this.container.scrollTop) > 0.5) {
+      this.container.scrollTop = realTop
+      this.updateNow()
+      return true
+    }
+    return false
+  }
+
+  /** 定位后的异步吸附：等过滚动事件与 rAF 窗口重算的突发期再校准 */
+  private scheduleLocateSnap(idx: number, rounds: number): void {
+    scheduleFrame(() => {
+      setTimeout(() => {
+        if (this.snapToBlockTop(idx) && rounds > 1) {
+          this.scheduleLocateSnap(idx, rounds - 1)
+        }
+      }, 0)
+    })
   }
 
   /** 源 offset → 锚点块 → 滚动（view.locate / 模式切换定位链） */
@@ -279,6 +311,34 @@ export class VirtualReadingView {
     const start = this.anchorStartFor(offset)
     if (start !== null) {
       this.scrollToSrcStart(start)
+    }
+  }
+
+  /** 查找命中块高亮（#14）：块级类，null 清除；挂载/全文重建后自动保持 */
+  highlightBlock(srcStart: number | null): void {
+    this.highlightSrcStart = srcStart
+    this.applyHighlightToDom()
+  }
+
+  /** 把当前 highlightSrcStart 施加到容器内既有块（两条路径通用） */
+  private applyHighlightToDom(): void {
+    if (!this.virtualized) {
+      const els = this.container.querySelectorAll<HTMLElement>(
+        `.${READING_CLASS_NAMES.block}[data-oile-src-start]`,
+      )
+      for (const el of els) {
+        el.classList.toggle(
+          READING_CLASS_NAMES.findHit,
+          Number(el.dataset['oileSrcStart']) === this.highlightSrcStart,
+        )
+      }
+      return
+    }
+    for (const [i, el] of this.elements) {
+      el.classList.toggle(
+        READING_CLASS_NAMES.findHit,
+        this.blocks[i]?.start === this.highlightSrcStart,
+      )
     }
   }
 
@@ -397,6 +457,10 @@ export class VirtualReadingView {
   private mountBlock(i: number): void {
     const block = this.blocks[i]!
     const el = createReadingBlockElement(block, this.text)
+    if (block.start === this.highlightSrcStart) {
+      // #14 查找命中块：滚动窗口平移导致重挂载后高亮保持
+      el.classList.add(READING_CLASS_NAMES.findHit)
+    }
     this.elements.set(i, el)
     this.observer?.observe(el)
   }

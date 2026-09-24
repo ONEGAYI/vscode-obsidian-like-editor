@@ -24,20 +24,38 @@
 //   （不再发送 edit.request、忽略 doc.changed）；doc.resync 兼作恢复信号
 // - seq 持久化：经 bridge.setState 保存，webview 重载（retainContextWhenHidden
 //   关闭导致的状态重建）后继续编号，宿主按 seq 幂等去重
-import { Annotation, ChangeSet, EditorState, type Extension } from '@codemirror/state'
+import { Annotation, ChangeSet, EditorState, type Extension, type Text } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import {
   isHostToWebview,
   type CssProbeReport,
+  type FindSessionProbe,
   type LiveSyntaxProbe,
   type ReadingSyntaxProbe,
   type SerChange,
 } from '../shared/protocol'
+import {
+  FIND_CLASS_NAMES,
+  computeFindMatches,
+  findDecorations,
+  matchIndexFrom,
+  setFindMatches,
+  type FindMatch,
+} from './findSession'
 import { liveDecorationsField, livePreviewDecorations } from './liveDecorations'
 import { runPerfProbe } from './perfProbe'
 import { runReadingPerfProbe } from './readingProbe'
 import { createReadingContainer } from './readingView'
 import { VirtualReadingView } from './readingVirtualView'
+
+/** rAF 不可用环境（旧 jsdom）退化为短超时（与 readingVirtualView 同款） */
+function scheduleFrame(fn: () => void): void {
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => fn())
+  } else {
+    setTimeout(fn, 16)
+  }
+}
 
 /** webview 与宿主的通信通道（由 acquireVsCodeApi 适配） */
 export interface VsCodeBridge {
@@ -257,6 +275,26 @@ export class WebviewSyncController {
   private readingView: VirtualReadingView | undefined
   private toolbar: HTMLElement | undefined
 
+  // ---- 查找会话状态（#14）----
+  /** 查找是纯只读视图状态：不写 TextDocument、不入撤销栈、零出站消息。
+   *  匹配基于 webview 全文文本模型（CM6 doc），屏外内容同样命中 */
+  private findPanel: HTMLElement | undefined
+  private findInputEl: HTMLInputElement | undefined
+  private findCountEl: HTMLElement | undefined
+  private findOpen = false
+  /** 首次打开后置位：view.state 从此回报 find 观测（含关闭态 open:false） */
+  private findTouched = false
+  private findQuery = ''
+  /** 大小写语义固定：默认区分；UI 切换后全程保持所选语义 */
+  private findCaseSensitive = true
+  private findMatches: FindMatch[] = []
+  /** 0 基当前序号（无匹配时无意义） */
+  private findIndex = 0
+  /** 匹配计算时的文档快照（Text 不可变，引用比较即版本失效判定） */
+  private findDoc: Text | null = null
+  /** document 级键盘拦截（Mod-F 打开 / Esc 关闭），dispose 时移除 */
+  private docKeydown: ((e: KeyboardEvent) => void) | undefined
+
   // ---- 冲突暂停状态（#4）----
   /** 暂停写回：保留本地文本、忽略外部增量、不再发送 edit.request */
   private suspended = false
@@ -310,6 +348,7 @@ export class WebviewSyncController {
     this.extraExtensions = extraExtensions
     this.toolbar = this.buildToolbar()
     this.banner = this.buildBanner()
+    this.findPanel = this.buildFindPanel()
     this.liveWrapper = document.createElement('div')
     this.liveWrapper.className = 'oile-view-live'
     this.readingContainer = createReadingContainer()
@@ -321,7 +360,9 @@ export class WebviewSyncController {
     this.readingContainer.addEventListener('scroll', () => {
       const container = this.readingContainer
       const view = this.readingView
-      if (container && view && container.scrollHeight > 0) {
+      // 只有真实可滚动（内容超出视口）时才以视口顶块更新锚点：短文档
+      // 滚不动，视口读数（首块）无法表达定位目标，保留定位写入的权威锚点
+      if (container && view && container.scrollHeight > container.clientHeight + 1) {
         const anchor = view.currentAnchor()
         if (anchor !== null) {
           this.modeAnchor = anchor
@@ -333,6 +374,26 @@ export class WebviewSyncController {
     parent.appendChild(this.banner)
     parent.appendChild(this.liveWrapper)
     parent.appendChild(this.readingContainer)
+    parent.appendChild(this.findPanel)
+    // webview 内键盘拦截（#14）：Mod-F 打开查找（custom editor webview 不可用
+    // VSCode 原生 find 控件）；Esc 关闭并归还焦点。capture 阶段先行处理
+    this.docKeydown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'f') {
+        e.preventDefault()
+        this.openFind()
+        return
+      }
+      if (this.findOpen && e.key === 'Escape') {
+        e.preventDefault()
+        this.closeFind()
+        return
+      }
+      if (this.findOpen && e.key === 'F3') {
+        e.preventDefault()
+        this.findStep(e.shiftKey ? 'prev' : 'next')
+      }
+    }
+    document.addEventListener('keydown', this.docKeydown, true)
     this.view = new EditorView({
       parent: this.liveWrapper,
       state: EditorState.create({ doc: '', extensions: this.extensions() }),
@@ -350,12 +411,20 @@ export class WebviewSyncController {
       clearTimeout(this.flushTimer)
       this.flushTimer = undefined
     }
+    if (this.docKeydown) {
+      document.removeEventListener('keydown', this.docKeydown, true)
+      this.docKeydown = undefined
+    }
     this.view?.destroy()
     this.view = undefined
     this.banner?.remove()
     this.banner = undefined
     this.toolbar?.remove()
     this.toolbar = undefined
+    this.findPanel?.remove()
+    this.findPanel = undefined
+    this.findInputEl = undefined
+    this.findCountEl = undefined
     this.liveWrapper?.remove()
     this.liveWrapper = undefined
     this.readingView?.dispose()
@@ -462,6 +531,16 @@ export class WebviewSyncController {
         // 模式切换指令（宿主命令路径；webview 按钮走同一状态机）
         this.setViewMode(message.mode)
         break
+      case 'view.find.open':
+        // 查找会话（#14）：webview 内浮动面板；纯只读视图操作
+        this.openFind(message.query)
+        break
+      case 'view.find.close':
+        this.closeFind()
+        break
+      case 'view.find.step':
+        this.findStep(message.direction)
+        break
       case 'view.locate': {
         // 定位（#10 查找/跳转入口）：光标移到源 offset；reading 滚动到块。
         // 纯视图操作——事务不带 changes，不产生编辑历史
@@ -519,6 +598,12 @@ export class WebviewSyncController {
         }
         break
       case 'view.state.request': {
+        // 查找观测前同步校验新鲜度（文档变化后微任务可能尚未执行）；
+        // 此处不在 CM6 update 内，可以安全 dispatch 纯 effect 事务
+        if (this.findOpen) {
+          this.findEnsureFresh()
+          this.findRender()
+        }
         const doc = this.view?.state.doc
         const content = this.view?.dom.querySelector('.cm-content')
         // 标题装饰的可观测 DOM 文本：活动（源码态）与非活动（隐藏标记）
@@ -585,6 +670,7 @@ export class WebviewSyncController {
           cssProbe: this.collectCssProbe(),
           liveSyntax: this.collectLiveSyntax(),
           readingSyntax: this.viewMode === 'reading' ? this.collectReadingSyntax() : undefined,
+          find: this.collectFindProbe(),
         })
         break
       }
@@ -724,6 +810,12 @@ export class WebviewSyncController {
         this.modeAnchor = start
         this.readingView.scrollToSrcStart(start)
       }
+      // 查找会话跨模式保活（#14）：当前匹配位置经源位置锚点映射到新视图
+      if (this.findOpen) {
+        this.findEnsureFresh()
+        this.findRender()
+        this.findLocate()
+      }
       return
     }
     // reading → live：源码位置锚点 = modeAnchor（用户滚动经 scroll 监听
@@ -741,6 +833,12 @@ export class WebviewSyncController {
       selection: { anchor: pos },
       effects: EditorView.scrollIntoView(pos, { y: 'center' }),
     })
+    // 查找会话跨模式保活（#14）：选区恢复到当前匹配（非仅块首）
+    if (this.findOpen) {
+      this.findEnsureFresh()
+      this.findRender()
+      this.findLocate()
+    }
   }
 
   /** 容器显隐与按钮文案（稳定类名 oile-view-live / oile-view-reading） */
@@ -925,6 +1023,228 @@ export class WebviewSyncController {
     btn.addEventListener('click', () => this.setViewMode('toggle'))
     bar.appendChild(btn)
     return bar
+  }
+
+  // ---- 查找会话（#14）----
+  // UI 形态：webview 内浮动层（custom editor webview 不可用 VSCode 原生
+  // find 控件）。入口：Mod-F 拦截、宿主 view.find.open（命令面板共用）、
+  // 输入框 Enter/Shift-Enter、F3 循环导航；Esc 关闭归还焦点。
+  // 匹配集基于 CM6 doc 全文文本模型；文档变化经 Text 引用比较判过期。
+
+  /** 查找面板 DOM（稳定类名见 FIND_CLASS_NAMES；默认隐藏，open 类控制显隐） */
+  private buildFindPanel(): HTMLElement {
+    const panel = document.createElement('div')
+    panel.className = FIND_CLASS_NAMES.panel
+    panel.setAttribute('role', 'search')
+    const input = document.createElement('input')
+    input.type = 'text'
+    input.className = FIND_CLASS_NAMES.input
+    input.setAttribute('placeholder', '查找')
+    input.setAttribute('aria-label', '在文档中查找')
+    input.addEventListener('input', () => {
+      this.findQuery = input.value
+      this.findDoc = null // 查询变化：以当前位置为参考重算
+      this.findRecompute(this.findReferencePos())
+      this.findRender()
+      this.findLocate()
+    })
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        this.findStep(e.shiftKey ? 'prev' : 'next')
+      }
+    })
+    const count = document.createElement('span')
+    count.className = FIND_CLASS_NAMES.count
+    count.textContent = '0/0'
+    const mkBtn = (cls: string, label: string, onClick: () => void): HTMLButtonElement => {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.className = cls
+      b.textContent = label
+      b.setAttribute('aria-label', label)
+      b.addEventListener('click', onClick)
+      return b
+    }
+    const caseBtn = mkBtn(FIND_CLASS_NAMES.caseToggle, '区分大小写', () => {
+      this.findCaseSensitive = !this.findCaseSensitive
+      caseBtn.classList.toggle(FIND_CLASS_NAMES.caseActive, !this.findCaseSensitive)
+      caseBtn.setAttribute('aria-pressed', String(!this.findCaseSensitive))
+      this.findDoc = null
+      this.findRecompute(this.findReferencePos())
+      this.findRender()
+      this.findLocate()
+    })
+    caseBtn.setAttribute('aria-pressed', 'false')
+    this.findInputEl = input
+    this.findCountEl = count
+    panel.appendChild(input)
+    panel.appendChild(count)
+    panel.appendChild(caseBtn)
+    panel.appendChild(mkBtn(FIND_CLASS_NAMES.prev, '上一个匹配', () => this.findStep('prev')))
+    panel.appendChild(mkBtn(FIND_CLASS_NAMES.next, '下一个匹配', () => this.findStep('next')))
+    panel.appendChild(mkBtn(FIND_CLASS_NAMES.close, '关闭查找', () => this.closeFind()))
+    return panel
+  }
+
+  /** 打开查找面板（可预置查询词；重复打开重新聚焦输入框并全选查询） */
+  private openFind(query?: string): void {
+    this.findTouched = true
+    if (typeof query === 'string' && query !== this.findQuery) {
+      this.findQuery = query
+      if (this.findInputEl) {
+        this.findInputEl.value = query
+      }
+      this.findDoc = null
+      this.findRecompute(this.findReferencePos())
+    } else {
+      this.findEnsureFresh()
+    }
+    this.findOpen = true
+    this.findPanel?.classList.add(FIND_CLASS_NAMES.open)
+    this.findRender()
+    this.findLocate()
+    const el = this.findInputEl
+    if (el) {
+      el.focus()
+      el.select()
+    }
+  }
+
+  /** 关闭查找：清空装饰与阅读高亮，归还焦点（live → CM6；reading → 失焦输入框） */
+  private closeFind(): void {
+    if (!this.findOpen) {
+      return
+    }
+    this.findOpen = false
+    this.findPanel?.classList.remove(FIND_CLASS_NAMES.open)
+    this.findMatches = []
+    this.findIndex = 0
+    // 纯 effect 事务：不带 changes，无编辑历史、无出站
+    this.view?.dispatch({ effects: setFindMatches.of({ matches: [], index: 0 }) })
+    this.readingView?.highlightBlock(null)
+    if (this.viewMode === 'live') {
+      this.view?.focus()
+    } else {
+      this.findInputEl?.blur()
+    }
+  }
+
+  /** 循环导航（上一项/下一项）：步进后重绘并定位到新当前匹配 */
+  private findStep(direction: 'next' | 'prev'): void {
+    if (!this.findOpen) {
+      return
+    }
+    this.findEnsureFresh()
+    const n = this.findMatches.length
+    if (n === 0) {
+      return
+    }
+    this.findIndex = (this.findIndex + (direction === 'next' ? 1 : n - 1)) % n
+    this.findRender()
+    this.findLocate()
+  }
+
+  /** 匹配参考位置：live 取光标主位；reading 取当前锚点（源码位置语义） */
+  private findReferencePos(): number {
+    if (this.viewMode === 'reading') {
+      return this.modeAnchor ?? 0
+    }
+    return this.view?.state.selection.main.from ?? 0
+  }
+
+  /** 无条件重算匹配集（查询/选项变化路径）：当前匹配取参考位置后首个 */
+  private findRecompute(ref: number): void {
+    const doc = this.view?.state.doc
+    this.findDoc = doc ?? null
+    this.findMatches = doc
+      ? computeFindMatches(doc.toString(), this.findQuery, this.findCaseSensitive)
+      : []
+    this.findIndex = matchIndexFrom(this.findMatches, ref)
+  }
+
+  /** 按需重算（导航/渲染前调用）：文档未变化时零开销；
+   *  变化后以旧当前匹配位置为参考就近保持（版本失效策略） */
+  private findEnsureFresh(): void {
+    const doc = this.view?.state.doc
+    if (!doc || doc === this.findDoc) {
+      return
+    }
+    const prevFrom = this.findMatches[this.findIndex]?.from
+    this.findRecompute(prevFrom ?? this.findReferencePos())
+  }
+
+  /** 重绘可观测状态：live 装饰效应、计数文本、阅读命中块（不改滚动位置） */
+  private findRender(): void {
+    this.view?.dispatch({
+      effects: setFindMatches.of({ matches: this.findMatches, index: this.findIndex }),
+    })
+    const total = this.findMatches.length
+    const cur = this.findMatches[this.findIndex]
+    if (this.findCountEl) {
+      this.findCountEl.textContent = `${total > 0 ? this.findIndex + 1 : 0}/${total}`
+      this.findCountEl.classList.toggle(FIND_CLASS_NAMES.countEmpty, total === 0)
+    }
+    if (this.readingView) {
+      // 块级高亮只在阅读模式生效（live 容器隐藏期不占用 DOM 类）
+      const start =
+        cur && this.viewMode === 'reading'
+          ? (this.readingView.anchorStartFor(this.clampToDoc(cur.from)) ?? null)
+          : null
+      this.readingView.highlightBlock(start)
+    }
+  }
+
+  /** 定位当前匹配（屏外内容同样定位；与视口/模式位置恢复协同）：
+   *  live → 选区+滚动（事务不带 changes）；reading → 源位置锚点映射到块、
+   *  滚动挂载目标并施加命中高亮 */
+  private findLocate(): void {
+    const cur = this.findMatches[this.findIndex]
+    if (!cur) {
+      return
+    }
+    this.modeAnchor = cur.from
+    if (this.viewMode === 'reading' && this.readingView) {
+      const start = this.readingView.anchorStartFor(this.clampToDoc(cur.from)) ?? cur.from
+      this.modeAnchor = start
+      this.readingView.scrollToSrcStart(start)
+      this.readingView.highlightBlock(start)
+      // 定位意图重申：滚动事件（异步，含 clamp 后的视口读数）触发的锚点
+      // 更新不得覆盖查找定位——帧+宏任务后（滚动事件突发期之后）重申目标
+      // 锚点；同一窗口内的用户滚动会被覆盖（一帧内，定位优先）
+      scheduleFrame(() => {
+        setTimeout(() => {
+          if (this.findOpen && this.viewMode === 'reading') {
+            const c2 = this.findMatches[this.findIndex]
+            if (c2 === cur) {
+              this.modeAnchor = start
+            }
+          }
+        }, 0)
+      })
+    } else {
+      this.view?.dispatch({
+        selection: { anchor: cur.from, head: cur.to },
+        effects: EditorView.scrollIntoView(cur.from, { y: 'center' }),
+      })
+    }
+  }
+
+  /** view.state 查找观测（#14）：首次打开后回报（含关闭态） */
+  private collectFindProbe(): FindSessionProbe | undefined {
+    if (!this.findTouched) {
+      return undefined
+    }
+    const cur = this.findMatches[this.findIndex]
+    return {
+      open: this.findOpen,
+      query: this.findQuery,
+      caseSensitive: this.findCaseSensitive,
+      total: this.findMatches.length,
+      index: this.findMatches.length > 0 ? this.findIndex + 1 : 0,
+      currentFrom: cur?.from ?? null,
+      currentTo: cur?.to ?? null,
+    }
   }
 
   /** 把 SerChange 组转为 clamp 到当前文档长度的 CM change spec */
@@ -1246,10 +1566,22 @@ export class WebviewSyncController {
       // 标题实时预览装饰（#5 切片）：直接装饰（StateField）+ 间接装饰
       // （ViewPlugin 按 visibleRanges），见 liveDecorations.ts 头注释
       livePreviewDecorations,
+      // 查找装饰（#14）：当前匹配（直接）+ 全部匹配（视口内间接）
+      findDecorations,
       ...this.extraExtensions,
       EditorView.updateListener.of((update) => {
         if (!update.docChanged) {
           return
+        }
+        // 查找会话的匹配失效（#14）：文档变化后标记过期，微任务中重算并
+        // 刷新（updateListener 内不可同步 dispatch；纯 effect 事务零写回）
+        if (this.findOpen) {
+          queueMicrotask(() => {
+            if (this.findOpen && this.view) {
+              this.findEnsureFresh()
+              this.findRender()
+            }
+          })
         }
         for (const tr of update.transactions) {
           if (!tr.docChanged || tr.annotation(externalSync)) {

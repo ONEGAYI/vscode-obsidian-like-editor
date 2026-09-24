@@ -16,6 +16,8 @@ body {
 
 #app {
   height: 100%;
+  /* 查找面板（.oile-find）以此为定位包含块（#14） */
+  position: relative;
 }
 
 #app .cm-editor {
@@ -311,4 +313,91 @@ body {
 .oile-suspend-banner button + button {
   background-color: var(--vscode-button-secondaryBackground);
   color: var(--vscode-button-secondaryForeground);
+}
+
+/* ---- 编辑区查找（#14）：webview 内浮动查找面板 ----
+   稳定样式入口（ADR-0004）：面板与匹配高亮均经 oile-find-* 类定位；
+   custom editor webview 不可用 VSCode 原生 find 控件，此为自有 UI。
+   --oile-find-match-background / -current-background 为可覆盖变量入口 */
+.oile-find {
+  position: absolute;
+  top: 36px;
+  right: 14px;
+  z-index: 40;
+  display: none;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  box-sizing: border-box;
+  border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.4));
+  border-radius: 4px;
+  background-color: var(--vscode-editorWidget-background, #252526);
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
+}
+
+.oile-find.oile-find-open {
+  display: flex;
+}
+
+.oile-find .oile-find-input {
+  width: 180px;
+  box-sizing: border-box;
+  padding: 2px 6px;
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size, 13px);
+  color: var(--vscode-input-foreground);
+  background-color: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, rgba(128, 128, 128, 0.35));
+  outline: none;
+}
+
+.oile-find .oile-find-count {
+  min-width: 46px;
+  text-align: center;
+  font-size: var(--vscode-font-size, 12px);
+  color: var(--vscode-descriptionForeground, rgba(204, 204, 204, 0.75));
+  white-space: nowrap;
+}
+
+.oile-find .oile-find-count-empty {
+  color: var(--vscode-errorForeground, #f48771);
+}
+
+.oile-find button {
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size, 12px);
+  line-height: 1;
+  min-width: 22px;
+  padding: 3px 4px;
+  cursor: pointer;
+  color: var(--vscode-button-secondaryForeground);
+  background-color: var(--vscode-button-secondaryBackground);
+  border: none;
+  border-radius: 3px;
+}
+
+/* 大小写切换的激活态（不区分大小写时点亮） */
+.oile-find .oile-find-case-active {
+  color: var(--vscode-button-foreground);
+  background-color: var(--vscode-button-background);
+}
+
+/* Live 匹配装饰：全部匹配（视口内间接装饰）与当前匹配（直接装饰）。
+   --oile-find-* 为稳定 CSS 变量入口，外部片段可覆盖 */
+#app .cm-editor .cm-content .oile-find-match {
+  background-color: var(--oile-find-match-background, rgba(234, 179, 8, 0.28));
+  border-radius: 2px;
+}
+
+#app .cm-editor .cm-content .oile-find-match-current {
+  background-color: var(--oile-find-match-current-background, rgba(255, 141, 55, 0.65));
+  outline: 1px solid var(--oile-find-match-current-outline, rgba(255, 141, 55, 0.9));
+  border-radius: 2px;
+}
+
+/* 阅读视图命中块高亮（块级：只高亮当前匹配所在块） */
+#app .oile-view-reading .oile-reading-block.oile-reading-find-hit {
+  box-shadow: inset 3px 0 0 var(--oile-find-match-current-background, rgba(255, 141, 55, 0.85));
+  background-color: var(--oile-find-hit-block-background, rgba(255, 141, 55, 0.08));
+  border-radius: 2px;
 }

@@ -33,6 +33,19 @@
         "command": "onegayi.obsidian-like-editor.toggleViewMode",
         "title": "切换实时预览与阅读模式",
         "category": "Obsidian-like Markdown Editor"
+      },
+      {
+        "command": "onegayi.obsidian-like-editor.find",
+        "title": "查找（编辑区）",
+        "category": "Obsidian-like Markdown Editor"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "onegayi.obsidian-like-editor.find",
+        "key": "ctrl+f",
+        "mac": "cmd+f",
+        "when": "activeCustomEditorId == onegayi.obsidian-like-markdown-editor"
       }
     ]
   },
