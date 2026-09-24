@@ -61,6 +61,9 @@ export function createSettingsPage(
         return
       case 'settings.set': {
         void service.apply(message.values).then((result) => {
+          // 持久化期间设置页可能已关闭或重新打开；旧面板的 webview getter
+          // 在 dispose 后会抛错，旧保存结果也不应回信给新面板。
+          if (!current || panel !== current) return
           // 成功：onChange 广播（provider 层接编辑器面板）之外，直接回发
           // 设置页自身 settings.changed 刷新回显；拒绝：以权威快照恢复显示
           const kind = result.ok ? 'settings.changed' : 'settings.snapshot'

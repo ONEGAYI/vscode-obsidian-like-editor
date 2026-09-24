@@ -69,7 +69,7 @@ Remove-Item Env:VSIDIAN_TEST_HOST_MODE
 
 ## 验证与性能
 
-- 本联合分支合入 #32–#34 后正在复验；开发态、安装态与人工验收的结果应以合并后的记录为准，人工事项见[验证清单](docs/specs/manual-verification.md)。
+- 本联合分支回归：840 项 Vitest 单测、11 项启动器契约测试，以及开发态与 VSIX 安装态各 81 项真实 VSCode 1.86.2 宿主集成用例通过；人工验收另见[验证清单](docs/specs/manual-verification.md)。
 - 性能实测与功能验证矩阵：[docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md)。
 - 人工验证项（IME/鼠标手感/远程环境）：[docs/specs/manual-verification.md](docs/specs/manual-verification.md)。
 
