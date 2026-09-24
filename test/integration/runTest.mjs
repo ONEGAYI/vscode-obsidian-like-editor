@@ -91,6 +91,17 @@ const FENCE_CHUNK_DOC = (() => {
   out.push('```', '', '结尾段。', '')
   return out.join('\n')
 })()
+// #9 任务勾选样例：含重复任务行（定位安全验证）与已勾选项
+const TASK_DOC = [
+  '# 任务清单标题',
+  '',
+  '- [ ] 未完成任务甲',
+  '- [ ] 未完成任务甲',
+  '- [x] 已完成任务',
+  '',
+  '结尾段落。',
+  '',
+].join('\n')
 const LARGE_LINES = 100_000
 
 const wsDir = mkdtempSync(path.join(tmpdir(), 'oile-itest-'))
@@ -111,6 +122,7 @@ try {
   writeFileSync(path.join(wsDir, 'mode-anchor.md'), MODE_ANCHOR_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'syntax.md'), SYNTAX_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'fence-chunk.md'), FENCE_CHUNK_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'task.md'), TASK_DOC, 'utf8')
   const largeLines = Array.from({ length: LARGE_LINES }, (_, i) => `第 ${i + 1} 行 ——固定宽度填充文本，用于长文档视口渲染验证——`)
   writeFileSync(path.join(wsDir, 'large.md'), largeLines.join('\n') + '\n', 'utf8')
   // 性能体量对比样例（#5）：同构普通段落 + 每 50 行一个二级标题

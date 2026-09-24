@@ -46,3 +46,15 @@
 #app .oile-view-reading .oile-reading-block strong {
   text-decoration-color: rgb(16, 17, 18);
 }
+
+/* ---- #9：任务勾选稳定类名探针（两种视图的交互 checkbox） ---- */
+
+/* live 任务 checkbox（#8 的只读字形已换为可交互 input） */
+#app .oile-view-live .oile-task-checkbox {
+  text-decoration-color: rgb(19, 20, 21);
+}
+
+/* reading 任务 checkbox（#9 起启用勾选写回） */
+#app .oile-view-reading .oile-reading-task-checkbox {
+  text-decoration-color: rgb(22, 23, 24);
+}

@@ -147,28 +147,44 @@ body {
   padding: 0 2px;
 }
 
-/* 任务字形 widget（#8 只读呈现；#9 换交互 checkbox） */
-#app .cm-editor .cm-scroller .oile-task-glyph {
+/* 任务 checkbox（#9 可交互：input[type=checkbox] 替换 [ ]/[x] 标记）。
+   appearance 关闭原生形态，沿用 #8 字形绘制语义（颜色跟随 VSCode 变量）；
+   .oile-task-checked 为稳定修饰类（与 :checked 伪类双入口） */
+#app .cm-editor .cm-scroller .oile-task-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
   display: inline-block;
   width: 0.85em;
   height: 0.85em;
-  margin-right: 5px;
+  margin: 0 5px 0 0;
+  padding: 0;
   box-sizing: border-box;
   border: 1px solid var(--vscode-editorLineNumber-foreground, rgba(128, 128, 128, 0.9));
   border-radius: 2px;
   vertical-align: -0.05em;
+  cursor: pointer;
+  background: transparent;
 }
 
-#app .cm-editor .cm-scroller .oile-task-glyph.oile-task-checked {
+#app .cm-editor .cm-scroller .oile-task-checkbox:checked,
+#app .cm-editor .cm-scroller .oile-task-checkbox.oile-task-checked {
   background-color: var(--vscode-settings-checkboxBackground, #4fc1ff);
   border-color: var(--vscode-focusBorder, #4fc1ff);
 }
 
-#app .cm-editor .cm-scroller .oile-task-glyph.oile-task-checked::after {
+#app .cm-editor .cm-scroller .oile-task-checkbox:checked::after,
+#app .cm-editor .cm-scroller .oile-task-checkbox.oile-task-checked::after {
   content: '✓';
   color: var(--vscode-settings-checkboxForeground, #ffffff);
   font-size: 0.8em;
   line-height: 1;
+  display: inline-block;
+}
+
+/* 键盘可达（#9）：Tab 聚焦任务 checkbox 时的可见焦点框 */
+#app .cm-editor .cm-scroller .oile-task-checkbox:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #4fc1ff);
+  outline-offset: 1px;
 }
 
 /* ---- 阅读视图（#6 基础版，#8 完整 Markdown 显示）----
@@ -215,11 +231,17 @@ body {
   padding-left: 0.5em;
 }
 
-/* 任务项（#6 只读呈现；#9 实现勾选写回，checkbox 当前 disabled） */
+/* 任务项（#9 实现勾选写回：checkbox 启用，点击切换 Markdown 任务状态） */
 #app .oile-view-reading .oile-reading-task .oile-reading-task-checkbox {
   margin-right: 6px;
   vertical-align: middle;
-  cursor: default;
+  cursor: pointer;
+}
+
+/* 键盘可达（#9）：Tab 聚焦阅读任务 checkbox 时的可见焦点框 */
+#app .oile-view-reading .oile-reading-task-checkbox:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #4fc1ff);
+  outline-offset: 1px;
 }
 
 /* ---- #8：markdown-it 语义标签的阅读样式 ---- */

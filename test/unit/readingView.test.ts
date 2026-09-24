@@ -80,18 +80,22 @@ describe('renderReadingBlocks：块结构与源锚点', () => {
   })
 })
 
-describe('任务语义入口（#9 预留）', () => {
-  it('任务项渲染 disabled checkbox，勾选状态映射，带 marker 区间锚点', () => {
+describe('任务语义入口（#9：可交互勾选）', () => {
+  it('任务项渲染启用 checkbox，勾选状态映射，带 marker 区间锚点', () => {
     const { container } = rendered()
     const boxes = Array.from(container.querySelectorAll<HTMLInputElement>(`.${READING_CLASS_NAMES.taskCheckbox}`))
     expect(boxes.length).toBe(2)
-    expect(boxes[0]!.disabled).toBe(true)
+    expect(boxes[0]!.disabled).toBe(false) // #9 起启用：点击走勾选写回链路
     expect(boxes[0]!.checked).toBe(false)
     expect(boxes[1]!.checked).toBe(true)
     // checkbox 的 data 锚点指向源文 [ ]/[x] 标记区间（#9 写回定位依据）
     const s = Number(boxes[1]!.dataset['oileSrcStart'])
     const e = Number(boxes[1]!.dataset['oileSrcEnd'])
     expect(DOC.slice(s, e)).toBe('[x]')
+    // 渲染态锚点（data-oile-checked）：点击意图的确定性来源（不受原生
+    // checkbox 激活时序影响）
+    expect(boxes[0]!.dataset['oileChecked']).toBe('false')
+    expect(boxes[1]!.dataset['oileChecked']).toBe('true')
     // 任务 li 带任务语义类与自身锚点
     const tasks = container.querySelectorAll(`li.${READING_CLASS_NAMES.task}`)
     expect(tasks.length).toBe(2)

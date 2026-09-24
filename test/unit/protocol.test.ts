@@ -335,6 +335,8 @@ describe('模式切换协议（#6）', () => {
       liveInlineCodeDecorationColor: 'rgb(7, 8, 9)',
       liveCodeLineDecorationColor: null,
       readingStrongDecorationColor: 'rgb(10, 11, 12)',
+      liveTaskCheckboxDecorationColor: null,
+      readingTaskCheckboxDecorationColor: 'rgb(19, 20, 21)',
     }
     expect(isWebviewToHost({ ...baseViewState, cssProbe: probe })).toBe(true)
     expect(isWebviewToHost({ ...baseViewState, cssProbe: { ...probe, readingVarProbe: 42 } })).toBe(false)
@@ -465,5 +467,52 @@ describe('阅读视图按需挂载协议（#7）', () => {
   it('方向校验：reading.perf 系宿主方向、report 系 webview 方向，互不接受', () => {
     expect(isWebviewToHost({ kind: 'reading.perf', scrollRounds: 10 })).toBe(false)
     expect(isHostToWebview({ kind: 'reading.perf.report', scrollRounds: 10, totalBlocks: 0, baseline: emptySnapshot, afterScroll: emptySnapshot, parseCount: 0, maxMountedBlocks: 0, ok: true })).toBe(false)
+  })
+})
+
+describe('任务勾选协议（#9）', () => {
+  const baseViewState = {
+    kind: 'view.state' as const,
+    text: '- [ ] 任务',
+    docLength: 7,
+    lineCount: 1,
+    renderedLines: 1,
+  }
+
+  it('接受合法 task.test.click（宿主 → webview 测试钩子）', () => {
+    expect(isHostToWebview({ kind: 'task.test.click', view: 'live', index: 0 })).toBe(true)
+    expect(isHostToWebview({ kind: 'task.test.click', view: 'reading', index: 3 })).toBe(true)
+  })
+
+  it('拒绝非法 view / 负数或非整数 index 与 webview 方向伪造', () => {
+    expect(isHostToWebview({ kind: 'task.test.click', view: 'preview', index: 0 })).toBe(false)
+    expect(isHostToWebview({ kind: 'task.test.click', view: 'live', index: -1 })).toBe(false)
+    expect(isHostToWebview({ kind: 'task.test.click', view: 'live', index: 1.5 })).toBe(false)
+    expect(isHostToWebview({ kind: 'task.test.click', view: 'live' })).toBe(false)
+    expect(isWebviewToHost({ kind: 'task.test.click', view: 'live', index: 0 })).toBe(false)
+  })
+
+  it('cssProbe 接受任务勾选新探针字段（可为 null），拒绝类型错误', () => {
+    const probe = {
+      liveHeadingDecorationColor: null,
+      readingHeadingDecorationColor: null,
+      readingVarProbe: null,
+      liveStrongDecorationColor: null,
+      liveInlineCodeDecorationColor: null,
+      liveCodeLineDecorationColor: null,
+      readingStrongDecorationColor: null,
+      liveTaskCheckboxDecorationColor: 'rgb(19, 20, 21)',
+      readingTaskCheckboxDecorationColor: null,
+    }
+    expect(isWebviewToHost({ ...baseViewState, cssProbe: probe })).toBe(true)
+    expect(
+      isWebviewToHost({ ...baseViewState, cssProbe: { ...probe, liveTaskCheckboxDecorationColor: 19 } }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({ ...baseViewState, cssProbe: { ...probe, readingTaskCheckboxDecorationColor: 'x' } }),
+    ).toBe(true) // 字符串颜色值本身合法
+    expect(
+      isWebviewToHost({ ...baseViewState, cssProbe: { ...probe, readingTaskCheckboxDecorationColor: undefined } }),
+    ).toBe(false) // 缺字段（undefined 违反 isNullOrString）
   })
 })

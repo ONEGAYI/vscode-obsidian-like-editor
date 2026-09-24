@@ -13,9 +13,9 @@
 // </div>
 //
 // - data-oile-src-start/end：LF 全文 UTF-16 offset（协议 SerChange 同构）；
-//   li 与 checkbox 另有自身锚点（#9 以此构造精确替换）
+//   li 与 checkbox 另有自身锚点（#9 勾选写回经此构造精确替换）
 // - 块内容来自 markdown-it 渲染（html:false）+ DOM 纵深净化 + 任务项转换
-//   （checkbox disabled，#8 只读显示；#9 实现勾选写回）
+//   （checkbox 启用，#9 点击/键盘切换走 syncController 的出站链路）
 // - 类名映射 Obsidian 同款选择器，见 docs/design/obsidian-selector-map.md
 import { splitReadingBlocks, type ReadingBlock } from './readingBlocks'
 import { convertTaskItems, sanitizeReadingDom } from './readingMarkdown'

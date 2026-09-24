@@ -93,7 +93,8 @@ vscode-obsidian-like-editor/
 │       ├── readingView.ts        # 阅读视图 DOM 构建与锚点定位
 │       ├── readingViewport.ts    # 阅读视口挂载窗口纯函数
 │       ├── readingVirtualView.ts # 阅读视图虚拟化装配层
-│       └── syncController.ts     # CM6 同步控制器
+│       ├── syncController.ts     # CM6 同步控制器
+│       └── taskToggle.ts         # 任务勾选点击解析：源位置严格校验与安全替换区间（工单 #9）
 ├── test/             # 测试根
 │   ├── integration/ # 真宿主集成测试
 │   │   ├── runTest.mjs # 集成测试启动器
@@ -121,6 +122,8 @@ vscode-obsidian-like-editor/
 │       ├── readingViewport.test.ts    # 视口窗口纯函数契约测试
 │       ├── readingVirtualView.test.ts # 虚拟化装配契约测试
 │       ├── suspendResume.test.ts      # 暂停恢复契约测试
+│       ├── taskInteraction.test.ts    # 两种模式任务勾选交互契约测试（jsdom 直驱 CM6）
+│       ├── taskToggle.test.ts         # 任务勾选解析纯函数契约测试
 │       ├── viewMode.test.ts           # 模式切换状态机契约测试
 │       └── webviewSync.test.ts        # webview 同步契约
 ├── tsconfig.json     # TypeScript 类型检查配置

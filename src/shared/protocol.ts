@@ -46,7 +46,7 @@ export type HostToWebview =
    *  挂载/回收/解析次数。要求当前处于 reading 模式，否则回报失败态 */
   | { kind: 'reading.perf'; scrollRounds: number }
   /** 测试钩子（#7）：向包含 srcStart 的挂载块注入无网络图片并延迟改高，
-   *  模拟图片加载后的布局变化（动态尺寸变化机制的验证载体） */
+   * 模拟图片加载后的布局变化（动态尺寸变化机制的验证载体） */
   | {
       kind: 'reading.test.image'
       srcStart: number
@@ -54,6 +54,10 @@ export type HostToWebview =
       finalHeightPx: number
       delayMs: number
     }
+  /** 测试钩子（#9）：按视图与序号点击真实任务 checkbox，驱动与用户点击
+   *  完全相同的处理器链路（校验 → 出站 edit.request）。宿主测试无法向
+   *  webview 派发真实鼠标事件，以此通道验证真实宿主内的勾选写回 */
+  | { kind: 'task.test.click'; view: 'live' | 'reading'; index: number }
 
 /** webview → 宿主消息 */
 export type WebviewToHost =
@@ -195,6 +199,10 @@ export interface CssProbeReport {
   liveCodeLineDecorationColor: string | null
   /** #8：阅读视图内语义 strong 经 `.oile-view-reading strong` 命中的属性值 */
   readingStrongDecorationColor: string | null
+  /** #9：live 任务 checkbox 经 `.oile-task-checkbox` 命中的属性值；无目标为 null */
+  liveTaskCheckboxDecorationColor: string | null
+  /** #9：阅读任务 checkbox 经 `.oile-reading-task-checkbox` 命中的属性值 */
+  readingTaskCheckboxDecorationColor: string | null
 }
 
 /** live 侧语法装饰统计（#8：装饰集合计数，覆盖标题/行内/块级/任务/降级观测） */
@@ -287,7 +295,9 @@ function isCssProbeReport(v: unknown): v is CssProbeReport {
     isNullOrString(v.liveStrongDecorationColor) &&
     isNullOrString(v.liveInlineCodeDecorationColor) &&
     isNullOrString(v.liveCodeLineDecorationColor) &&
-    isNullOrString(v.readingStrongDecorationColor)
+    isNullOrString(v.readingStrongDecorationColor) &&
+    isNullOrString(v.liveTaskCheckboxDecorationColor) &&
+    isNullOrString(v.readingTaskCheckboxDecorationColor)
   )
 }
 
@@ -489,6 +499,11 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
         isNonNegativeInt(v.initialHeightPx) &&
         isNonNegativeInt(v.finalHeightPx) &&
         isNonNegativeInt(v.delayMs)
+      )
+    case 'task.test.click':
+      return (
+        (v.view === 'live' || v.view === 'reading') &&
+        isNonNegativeInt(v.index)
       )
     default:
       return false
