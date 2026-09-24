@@ -1000,7 +1000,13 @@ function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): st
     `default-src 'none'`,
     `img-src ${webview.cspSource} https:`,
     `script-src ${webview.cspSource} 'nonce-${nonce}'`,
-    `style-src ${webview.cspSource}`,
+    // 'unsafe-inline' 仅放行样式：CodeMirror 6（style-mod）在运行时向
+    // document 注入 <style> 元素承载 baseTheme 与扩展样式，属 CSP 的
+    // "内联样式"——不放行则整个 CM6 注入样式表被拒（.sheet 为 null），
+    // .cm-scroller 失去 flex、caret/选区样式缺失（P0：#34 行号加入后
+    // gutter 与正文改为上下堆叠，正文被推出视口）。脚本仍由上方
+    // nonce 门控，本行不放宽任何脚本执行。
+    `style-src ${webview.cspSource} 'unsafe-inline'`,
     `font-src ${webview.cspSource}`,
   ].join('; ')
   return `<!DOCTYPE html>

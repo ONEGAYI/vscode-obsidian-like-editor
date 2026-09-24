@@ -271,6 +271,12 @@ interface ViewState {
     last: string | null
     scaleX: number | null
   }
+  /** 绘制层探针（P0 回归）：正文可见性 / CM6 注入样式存活 / 行号禁选 */
+  paint?: {
+    textVisible: boolean
+    scrollerDisplay: string | null
+    gutterUserSelect: string | null
+  }
 }
 
 /** #7 阅读视图探针回报（reading.perf.report） */
@@ -3065,5 +3071,36 @@ export const cases: Array<[string, () => Promise<void>]> = [
     if (doc.isDirty) {
       await doc.save()
     }
+  }],
+
+  // ---- #34 补充（P0 回归）：行号开启时正文真的可见 ----
+
+  ['绘制层探针：行号开启时正文可见、CM6 注入样式存活、行号禁选（P0 回归）', async () => {
+    // 由来：CSP style-src 未放行内联样式 → CM6 注入样式表被拒 → scroller
+    // 退化 block → #34 行号栏与正文上下堆叠、正文被推出视口。既有 DOM
+    // 数量/几何 x 坐标断言全部存活于该缺陷之上，唯有绘制层断言能拦住。
+    await openWithEditor('linenumbers.md')
+    await waitSessionReady('linenumbers.md')
+    const on = await waitViewState('linenumbers.md', (v) => (v.lineGutter?.count ?? 0) > 0)
+    assert(on.lineGutter?.on === true, '行号应默认开启')
+    assert(on.paint?.textVisible === true,
+      `行号开启时正文应可见（textVisible=${String(on.paint?.textVisible)}，` +
+        `scrollerDisplay=${String(on.paint?.scrollerDisplay)}）`)
+    assert(on.paint?.scrollerDisplay === 'flex',
+      `CM6 注入样式应存活（scroller display 应为 flex，实际 ${String(on.paint?.scrollerDisplay)}；` +
+        '若为 block 说明 CSP 拦截了 style-mod 注入的样式表）')
+    assert(on.paint?.gutterUserSelect === 'none',
+      `行号栏应禁选（user-select 应为 none，实际 ${String(on.paint?.gutterUserSelect)}）`)
+
+    // 差分自证：关闭行号后正文仍可见（度量在两态下均有效）
+    const okSet = (await vscode.commands.executeCommand(CMD.setSettings, {
+      'editor.lineNumbers': false,
+    })) as { ok: boolean }
+    assert(okSet.ok === true, '关闭行号设置应成功')
+    const off = await waitViewState('linenumbers.md', (v) => v.lineGutter?.on === false)
+    assert(off.paint?.textVisible === true, '行号关闭后正文应仍可见（度量校准）')
+    // 还原默认开启，避免影响后续用例（与 #34 既有用例同款跨用例状态清理）
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
+    await waitViewState('linenumbers.md', (v) => v.lineGutter?.on === true)
   }],
 ]

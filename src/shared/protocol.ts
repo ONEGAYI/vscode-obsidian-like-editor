@@ -206,6 +206,8 @@ export type WebviewToHost =
       lineGutter?: LineGutterProbe
       /** #32 排版一致性探针（两模式基础排版对照采样；旧 webview 缺省） */
       typography?: TypographyProbe
+      /** 绘制层探针（P0 回归）：正文可见性与 CM6 注入样式存活观测 */
+      paint?: PaintProbe
     }
       /** 阅读视图性能探针回报（#7）：滚动往返期间的挂载/回收与解析观测 */
   | {
@@ -362,6 +364,24 @@ export interface LineGutterProbe {
   scaleX: number | null
 }
 
+/**
+ * 绘制层探针（view.state 扩展字段）：守护"正文真的可见"这一用户级事实。
+ * 由来（P0）：CSP `style-src` 未放行内联样式时，CM6（style-mod）注入的
+ * baseTheme 样式表被浏览器拒绝（el.sheet 为 null），.cm-scroller 退化
+ * block——无行号时与 flex 视觉等价从未暴露，行号栏加入后 gutter 与正文
+ * 上下堆叠、正文被推出视口。既有用例只断言 DOM 数量与几何 x 坐标，均
+ * 存活于该缺陷之上，故补此探针断言绘制层。
+ * jsdom 无布局能力（rect 恒 0），textVisible 恒 false，不作单测断言依据。
+ */
+export interface PaintProbe {
+  /** 首个含文本行：首字符 rect 在视口内且 elementFromPoint 命中内容区 */
+  textVisible: boolean
+  /** `.cm-scroller` computed display：CM6 baseTheme 存活时为 'flex' */
+  scrollerDisplay: string | null
+  /** 行号栏 computed user-select（'none' = 禁选；栏未装配为 null） */
+  gutterUserSelect: string | null
+}
+
 /** #32 排版一致性探针：正文基础排版四项样本（null = 元素缺失/不可读） */
 export interface TypographySample {
   /** computed font-family（浏览器归一化串） */
@@ -510,6 +530,16 @@ function isLineGutterProbe(v: unknown): v is LineGutterProbe {
     (v.first === null || isString(v.first)) &&
     (v.last === null || isString(v.last)) &&
     (v.scaleX === null || (typeof v.scaleX === 'number' && v.scaleX > 0))
+  )
+}
+
+/** 绘制层探针校验：textVisible 布尔；display/userSelect 为字符串或 null */
+function isPaintProbe(v: unknown): v is PaintProbe {
+  return (
+    isObject(v) &&
+    typeof v.textVisible === 'boolean' &&
+    isNullOrString(v.scrollerDisplay) &&
+    isNullOrString(v.gutterUserSelect)
   )
 }
 
@@ -751,6 +781,7 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.find === undefined || isFindSessionProbe(v.find)) &&
         (v.settings === undefined || isSettingsPayload(v.settings)) &&
         (v.lineGutter === undefined || isLineGutterProbe(v.lineGutter)) &&
+        (v.paint === undefined || isPaintProbe(v.paint)) &&
         (v.typography === undefined || isTypographyProbe(v.typography))
       )
     case 'reading.perf.report':

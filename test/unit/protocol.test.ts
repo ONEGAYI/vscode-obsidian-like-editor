@@ -179,6 +179,35 @@ describe('isWebviewToHost', () => {
     expect(isWebviewToHost(base)).toBe(true)
   })
 
+  it('view.state 的 paint 观测（P0 回归）：合法样本接受、字段非法拒绝', () => {
+    const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
+    // 合法：textVisible 布尔；display/userSelect 字符串或 null
+    expect(
+      isWebviewToHost({
+        ...base,
+        paint: { textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none' },
+      }),
+    ).toBe(true)
+    expect(
+      isWebviewToHost({
+        ...base,
+        paint: { textVisible: false, scrollerDisplay: null, gutterUserSelect: null },
+      }),
+    ).toBe(true)
+    // 非法：textVisible 非布尔 / scrollerDisplay 非字符串非 null
+    expect(
+      isWebviewToHost({ ...base, paint: { textVisible: 1, scrollerDisplay: 'flex', gutterUserSelect: 'none' } }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({ ...base, paint: { textVisible: true, scrollerDisplay: 3, gutterUserSelect: 'none' } }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({ ...base, paint: { textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: [] } }),
+    ).toBe(false)
+    // 缺省合法（向后兼容：探针未装配的旧 webview）
+    expect(isWebviewToHost(base)).toBe(true)
+  })
+
   it('拒绝 null、非对象与数组', () => {
     expect(isWebviewToHost(null)).toBe(false)
     expect(isWebviewToHost(undefined)).toBe(false)

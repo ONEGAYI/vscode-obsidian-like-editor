@@ -32,6 +32,7 @@ import {
   type FindSessionProbe,
   type LineGutterProbe,
   type LiveSyntaxProbe,
+  type PaintProbe,
   type ReadingSyntaxProbe,
   type SerChange,
   type TypographyInheritSample,
@@ -985,6 +986,8 @@ export class WebviewSyncController {
       settings: this.settings,
       // #34 行号栏观测（开关态与视口内渲染结果）
       lineGutter: this.collectLineGutter(),
+      // 绘制层探针（P0 回归）：正文可见性 / CM6 注入样式存活 / 行号禁选
+      paint: this.collectPaint(),
     }
     this.bridge.postMessage(state)
   }
@@ -2110,6 +2113,57 @@ export class WebviewSyncController {
       first: texts.length > 0 ? texts[0] : null,
       last: texts.length > 0 ? texts[texts.length - 1] : null,
       scaleX: Number.isFinite(raw) && raw > 0 ? raw : 1,
+    }
+  }
+
+  /**
+   * 绘制层探针（P0 回归，语义见 protocol.ts PaintProbe）：首个含文本行的
+   * 首字符命中测试落在内容区内（DOM 数量与几何坐标探针测不出的"真的
+   * 可见"），附带 CM6 baseTheme 存活与行号禁选观测。
+   */
+  private collectPaint(): PaintProbe {
+    const view = this.view
+    const contentEl = view?.dom.querySelector<HTMLElement>('.cm-content')
+    if (!view || !contentEl) {
+      return { textVisible: false, scrollerDisplay: null, gutterUserSelect: null }
+    }
+    // elementFromPoint/几何 rect 依赖真实布局：jsdom（单测宿主）无布局能力
+    // 且 elementFromPoint 缺失，任何异常都视为不可见（PaintProbe 语义注记：
+    // jsdom 下 textVisible 恒 false，只作真宿主集成断言依据）
+    let textVisible = false
+    try {
+      for (const line of Array.from(view.dom.querySelectorAll<HTMLElement>('.cm-line')).slice(0, 8)) {
+        const tn = Array.from(line.getElementsByTagName('*'))
+          .flatMap((el) => Array.from(el.childNodes))
+          .find((n) => n.nodeType === 3 && (n.nodeValue ?? '').trim().length > 0)
+        const direct = Array.from(line.childNodes).find(
+          (n) => n.nodeType === 3 && (n.nodeValue ?? '').trim().length > 0,
+        )
+        const textNode = (tn ?? direct) as ChildNode | undefined
+        if (!textNode || !textNode.nodeValue) {
+          continue
+        }
+        const r = document.createRange()
+        r.setStart(textNode as unknown as Node, 0)
+        r.setEnd(textNode as unknown as Node, 1)
+        const cr = r.getBoundingClientRect()
+        if (cr.width <= 0 || cr.height <= 0) {
+          continue
+        }
+        const hit = document.elementFromPoint(cr.x + cr.width / 2, cr.y + cr.height / 2)
+        if (hit && contentEl.contains(hit)) {
+          textVisible = true
+          break
+        }
+      }
+    } catch {
+      textVisible = false
+    }
+    const guttersEl = view.dom.querySelector<HTMLElement>('.cm-gutters')
+    return {
+      textVisible,
+      scrollerDisplay: view.scrollDOM ? getComputedStyle(view.scrollDOM).display : null,
+      gutterUserSelect: guttersEl ? getComputedStyle(guttersEl).userSelect : null,
     }
   }
 

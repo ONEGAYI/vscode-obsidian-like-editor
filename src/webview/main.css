@@ -69,6 +69,12 @@ body {
      做水平压缩（公式见 syncController.syncLineNumberScale），scaleX
      保持数字高度可读、行号值完整；overflow 裁剪仅作极端字体的兜底 */
 #app .cm-editor .cm-scroller .cm-gutters {
+  /* CM6 Gutter 以 JS 内联样式设置 position: sticky（横向滚动时钉住行号，
+     见 @codemirror/view dist index.js Gutter#update 附近 dom.style.position
+     赋值）；sticky 会被包含块钳制在内容盒左缘，使负边距失效、行号栏压到
+     正文。live 预览启用软换行（无横向滚动），sticky 无用，须以 !important
+     压过内联样式让负边距把行号栏移入留白带。 */
+  position: relative !important;
   margin-left: calc(-1 * var(--vsidian-content-padding-inline));
   width: var(--vsidian-content-padding-inline);
   justify-content: flex-end;
@@ -76,6 +82,8 @@ body {
   background-color: transparent;
   border: none;
   color: var(--vscode-editorLineNumber-foreground, rgba(127, 127, 127, 0.6));
+  /* 行号非可编辑内容：禁选，避免拖选正文时把行号一并选中 */
+  user-select: none;
 }
 
 /* 行号单元格：字号公式 min(0.75 × 正文基准, 12px)——与
