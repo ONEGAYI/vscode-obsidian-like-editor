@@ -2,8 +2,8 @@
 // - 语义来源：@codemirror/lang-markdown 的解析树（含 GFM），标题/粗斜体/
 //   列表（含任务）/引用/行内代码/围栏代码/水平线由树节点判定——代码围栏
 //   内的伪语法不再误判（#5 切片限制的解除）
-// - 活动语义沿用 #5：光标所在行显示源码（标记 replace 隐藏被撤销），移出
-//   恢复格式；选区跨行时覆盖行均视为活动
+// - mark 显形：标题前缀在标题范围内、列表/引用前缀仅在标记附近；行内标记只在自身语法范围内；
+//   同一行其他 mark 保持格式化，选区跨范围时按相交范围显形
 // - 直接装饰（StateField）：整篇构建一次 + 事务增量维护；正常键入只重扫
 //   受影响行（键入不遍历全文）；结构编辑（围栏开闭等）按需扩展重建范围
 // - 增量结果与全量重建对拍一致（固定编辑序列，RangeSet.eq）
@@ -251,17 +251,17 @@ describe('buildLivePreviewDecorations：全量构建（树驱动语义）', () =
   })
 })
 
-describe('活动语义（#5 选区联动沿用）：光标行显示源码', () => {
+describe('标记作用域：行首及行内语法', () => {
   const doc = '# 标题\n\n**粗** 与 `码`\n\n> 引用\n'
 
-  it('光标在标题行：# 标记不隐藏；移出后隐藏', () => {
+  it('光标在 # 附近：标记不隐藏；移出后隐藏', () => {
     const active = build(doc, { anchor: 0 })
     expect(hiddenRanges(active)).not.toContainEqual([0, 2])
     const inactive = build(doc, { anchor: doc.indexOf('粗') })
     expect(hiddenRanges(inactive)).toContainEqual([0, 2])
   })
 
-  it('光标在粗体行：** 标记显示；任务/引用行标记同样按行判定', () => {
+  it('光标在粗体内容：** 标记显示；其他行标记保持隐藏', () => {
     const pos = doc.indexOf('粗')
     const active = build(doc, { anchor: pos })
     const marks = doc.indexOf('**')
@@ -275,12 +275,105 @@ describe('活动语义（#5 选区联动沿用）：光标行显示源码', () =
     expect(hiddenRanges(inQuote)).toContainEqual([marks, marks + 2])
   })
 
-  it('任务行活动时 marker 以源码呈现（无 widget）', () => {
+  it('光标在任务 marker 内时以源码呈现（无 widget）', () => {
     const taskDoc = '正文行\n- [ ] 任务\n'
     const active = build(taskDoc, { anchor: taskDoc.indexOf('[') })
     expect(taskGlyphs(active)).toHaveLength(0)
     const inactive = build(taskDoc, { anchor: 0 })
     expect(taskGlyphs(inactive)).toHaveLength(1)
+  })
+})
+
+describe('mark 作用域显形', () => {
+  it('列表正文保持 bullet 隐藏；光标贴近 marker 时只显形当前 bullet', () => {
+    const doc = '- 第一项 **强调**\n- 第二项\n'
+    const first = doc.indexOf('-')
+    const second = doc.indexOf('-', first + 1)
+    const body = build(doc, { anchor: doc.indexOf('第一项') + 2 })
+    expect(hiddenRanges(body)).toContainEqual([first, first + 2])
+    expect(hiddenRanges(body)).toContainEqual([second, second + 2])
+    expect(byClass(body).get('vsidian-list-marker-visible')).toBeUndefined()
+
+    const atMarker = build(doc, { anchor: first })
+    expect(hiddenRanges(atMarker)).not.toContainEqual([first, first + 2])
+    expect(hiddenRanges(atMarker)).toContainEqual([second, second + 2])
+    expect(byClass(atMarker).get('vsidian-list-marker-visible')).toHaveLength(1)
+    expect(hiddenRanges(build(doc, { anchor: first + 2 }))).not.toContainEqual([first, first + 2])
+  })
+
+  it('标题行任意位置显形自身的 #；引用仍只在标记附近显形', () => {
+    const doc = '# 很长的标题\n## 另一标题\n> 很长的引用\n'
+    const heading = doc.indexOf('#')
+    const otherHeading = doc.indexOf('##')
+    const quote = doc.indexOf('>')
+    const inHeading = hiddenRanges(build(doc, { anchor: doc.indexOf('标题') }))
+    expect(inHeading).not.toContainEqual([heading, heading + 2])
+    expect(inHeading).toContainEqual([otherHeading, otherHeading + 3])
+    expect(hiddenRanges(build(doc, { anchor: doc.indexOf('引用') }))).toContainEqual([quote, quote + 2])
+    expect(hiddenRanges(build(doc, { anchor: heading }))).not.toContainEqual([heading, heading + 2])
+    expect(hiddenRanges(build(doc, { anchor: quote }))).not.toContainEqual([quote, quote + 2])
+  })
+
+  it('标题行内的粗体 mark 仍由粗体自身控制域决定', () => {
+    const doc = '# 标题前文 **重点** 标题后文'
+    const heading = doc.indexOf('#')
+    const strong = doc.indexOf('**')
+    const afterStrong = hiddenRanges(build(doc, { anchor: doc.indexOf('标题后文') }))
+    expect(afterStrong).not.toContainEqual([heading, heading + 2])
+    expect(afterStrong).toContainEqual([strong, strong + 2])
+    const inStrong = hiddenRanges(build(doc, { anchor: doc.indexOf('重点') }))
+    expect(inStrong).not.toContainEqual([heading, heading + 2])
+    expect(inStrong).not.toContainEqual([strong, strong + 2])
+  })
+
+  it('Setext 标题正文内的光标也显形下划线标记', () => {
+    const doc = '下划线标题\n====\n\n普通正文'
+    const underline = doc.indexOf('====')
+    const inHeading = hiddenRanges(build(doc, { anchor: doc.indexOf('标题') }))
+    expect(inHeading).not.toContainEqual([underline, underline + 4])
+    expect(hiddenRanges(build(doc, { anchor: doc.indexOf('普通正文') }))).toContainEqual([underline, underline + 4])
+  })
+
+  it('同一行的粗体和行内代码各按自己的内容作用域显形', () => {
+    const doc = '前缀 **粗体** 中间 `代码` 尾部 **另一处**'
+    const strong = doc.indexOf('**')
+    const code = doc.indexOf('`')
+    const other = doc.lastIndexOf('**另一处')
+    const inStrong = hiddenRanges(build(doc, { anchor: doc.indexOf('粗体') }))
+    expect(inStrong).not.toContainEqual([strong, strong + 2])
+    expect(inStrong).toContainEqual([code, code + 1])
+    expect(inStrong).toContainEqual([other, other + 2])
+    const inCode = hiddenRanges(build(doc, { anchor: doc.indexOf('代码') }))
+    expect(inCode).toContainEqual([strong, strong + 2])
+    expect(inCode).not.toContainEqual([code, code + 1])
+    expect(hiddenRanges(build(doc, { anchor: doc.indexOf('中间') }))).toContainEqual([strong, strong + 2])
+  })
+
+  it('任务正文保留 checkbox，只有光标进入 [ ] 范围才显示任务源码', () => {
+    const doc = '- [ ] 任务正文'
+    expect(taskGlyphs(build(doc, { anchor: doc.indexOf('正文') }))).toHaveLength(1)
+    expect(taskGlyphs(build(doc, { anchor: doc.indexOf('[') }))).toHaveLength(0)
+  })
+
+  it('同一行内移动光标后增量装饰与全量结果一致', () => {
+    const doc = '- 正文 **强调** 和 `代码`'
+    let state = stateWithDoc(doc, { anchor: doc.indexOf('正文') })
+    for (const pos of [0, doc.indexOf('强调'), doc.indexOf('代码'), doc.length]) {
+      state = state.update({ selection: EditorSelection.single(pos) }).state
+      expect(setsEqual(state, buildLivePreviewDecorations(state.doc, state.selection))).toBe(true)
+    }
+  })
+
+  it('非空选区只显形相交的格式范围', () => {
+    const doc = '前 **甲** 中 **乙** 后'
+    const first = doc.indexOf('**')
+    const second = doc.indexOf('**', first + 2)
+    const state = stateWithDoc(doc, { anchor: doc.indexOf('甲'), head: doc.indexOf('甲') + 1 })
+    const hidden = hiddenRanges(state.field(liveDecorationsField).decos)
+    expect(hidden).not.toContainEqual([first, first + 2])
+    expect(hidden).not.toContainEqual([second, second + 2])
+    const otherOpen = doc.indexOf('**乙')
+    expect(hidden).toContainEqual([otherOpen, otherOpen + 2])
   })
 })
 

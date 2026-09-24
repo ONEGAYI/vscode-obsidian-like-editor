@@ -768,14 +768,23 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(v2.text === afterExternal, `面板 2 文本应与权威一致：${JSON.stringify(v2.text)}`)
   }],
 
-  ['标题装饰：非活动标题渲染为格式化标题，活动行显示源码（#5 切片）', async () => {
+  ['标题装饰：光标位于标题正文时显示标记，其他标题隐藏标记', async () => {
     await openWithEditor('heading.md')
     await waitSessionReady('heading.md')
-    // 光标初始在文档头（行 1 标题上）：该行活动显示源码，行 4 标题非活动隐藏标记
+    // 光标初始在文档头的 # 标记处：该标记显形，另一标题的标记隐藏
     const view = await waitViewState('heading.md', (v) => (v.headingLineCount ?? 0) >= 2)
-    assert((view.headingActiveText ?? '').startsWith('#'), `活动标题行应显示源码（# 开头）：${JSON.stringify(view.headingActiveText)}`)
-    assert((view.headingHiddenText ?? '').startsWith('#') === false, `非活动标题行应隐藏标记（不以 # 开头）：${JSON.stringify(view.headingHiddenText)}`)
-    assert((view.headingHiddenText ?? '') === '中部二级标题', `非活动标题行 DOM 文本应为标题内容：${JSON.stringify(view.headingHiddenText)}`)
+    assert((view.headingActiveText ?? '').startsWith('#'), `光标贴近的标题标记应显形（# 开头）：${JSON.stringify(view.headingActiveText)}`)
+    assert((view.headingHiddenText ?? '').startsWith('#') === false, `另一标题标记应隐藏（不以 # 开头）：${JSON.stringify(view.headingHiddenText)}`)
+    assert((view.headingHiddenText ?? '') === '中部二级标题', `另一标题行 DOM 文本应为标题内容：${JSON.stringify(view.headingHiddenText)}`)
+
+    const uri = wsUri('heading.md').toString()
+    const bodyOffset = '# 顶部'.length
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: bodyOffset })
+    const inBody = await poll('标题正文光标显形行首标记', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.selectionOffset === bodyOffset ? v : undefined
+    })
+    assert((inBody.headingActiveText ?? '').startsWith('#'), `光标在标题正文时 # 应保持显形：${JSON.stringify(inBody.headingActiveText)}`)
 
     // 外部编辑把普通行改成标题：装饰随文本增量更新（doc.changed 广播路径）
     const before = view.headingLineCount ?? 0

@@ -861,7 +861,7 @@ export class WebviewSyncController {
       // #10 链接/图片观测（DOM 级：live 限视口，reading 限挂载块）
       liveLinkCount: content ? content.querySelectorAll('.vsidian-link').length : 0,
       liveImageCount: content ? content.querySelectorAll('.vsidian-image').length : 0,
-      // #11 双链观测（live：非活动行 widget + 活动行 mark；reading：a）
+      // #11 双链观测（live：范围外 widget + 范围内 mark；reading：a）
       liveWikilinkCount: content
         ? content.querySelectorAll(`.${WIKILINK_CLASS_NAMES.wikilink}`).length
         : 0,

@@ -21,11 +21,11 @@
 | --- | --- | --- |
 | `.vsidian-heading-line-{1..6}`（挂在 `.cm-line` 行元素上） | `.HyperMD-header-{1..6}`（Obsidian live 的标题**行容器**类） | 语义等价（行级）。已验证：测试片段经 `.vsidian-heading-line-1` 修改 `text-decoration-color` 生效 |
 | `.vsidian-header-{1..6}`（#8：标题**内容 span**，mark 装饰） | `.cm-header-{1..6}`（Obsidian live 的标题行内 token 类） | 语义等价（span 级）。#8 起提供；类名保持 `vsidian-` 前缀，Obsidian 片段按原名定位不命中（经映射垫片兼容属二期） |
-| `.vsidian-heading-inview` / `.vsidian-heading-active` | 无直接对应（Obsidian 无活动行标题源码态类；其等价行为由 `.cm-active` 相关规则承担） | 本项目自有扩展：视口内强调与"光标所在行显示源码"提示 |
+| `.vsidian-heading-inview` / `.vsidian-heading-active` | 无直接对应（Obsidian 无活动行标题提示类） | 本项目自有扩展：视口内强调与光标所在标题行的强调提示；标题 `#` 在光标进入该标题行时显形 |
 
 ## live 视图行内与块级语法（#8 新增）
 
-#8 起 live 视图的覆盖语法由解析树驱动（`@codemirror/lang-markdown` 的 `markdownLanguage` 解析器，GFM 含任务列表），非活动行隐藏标记、活动行显示源码（#5 选区联动语义）。以下 span 级行级类均为稳定样式入口：
+#8 起 live 视图的覆盖语法由解析树驱动（`@codemirror/lang-markdown` 的 `markdownLanguage` 解析器，GFM 含任务列表）。标记显形按各自语法范围判定：标题标记在对应标题范围内显形（Setext 标题包含正文和下划线行）；列表、引用的行首标记只在标记及相邻空格附近显形；粗斜体、行内代码在对应语法节点内显形；任务 checkbox 仅在光标进入 `[ ]` / `[x]` 标记时切回源码。同一行其他标记保持格式化形态。以下 span 级行级类均为稳定样式入口：
 
 | 本项目稳定类名 | 本项目用途 | Obsidian 对应选择器 | 核对结果 |
 | --- | --- | --- | --- |
@@ -36,6 +36,7 @@
 | `.vsidian-quote-line` | 引用行 | `.HyperMD-quote`（Obsidian 引用行类）/ `.cm-quote` | 语义等价（行级；本项目无 span 级引用 token 类——引用内容不额外 span 化） |
 | `.vsidian-list-line`（+ `-d{1..8}` 嵌套深度修饰） | 列表项行 | `.HyperMD-list-line`（Obsidian 列表行类族）/ `.cm-list-number` 等修饰 | 行级语义对应；深度修饰为本项目自有形态（Obsidian 按行 class 组合表达缩进，结构不同但等价定位） |
 | `.vsidian-list-bullet` / `.vsidian-list-ordered` | 无序/有序列表行修饰（无序标记隐藏后以 `::before` 圆点呈现；有序编号保留可见） | 无直接对应（Obsidian 圆点由 `.cm-formatting-list` 隐藏 + 原生列表样式承担） | 本项目自有呈现形态 |
+| `.vsidian-list-marker-visible` | 无序列表源码标记显形时抑制 `::before` 伪圆点，避免双圆点 | 无直接对应 | 本项目自有状态修饰类 |
 | `.vsidian-task-checkbox`（+ `.vsidian-task-checked` 修饰；`input[type=checkbox]`） | 任务 checkbox（#9：替换 #8 的只读字形，可交互——点击/Enter/空格切换勾选态并写回 Markdown） | `.cm-task-*` 方向（Obsidian 任务标记由 HMR widget 承担） | 本项目自有 widget；勾选态双入口（`:checked` 伪类与 `.vsidian-task-checked` 类）。已验证：测试片段经 `.vsidian-task-checkbox` 命中（真实宿主断言） |
 | `.vsidian-hr-line` | 水平线行 | `.cm-hr`（Obsidian 水平线 token 类） | 语义等价（行级呈现，`---` 源文保留可见） |
 | `.vsidian-frontmatter-line` | frontmatter 行（头块按源码呈现、语法不解析） | `.cm-hmd-frontmatter`（Obsidian frontmatter 类） | 语义对应（类名不同）；frontmatter 边界由 `markdownDoc.frontmatterRange` 两视图共用判定 |
@@ -82,7 +83,7 @@
 
 | 本项目稳定类名 | 本项目用途 | Obsidian 对应选择器 | 核对结果 |
 | --- | --- | --- | --- |
-| `.vsidian-link`（live，mark span） | 链接**内容** span（活动与非活动行都标记；非活动行隐藏 `](url)` 尾部，活动行显示源码） | `.cm-link`（Obsidian 链接内容 token） | 语义等价（span 级）。已验证：测试片段经 `.vsidian-link` 命中（`rgb(19, 20, 21)`，真实宿主断言）。隐藏的 `](url)` 尾部对应 Obsidian `.cm-formatting-link` / `.cm-string.cm-url` 方向——本项目以隐藏呈现，无独立样式类 |
+| `.vsidian-link`（live，mark span） | 链接**内容** span（始终标记；光标或选区进入该链接范围时显示 `[` 和 `](url)` 源码，同一行其他链接保持格式化） | `.cm-link`（Obsidian 链接内容 token） | 语义等价（span 级）。已验证：测试片段经 `.vsidian-link` 命中（`rgb(19, 20, 21)`，真实宿主断言）。隐藏的 `](url)` 尾部对应 Obsidian `.cm-formatting-link` / `.cm-string.cm-url` 方向——本项目以隐藏呈现，无独立样式类 |
 | 阅读链接（无自有类） | markdown-it 渲染的语义 `<a>` | `.markdown-preview-view a` | 标签等价。已验证：探针 `rgb(22, 23, 24)`。单击经容器级委托上报 `link.activate`（`preventDefault`，不做 webview 原生导航） |
 | `.vsidian-image`（双视图） | 图片槽位基类：阅读视图为 `<img>` 元素本体；live 视图为 widget 容器 `span`（内部 `<img>` 由资源管理器装载） | `.markdown-preview-view img`（阅读）/ `.cm-image`（live 方向） | 阅读侧标签等价 + 类命中（探针 `rgb(25, 26, 27)`）；live 侧为本项目自有 widget 形态（Obsidian 图片 widget 无公开稳定类） |
 | `.vsidian-image-loading` / `.vsidian-image-loaded` / `.vsidian-image-error`（状态修饰，与 `data-vsidian-img-state` 同步） | 图片三态：占位（alt 文本）/ 已加载（`img load` 事件确认）/ 失败（点击重试） | 无直接对应（Obsidian 无公开加载状态类） | 本项目自有状态机形态；`vsidian-image-error` 提供可重试的可见错误轮廓 |
@@ -95,11 +96,11 @@
 
 ## 双链（#11）
 
-#11 起两种视图贯通双链显示与跳转（ADR-0002：按需 `workspace.findFiles` 解析，不建持久索引、不自动创建文件）。**形态声明**：支持 `[[笔记]]`、`[[目录/笔记]]`、`[[笔记|显示文字]]`、`[[笔记#标题]]` 及组合；块引用 `[[笔记^块]]`、嵌入 `![[…]]` 与残缺形态按**原文**显示（源码保真降级，源文不改写）。live 非活动行整体替换为显示文字（别名或链接名），活动行显示源码；跳转执行归宿主（webview 只上报 `wikilink.activate`：阅读单击、live Ctrl/Cmd+单击）。重名候选经 QuickPick 由用户选择；无工作区、缺失目标给可见反馈。
+#11 起两种视图贯通双链显示与跳转（ADR-0002：按需 `workspace.findFiles` 解析，不建持久索引、不自动创建文件）。**形态声明**：支持 `[[笔记]]`、`[[目录/笔记]]`、`[[笔记|显示文字]]`、`[[笔记#标题]]` 及组合；块引用 `[[笔记^块]]`、嵌入 `![[…]]` 与残缺形态按**原文**显示（源码保真降级，源文不改写）。live 视图仅在光标进入该双链范围时显示源码，范围外整体替换为显示文字（别名或链接名）；跳转执行归宿主（webview 只上报 `wikilink.activate`：阅读单击、live Ctrl/Cmd+单击）。重名候选经 QuickPick 由用户选择；无工作区、缺失目标给可见反馈。
 
 | 本项目稳定类名 | 本项目用途 | Obsidian 对应选择器 | 核对结果 |
 | --- | --- | --- | --- |
-| `.vsidian-wikilink`（live） | 双链呈现：非活动行为显示文字 widget（替换整个 `[[…]]`）、活动行为源码 mark | `.cm-hmd-internal-link`（Obsidian live 内链 token 类族） | 语义等价（呈现级）。已验证：测试片段经 `.vsidian-wikilink` 命中（`rgb(28, 29, 30)`，真实宿主断言）。Obsidian 另有 `.cm-hmd-internal-link` 拆分形态（链接名/别名/格式化括号），本项目整体替换、无拆分类 |
+| `.vsidian-wikilink`（live） | 双链呈现：光标在该双链范围外时为显示文字 widget（替换整个 `[[…]]`），进入范围后为源码 mark | `.cm-hmd-internal-link`（Obsidian live 内链 token 类族） | 语义等价（呈现级）。已验证：测试片段经 `.vsidian-wikilink` 命中（`rgb(28, 29, 30)`，真实宿主断言）。Obsidian 另有 `.cm-hmd-internal-link` 拆分形态（链接名/别名/格式化括号），本项目整体替换、无拆分类 |
 | `a.vsidian-wikilink`（阅读） | markdown-it 双链规则渲染的语义 `<a>`（`href` 为原文 target，显示别名或链接名） | `.markdown-preview-view a.internal-link`（Obsidian 阅读内链类） | 语义等价（标签 + 类）。已验证：探针 `rgb(31, 32, 33)`。单击经容器级委托上报 `wikilink.activate`（`preventDefault`） |
 | 无对应（`.cm-hashtag` 方向） | 标签 `#tag` | `.cm-hashtag` / `.tag` | **不支持**（一期未实现标签语法；如实列入不支持清单） |
 

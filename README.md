@@ -17,7 +17,7 @@
 
 - **打开文档**：对 `.md` 文件右键 →「打开方式…」→「Vsidian」（默认打开仍是原生文本编辑器，不自动接管）。
 - **双视图切换**：命令面板 →「切换实时预览与阅读模式」，或编辑器工具栏按钮；源码位置锚点保持（不按滚动百分比跳变）。
-- **实时预览**（live）：CodeMirror 6 全文承载，视口外不创建 DOM；标题/粗斜体/列表/引用/代码等非活动行渲染为格式化形态，光标行显示源码。
+- **实时预览**（live）：CodeMirror 6 全文承载，视口外不创建 DOM；格式符号只在光标进入对应语法范围时显形。列表、标题和引用的行首符号仅在标记附近显形；链接、图片和双链仅在光标进入各自范围时显示源码。
 - **阅读模式**（reading）：markdown-it 渲染的分块按需挂载，10 万块级文档挂载量与体量无关。
 - **任务勾选**：两种视图点击 checkbox 写回源文本，支持撤销。
 - **链接与图片**：live 视图 **Ctrl/Cmd + 单击**链接跳转（reading 直接单击）；本地图片经宿主通道装载，缺失图呈现可重试错误态；`file://`、`javascript:` 等危险 scheme 被拦截。注：CSP 以 `img-src https:` 放行任意 https 图源（远程图床支持的设计代价——任意 https 图片可达，理论上可被用作跟踪像素）。
@@ -39,7 +39,7 @@ node test/perf/runPerf.mjs      # 性能档位测量（报告写 docs/perf/data/
 npx @vscode/vsce package --no-dependencies  # 打包 VSIX（bundle 自包含，不带 node_modules）
 ```
 
-调试：VSCode 打开本仓库后按 F5（Extension Development Host），对 `.md` 文件执行「Reopen With…」选择「Vsidian」。
+调试：VSCode 以**文件夹工作区**打开本仓库根目录，按 F5 运行「Vsidian: 启动扩展开发宿主」。启动前会执行 `npm run compile`，开发宿主加载当前工作树的 `out/extension.js`。调试端口固定为 46186；端口被占用时修改 `.vscode/launch.json` 中的 `port`。在新窗口对 `.md` 文件执行「Reopen With…」选择「Vsidian」。
 
 ### 架构速览
 

@@ -167,7 +167,7 @@ export type WebviewToHost =
       liveLinkCount?: number
       /** live 视口内图片 widget 数（#10） */
       liveImageCount?: number
-      /** live 视口内双链数（#11；非活动行 widget 与活动行 mark 共用类名） */
+      /** live 视口内双链数（#11；范围外 widget 与范围内 mark 共用类名） */
       liveWikilinkCount?: number
       /** 阅读挂载块内链接数（#10；屏外块不创建，无 DOM） */
       readingLinkCount?: number

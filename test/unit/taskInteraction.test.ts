@@ -144,11 +144,12 @@ describe('live：任务标记 widget 可交互并走标准出站链路', () => {
     expect(editRequests(h)).toHaveLength(1)
   })
 
-  it('活动行（光标所在行）显示源码：无 checkbox，标记以原文呈现', () => {
+  it('任务正文保留 checkbox；光标进入 [ ] 才显示标记源码', () => {
     const h = makeHarness()
     const view = h.controller.getView()!
     view.dispatch({ selection: { anchor: DOC.indexOf('未完成任务甲') } })
-    // 光标在第一个任务行：该行活动 → 只剩 2 个 checkbox
+    expect(liveCheckboxes(h)).toHaveLength(3)
+    view.dispatch({ selection: { anchor: DOC.indexOf('[') } })
     expect(liveCheckboxes(h)).toHaveLength(2)
   })
 

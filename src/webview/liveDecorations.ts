@@ -8,8 +8,8 @@
 // - 直接装饰（影响块高度）→ StateField 常驻 RangeSet 整篇维护：
 //   · 行级类：标题（#5 类名不变）、围栏/缩进代码、引用、列表（含嵌套
 //     深度与有序/子弹区分）、水平线、frontmatter
-//   · 标记隐藏（replace）：非活动行的 #/**/`/>/- 等标记与任务 [x] 字形
-//     widget（光标行显示源码——#5 选区联动语义）
+//   · 标记隐藏（replace）：标题标记在标题范围内显形；列表与引用前缀仅在
+//     标记及相邻空格附近显形；任务 [x] 在标记范围外显示 checkbox widget
 //   · 内容 span：vsidian-header-{n} / vsidian-strong / vsidian-emphasis / vsidian-inline-code
 // - 间接装饰（纯视口内）→ ViewPlugin 按直接装饰集合与 visibleRanges 计算
 //   标题行强调与活动提示（不触碰 view/DOM 测量，防布局循环）
@@ -80,6 +80,8 @@ export const LIVE_CLASS_NAMES = {
   listLine: 'vsidian-list-line',
   /** 无序列表行修饰（标记隐藏后以 ::before 呈现圆点） */
   listBullet: 'vsidian-list-bullet',
+  /** 无序列表源码标记显形时抑制行首伪圆点，避免重复 */
+  listMarkerVisible: 'vsidian-list-marker-visible',
   /** 有序列表行修饰（编号保留可见） */
   listOrdered: 'vsidian-list-ordered',
   /** 任务 checkbox（input，#9 可交互：点击/Enter 切换勾选态） */
@@ -276,11 +278,20 @@ function emitTableRowMarks(
   emitTablePipeMarks(out, doc, line.from)
 }
 
-/** 行是否被选区覆盖（任一 range 的行区间覆盖该行即视为活动，显示源码）。
- *  #10 起 liveLinks 的链接/图片装饰复用同一活动语义 */
+/** 行是否被选区覆盖（仅用于标题行视口强调；mark 显形用 selectionTouchesRange）。 */
 export function isLineActive(selection: EditorSelection, doc: Text, lineNumber: number): boolean {
   for (const r of selection.ranges) {
     if (doc.lineAt(r.from).number <= lineNumber && lineNumber <= doc.lineAt(r.to).number) {
+      return true
+    }
+  }
+  return false
+}
+
+/** 光标或非空选区是否触及语法范围；折叠光标包含两端边界，便于在 mark 左右编辑。 */
+export function selectionTouchesRange(selection: EditorSelection, from: number, to: number): boolean {
+  for (const range of selection.ranges) {
+    if (range.empty ? range.head >= from && range.head <= to : range.from < to && range.to > from) {
       return true
     }
   }
@@ -362,7 +373,9 @@ function emitForRange(
     }
     set.add(cls)
   }
-  const active = (lineNo: number): boolean => isLineActive(selection, doc, lineNo)
+  const touches = (from: number, to: number): boolean => selectionTouchesRange(selection, from, to)
+  const markerEnd = (node: SyntaxNode): number =>
+    node.to < doc.length && doc.sliceString(node.to, node.to + 1) === ' ' ? node.to + 1 : node.to
 
   // frontmatter：按行给类（树发射被裁剪到 fm 之后）
   if (fm) {
@@ -474,13 +487,17 @@ function emitForRange(
       case 'InlineCode':
         pushInnerSpan(out, node, 'CodeMark', inlineCodeDeco)
         return
-      case 'HeaderMark':
+      case 'HeaderMark': {
+        const heading = [...path].reverse().find((parent) => headingLevelOf(parent.name) !== null)
+        const to = markerEnd(node)
+        if (!heading || !touches(heading.from, heading.to)) {
+          out.push(hideDeco.range(node.from, to))
+        }
+        return
+      }
       case 'QuoteMark': {
-        const lineNo = doc.lineAt(node.from).number
-        if (!active(lineNo)) {
-          // 标记字符 + 其后一个空格一并隐藏（#5 语义：'# '/'> '）
-          const to =
-            node.to < doc.length && doc.sliceString(node.to, node.to + 1) === ' ' ? node.to + 1 : node.to
+        const to = markerEnd(node)
+        if (!touches(node.from, to)) {
           out.push(hideDeco.range(node.from, to))
         }
         return
@@ -493,16 +510,17 @@ function emitForRange(
         if (ordered) {
           return
         }
-        const lineNo = doc.lineAt(node.from).number
-        if (!active(lineNo)) {
-          const to = node.to < doc.length && doc.sliceString(node.to, node.to + 1) === ' ' ? node.to + 1 : node.to
+        const to = markerEnd(node)
+        if (!touches(node.from, to)) {
           out.push(hideDeco.range(node.from, to))
+        } else {
+          addLineCls(doc.lineAt(node.from).number, LIVE_CLASS_NAMES.listMarkerVisible)
         }
         return
       }
       case 'EmphasisMark': {
-        const lineNo = doc.lineAt(node.from).number
-        if (!active(lineNo)) {
+        const scope = path[path.length - 1]
+        if (!scope || !touches(scope.from, scope.to)) {
           out.push(hideDeco.range(node.from, node.to))
         }
         return
@@ -510,16 +528,15 @@ function emitForRange(
       case 'CodeMark': {
         // 仅行内代码的反引号隐藏；围栏 ``` 保留可见
         if (path[path.length - 1]?.name === 'InlineCode') {
-          const lineNo = doc.lineAt(node.from).number
-          if (!active(lineNo)) {
+          const scope = path[path.length - 1]!
+          if (!touches(scope.from, scope.to)) {
             out.push(hideDeco.range(node.from, node.to))
           }
         }
         return
       }
       case 'TaskMarker': {
-        const lineNo = doc.lineAt(node.from).number
-        if (!active(lineNo)) {
+        if (!touches(node.from, node.to)) {
           const checked = doc.sliceString(node.from + 1, Math.min(node.from + 2, node.to)) !== ' '
           out.push(taskCheckboxDecos[checked ? 1 : 0]!.range(node.from, node.to))
         }
@@ -626,7 +643,7 @@ interface ChangedRange4 {
   toB: number
 }
 
-/** 选区驱动的重建行（#5 语义：旧选区行映射 + 新选区行） */
+/** 选区驱动的重建行：旧选区行映射 + 新选区行 */
 function selectionSpans(tr: Transaction): LineSpan[] {
   const doc = tr.state.doc
   const spans: LineSpan[] = []
@@ -692,7 +709,7 @@ function planRebuildSpans(
       }
     })
   }
-  // 选区显式变化才扩展重建行（#5 语义：编辑事务的默认选区映射不触发）
+  // 选区显式变化才扩展重建行（编辑事务的默认选区映射不触发）
   if (tr.selection !== undefined) {
     spans.push(...selectionSpans(tr))
   }
@@ -849,7 +866,7 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
       return value
     }
     if (!tr.docChanged) {
-      // 纯选区移动：树不变，仅活动语义重建（#5 的选区联动路径）
+      // 纯选区移动：树不变，仅重建旧/新选区所在行的 mark 显形
       const doc = tr.state.doc
       let decos = value.decos
       let scanned = 0
@@ -910,7 +927,7 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
 
 /**
  * 间接装饰构建（纯数据输入：doc/visibleRanges/selection/直接装饰集）：
- * 视口内标题行的强调与活动行源码态提示。标题行身份来自直接装饰集
+ * 视口内标题行的强调与光标所在标题行的强调提示。标题行身份来自直接装饰集
  * （树驱动），围栏内伪标题天然不参与。
  */
 export function buildViewportLiveDecorations(

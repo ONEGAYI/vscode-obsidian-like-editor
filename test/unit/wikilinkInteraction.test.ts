@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // 双链显示与跳转意图的 webview 契约（工单 #11）：
-// - live 视图：非活动行 `[[…]]` 整体替换为显示文字 widget（vsidian-wikilink
-//   稳定类名）、活动行显示源码（mark 标记）；围栏代码与行内代码内不装饰
+// - live 视图：光标在双链范围外以显示文字 widget 替换 `[[…]]`，进入范围
+//   才显示源码（vsidian-wikilink 稳定类名）；代码上下文不装饰
 // - live Ctrl/Cmd+单击 = wikilink.activate 上报（原始 target + 源区间）；
 //   普通单击不产生意图；嵌入/块引用形态不上报
 // - 阅读视图：合法双链渲染为 a.vsidian-wikilink（href=原文 target，显示别名
@@ -93,7 +93,7 @@ function readingContainer(): HTMLElement {
   return host.querySelector<HTMLElement>('.vsidian-view-reading')!
 }
 
-describe('实时预览：双链间接装饰（视口内、非活动行替换显示文字）', () => {
+describe('实时预览：双链间接装饰（视口内按各自范围切换）', () => {
   function liveRanges(text: string, selection?: { anchor: number }) {
     const state = EditorState.create({
       doc: text,
@@ -109,7 +109,7 @@ describe('实时预览：双链间接装饰（视口内、非活动行替换显�
     )
   }
 
-  it('非活动行：`[[…]]` 整体替换为显示文字 widget（别名或链接名）', () => {
+  it('光标在双链范围外：`[[…]]` 整体替换为显示文字 widget', () => {
     const ranges = liveRanges(WIKILINK_DOC)
     const widgets = ranges.filter((r) => r.value.spec.widget instanceof LiveWikilinkWidget)
     // 合法双链 3 处（目标笔记 / 别名形态 / 标题形态）；降级与代码内不装饰
@@ -127,7 +127,7 @@ describe('实时预览：双链间接装饰（视口内、非活动行替换显�
     expect(WIKILINK_DOC.slice(first.from, first.to)).toBe('[[目标笔记]]')
   })
 
-  it('活动行：不替换（源码可编辑），mark 类标记整个出现', () => {
+  it('光标进入双链范围：不替换（源码可编辑），mark 类标记整个出现', () => {
     const pos = WIKILINK_DOC.indexOf('[[目标笔记]]') + 3
     const ranges = liveRanges(WIKILINK_DOC, { anchor: pos })
     const inLine = ranges.filter((r) => r.from <= pos && r.to >= WIKILINK_DOC.indexOf('[[目标笔记]]'))
@@ -139,6 +139,19 @@ describe('实时预览：双链间接装饰（视口内、非活动行替换显�
     // 同一行不再有替换 widget
     const widgets = inLine.filter((r) => r.value.spec.widget !== undefined)
     expect(widgets.length).toBe(0)
+  })
+
+  it('同一行双链按各自范围切换源码与 widget', () => {
+    const doc = '前 [[甲]] 中 [[乙|别名]] 后'
+    const first = doc.indexOf('[[甲]]')
+    const second = doc.indexOf('[[乙|别名]]')
+    const widgets = (anchor: number) =>
+      liveRanges(doc, { anchor })
+        .filter((r) => r.value.spec.widget instanceof LiveWikilinkWidget)
+        .map((r) => r.from)
+    expect(widgets(doc.indexOf('中'))).toEqual([first, second])
+    expect(widgets(doc.indexOf('甲'))).toEqual([second])
+    expect(widgets(second + 1)).toEqual([first])
   })
 
   it('降级形态不装饰：嵌入 ![[…]]、块引用 ^、空标题；代码上下文不装饰', () => {

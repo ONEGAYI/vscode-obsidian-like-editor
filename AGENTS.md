@@ -39,6 +39,9 @@ vsidian/
 │       └── file-tree/ # file-tree 技能部署实例
 ├── .gitignore        # Git 忽略规则
 ├── .scratch/         # MVP 开票草稿，临时目录
+├── .vscode/          # VSCode 工作区配置
+│   ├── launch.json # F5 扩展宿主启动配置
+│   └── tasks.json  # 调试前编译任务
 ├── .vscodeignore     # VSIX 打包排除清单
 ├── AGENTS.md         # 项目级 agent 规则单一事实源
 ├── CLAUDE.md         # Claude 专属规则导入入口
