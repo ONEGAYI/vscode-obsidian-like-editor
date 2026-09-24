@@ -11,6 +11,7 @@ const CMD = {
   postToPanel: 'onegayi.vsidian._test.postToPanel',
   viewState: 'onegayi.vsidian._test.requestViewState',
   conflictState: 'onegayi.vsidian._test.getConflictState',
+  closedInput: 'onegayi.vsidian._test.getLastClosedInput',
   viewStateCache: 'onegayi.vsidian._test.getPanelViewStateCache',
   resumePanel: 'onegayi.vsidian._test.resumePanel',
   perfProbe: 'onegayi.vsidian._test.perfProbe',
@@ -159,6 +160,7 @@ interface ViewState {
   headingLineCount?: number
   headingActiveText?: string
   headingHiddenText?: string
+  headingFontPx?: number
   /** #6 模式切换观测 */
   viewMode?: 'live' | 'reading'
   selectionOffset?: number
@@ -717,6 +719,37 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(conflictAfter.suspended === false, '恢复后不应处于暂停')
   }],
 
+  ['冲突后输入立即留存：关闭面板通知含最后一笔（#21）', async () => {
+    await openWithEditor('conflict.md')
+    await waitSessionReady('conflict.md')
+    const uri = wsUri('conflict.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('conflict.md'))
+    const external = new vscode.WorkspaceEdit()
+    external.replace(wsUri('conflict.md'), new vscode.Range(0, 0, 0, 7), '外部改写行')
+    assert(await vscode.workspace.applyEdit(external), '制造冲突的外部编辑应成功')
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, {
+      kind: 'edit.request',
+      sessionId: '',
+      docUri: uri,
+      seq: 1,
+      baseVersion: 1,
+      changes: [{ offset: 2, length: 2, text: '未确认输入' }],
+    })
+    const suspended = await waitViewState('conflict.md', (v) => v.suspended === true)
+    const latest = `最后一笔${suspended.text}`
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'sync.test.edit', offset: 0, text: '最后一笔', closeAfter: true,
+    })
+    // webview 同一事件内编辑并请求关闭；不预等宿主快照，以覆盖旧 500 ms 空窗。
+    assert(doc.getText() !== latest, '暂停期输入不得写回权威文档')
+    const closed = await poll('关闭通知携带最新输入', async () => {
+      const state = (await vscode.commands.executeCommand(CMD.closedInput)) as
+        | { docUri: string; webviewText?: string } | undefined
+      return state?.docUri === uri ? state : undefined
+    })
+    assert(closed.webviewText === latest, `关闭通知缺最后一笔：${JSON.stringify(closed)}`)
+  }],
+
   ['split 双面板冲突暂停只隔离冲突面板，第二面板正常写回（#4）', async () => {
     await openWithEditor('splitconflict.md')
     await waitSessionReady('splitconflict.md')
@@ -838,6 +871,17 @@ export const cases: Array<[string, () => Promise<void>]> = [
   }],
 
   // ---- 工单 #6：模式切换 / 源锚点 / 稳定样式契约 ----
+
+  ['阅读模式一级标题字号与实时预览接近（#30）', async () => {
+    await openWithEditor('mode.md')
+    await waitSessionReady('mode.md')
+    const live = await waitViewState('mode.md', (v) => v.viewMode === 'live' && (v.headingFontPx ?? 0) > 0)
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
+    const reading = await waitViewState('mode.md', (v) => v.viewMode === 'reading' && (v.headingFontPx ?? 0) > 0)
+    const ratio = reading.headingFontPx! / live.headingFontPx!
+    assert(ratio >= 0.85 && ratio <= 1.15,
+      `一级标题字号差距过大：live=${live.headingFontPx}px，reading=${reading.headingFontPx}px，倍率=${ratio.toFixed(2)}`)
+  }],
 
   ['模式切换：命令入口切换、未保存内容保留、不产生编辑历史（#6）', async () => {
     await openWithEditor('mode.md')
@@ -1488,6 +1532,30 @@ export const cases: Array<[string, () => Promise<void>]> = [
 
   // ---- 工单 #10：普通链接打开与本地/SSH 工作区图片显示 ----
 
+  ['live 渲染链接真实 DOM 单击：普通链接与双链均跳转、源文零写回（#28）', async () => {
+    await openWithEditor('links.md')
+    await waitSessionReady('links.md')
+    const linkUri = wsUri('links.md').toString()
+    const linkBefore = await readDisk('links.md')
+    await waitViewState('links.md', (v) => (v.liveLinkCount ?? 0) >= 2)
+    await vscode.commands.executeCommand(CMD.postToPanel, linkUri, {
+      kind: 'link.test.mousedown', target: 'link', index: 1,
+    })
+    await waitWikilinkLog(linkUri, (e) => e.kind === 'doc' && e.path === wsUri('链接目标.md').fsPath)
+    assert(await readDisk('links.md') === linkBefore, 'live 普通链接单击不得改写源文')
+
+    await openWithEditor('wikilinks.md')
+    await waitSessionReady('wikilinks.md')
+    const wikiUri = wsUri('wikilinks.md').toString()
+    const wikiBefore = await readDisk('wikilinks.md')
+    await waitViewState('wikilinks.md', (v) => (v.liveWikilinkCount ?? 0) >= 1)
+    await vscode.commands.executeCommand(CMD.postToPanel, wikiUri, {
+      kind: 'link.test.mousedown', target: 'wikilink', index: 0,
+    })
+    await waitWikilinkLog(wikiUri, (e) => e.kind === 'wikilink-doc' && e.target === '目标笔记')
+    assert(await readDisk('wikilinks.md') === wikiBefore, 'live 双链单击不得改写源文')
+  }],
+
   ['链接跳转：宿主解析相对路径并打开工作区目标（中文/空格/%20 编码，#10）', async () => {
     await openWithEditor('links.md')
     const session = await waitSessionReady('links.md')
@@ -1705,6 +1773,9 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
     const reading = await waitViewState('table.md', (v) => v.viewMode === 'reading' && v.readingSyntax?.tables !== undefined)
     assert(reading.readingSyntax!.tables === 1, `阅读视图应渲染 1 张表格，实际 ${reading.readingSyntax!.tables}`)
+    // fixture 数据行含 `x|y`：若错误地按管道切列，行内代码 token 会丢失。
+    assert(reading.readingSyntax!.inlineCodeCount === 1,
+      `阅读表格应保留行内代码，实际 ${reading.readingSyntax!.inlineCodeCount}`)
     // 只读语义：表格为语义标签渲染，无输入控件（任务勾选外的交互均不提供）
     assert(
       reading.cssProbe?.readingTableDecorationColor === 'rgb(22, 23, 24)',

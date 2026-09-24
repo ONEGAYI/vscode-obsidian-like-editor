@@ -227,3 +227,14 @@ describe('blockForOffset：floor 语义（#6 契约保持）', () => {
     expect(blockForOffset([], 0)).toBeNull()
   })
 })
+
+describe('表格管道遮蔽不得改动普通链接（#22）', () => {
+  it('URL 中反引号包围的管道符保持原目标', () => {
+    const blocks = splitReadingBlocks('[跳转](https://example.com/`a|b`)\n')
+    const host = document.createElement('div')
+    host.innerHTML = blocks[0]!.html
+    const href = host.querySelector('a')?.getAttribute('href')
+    expect(href).toContain('%7C')
+    expect(href).not.toContain('%EE%80%80')
+  })
+})

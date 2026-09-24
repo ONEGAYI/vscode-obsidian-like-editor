@@ -1,5 +1,5 @@
-// Live 视图链接与图片（工单 #10）：间接装饰（按 visibleRanges）+ Ctrl/Cmd
-// 单击跳转意图上报。
+// Live 视图链接与图片（工单 #10/#28）：按 visibleRanges 间接装饰，
+// 渲染态单击及 Ctrl/Cmd+单击上报跳转意图。
 //
 // 装饰语义（与既有间接装饰同类，ADR-0005 / #8 分工沿用）：
 // - 链接内容 span：vsidian-link 稳定类名（Obsidian .cm-link 方向）——活动与
@@ -17,7 +17,8 @@
 // 解析共用同一形态学）；代码上下文（围栏/缩进/行内代码）与 frontmatter
 // 内不装饰（语法树 + fm 边界判定，与 #8 的源码降级边界一致）。
 //
-// 点击语义：单击 = CM6 默认（光标编辑）；Ctrl/Cmd+单击 = 跳转意图上报
+// 点击语义：已渲染的链接单击跳转；活动行源码普通单击仍由 CM6 编辑；
+// Ctrl/Cmd+单击在两种形态下都跳转
 // （原始 URI/target + 源区间），执行归宿主（URI 解析与白名单在宿主侧；
 // 双链先于普通链接判定——两者语法不重叠）。
 import { EditorSelection, RangeSet, Text, type Extension, type Range } from '@codemirror/state'
@@ -42,6 +43,10 @@ export const LINK_CLASS_NAMES = {
 export { WIKILINK_CLASS_NAMES }
 
 const linkMarkDeco = Decoration.mark({ class: LINK_CLASS_NAMES.link })
+const renderedLinkMarkDeco = Decoration.mark({
+  class: LINK_CLASS_NAMES.link,
+  attributes: { 'data-vsidian-rendered-link': 'true' },
+})
 const hideDeco = Decoration.replace({})
 
 // ---- #11 双链装饰实例缓存（同 display 复用同一实例，RangeSet.eq 成立） ----
@@ -89,7 +94,7 @@ export function wikilinkWidgetDeco(display: string): ReturnType<typeof Decoratio
 /**
  * #11 live 双链 widget：非活动行把 `[[…]]` 整体替换为显示文字（别名或
  * 链接名）。纯呈现（无加载/失败生命周期）；点击交互经编辑器级
- * Ctrl/Cmd+mousedown 的 posAtCoords 命中（替换区间仍有文档坐标）。
+ * 编辑器级 mousedown 的 posAtCoords 命中（替换区间仍有文档坐标）。
  */
 export class LiveWikilinkWidget extends WidgetType {
   constructor(readonly displayText: string) {
@@ -103,12 +108,13 @@ export class LiveWikilinkWidget extends WidgetType {
   toDOM(): HTMLElement {
     const span = document.createElement('span')
     span.className = WIKILINK_CLASS_NAMES.wikilink
+    span.dataset['vsidianRenderedWikilink'] = 'true'
     span.textContent = this.displayText
     return span
   }
 
   ignoreEvent(): boolean {
-    return true // 无内部交互（激活走编辑器级 mousedown）
+    return false // 交给 CM6：渲染态单击跳转，其他事件仍可用于编辑
   }
 }
 
@@ -309,7 +315,7 @@ export function buildLinkImageDecorationRanges(
           seen.add(node)
           const url = childNamed(node, 'URL')
           if (url && url.to > url.from) {
-            out.push(linkMarkDeco.range(url.from, url.to))
+            out.push((active ? linkMarkDeco : renderedLinkMarkDeco).range(url.from, url.to))
           }
           if (!active) {
             for (const mark of linkMarks(node)) {
@@ -333,7 +339,7 @@ export function buildLinkImageDecorationRanges(
           const innerCuts = imageRanges.filter((r) => r.from >= opener.to && r.to <= closer.from)
           for (const run of subtractIntervals(opener.to, closer.from, innerCuts)) {
             if (run.to > run.from) {
-              out.push(linkMarkDeco.range(run.from, run.to))
+              out.push((active ? linkMarkDeco : renderedLinkMarkDeco).range(run.from, run.to))
             }
           }
           if (!active) {
@@ -497,17 +503,14 @@ export function activateWikilinkAtPos(
   return true
 }
 
-/** mousedown 语义：Ctrl/Cmd 按下且命中链接/双链才激活（preventDefault 并吞掉
- *  CM6 默认处理）；其余交还编辑器（普通单击 = 光标编辑）。
+/** Ctrl/Cmd+mousedown 直接激活；普通单击在 mouseup 才确认，以免拖选时跳转。
  *  #11：双链先于普通链接判定（两者语法不重叠，先后仅是判定次序） */
 export function makeLinkMouseDownHandler(
   postActivate: (href: string, srcStart: number, srcEnd: number) => void,
   postActivateWikilink?: (target: string, srcStart: number, srcEnd: number) => void,
 ): (event: MouseEvent, view: EditorView) => boolean {
   return (event, view) => {
-    if (!(event.ctrlKey || event.metaKey)) {
-      return false
-    }
+    if (event.button !== 0 || !(event.ctrlKey || event.metaKey)) return false
     // 6.43 API 面：posAtCoords 直接返回 number | null
     const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
     if (pos === null) {
@@ -525,7 +528,7 @@ export function makeLinkMouseDownHandler(
   }
 }
 
-/** live 链接/图片/双链扩展装配：视口间接装饰 + 图片资源管理器 + Ctrl/Cmd 单击 */
+/** live 链接/图片/双链扩展装配：视口间接装饰 + 图片资源管理器 + 点击 */
 export function createLinkInteractions(opts: {
   postActivate: (href: string, srcStart: number, srcEnd: number) => void
   images: ImageResourceManager
@@ -533,6 +536,7 @@ export function createLinkInteractions(opts: {
   postActivateWikilink?: (target: string, srcStart: number, srcEnd: number) => void
 }): Extension {
   const onMouseDown = makeLinkMouseDownHandler(opts.postActivate, opts.postActivateWikilink)
+  let pendingClick: { target: 'wikilink' | 'link'; pos: number; x: number; y: number } | null = null
   return ViewPlugin.fromClass(
     class {
       decorations: DecorationSet
@@ -578,7 +582,31 @@ export function createLinkInteractions(opts: {
       decorations: (plugin) => plugin.decorations,
       eventHandlers: {
         mousedown(event: MouseEvent, view: EditorView) {
-          return onMouseDown(event, view)
+          pendingClick = null
+          if (event.ctrlKey || event.metaKey) return onMouseDown(event, view)
+          if (event.button !== 0) return false
+          const target = event.target instanceof Element ? event.target : null
+          const rendered = target?.closest('[data-vsidian-rendered-wikilink="true"]')
+            ? 'wikilink'
+            : target?.closest('[data-vsidian-rendered-link="true"]') ? 'link' : null
+          if (!rendered) return false
+          const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
+          if (pos !== null) pendingClick = { target: rendered, pos, x: event.clientX, y: event.clientY }
+          return false
+        },
+        mouseup(event: MouseEvent, view: EditorView) {
+          const pending = pendingClick
+          pendingClick = null
+          if (!pending || event.button !== 0 ||
+            Math.hypot(event.clientX - pending.x, event.clientY - pending.y) > 5) return false
+          const hit = pending.target === 'wikilink'
+            ? Boolean(opts.postActivateWikilink &&
+              (activateWikilinkAtPos(view, pending.pos, opts.postActivateWikilink) ||
+                (pending.pos > 0 && activateWikilinkAtPos(view, pending.pos - 1, opts.postActivateWikilink))))
+            : activateLinkAtPos(view, pending.pos, opts.postActivate) ||
+              (pending.pos > 0 && activateLinkAtPos(view, pending.pos - 1, opts.postActivate))
+          if (hit) event.preventDefault()
+          return hit
         },
       },
     },

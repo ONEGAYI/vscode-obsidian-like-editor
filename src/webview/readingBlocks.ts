@@ -18,6 +18,7 @@
 // - 未支持语法（脚注 [^1]、定义列表等）由 markdown-it 按普通段落文本
 //   渲染——保留原文的局部源码降级，不触发整篇改写
 import { frontmatterRange } from './markdownDoc'
+import { maskCodeSpanPipes } from './tableCells'
 import {
   buildLineBounds,
   createMarkdownRenderer,
@@ -56,6 +57,45 @@ export const FENCE_CHUNK_LINES = 60
 
 /** 单例渲染器（规则链一次装配；渲染是同步纯函数，实例可安全复用） */
 const md = createMarkdownRenderer()
+
+/** 表格块规则早于 inline code 切格；等长替身避免改变 token.map 与源锚点。 */
+function protectCodePipes(body: string): { parseText: string; marker: string | null } {
+  if (!body.includes('|') || !body.includes('`')) {
+    return { parseText: body, marker: null }
+  }
+  let code = 0xe000
+  while (code <= 0xf8ff && (
+    body.includes(String.fromCharCode(code)) ||
+    body.toLowerCase().includes(encodeURIComponent(String.fromCharCode(code)).toLowerCase())
+  )) {
+    code += 1
+  }
+  if (code > 0xf8ff) {
+    return { parseText: body, marker: null }
+  }
+  const marker = String.fromCharCode(code)
+  const parseText = body.split('\n').map((line) => maskCodeSpanPipes(line, marker)).join('\n')
+  return { parseText, marker: parseText === body ? null : marker }
+}
+
+function restoreCodePipes(tokens: Token[], marker: string): void {
+  const encodedMarker = new RegExp(encodeURIComponent(marker), 'gi')
+  for (const token of tokens) {
+    if (token.content.includes(marker)) {
+      token.content = token.content.replaceAll(marker, '|')
+    }
+    if (token.attrs) {
+      for (const attr of token.attrs) {
+        if (typeof attr[1] === 'string') {
+          attr[1] = attr[1].replaceAll(marker, '|').replace(encodedMarker, '%7C')
+        }
+      }
+    }
+    if (token.children) {
+      restoreCodePipes(token.children, marker)
+    }
+  }
+}
 
 function escapeHtml(s: string): string {
   return md.utils.escapeHtml(s)
@@ -120,7 +160,11 @@ function splitBody(
   if (body.trim() === '') {
     return blocks
   }
-  const tokens = md.parse(body, env as unknown as Env)
+  const { parseText, marker } = protectCodePipes(body)
+  const tokens = md.parse(parseText, env as unknown as Env)
+  if (marker) {
+    restoreCodePipes(tokens, marker)
+  }
   for (let i = 0; i < tokens.length; ) {
     const token = tokens[i]!
     if (token.level !== 0 || token.hidden) {

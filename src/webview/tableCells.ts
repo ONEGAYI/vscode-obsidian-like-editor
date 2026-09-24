@@ -73,6 +73,25 @@ function scanCodeSpans(line: string): boolean[] {
   return inSpan
 }
 
+/** 保持行长度不变地遮蔽 code span 内的管道符，供阅读表格解析使用。
+ * markdown-it 的表格规则先于 inline code 切格，遮蔽后再从 token 还原原字。
+ */
+export function maskCodeSpanPipes(line: string, marker: string): string {
+  if (!line.includes('|') || !line.includes('`')) {
+    return line
+  }
+  const inSpan = scanCodeSpans(line)
+  let changed = false
+  const chars = line.split('')
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === '|' && inSpan[i]) {
+      chars[i] = marker
+      changed = true
+    }
+  }
+  return changed ? chars.join('') : line
+}
+
 /** 位置 i 的管道符是否被反斜杠转义（前导奇数个连续 \） */
 function isEscapedAt(line: string, i: number): boolean {
   let n = 0

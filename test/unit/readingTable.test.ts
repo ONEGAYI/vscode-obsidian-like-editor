@@ -61,6 +61,23 @@ describe('阅读块模型：表格独立成块', () => {
     expect(tds).toHaveLength(2)
   })
 
+  it('行内代码里的管道符不切列，表头与数据行均保留完整内容（#22）', () => {
+    const text = [
+      '| `键|名` | 普通 |',
+      '| --- | --- |',
+      '| `x|y` | z |',
+      '| ``a|b`` | w |',
+      '',
+    ].join('\n')
+    const table = splitReadingBlocks(text).find((b) => b.kind === 'table')
+    expect(table).toBeDefined()
+    const el = createReadingBlockElement(table!, text)
+    expect(Array.from(el.querySelectorAll('thead th'), (th) => th.textContent)).toEqual(['键|名', '普通'])
+    expect(Array.from(el.querySelectorAll('tbody tr'), (tr) =>
+      Array.from(tr.querySelectorAll('td'), (td) => td.textContent),
+    )).toEqual([['x|y', 'z'], ['a|b', 'w']])
+  })
+
   it('表格块只读：无输入控件、无 contenteditable、无事件属性', () => {
     const table = splitReadingBlocks(TABLE_DOC).find((b) => b.kind === 'table')!
     const el = createReadingBlockElement(table, TABLE_DOC)

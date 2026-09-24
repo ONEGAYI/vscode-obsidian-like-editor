@@ -29,6 +29,7 @@ export interface PerfReport {
   typingRounds: number
   scrollRounds: number
   docLines: number
+  firstInputSettledEpochMs: number
   baseline: PerfSnapshot
   afterTyping: PerfSnapshot
   afterScroll: PerfSnapshot
@@ -141,6 +142,7 @@ export async function runPerfProbe(
   const insertAt = Math.min(anchorLine.to, view.state.doc.length)
   const probeChar = '探'
   const samples: number[] = []
+  let firstInputSettledEpochMs = 0
   for (let i = 0; i < options.typingRounds; i++) {
     const start = performance.now()
     view.dispatch({
@@ -148,6 +150,7 @@ export async function runPerfProbe(
       annotations: externalSync.of(true),
     })
     await settle()
+    if (i === 0) firstInputSettledEpochMs = Date.now()
     samples.push(performance.now() - start)
   }
   // 清理：一次性删除全部探针字符
@@ -184,6 +187,7 @@ export async function runPerfProbe(
     typingRounds: options.typingRounds,
     scrollRounds: options.scrollRounds,
     docLines: view.state.doc.lines,
+    firstInputSettledEpochMs,
     baseline,
     afterTyping,
     afterScroll,

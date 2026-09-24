@@ -58,6 +58,8 @@ describe('runPerfProbe：测量与还原', () => {
       }
     }
     expect(report.inputDelayMs.samples).toHaveLength(3)
+    expect(report.firstInputSettledEpochMs).toBeGreaterThan(0)
+    expect(report.firstInputSettledEpochMs).toBeLessThanOrEqual(Date.now())
     expect(report.inputDelayMs.avgMs).toBeGreaterThan(0)
     expect(report.inputDelayMs.maxMs).toBeGreaterThanOrEqual(report.inputDelayMs.avgMs)
     view.destroy()

@@ -93,6 +93,8 @@ interface PanelEntry {
   /** webview 冲突上报的本地全文快照（conflict.report） */
   conflictWebviewText?: string
   conflictWebviewVersion?: number
+  /** 单调快照序号：迟到的旧报告不得覆盖更新的全文。 */
+  lastConflictRevision: number
   /** 最近一次性能探针回报（#5：测试钩子 perfProbe 轮询读取） */
   lastPerfReport?: Extract<WebviewToHost, { kind: 'perf.report' }>
   /** 最近一次阅读视图探针回报（#7：测试钩子 readingPerf 轮询读取） */
@@ -167,6 +169,7 @@ export class DocumentSession {
       suspended: false,
       suspendedReason: 'conflict',
       conflictFragments: [],
+      lastConflictRevision: 0,
       conflictNotified: false,
       reloaded: false,
     })
@@ -220,6 +223,9 @@ export class DocumentSession {
       return Promise.resolve()
     }
     switch (message.kind) {
+      case 'sync.test.close':
+        // 仅由测试模式的 provider 消费；若绕过面板入口则无副作用。
+        return Promise.resolve()
       case 'ready': {
         const wasReady = panel.ready
         this.sendInit(panel)
@@ -254,8 +260,11 @@ export class DocumentSession {
         }
         // webview 冲突快照：与请求片段并存（fragments 是逐笔输入，全文是
         // 完整上下文），用户取回时优先最新 view.state，此处留存兜底
-        panel.conflictWebviewText = message.text
-        panel.conflictWebviewVersion = message.version
+        if (message.revision > panel.lastConflictRevision) {
+          panel.lastConflictRevision = message.revision
+          panel.conflictWebviewText = message.text
+          panel.conflictWebviewVersion = message.version
+        }
         return Promise.resolve()
       }
       case 'conflict.action': {
