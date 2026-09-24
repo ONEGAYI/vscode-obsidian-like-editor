@@ -120,6 +120,32 @@ describe('isWebviewToHost', () => {
     expect(isWebviewToHost({ ...base, suspended: 'yes' })).toBe(false)
   })
 
+  it('view.state 的 lineGutter 观测（#34）：合法样本接受、字段非法拒绝', () => {
+    const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
+    // 合法：on 布尔、count 非负整数、first/last 字符串或 null、scaleX 正数
+    expect(
+      isWebviewToHost({
+        ...base,
+        lineGutter: { on: true, count: 12, first: '1', last: '12', scaleX: 0.61 },
+      }),
+    ).toBe(true)
+    expect(
+      isWebviewToHost({
+        ...base,
+        lineGutter: { on: false, count: 0, first: null, last: null, scaleX: null },
+      }),
+    ).toBe(true)
+    // 非法：on 非布尔 / count 负数或小数 / first 非字符串非 null / scaleX ≤ 0
+    expect(isWebviewToHost({ ...base, lineGutter: { on: 1, count: 1, first: null, last: null, scaleX: 1 } })).toBe(false)
+    expect(isWebviewToHost({ ...base, lineGutter: { on: true, count: -1, first: null, last: null, scaleX: 1 } })).toBe(false)
+    expect(isWebviewToHost({ ...base, lineGutter: { on: true, count: 1.5, first: null, last: null, scaleX: 1 } })).toBe(false)
+    expect(isWebviewToHost({ ...base, lineGutter: { on: true, count: 1, first: 3, last: null, scaleX: 1 } })).toBe(false)
+    expect(isWebviewToHost({ ...base, lineGutter: { on: true, count: 1, first: null, last: null, scaleX: 0 } })).toBe(false)
+    expect(isWebviewToHost({ ...base, lineGutter: { on: true, count: 1, first: null, last: null, scaleX: -1 } })).toBe(false)
+    // 缺省合法（向后兼容：行号扩展未装配的旧 webview）
+    expect(isWebviewToHost(base)).toBe(true)
+  })
+
   it('拒绝 null、非对象与数组', () => {
     expect(isWebviewToHost(null)).toBe(false)
     expect(isWebviewToHost(undefined)).toBe(false)

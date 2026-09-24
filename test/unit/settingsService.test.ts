@@ -38,9 +38,9 @@ function makeStorage(writes: Array<{ key: string; value: unknown }> = []): Setti
 }
 
 describe('快照读取', () => {
-  it('生产空注册表：快照为空对象（设置页空状态的数据依据）', () => {
+  it('生产注册表（#34 起）：快照为定义默认值（editor.lineNumbers: true）', () => {
     const svc = new SettingsService(makeStorage(), PRODUCTION_SETTING_DEFINITIONS)
-    expect(svc.getSnapshot()).toEqual({})
+    expect(svc.getSnapshot()).toEqual({ 'editor.lineNumbers': true })
   })
 
   it('fixture 定义下按默认值产出快照', () => {
