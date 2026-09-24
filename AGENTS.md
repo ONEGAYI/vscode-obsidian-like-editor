@@ -77,7 +77,8 @@ vsidian/
 │       └── mvp.md                 # MVP 规格主文档
 ├── esbuild.mjs       # esbuild 双产物构建脚本
 ├── media/            # 随扩展打包的静态资源
-│   └── css-contract-probe.css # 样式契约内部测试片段
+│   ├── css-contract-probe.css # 样式契约内部测试片段
+│   └── vsidian-icon.png       # Vsidian 扩展图标
 ├── package-lock.json # npm 依赖锁定文件
 ├── package.json      # 扩展清单与锁定依赖
 ├── README.md         # 项目门面说明
