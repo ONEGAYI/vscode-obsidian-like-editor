@@ -101,6 +101,23 @@ describe('runPerfProbe：测量与还原', () => {
     }
     view.destroy()
   })
+
+  // #15：快照可选携带 webview JS 堆读数（Chromium performance.memory）
+  it('快照 jsHeapBytes：有 performance.memory 时为正整数，否则为 null', async () => {
+    const view = makeView(makeDoc())
+    const report = await runPerfProbe(view, { typingRounds: 1, scrollRounds: 1 })
+    const heap = (performance as { memory?: { usedJSHeapSize?: number } }).memory
+      ?.usedJSHeapSize
+    for (const snap of [report.baseline, report.afterTyping, report.afterScroll]) {
+      if (typeof heap === 'number') {
+        expect(Number.isSafeInteger(snap.jsHeapBytes)).toBe(true)
+        expect(snap.jsHeapBytes!).toBeGreaterThan(0)
+      } else {
+        expect(snap.jsHeapBytes ?? null).toBeNull()
+      }
+    }
+    view.destroy()
+  })
 })
 
 describe('syncController 集成：perf.probe 消息驱动', () => {

@@ -268,6 +268,33 @@ describe('perf 探针协议（#5）', () => {
     expect(isWebviewToHost({ ...validReport, docLines: '1000' })).toBe(false)
   })
 
+  // #15：快照可选携带 webview JS 堆读数（Chromium performance.memory）
+  it('perf.report 快照接受 jsHeapBytes（正整数 / null / 缺省），拒绝非法类型', () => {
+    const withHeap = {
+      ...validReport,
+      baseline: { ...validReport.baseline, jsHeapBytes: 12_345_678 },
+    }
+    expect(isWebviewToHost(withHeap)).toBe(true)
+    expect(
+      isWebviewToHost({
+        ...validReport,
+        afterTyping: { ...validReport.afterTyping, jsHeapBytes: null },
+      }),
+    ).toBe(true)
+    expect(
+      isWebviewToHost({
+        ...validReport,
+        afterScroll: { ...validReport.afterScroll, jsHeapBytes: -5 },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...validReport,
+        afterScroll: { ...validReport.afterScroll, jsHeapBytes: '12' },
+      }),
+    ).toBe(false)
+  })
+
   it('view.state 接受新增装饰诊断可选字段，拒绝类型错误', () => {
     expect(
       isWebviewToHost({

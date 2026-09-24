@@ -247,6 +247,8 @@ export interface PerfSnapshot {
   headingLineCount: number
   /** .oile-heading-inview 元素数（间接装饰渲染结果） */
   inviewHeadingCount: number
+  /** #15：webview JS 堆已用字节数（Chromium performance.memory）；环境不支持为 null */
+  jsHeapBytes?: number | null
 }
 
 /** 阅读视图性能快照（#7）：一次观测时点的挂载与滚动状态 */
@@ -259,6 +261,8 @@ export interface ReadingPerfSnapshot {
   scrollTopPx: number
   /** 容器 scrollHeight（px） */
   scrollHeightPx: number
+  /** #15：webview JS 堆已用字节数（Chromium performance.memory）；环境不支持为 null */
+  jsHeapBytes?: number | null
 }
 
 /** 图片槽位状态计数（#10：图片生命周期观测，当前视图内计数） */
@@ -418,13 +422,19 @@ function isSerChangeArray(v: unknown): v is SerChange[] {
   return Array.isArray(v) && v.every(isSerChange)
 }
 
+/** #15：可选 JS 堆读数字段——缺省（旧探针）或 null（环境不支持）均合法，非正整数拒绝 */
+function isOptionalJsHeap(v: unknown): boolean {
+  return v === undefined || v === null || (typeof v === 'number' && Number.isSafeInteger(v) && v > 0)
+}
+
 function isPerfSnapshot(v: unknown): v is PerfSnapshot {
   return (
     isObject(v) &&
     isNonNegativeInt(v.renderedLines) &&
     isNonNegativeInt(v.contentDomCount) &&
     isNonNegativeInt(v.headingLineCount) &&
-    isNonNegativeInt(v.inviewHeadingCount)
+    isNonNegativeInt(v.inviewHeadingCount) &&
+    isOptionalJsHeap(v.jsHeapBytes)
   )
 }
 
@@ -506,7 +516,8 @@ function isReadingPerfSnapshot(v: unknown): v is ReadingPerfSnapshot {
     isNonNegativeInt(v.mountedBlocks) &&
     isNonNegativeInt(v.contentDomCount) &&
     isNonNegativeNumber(v.scrollTopPx) &&
-    isNonNegativeNumber(v.scrollHeightPx)
+    isNonNegativeNumber(v.scrollHeightPx) &&
+    isOptionalJsHeap(v.jsHeapBytes)
   )
 }
 

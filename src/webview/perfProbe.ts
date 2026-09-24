@@ -37,6 +37,17 @@ export interface PerfReport {
   headingStats: { totalUpdates: number; lastUpdateScannedLines: number; fullBuildLines: number }
 }
 
+/**
+ * #15：读取 webview JS 堆已用字节数。Chromium 的 performance.memory 为非标准
+ * API（Electron 宿主可用；jsdom 等环境无此 API 返回 null）。读数为采样值，
+ * 未强制 GC——数值含基线噪声，仅作跨档位对比的工程口径。
+ */
+export function readUsedJsHeapBytes(): number | null {
+  const memory = (performance as { memory?: { usedJSHeapSize?: unknown } }).memory
+  const bytes = memory?.usedJSHeapSize
+  return typeof bytes === 'number' && Number.isSafeInteger(bytes) && bytes > 0 ? bytes : null
+}
+
 function snapshot(view: EditorView): PerfSnapshot {
   const content = view.dom.querySelector('.cm-content')
   const count = (selector: string): number =>
@@ -46,6 +57,7 @@ function snapshot(view: EditorView): PerfSnapshot {
     contentDomCount: content ? content.querySelectorAll('*').length : 0,
     headingLineCount: count('.oile-heading-line'),
     inviewHeadingCount: count('.oile-heading-inview'),
+    jsHeapBytes: readUsedJsHeapBytes(),
   }
 }
 

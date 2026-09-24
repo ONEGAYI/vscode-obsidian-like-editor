@@ -75,6 +75,7 @@ async function poll<T>(
   label: string,
   fn: () => T | undefined | Promise<T | undefined>,
   timeoutMs = 30000,
+  intervalMs = 150,
 ): Promise<T> {
   const start = Date.now()
   for (;;) {
@@ -85,7 +86,7 @@ async function poll<T>(
     if (Date.now() - start > timeoutMs) {
       throw new Error(`等待超时：${label}`)
     }
-    await new Promise((r) => setTimeout(r, 150))
+    await new Promise((r) => setTimeout(r, intervalMs))
   }
 }
 
@@ -140,13 +141,22 @@ export async function run(): Promise<void> {
         | undefined
       return state?.found && state.panels.some((p) => p.ready) ? state : undefined
     })
+    // #15 模式切换档位：live → reading（细粒度轮询压缩计时量化误差）
+    const switchPollMs = 25
     await vscode.commands.executeCommand(CMD.toggleViewMode)
-    const readingView = await poll(`阅读模式虚拟化 ${readingFile}`, async () => {
-      const v = (await vscode.commands.executeCommand(CMD.viewState, readingUri.toString())) as
-        | (ViewState & ReadingViewState)
-        | undefined
-      return v?.viewMode === 'reading' && v.readingVirtualized === true ? v : undefined
-    })
+    const tToReading = Date.now()
+    const readingView = await poll(
+      `阅读模式虚拟化 ${readingFile}`,
+      async () => {
+        const v = (await vscode.commands.executeCommand(CMD.viewState, readingUri.toString())) as
+          | (ViewState & ReadingViewState)
+          | undefined
+        return v?.viewMode === 'reading' && v.readingVirtualized === true ? v : undefined
+      },
+      30000,
+      switchPollMs,
+    )
+    const toReadingMs = Date.now() - tToReading
     const readingReport = (await vscode.commands.executeCommand(
       CMD.readingPerf,
       readingUri.toString(),
@@ -155,6 +165,21 @@ export async function run(): Promise<void> {
     if (!readingReport || readingReport.ok !== true) {
       throw new Error(`阅读探针无报告：${readingFile}`)
     }
+    // #15 模式切换档位：reading → live（CM6 重建完成判据：viewMode=live 且已渲染行）
+    await vscode.commands.executeCommand(CMD.toggleViewMode)
+    const tToLive = Date.now()
+    await poll(
+      `切回 live ${readingFile}`,
+      async () => {
+        const v = (await vscode.commands.executeCommand(CMD.viewState, readingUri.toString())) as
+          | (ViewState & ReadingViewState)
+          | undefined
+        return v?.viewMode === 'live' && (v.renderedLines ?? 0) > 0 ? v : undefined
+      },
+      30000,
+      switchPollMs,
+    )
+    const toLiveMs = Date.now() - tToLive
     sampleStore[size]!['reading'] = {
       file: readingFile,
       totalBlocks: readingView.readingTotalBlocks,
@@ -163,7 +188,9 @@ export async function run(): Promise<void> {
       parseCount: readingView.readingParseCount,
       report: readingReport,
     }
+    sampleStore[size]!['modeSwitch'] = { toReadingMs, toLiveMs, pollIntervalMs: switchPollMs }
     console.log(`[perf] ${size} 阅读视图：块模型 ${readingReport.totalBlocks}，挂载基线 ${readingReport.baseline.mountedBlocks}，滚动后 ${readingReport.afterScroll.mountedBlocks}，解析 ${readingReport.parseCount} 次，最大挂载 ${readingReport.maxMountedBlocks}`)
+    console.log(`[perf] ${size} 模式切换：→reading ${toReadingMs}ms，→live ${toLiveMs}ms（轮询粒度 ${switchPollMs}ms）`)
     await vscode.commands.executeCommand('workbench.action.closeAllEditors')
   }
 
