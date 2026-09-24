@@ -88,12 +88,33 @@ describe('mapChangeThroughChanges', () => {
     expect(mapChangeThroughChanges({ offset: 8, length: 4, text: 'x' }, applied)).toBeNull()
   })
 
-  it('编辑区间完全包含已应用删除区间也返回 null（to 端点被覆盖）', () => {
+  it('编辑区间包含已应用删除区间仍属真实重叠', () => {
     const applied = [[{ offset: 4, length: 6, text: '' }]] // 删除 [4,10)
-    // 编辑 [2,12)：from=2 与 to=12 都在区间外，但区间横跨删除
-    // ——按保守规则，端点可映射则允许（等价于替换掉已删除区域），此处应得到平移区间
-    const mapped = mapChangeThroughChanges({ offset: 2, length: 10, text: 'x' }, applied)
-    expect(mapped).toEqual({ offset: 2, length: 4, text: 'x' })
+    expect(mapChangeThroughChanges({ offset: 2, length: 10, text: 'x' }, applied)).toBeNull()
+  })
+
+  it('本地删除与已应用外部替换同区间时返回 null', () => {
+    const applied = [[{ offset: 1, length: 1, text: '外' }]]
+    expect(mapChangeThroughChanges({ offset: 1, length: 1, text: '' }, applied)).toBeNull()
+  })
+
+  it('本地区间跨过外部插入点时返回 null，避免删除新增字', () => {
+    const applied = [[{ offset: 2, length: 0, text: '外' }]]
+    expect(mapChangeThroughChanges({ offset: 1, length: 2, text: '' }, applied)).toBeNull()
+    expect(mapChangeThroughChanges({ offset: 2, length: 1, text: '' }, applied)).toBeNull()
+  })
+
+  it('与外部替换仅端点相邻时仍能重定位', () => {
+    const applied = [[{ offset: 1, length: 1, text: '外部' }]]
+    expect(mapChangeThroughChanges({ offset: 2, length: 1, text: 'B' }, applied))
+      .toEqual({ offset: 3, length: 1, text: 'B' })
+    expect(mapChangeThroughChanges({ offset: 0, length: 1, text: 'A' }, applied))
+      .toEqual({ offset: 0, length: 1, text: 'A' })
+  })
+
+  it('同点双插入不把外部新增文本当作本地替换范围', () => {
+    const applied = [[{ offset: 1, length: 0, text: '外' }]]
+    expect(mapChangeThroughChanges({ offset: 1, length: 0, text: '我' }, applied)).toBeNull()
   })
 
   it('空已应用列表恒等', () => {
