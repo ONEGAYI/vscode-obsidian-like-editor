@@ -68,6 +68,12 @@ export type SessionNotice =
 export interface DocumentSessionOptions {
   docUri?: string
   onNotice?: (notice: SessionNotice) => void
+  /** #38 面板视图状态回报回调：view.state 缓存后触发（宿主维护
+   *  vsidian.activeMode context 与初始 reading 恢复决策的数据源） */
+  onViewState?: (
+    sessionId: string,
+    state: Extract<WebviewToHost, { kind: 'view.state' }>,
+  ) => void
 }
 
 interface PendingEdit {
@@ -306,6 +312,7 @@ export class DocumentSession {
       }
       case 'view.state':
         panel.lastViewState = message
+        this.options.onViewState?.(sessionId, message)
         return Promise.resolve()
       case 'link.activate': {
         // #10 链接跳转意图：校验归属与 ready 后交面板端口执行。只读交互，

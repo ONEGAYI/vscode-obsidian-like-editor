@@ -121,10 +121,20 @@ class FakeDoc implements HostDocumentPort {
 
 function setup(
   text = '# 标题\n正文内容',
-  opts?: { onNotice?: (notice: SessionNotice) => void },
+  opts?: {
+    onNotice?: (notice: SessionNotice) => void
+    onViewState?: (
+      sessionId: string,
+      state: Extract<WebviewToHost, { kind: 'view.state' }>,
+    ) => void
+  },
 ) {
   const doc = new FakeDoc(text)
-  const session = new DocumentSession(doc, { docUri: DOC_URI, onNotice: opts?.onNotice })
+  const session = new DocumentSession(doc, {
+    docUri: DOC_URI,
+    onNotice: opts?.onNotice,
+    onViewState: opts?.onViewState,
+  })
   doc.onDocChanged((changes, version) => session.handleDocChanged(changes, version))
   const sent = new Map<string, HostToWebview[]>()
   const attach = (): string => {
@@ -524,6 +534,34 @@ describe('view.state 诊断缓存', () => {
     })
     expect(s.session.getViewState(id)).toMatchObject({ renderedLines: 12, text: '# t' })
     expect(s.session.getViewState('other')).toBeUndefined()
+  })
+})
+
+describe('view.state 回报回调（#38 模式编排数据源）', () => {
+  it('view.state 缓存后触发 onViewState：携带 sessionId 与完整回报', async () => {
+    const seen: Array<{ sessionId: string; viewMode?: string }> = []
+    const s = setup('# 标题\n', {
+      onViewState: (sessionId, state) => seen.push({ sessionId, viewMode: state.viewMode }),
+    })
+    const id = s.attach()
+    await readyPanel(s, id)
+    await s.send(id, {
+      kind: 'view.state',
+      text: '# 标题\n',
+      docLength: 5,
+      lineCount: 2,
+      renderedLines: 2,
+      viewMode: 'reading',
+    })
+    expect(seen).toEqual([{ sessionId: id, viewMode: 'reading' }])
+    // 未注入回调时不产生副作用（缺省可选）
+    const plain = setup('# 标题\n')
+    const pid = plain.attach()
+    await readyPanel(plain, pid)
+    await plain.send(pid, {
+      kind: 'view.state', text: '# 标题\n', docLength: 5, lineCount: 2, renderedLines: 2,
+    })
+    expect(plain.session.getViewState(pid)).toBeDefined()
   })
 })
 

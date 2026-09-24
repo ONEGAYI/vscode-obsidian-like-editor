@@ -58,36 +58,17 @@ body {
   background-color: var(--vscode-editor-lineHighlightBackground, rgba(128, 128, 128, 0.12));
 }
 
-/* ---- 模式切换（#6）：live 容器 / 工具栏 ----
+/* ---- 模式切换（#6）：live 容器 ----
    .vsidian-view-live 为 live 视图稳定容器类（Obsidian 对应
-   .markdown-source-view.mod-cm6；映射见 docs/design/obsidian-selector-map.md） */
+   .markdown-source-view.mod-cm6；映射见 docs/design/obsidian-selector-map.md）。
+   #38 起 webview 内切换工具栏已移除（入口迁移宿主标题栏命令），
+   容器占满全高、不再为工具栏扣减 */
 #app .vsidian-view-live .cm-editor {
   height: 100%;
 }
 
 #app .vsidian-view-live {
-  height: calc(100% - 30px);
-}
-
-/* 切换工具栏：按钮与宿主命令走同一状态机 */
-.vsidian-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 30px;
-  padding: 0 10px;
-  box-sizing: border-box;
-  border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
-}
-
-.vsidian-toolbar .vsidian-mode-toggle {
-  font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size, 13px);
-  padding: 1px 10px;
-  cursor: pointer;
-  color: var(--vscode-button-secondaryForeground);
-  background-color: var(--vscode-button-secondaryBackground);
-  border: none;
+  height: 100%;
 }
 
 /* ---- Live Preview 语法装饰（#8：标题之外的覆盖语法）----
