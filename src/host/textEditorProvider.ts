@@ -879,7 +879,7 @@ export function createTextEditorProvider(
         return true
       },
     ),
-    )
+  )
   }
 
   return provider

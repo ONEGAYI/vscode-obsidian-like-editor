@@ -343,7 +343,6 @@ export class WebviewSyncController {
   private hostDarkApplied: boolean | undefined
   /** body 主题 class 观察者：宿主切换明暗主题时热跟随 */
   private hostThemeObserver: MutationObserver | undefined
-  /** 当前降级档位（视口最大行号十进制位数；-1 = 未初始化，触发首次计算） */
 
   // ---- 冲突暂停状态（#4）----
   /** 暂停写回：保留本地文本、忽略外部增量、不再发送 edit.request */

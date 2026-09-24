@@ -3099,17 +3099,21 @@ export const cases: Array<[string, () => Promise<void>]> = [
         '若为 block 说明 CSP 拦截了 style-mod 注入的样式表）')
     assert(on.paint?.gutterUserSelect === 'none',
       `行号栏应禁选（user-select 应为 none，实际 ${String(on.paint?.gutterUserSelect)}）`)
-    // 光标明暗自适应（深色主题黑底黑光标回归）：本扩展未启用 drawSelection，
-    // CM6 光标即原生 caret；dark 声明须随宿主主题 class 激活（Dark+ 宿主
-    // body 带 vscode-dark），caret 颜色由 baseTheme 内建变体接管而非黑默认
+    // 光标明暗自适应（深色主题黑底黑光标回归）：断言 dark 声明与 caret
+    // 变体联动，不依赖测试宿主默认主题——浅色/深色宿主下均自洽成立
+    const dark = on.paint?.darkTheme
     const caret = on.paint?.caretColor ?? null
-    console.log(`[P0] darkTheme=${String(on.paint?.darkTheme)}，caret-color=${String(caret)}`)
-    assert(on.paint?.darkTheme === true,
-      `深色宿主应激活 CM6 dark 声明（darkTheme=${String(on.paint?.darkTheme)}；` +
-        '若为 false 说明 body 主题 class 判定或热跟随装配失效，见 syncController.isVscodeDarkBody）')
+    console.log(`[P0] darkTheme=${String(dark)}，caret-color=${String(caret)}`)
+    assert(typeof dark === 'boolean', `dark 声明应为布尔（实际 ${String(dark)}）`)
     assert(caret !== null, 'caret-color 计算值应可读（caretColor 不应为 null）')
-    assert(caret !== 'rgb(0, 0, 0)' && caret !== '#000000' && caret !== '#000',
-      `深色宿主 caret 应为 baseTheme dark 变体（white）而非黑默认（实际 ${caret}）`)
+    if (dark) {
+      assert(caret === 'rgb(255, 255, 255)' || caret === '#ffffff' || caret === '#fff',
+        `dark 声明激活时 caret 应为 baseTheme dark 变体 white（实际 ${caret}；` +
+          '非白说明明暗声明未接管 caret 颜色——黑底黑光标回归）')
+    } else {
+      assert(caret === 'rgb(0, 0, 0)' || caret === '#000000' || caret === '#000',
+        `light 声明时 caret 应为 baseTheme light 变体 black（实际 ${caret}）`)
+    }
 
     // 差分自证：关闭行号后正文仍可见（度量在两态下均有效）
     const okSet = (await vscode.commands.executeCommand(CMD.setSettings, {

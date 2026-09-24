@@ -52,17 +52,21 @@ describe('行号列布局与 main.css 的一致（#34 流内列改造后）', ()
     expect(Number.parseFloat(formula[3]!)).toBe(12)
   })
 
-  it('行号垂直锚定首个视觉行：禁用折行块居中，顶部补偿公式在场', () => {
+  it('行号垂直锚定首个视觉行：禁用折行块居中，顶部补偿公式完整在场', () => {
     const rule = css.match(/\.cm-gutterElement\s*\{[^}]*\}/g)
     expect(rule, '.cm-gutterElement 规则应存在').toBeTruthy()
     const block = rule![0]!
     expect(block, '行号单元格不得垂直居中于整块（应锚定首个视觉行）').not.toMatch(
       /align-items:\s*center/,
     )
+    // 钉完整公式（两侧同为 1.5 行高比）：被减项 = 1.5 × 行号行高（与字号
+    // 公式同源的 0.75/12 上限），整体半差补偿——只改其中一侧会漏检错位
     expect(
       block,
-      '行号单元格应有首视觉行居中的 padding-top 补偿公式',
-    ).toMatch(/padding-top:\s*calc\(\s*\(1\.5 \* var\(--vsidian-content-font-size\)/)
+      '行号单元格应有完整的首视觉行 padding-top 半差补偿公式',
+    ).toMatch(
+      /padding-top:\s*calc\(\s*\(1\.5 \* var\(--vsidian-content-font-size[^)]*\)\s*-\s*1\.5 \* min\(0\.75 \* var\(--vsidian-content-font-size[^)]*\),\s*12px\)\)\s*\/\s*2/,
+    )
   })
 
   it('降级机制不得复活：无 scaleX 压缩、无 --vsidian-ln-scale 变量', () => {

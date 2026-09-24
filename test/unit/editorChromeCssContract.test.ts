@@ -7,7 +7,7 @@
 // 另以源文本钉子守住 main.css 不回退到硬编码颜色方案。
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { EditorView } from '@codemirror/view'
 import {
   WebviewSyncController,
@@ -90,12 +90,20 @@ describe('CM6 dark 声明随宿主主题热跟随', () => {
     expect(darkFacet(controller!)).toBe(false)
   })
 
-  it('dispose 后不再跟随主题变化（观察者已断开）', async () => {
-    controller!.dispose()
-    controller = undefined
-    document.body.classList.add('vscode-dark')
-    await settle()
-    // dispose 后 getView 为空，无从观察 facet——以不再抛错/无残留副作用为过
+  it('dispose 后不再跟随主题变化（观察者已断开、view 已销毁）', async () => {
+    const disconnectSpy = vi.spyOn(MutationObserver.prototype, 'disconnect')
+    const c = controller!
+    try {
+      c.dispose()
+      controller = undefined
+      expect(disconnectSpy, 'dispose 应断开 body 主题观察者').toHaveBeenCalled()
+      expect(c.getView(), 'dispose 后 EditorView 应已销毁').toBeUndefined()
+      // 断开后主题变化不应再触发任何跟随（此处仅验证无异常路径）
+      document.body.classList.add('vscode-dark')
+      await settle()
+    } finally {
+      disconnectSpy.mockRestore()
+    }
   })
 })
 

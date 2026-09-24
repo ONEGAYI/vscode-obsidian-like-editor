@@ -40,6 +40,9 @@
 | [#28](https://github.com/ONEGAYI/vsidian/issues/28) | live 渲染链接单击跳转缺陷 | 无 |
 | [#29](https://github.com/ONEGAYI/vsidian/issues/29) | 活动位置 Markdown 标记呈现规则待决策 | 无 |
 | [#30](https://github.com/ONEGAYI/vsidian/issues/30) | 阅读模式标题字号过大，与实时预览不一致 | 无 |
+| [#32](https://github.com/ONEGAYI/vsidian/issues/32) | 统一实时预览与阅读模式的基础排版 | 无 |
+| [#33](https://github.com/ONEGAYI/vsidian/issues/33) | 增加 Vsidian 独立设置页面 | 无 |
+| [#34](https://github.com/ONEGAYI/vsidian/issues/34) | 实时预览显示可开关的源文件行号 | #32、#33 |
 
 ## 后续路线
 

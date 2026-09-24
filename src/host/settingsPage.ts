@@ -127,7 +127,8 @@ function buildSettingsPageHtml(webview: vscode.Webview, extensionUri: vscode.Uri
   )
   const csp = [
     `default-src 'none'`,
-    `img-src ${webview.cspSource} https:`,
+    // 本页无图片资源（视图全 createElement/textContent），不放行远程图源
+    `img-src ${webview.cspSource}`,
     `script-src ${webview.cspSource} 'nonce-${nonce}'`,
     `style-src ${webview.cspSource}`,
   ].join('; ')

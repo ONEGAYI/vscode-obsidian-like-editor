@@ -350,7 +350,10 @@ export interface CssProbeReport {
   readingWikilinkDecorationColor: string | null
 }
 
-/** #34 行号栏观测（view.state 扩展字段）：开关生效态与视口内渲染结果 */
+/** #34 行号栏观测（view.state 扩展字段）：开关生效态与视口内渲染结果。
+ *  口径注意：采集不判 viewMode——reading 态 liveWrapper 仅 display:none
+ *  而 DOM 仍在，count/first/last 仍统计隐藏的 live gutter（与 TypographyProbe
+ *  对隐藏侧的显式声明同理），不得据此断言"reading 态行号在渲染"。 */
 export interface LineGutterProbe {
   /** 设置开关生效态（快照缺键时为定义默认 true） */
   on: boolean
@@ -372,7 +375,9 @@ export interface LineGutterProbe {
  * jsdom 无布局能力（rect 恒 0），textVisible 恒 false，不作单测断言依据。
  */
 export interface PaintProbe {
-  /** 首个含文本行：首字符 rect 在视口内且 elementFromPoint 命中内容区 */
+  /** 首个含文本行：首字符 rect 在视口内且 elementFromPoint 命中内容区。
+   *  覆盖物（冲突暂停横幅、查找面板等绝对定位元素）遮挡首 8 行文本时同样
+   *  返回 false——失败排障时先排除覆盖物再怀疑 CSP 样式失效 */
   textVisible: boolean
   /** `.cm-scroller` computed display：CM6 baseTheme 存活时为 'flex' */
   scrollerDisplay: string | null
