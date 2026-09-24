@@ -25,6 +25,9 @@ import {
   livePreviewDecorations,
 } from '../../src/webview/liveDecorations'
 import { tableEditing, tablePipeKeyHandler } from '../../src/webview/tableEditing'
+import { splitTableRowCells, tableRowCellsForColumns } from '../../src/webview/tableCells'
+import { splitReadingBlocks } from '../../src/webview/readingBlocks'
+import { createReadingBlockElement } from '../../src/webview/readingView'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
 import { DocumentSession, type HostDocumentPort } from '../../src/host/documentSession'
 import type { HostToWebview, SerChange, WebviewToHost } from '../../src/shared/protocol'
@@ -225,8 +228,13 @@ describe('live 表格装饰', () => {
       .toHaveLength(2)
   })
 
-  it('两列合法表格的纯空白数据行仍呈现两格网格', () => {
-    const doc = 'a|b\n---|---\n | \n'
+  it.each([
+    ['a|b', '---|---', ' | ', 2],
+    ['a|b|c', '---|---|---', ' | | ', 3],
+    ['a|b|c|d', '---|---|---|---', ' | | | ', 4],
+    ['| a | b | c |', '| --- | --- | --- |', '| | | |', 3],
+  ])('合法表格 %s / %s / %s 保持 %i 格网格', (header, delimiter, row, count) => {
+    const doc = `${header}\n${delimiter}\n${row}\n`
     const set = build(doc, { anchor: doc.length })
     expect(textsFor(set, LIVE_CLASS_NAMES.tableGridRow, doc)).toHaveLength(2)
     const view = new EditorView({
@@ -234,7 +242,34 @@ describe('live 表格装饰', () => {
       state: EditorState.create({ doc, extensions: [livePreviewDecorations], selection: EditorSelection.single(doc.length) }),
     })
     expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]
-      ?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(2)
+      ?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(count)
+    view.destroy()
+  })
+
+  it.each([2, 3])('同一无边界空白行在 %i 列表格按列数绘制，点击不写回且首次输入维持网格', (columns) => {
+    const header = Array.from({ length: columns }, (_, i) => String.fromCharCode(97 + i)).join('|')
+    const delimiter = Array(columns).fill('---').join('|')
+    const doc = `${header}\n${delimiter}\n | | \n`
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc, extensions: [livePreviewDecorations, tableEditing] }),
+    })
+    const table = splitReadingBlocks(doc).find((block) => block.kind === 'table')!
+    expect(createReadingBlockElement(table, doc).querySelectorAll('tbody td')).toHaveLength(columns)
+    for (let col = 0; col < columns; col++) {
+      const cells = view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')[1]
+        ?.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')
+      expect(cells).toHaveLength(columns)
+      cells![col]!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }))
+      expect(view.state.doc.toString()).toBe(doc)
+      const pos = splitTableRowCells(' | | ', doc.indexOf(' | | '))[col]!.contentFrom
+      view.dispatch({ selection: EditorSelection.single(pos) })
+      view.dispatch({ changes: { from: pos, insert: 'X' }, userEvent: 'input.type' })
+      expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]
+        ?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(columns)
+      expect(view.state.doc.line(3).text).toContain('X')
+      view.dispatch({ changes: { from: view.state.doc.line(3).from, to: view.state.doc.line(3).to, insert: ' | | ' } })
+    }
     view.destroy()
   })
 
@@ -291,6 +326,19 @@ function makeEditView(doc: string, anchor: number): EditorView {
 }
 
 describe('表格单元格 | 键转义钩子', () => {
+  it('省略边界的纯空白行首次键入管道：一笔规范化并转义，网格仍在', () => {
+    const doc = 'a|b|c\n---|---|---\n | | '
+    const pos = doc.length
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc, extensions: [livePreviewDecorations, tableEditing], selection: EditorSelection.single(pos) }),
+    })
+    expect(tablePipeKeyHandler(view)).toBe(true)
+    expect(view.state.doc.line(3).text).toBe('| | | \\||')
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]
+      ?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(3)
+    view.destroy()
+  })
   it('单元格内容中键入 | 写为 \\|（一次 CM6 事务）', () => {
     const view = makeEditView(TABLE_DOC, TABLE_DOC.indexOf('果') + 1)
     expect(tablePipeKeyHandler(view)).toBe(true)
@@ -448,6 +496,28 @@ const settle = async (): Promise<void> => {
 }
 
 describe('单元格编辑权威链路', () => {
+  it.each([
+    [2, 'input.paste'],
+    [3, 'input.type.compose'],
+  ])('%i 列纯空白行末格首次 %s 输入：单笔权威写回并在阅读视图保持目标列', async (columns, userEvent) => {
+    const header = Array.from({ length: columns }, (_, i) => String.fromCharCode(97 + i)).join('|')
+    const delimiter = Array(columns).fill('---').join('|')
+    const source = `${header}\n${delimiter}\n | | \n`
+    const linked = await setupLinked(source)
+    const view = linked.controller.getView()!
+    const pos = tableRowCellsForColumns(' | | ', source.indexOf(' | | '), columns)![columns - 1]!.contentFrom
+    view.dispatch({ selection: EditorSelection.single(pos) })
+    view.dispatch({ changes: { from: pos, insert: 'X' }, userEvent })
+    await settle()
+    expect(linked.doc.getText()).toBe(view.state.doc.toString())
+    expect(linked.hostSent.filter((msg) => msg.kind === 'edit.request')).toHaveLength(1)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]
+      ?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(columns)
+    const table = splitReadingBlocks(linked.doc.getText()).find((block) => block.kind === 'table')!
+    const reading = createReadingBlockElement(table, linked.doc.getText())
+    expect(Array.from(reading.querySelectorAll('tbody td'), (cell) => cell.textContent))
+      .toEqual(Array.from({ length: columns }, (_, i) => i === columns - 1 ? 'X' : ''))
+  })
   it('视图单元格替换 → 权威文档更新 → 保存回读一致 → 再渲染一致', async () => {
     const linked = await setupLinked(TABLE_DOC)
     const view = linked.controller.getView()!

@@ -14,6 +14,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   splitTableRowCells,
+  tableRowCellsForColumns,
+  planBlankRowCellInput,
   parseTableDelimiter,
   needsPipeEscapeAt,
   escapeCellText,
@@ -64,11 +66,49 @@ describe('splitTableRowCells：GFM 单元格切分', () => {
     expect(splitTableRowCells('  | c | d |\t', 0)).toHaveLength(2)
   })
 
-  it('单个管道两侧都是空白时保留两个空单元格', () => {
+  it.each([
+    [' | ', 2],
+    [' | | ', 3],
+    [' | | | ', 4],
+    ['| | |', 2],
+    ['| | | |', 3],
+    ['| | | | |', 4],
+    ['| | | ', 2],
+    [' | | |', 2],
+  ])('纯空白行 %j 按实际边界切为 %i 格', (row, count) => {
+    const cells = splitTableRowCells(row, 20)
+    expect(cells).toHaveLength(count)
+    expect(cells.every((cell) => cell.contentFrom === cell.contentTo)).toBe(true)
+    expect(cells.every((cell) => cell.from >= 20 && cell.to <= 20 + row.length)).toBe(true)
+  })
+
+  it('无边界的两格空白行保留原始区间', () => {
     const cells = splitTableRowCells(' | ', 20)
-    expect(cells).toHaveLength(2)
     expect(cells[0]).toMatchObject({ from: 20, to: 21, contentFrom: 21, contentTo: 21 })
     expect(cells[1]).toMatchObject({ from: 22, to: 23, contentFrom: 23, contentTo: 23 })
+  })
+
+  it('同一纯空白行按表头列数安全截取可编辑源格，格位仍保持原始坐标', () => {
+    expect(tableRowCellsForColumns(' | | ', 20, 2)?.map((cell) => cell.contentFrom)).toEqual([21, 23])
+    expect(tableRowCellsForColumns(' | | ', 20, 3)?.map((cell) => cell.contentFrom)).toEqual([21, 23, 25])
+    expect(tableRowCellsForColumns('x|y|z', 20, 2)).toBeNull()
+    expect(tableRowCellsForColumns(' | | | ', 20, 2)).toBeNull()
+  })
+
+  it('纯空白格首次粘贴含裸管道的文本时先转义，仍保持单格', () => {
+    const edit = planBlankRowCellInput(' | | ', 20, 3, 23, 23, 'x|y')!
+    expect(edit.insert).toBe('| | x\\|y| |')
+    expect(edit.selection).toBe(28)
+  })
+
+  it.each([2, 3])('无边界纯空白行的第 %i 列数首次输入补全源管道和目标格', (columns) => {
+    for (let col = 0; col < columns; col++) {
+      const original = ' | | '
+      const pos = tableRowCellsForColumns(original, 20, columns)![col]!.contentFrom
+      const edit = planBlankRowCellInput(original, 20, columns, pos, pos, 'X')
+      const expected = '|' + Array.from({ length: columns }, (_, index) => ` ${index === col ? 'X' : ''}|`).join('')
+      expect(edit).toEqual({ from: 20, to: 25, insert: expected, selection: 20 + expected.indexOf('X') + 1 })
+    }
   })
 
   it('空单元格：| a || b | 的中间空段是空格零内容单元格', () => {

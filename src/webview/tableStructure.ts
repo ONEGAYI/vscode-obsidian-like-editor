@@ -20,7 +20,7 @@
 //
 // 坐标契约：全文 UTF-16 code unit offset（与协议 SerChange、CM6 同构）；
 // selection 为应用 changes 之后的新文档坐标。
-import { barePipeAt, splitTableRowCells, type TableCellRange } from './tableCells'
+import { barePipeAt, parseTableDelimiter, splitTableRowCells, tableRowCellsForColumns, type TableCellRange } from './tableCells'
 import type { TableEditOp } from '../shared/protocol'
 
 /** 表格行身份（解析树判定后传入；行区间不含换行） */
@@ -117,7 +117,17 @@ export function tableCellNavTarget(
     return null
   }
   const row = rows[i]!
-  const cells = splitTableRowCells(doc.slice(row.lineFrom, row.lineTo), row.lineFrom)
+  const delimiter = rows.find((entry) => entry.kind === 'delimiter')
+  const columns = delimiter
+    ? parseTableDelimiter(doc.slice(delimiter.lineFrom, delimiter.lineTo))?.length
+    : undefined
+  const cellsOf = (entry: TableRowInfo): TableCellRange[] => {
+    const text = doc.slice(entry.lineFrom, entry.lineTo)
+    return columns && entry.kind !== 'delimiter'
+      ? tableRowCellsForColumns(text, entry.lineFrom, columns) ?? splitTableRowCells(text, entry.lineFrom)
+      : splitTableRowCells(text, entry.lineFrom)
+  }
+  const cells = cellsOf(row)
   if (cells.length === 0) {
     return null
   }
@@ -130,7 +140,7 @@ export function tableCellNavTarget(
     if (!next) {
       return null
     }
-    const nextCells = splitTableRowCells(doc.slice(next.lineFrom, next.lineTo), next.lineFrom)
+    const nextCells = cellsOf(next)
     return nextCells.length > 0 ? nextCells[0]!.contentFrom : null
   }
   if (col - 1 >= 0) {
@@ -140,7 +150,7 @@ export function tableCellNavTarget(
   if (!prev) {
     return null
   }
-  const prevCells = splitTableRowCells(doc.slice(prev.lineFrom, prev.lineTo), prev.lineFrom)
+  const prevCells = cellsOf(prev)
   return prevCells.length > 0 ? prevCells[prevCells.length - 1]!.contentTo : null
 }
 

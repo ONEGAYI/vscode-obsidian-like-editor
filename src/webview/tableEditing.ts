@@ -16,14 +16,13 @@
 //   增删行列以单笔 CM6 事务派发 = 单笔 edit.request = 宿主撤销一次
 // - #43 悬停控件由 tableControls.ts 只按可见 DOM 行构建；拖排行的纯规划
 //   在 tableStructure.ts，松手时仍经本模块单笔 CM6 事务写回
-import { EditorSelection } from '@codemirror/state'
+import { EditorSelection, EditorState, Transaction } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import type { Command } from '@codemirror/view'
-import type { EditorState } from '@codemirror/state'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import type { TableEditOp } from '../shared/protocol'
 import { liveDecorationsField } from './liveDecorations'
-import { needsPipeEscapeAt } from './tableCells'
+import { needsPipeEscapeAt, parseTableDelimiter, planBlankRowCellInput, tableRowCellsForColumns } from './tableCells'
 import { planTableEdit, planTableRowMove, tableCellNavTarget, type TableRowInfo } from './tableStructure'
 import { createTableControls } from './tableControls'
 import { planCreateTable } from './tableCreate'
@@ -67,6 +66,14 @@ export const tablePipeKeyHandler: Command = (view: EditorView): boolean => {
   const field = state.field(liveDecorationsField, false)
   if (!field) {
     return false
+  }
+  if (state.selection.ranges.length === 1) {
+    const range = state.selection.main
+    const plan = blankRowInputPlan(state, range.from, range.to, '\\|')
+    if (plan) {
+      view.dispatch({ changes: plan, selection: { anchor: plan.selection } })
+      return true
+    }
   }
   const changes: Array<{ from: number; to?: number; insert: string }> = []
   for (const range of state.selection.ranges) {
@@ -143,6 +150,41 @@ export function tableRowsAt(state: EditorState, pos: number, tree: Tree): TableR
   }
   return rows.length >= 2 ? rows.sort((a, b) => a.lineFrom - b.lineFrom) : null
 }
+
+function blankRowInputPlan(state: EditorState, from: number, to: number, text: string) {
+  const line = state.doc.lineAt(from)
+  if (!line.text.includes('|') || !/^[\s|]+$/.test(line.text)) return null
+  const field = state.field(liveDecorationsField, false)
+  if (!field) return null
+  const rows = tableRowsAt(state, from, field.tree)
+  const delimiter = rows?.find((row) => row.kind === 'delimiter')
+  if (!delimiter || !rows?.some((row) => row.kind === 'row' && row.lineFrom === line.from)) return null
+  const columns = parseTableDelimiter(state.doc.sliceString(delimiter.lineFrom, delimiter.lineTo))?.length
+  if (!columns || rows.some((row) => row.kind !== 'delimiter' &&
+      !tableRowCellsForColumns(state.doc.sliceString(row.lineFrom, row.lineTo), row.lineFrom, columns))) return null
+  return planBlankRowCellInput(line.text, line.from, columns, from, to, text)
+}
+
+/** 普通键入、粘贴与 IME 首次写入空白行时，一笔事务补齐边界并写入目标格。 */
+const normalizeBlankRowInput = EditorState.transactionFilter.of((tr) => {
+  if (!tr.isUserEvent('input') || tr.changes.empty) return tr
+  let change: { from: number; to: number; text: string } | null = null
+  let multiple = false
+  tr.changes.iterChanges((from, to, _fromB, _toB, insert) => {
+    if (change) multiple = true
+    change = { from, to, text: insert.toString() }
+  })
+  if (multiple || !change) return tr
+  const { from, to, text } = change
+  const plan = blankRowInputPlan(tr.startState, from, to, text)
+  if (!plan) return tr
+  const event = tr.annotation(Transaction.userEvent)
+  return {
+    changes: plan,
+    selection: { anchor: plan.selection },
+    annotations: event ? Transaction.userEvent.of(event) : undefined,
+  }
+})
 
 /** 导航前置解析：全部 range（须为空光标）都在表格单元格序列上时返回目标数组 */
 function navTargetsOf(view: EditorView, forward: boolean): number[] | null {
@@ -276,6 +318,7 @@ const tableControls = createTableControls({ tableRowsAt, runTableEditAt, runTabl
 
 /** 装配扩展：键盘编辑、导航及可见表格控件共用 CM6 文本事务 */
 export const tableEditing = [
+  normalizeBlankRowInput,
   keymap.of([{ key: '|', run: tablePipeKeyHandler }]),
   keymap.of([{ key: 'Tab', run: tableTabForward, shift: tableTabBackward }]),
   tableControls,

@@ -146,13 +146,13 @@ export function splitTableRowCells(lineText: string, lineStart: number): TableCe
     }
   }
   segs.push({ from: segStart, to: lineText.length })
-  // 单个管道两侧都是实际空白（` | `）表示两个空单元格；没有足够的分隔符
-  // 可以同时把它解释成首尾边界。`|` 本身没有单元格，仍走下方边界裁剪。
-  const twoBlankCells = segs.length === 2 &&
-    segs[0]!.to > segs[0]!.from && segs[1]!.to > segs[1]!.from &&
-    lineText.slice(segs[0]!.from, segs[0]!.to).trim() === '' &&
-    lineText.slice(segs[1]!.from, segs[1]!.to).trim() === ''
-  if (!twoBlankCells) {
+  // 纯空白行且首尾没有实际边界管道时，每段空白都是一个单元格：
+  // ` | ` 为两格，` | | ` 为三格。若行首/行尾有管道，或行内有内容，
+  // 则首尾空白段是边界外的缩进/尾随空白，不计入单元格。
+  const hasContent = segs.some((seg) => lineText.slice(seg.from, seg.to).trim() !== '')
+  const hasEdgePipe = segs[0]!.from === segs[0]!.to ||
+    segs[segs.length - 1]!.from === segs[segs.length - 1]!.to
+  if (hasContent || hasEdgePipe) {
     if (segs.length > 0 && lineText.slice(segs[0]!.from, segs[0]!.to).trim() === '') {
       segs.shift()
     }
@@ -173,6 +173,51 @@ export function splitTableRowCells(lineText: string, lineStart: number): TableCe
       contentTo,
     }
   })
+}
+
+/**
+ * 表格网格需要每个显示格有独立源区间。仅在纯空白且省略边界管道的行上，
+ * 允许按表头列数舍弃多余的尾部空白段；含内容的多列行仍拒绝映射。
+ */
+export function tableRowCellsForColumns(
+  lineText: string,
+  lineStart: number,
+  columns: number,
+): TableCellRange[] | null {
+  const cells = splitTableRowCells(lineText, lineStart)
+  if (cells.length === columns) return cells
+  if (columns > 0 && cells.length === columns + 1 && /^[\s|]+$/.test(lineText) &&
+      lineText[0] !== '|' && lineText[lineText.length - 1] !== '|') {
+    return cells.slice(0, columns)
+  }
+  return null
+}
+
+/** 首次写入无边界纯空白行时，在同一事务中规范化为显式边界并填目标格。 */
+export function planBlankRowCellInput(
+  lineText: string,
+  lineStart: number,
+  columns: number,
+  from: number,
+  to: number,
+  insert: string,
+): { from: number; to: number; insert: string; selection: number } | null {
+  if (from !== to || !insert || insert.includes('\n') || !/^[\s|]+$/.test(lineText) ||
+      lineText[0] === '|' || lineText[lineText.length - 1] === '|') return null
+  const cells = tableRowCellsForColumns(lineText, lineStart, columns)
+  if (!cells) return null
+  const column = cells.findIndex((cell) => cell.contentFrom === from)
+  if (column < 0) return null
+  const canonical = '|' + ' |'.repeat(columns)
+  const target = splitTableRowCells(canonical, lineStart)[column]!.contentFrom
+  const relative = target - lineStart
+  const escaped = escapeCellText(insert)
+  return {
+    from: lineStart,
+    to: lineStart + lineText.length,
+    insert: canonical.slice(0, relative) + escaped + canonical.slice(relative),
+    selection: target + escaped.length,
+  }
 }
 
 /**

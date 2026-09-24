@@ -75,6 +75,13 @@ const at = (needle: string, from = 0): number => DOC.indexOf(needle, from)
 // ---- Tab / Shift+Tab 导航目标 ----
 
 describe('tableCellNavTarget：单元格导航目标', () => {
+  it('两列空白行的 Tab 只遍历网格实际两格，不进入被截断的尾部空白', () => {
+    const doc = 'a|b\n---|---\n | | '
+    const rows = rowsOf(doc, [0, 1, 2], ['header', 'delimiter', 'row'])
+    const start = doc.lastIndexOf(' | | ')
+    expect(tableCellNavTarget(doc, rows, start + 1, true)).toBe(start + 3)
+    expect(tableCellNavTarget(doc, rows, start + 3, true)).toBeNull()
+  })
   it('Tab：单元格内光标 → 下一单元格内容首', () => {
     // '| 苹果 | 3 | 甲 |' 中「苹果」首字符后
     const p = at('苹果') + 1
