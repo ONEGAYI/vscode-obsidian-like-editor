@@ -3,7 +3,7 @@
 // 拒绝）、自家编辑确认（edit.ack）与外部变更广播（doc.changed）。
 // 权威文档通过 HostDocumentPort 注入（vscode 层实现），此处用假文档驱动。
 import { describe, it, expect } from 'vitest'
-import { DocumentSession, type HostDocumentPort } from '../../src/host/documentSession'
+import { DocumentSession, type HostDocumentPort, type SessionNotice } from '../../src/host/documentSession'
 import type { HostToWebview, SerChange, WebviewToHost } from '../../src/shared/protocol'
 
 function applyToText(text: string, changes: SerChange[]): string {
@@ -23,6 +23,7 @@ class FakeDoc implements HostDocumentPort {
   applyCalls: SerChange[][] = []
   applyResult = true
   fireChangeOnApply = true
+  holdApply = false
   undoCalls = 0
   redoCalls = 0
   private undoStack: { changes: SerChange[]; before: string }[] = []
@@ -46,8 +47,23 @@ class FakeDoc implements HostDocumentPort {
     this.listener = cb
   }
 
+  /** 下一笔 applyChanges 挂起（测试钩子：构造在途 pending 窗口）。
+   *  挂起的调用永不完成（模拟断连/超长在途），测试结束时 release 复位标记 */
+  holdNextApply(): { release: () => void } {
+    this.holdApply = true
+    return {
+      release: () => {
+        this.holdApply = false
+      },
+    }
+  }
+
   async applyChanges(changes: SerChange[]): Promise<boolean> {
     this.applyCalls.push(changes)
+    if (this.holdApply) {
+      await new Promise<void>(() => undefined) // 测试钩子：在途挂起（由测试放弃）
+      return false
+    }
     if (!this.applyResult) return false
     this.undoStack.push({ changes, before: this.content })
     this.redoStack = []
@@ -103,9 +119,12 @@ class FakeDoc implements HostDocumentPort {
   }
 }
 
-function setup(text = '# 标题\n正文内容') {
+function setup(
+  text = '# 标题\n正文内容',
+  opts?: { onNotice?: (notice: SessionNotice) => void },
+) {
   const doc = new FakeDoc(text)
-  const session = new DocumentSession(doc, { docUri: DOC_URI })
+  const session = new DocumentSession(doc, { docUri: DOC_URI, onNotice: opts?.onNotice })
   doc.onDocChanged((changes, version) => session.handleDocChanged(changes, version))
   const sent = new Map<string, HostToWebview[]>()
   const attach = (): string => {
@@ -309,6 +328,25 @@ describe('edit.request 校验与写回', () => {
     expect(s.doc.applyCalls).toHaveLength(0)
   })
 
+  it('C-4：兜底确认后迟到的回流不作为外部变更重复广播', async () => {
+    const s = setup('abcdef')
+    const id = s.attach()
+    await readyPanel(s, id)
+    // 模拟 applyEdit resolve 与回流事件之间的竞态窗口：回流延迟到达
+    s.doc.fireChangeOnApply = false
+    await s.send(id, {
+      kind: 'edit.request', sessionId: id, docUri: DOC_URI, seq: 1, baseVersion: 1,
+      changes: [{ offset: 0, length: 0, text: 'X' }],
+    })
+    // 兜底确认路径已发 ok ack
+    const ack = s.sent.get(id)!.find((m) => m.kind === 'edit.ack')
+    expect(ack).toMatchObject({ seq: 1, ok: true })
+    // 迟到的回流到达：识别为自家确认（已记录），不再广播给面板
+    s.session.handleDocChanged([{ offset: 0, length: 0, text: 'X' }], 2)
+    const broadcasts = s.sent.get(id)!.filter((m) => m.kind === 'doc.changed')
+    expect(broadcasts).toHaveLength(0)
+  })
+
   it('结构非法的消息被静默丢弃', async () => {
     const s = setup()
     const id = s.attach()
@@ -402,6 +440,50 @@ describe('CRLF 文档的换行协调（CM6 端统一 LF）', () => {
       origin: 'external',
     })
   })
+
+  it('C-1：行尾分布变化期间的迟到请求在 LF 空间重定位（LF 形态 no-op 不被当作平移）', async () => {
+    // 宿主 "a\nb\nc" v1 → 外部把第一行行尾改为 CRLF（v2，LF 空间是 no-op）
+    // → 迟到请求基于 v1 在 LF offset 2（'b' 前）插 X，期望 "a\r\nXb\nc"
+    const s = setup('a\nb\nc')
+    const id = s.attach()
+    await readyPanel(s, id)
+    s.doc.content = 'a\r\nb\nc'
+    s.doc.ver++
+    s.session.handleDocChanged([{ offset: 1, length: 1, text: '\r\n' }], 2)
+    await s.send(id, {
+      kind: 'edit.request', sessionId: id, docUri: DOC_URI, seq: 1, baseVersion: 1,
+      changes: [{ offset: 2, length: 0, text: 'X' }],
+    })
+    expect(s.doc.applyCalls).toEqual([[{ offset: 3, length: 0, text: 'X' }]])
+    expect(s.doc.content).toBe('a\r\nXb\nc')
+    const ack = s.sent.get(id)!.find((m) => m.kind === 'edit.ack')
+    expect(ack).toMatchObject({ seq: 1, ok: true })
+  })
+
+  it('C-1：CRLF 化行尾期间的非 no-op 变更同样以 LF 空间重定位（多行尾混合场景）', async () => {
+    // v1 "a\nb\nc\n"（LF）→ v2 外部把前两个行尾统一为 CRLF → 迟到请求在
+    // v1 的 LF offset 5（'c' 后的换行前？即 'c' 与末行尾之间）替换 'c' 为 'Z'
+    const s = setup('a\nb\nc\n')
+    const id = s.attach()
+    await readyPanel(s, id)
+    // 宿主 v2 = "a\r\nb\r\nc\n"：两笔替换（\n → \r\n）
+    s.doc.content = 'a\r\nb\r\nc\n'
+    s.doc.ver++
+    s.session.handleDocChanged(
+      [
+        { offset: 1, length: 1, text: '\r\n' },
+        { offset: 3, length: 1, text: '\r\n' },
+      ],
+      2,
+    )
+    // v1 LF 坐标：'c' 在 offset 4；替换 [4,5) 'c'→'Z'
+    await s.send(id, {
+      kind: 'edit.request', sessionId: id, docUri: DOC_URI, seq: 1, baseVersion: 1,
+      changes: [{ offset: 4, length: 1, text: 'Z' }],
+    })
+    // 宿主 v2 中 'c' 位于 host offset 6；期望 "a\r\nb\r\nZ\n"
+    expect(s.doc.content).toBe('a\r\nb\r\nZ\n')
+  })
 })
 
 describe('view.state 诊断缓存', () => {
@@ -491,6 +573,47 @@ describe('history.request（撤销/重做转发到权威栈）', () => {
   })
 })
 
+describe('B-2：暂停面板重载后的冲突快照来源', () => {
+  async function suspendPanel(s: ReturnType<typeof setup>, id: string) {
+    // 外部覆盖原文区间，使后续基于旧版本的请求不可安全重定位
+    s.doc.content = '外部全文'
+    s.doc.ver++
+    s.session.handleDocChanged([{ offset: 0, length: 2, text: '外部全文' }], s.doc.ver)
+    await s.send(id, {
+      kind: 'edit.request', sessionId: id, docUri: DOC_URI, seq: 1, baseVersion: 1,
+      changes: [{ offset: 0, length: 1, text: '本' }],
+    })
+    expect(s.session.getConflictState(id)?.suspended).toBe(true)
+  }
+
+  it('ready 重发 init 后 reloaded 置位：宿主快照不被重载冲掉，resume 清除标记', async () => {
+    const s = setup('草稿')
+    const id = s.attach()
+    await readyPanel(s, id)
+    await suspendPanel(s, id)
+    // webview 重载（retainContextWhenHidden 关闭）：ready → init 重发权威全文
+    await s.send(id, { kind: 'ready' })
+    const init = s.sent.get(id)!.at(-2)
+    expect(init).toMatchObject({ kind: 'init', text: '外部全文' })
+    const state = s.session.getConflictState(id)!
+    expect(state.reloaded).toBe(true)
+    // 冲突留存（fragments/webviewText）仍可用于复制取回
+    expect(state.fragments).toContain('本')
+    // 恢复：清除标记，面板回归正常
+    s.session.resumePanel(id)
+    const resumed = s.session.getConflictState(id)!
+    expect(resumed.reloaded).toBe(false)
+    expect(resumed.suspended).toBe(false)
+  })
+
+  it('未暂停面板的 reloaded 不影响常规诊断', async () => {
+    const s = setup('abc')
+    const id = s.attach()
+    await readyPanel(s, id)
+    expect(s.session.getConflictState(id)?.reloaded).toBe(false)
+  })
+})
+
 describe('sync.request（webview 发起的全文重同步）', () => {
   it('回复 doc.resync：附当前版本与 LF 化全文', async () => {
     const s = setup('# 标题\r\n正文')
@@ -541,5 +664,75 @@ describe('perf.report 缓存（#5 性能测量通道）', () => {
     await readyPanel(s, id)
     await s.send(id, { ...report, baseline: null } as unknown as WebviewToHost)
     expect(s.session.getLastPerfReport(id)).toBeUndefined()
+  })
+})
+
+describe('P3 修复批：B-4 / B-6 / C-6', () => {
+  async function suspendById(
+    s: ReturnType<typeof setup>,
+    id: string,
+  ): Promise<void> {
+    s.doc.content = '外部全文'
+    s.doc.ver++
+    s.session.handleDocChanged([{ offset: 0, length: 2, text: '外部全文' }], s.doc.ver)
+    await s.send(id, {
+      kind: 'edit.request', sessionId: id, docUri: DOC_URI, seq: 1, baseVersion: 1,
+      changes: [{ offset: 0, length: 1, text: '本' }],
+    })
+    expect(s.session.getConflictState(id)?.suspended).toBe(true)
+  }
+
+  it('B-4：暂停面板的 history.request 被忽略（与 edit.request 一致）', async () => {
+    const s = setup('abc')
+    const id = s.attach()
+    await readyPanel(s, id)
+    await suspendById(s, id)
+    await s.send(id, { kind: 'history.request', op: 'undo' })
+    expect(s.doc.undoCalls).toBe(0)
+  })
+
+  it('B-6：CRLF 文档在途 pending（宿主系）留存片段以 LF 形态入库', async () => {
+    const notices: SessionNotice[] = []
+    const s = setup('# 标题\r\n正文内容\r\n第三行', { onNotice: (n) => notices.push(n) })
+    const id = s.attach()
+    await readyPanel(s, id)
+    const gate = s.doc.holdNextApply() // applyEdit 挂起：pending 处于在途窗口
+    void s.send(id, {
+      kind: 'edit.request', sessionId: id, docUri: DOC_URI, seq: 1, baseVersion: 1,
+      changes: [{ offset: 4, length: 0, text: '第一\n二' }],
+    })
+    await new Promise((r) => setTimeout(r, 0)) // seq1 已 push pending（宿主系 CRLF 文本）并挂起
+    s.session.detachPanel(id) // 关闭面板：未确认输入必须留存通知
+    const notice = notices.find((n) => n.type === 'panel-closed-with-input')
+    expect(notice).toBeDefined()
+    if (notice?.type === 'panel-closed-with-input') {
+      // 片段统一 LF 形态（可读、与 webview 输入一致），不得混入 \r\n
+      expect(notice.fragments).toEqual(['第一\n二'])
+    }
+    gate.release()
+  })
+
+  it('C-6：docUri 不匹配的 conflict.report 被忽略', async () => {
+    const s = setup('abc')
+    const id = s.attach()
+    await readyPanel(s, id)
+    await s.send(id, {
+      kind: 'conflict.report', sessionId: id, docUri: 'file:///other.md', version: 1, text: '他人快照',
+    })
+    expect(s.session.getConflictState(id)?.webviewText).toBeUndefined()
+  })
+
+  it('C-6：docUri 不匹配的 conflict.action 被忽略', async () => {
+    const s = setup('abc')
+    const id = s.attach()
+    await readyPanel(s, id)
+    await suspendById(s, id)
+    const before = s.session.getConflictState(id)
+    expect(before?.suspended).toBe(true)
+    await s.send(id, {
+      kind: 'conflict.action', sessionId: id, docUri: 'file:///other.md', action: 'resume',
+    })
+    // 非本文档的恢复请求不得解除暂停
+    expect(s.session.getConflictState(id)?.suspended).toBe(true)
   })
 })

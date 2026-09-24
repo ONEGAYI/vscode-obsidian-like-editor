@@ -26,12 +26,20 @@ export interface SourceRange {
 /** live 装饰使用的 Markdown 解析器（markdownLanguage 已含 GFM 扩展） */
 export const markdownTreeParser = markdownLanguage.parser
 
+/** frontmatter 判定的有界扫描长度（B-3 截断口径单一事实源：live 装饰与
+ *  阅读切块共用——结束行落在界限外时不识别，两视图一致降级为普通 Markdown） */
+export const FM_SCAN_LIMIT = 8192
+
 /**
  * frontmatter 边界：文档首行恰为 `---`（容许行尾空格），且在第 2 行之后
  * 存在 `---` 或 `...` 结束行时，返回 [0, 结束行行尾) 区间；否则 null
  * （未闭合不视为 frontmatter，按普通 Markdown 处理——两视图同判定）。
+ * 扫描有界（FM_SCAN_LIMIT）：超长头块按未识别降级，两视图同源同判定。
  */
 export function frontmatterRange(text: string): SourceRange | null {
+  if (text.length > FM_SCAN_LIMIT) {
+    text = text.slice(0, FM_SCAN_LIMIT)
+  }
   const lines = text.split('\n')
   const isFenceLine = (line: string): boolean => /^(-{3}|\.{3})\s*$/.test(line)
   if (lines.length < 3 || !isFenceLine(lines[0]!)) {

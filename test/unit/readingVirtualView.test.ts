@@ -337,3 +337,37 @@ describe('VirtualReadingView：动态尺寸变化与生命周期', () => {
     expect(container.children.length).toBe(0)
   })
 })
+
+describe('C-9：setDocument 重建时解除对旧挂载元素的观察', () => {
+  it('清空挂载元素前逐个 unobserve，不留游离观察引用', () => {
+    const observe = vi.fn()
+    const unobserve = vi.fn()
+    class StubObserver {
+      observe = observe
+      unobserve = unobserve
+      disconnect(): void {}
+    }
+    vi.stubGlobal('ResizeObserver', StubObserver)
+    try {
+      const heightSpy = vi
+        .spyOn(HTMLElement.prototype, 'offsetHeight', 'get')
+        .mockReturnValue(36)
+      const container = createReadingContainer()
+      stubClientHeight(container, 400)
+      const view = new VirtualReadingView(container, { bufferPx: 600 })
+      view.setDocument(makeDoc(100))
+      const blockObservations = observe.mock.calls.filter(
+        (args) => args[0] !== container,
+      ).length
+      expect(blockObservations).toBeGreaterThan(0)
+      expect(unobserve.mock.calls.length).toBe(0)
+      // 重建：旧挂载块元素必须先逐个解除观察（observer 对元素是强引用，
+      // 直接丢弃会阻碍回收并可能触发对游离节点的回调）
+      view.setDocument(makeDoc(50))
+      expect(unobserve.mock.calls.length).toBe(blockObservations)
+      heightSpy.mockRestore()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})

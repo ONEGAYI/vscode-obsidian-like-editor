@@ -107,6 +107,44 @@ describe('在途未确认编辑 + 外部增量', () => {
     expect((banner as HTMLElement).style.display).not.toBe('none')
   })
 
+  it('C-3：外部插入点与在途删除区间端点仅相邻：不暂停且映射正确', () => {
+    const { bridge, sent } = makeBridge()
+    const { c } = mount(bridge)
+    init(c, 'abcdef', 1)
+    // 本地删除 [2,4)（'cd'）在途未确认：本地 'abef'
+    c.getView()!.dispatch({ changes: { from: 2, to: 4 } })
+    // 外部插入点在原 offset 4（恰为删除区间右端，相邻不相交）
+    c.handleHostMessage({
+      kind: 'doc.changed',
+      version: 2,
+      origin: 'external',
+      changes: [{ offset: 4, length: 0, text: 'X' }],
+    })
+    // 相邻不算真重叠：正常映射应用（插入点平移到删除点之后），不进入暂停
+    expect(c.getView()!.state.doc.toString()).toBe('abXef')
+    expect(conflictReports(sent)).toHaveLength(0)
+    c.handleHostMessage({ kind: 'view.state.request' })
+    const state = sent.find((m) => m.kind === 'view.state') as { suspended?: boolean }
+    expect(state.suspended).toBeFalsy()
+  })
+
+  it('C-3：外部区间跨过在途插入点（归属二义）仍暂停', () => {
+    const { bridge, sent } = makeBridge()
+    const { c } = mount(bridge)
+    init(c, 'abcdef', 1)
+    // 本地在 offset 2 插入 'ZZ' 在途：本地 'abZZcdef'
+    c.getView()!.dispatch({ changes: { from: 2, insert: 'ZZ' } })
+    // 外部替换 [1,3)（跨过插入点）：本地插入内容归属二义
+    c.handleHostMessage({
+      kind: 'doc.changed',
+      version: 2,
+      origin: 'external',
+      changes: [{ offset: 1, length: 2, text: 'Y' }],
+    })
+    expect(conflictReports(sent)).toHaveLength(1)
+    expect(c.getView()!.state.doc.toString()).toBe('abZZcdef')
+  })
+
   it('映射失败后 ack ok 到达也不推进版本（暂停态忽略一切写回结果）', async () => {
     const { bridge } = makeBridge()
     const { c } = mount(bridge)

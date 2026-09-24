@@ -7,7 +7,8 @@
 // - seq 经 bridge.setState 持久化，webview 重载后继续编号（宿主按 seq 去重）
 import { describe, it, expect } from 'vitest'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
-import type { WebviewToHost } from '../../src/shared/protocol'
+import { DocumentSession, type HostDocumentPort } from '../../src/host/documentSession'
+import type { HostToWebview, SerChange, WebviewToHost } from '../../src/shared/protocol'
 
 const DOC_URI = 'file:///d%3A/notes/a.md'
 
@@ -242,6 +243,177 @@ describe('view.state 诊断', () => {
     expect(msg.docLength).toBe('# 标题\n正文'.length)
     expect(msg.lineCount).toBe(2)
     expect(Number.isInteger(msg.renderedLines)).toBe(true)
+  })
+})
+
+describe('出站与入站的未确认参考系（C-2）', () => {
+  it('未确认期间连续输入：出站坐标逆穿未确认集回到 baseVersion 参考系', () => {
+    const { bridge, sent } = makeBridge()
+    const c = mount(bridge)
+    init(c, 'abcdef', 1)
+    const view = c.getView()!
+    view.dispatch({ changes: { from: 0, insert: 'ZZ' } }) // A：本地 offset 0
+    view.dispatch({ changes: { from: 5, insert: 'X' } }) // B：本地 'd' 前（base 系 offset 3）
+    const reqs = sent.filter((m) => m.kind === 'edit.request') as Extract<
+      WebviewToHost,
+      { kind: 'edit.request' }
+    >[]
+    expect(reqs[1]!.baseVersion).toBe(1)
+    // 出站坐标必须与 baseVersion 同参考系（宿主重定位语义）
+    expect(reqs[1]!.changes).toEqual([{ offset: 3, length: 0, text: 'X' }])
+  })
+
+  it('部分确认后外部增量按正确参考系平移（实证场景转正）', () => {
+    const { bridge } = makeBridge()
+    const c = mount(bridge)
+    init(c, 'abcdef', 1)
+    const view = c.getView()!
+    view.dispatch({ changes: { from: 0, insert: 'ZZ' } }) // A
+    view.dispatch({ changes: { from: 4, insert: 'W' } }) // B：本地 c 前
+    // 权威 v2 = 'ZZabcdef'（A 已应用、B 未确认）。第一笔 ack ok 到达但 B 在途
+    c.handleHostMessage({ kind: 'edit.ack', seq: 1, ok: true, version: 2 })
+    // 外部替换权威 v2 的 'd'（offset 5）为 'D'：期望 'ZZabWcDef'
+    c.handleHostMessage({
+      kind: 'doc.changed',
+      version: 3,
+      origin: 'external',
+      changes: [{ offset: 5, length: 1, text: 'D' }],
+    })
+    expect(c.getView()!.state.doc.toString()).toBe('ZZabWcDef')
+  })
+
+  it('部分确认后外部插入点恰在已确认内容端点：相邻不暂停且映射正确', () => {
+    const { bridge } = makeBridge()
+    const c = mount(bridge)
+    init(c, 'abcdef', 1)
+    const view = c.getView()!
+    view.dispatch({ changes: { from: 0, insert: 'ZZ' } }) // A
+    view.dispatch({ changes: { from: 4, insert: 'W' } }) // B（在途）
+    c.handleHostMessage({ kind: 'edit.ack', seq: 1, ok: true, version: 2 })
+    // 外部在权威 v2 的 ZZ 内容之后（offset 2，端点相邻不重叠）插入 'D'：
+    // 权威 v3 = 'ZZDabcdef'，期望本地同步为 'ZZDabWcdef'
+    c.handleHostMessage({
+      kind: 'doc.changed',
+      version: 3,
+      origin: 'external',
+      changes: [{ offset: 2, length: 0, text: 'D' }],
+    })
+    expect(c.getView()!.state.doc.toString()).toBe('ZZDabWcdef')
+  })
+})
+
+describe('C-2 端到端：未确认期间连续输入经宿主重定位后与本地一致', () => {
+  class InlineDoc implements HostDocumentPort {
+    content: string
+    ver = 1
+    private listener: ((changes: SerChange[], version: number) => void) | undefined
+    constructor(text: string) {
+      this.content = text
+    }
+    onDocChanged(cb: (changes: SerChange[], version: number) => void): void {
+      this.listener = cb
+    }
+    get version(): number {
+      return this.ver
+    }
+    getText(): string {
+      return this.content
+    }
+    async applyChanges(changes: SerChange[]): Promise<boolean> {
+      let out = this.content
+      let shift = 0
+      for (const c of [...changes].sort((a, b) => a.offset - b.offset)) {
+        out = out.slice(0, c.offset + shift) + c.text + out.slice(c.offset + shift + c.length)
+        shift += c.text.length - c.length
+      }
+      this.content = out
+      this.ver++
+      this.listener?.(changes, this.ver)
+      return true
+    }
+    async undo(): Promise<boolean> {
+      return false
+    }
+    async redo(): Promise<boolean> {
+      return false
+    }
+  }
+
+  function setupPair(text: string) {
+    const doc = new InlineDoc(text)
+    const toWebview: HostToWebview[] = []
+    const session = new DocumentSession(doc, { docUri: DOC_URI })
+    doc.onDocChanged((changes, version) => session.handleDocChanged(changes, version))
+    const sessionId = session.attachPanel({ send: (m) => toWebview.push(m) })
+    const bridge: VsCodeBridge = {
+      postMessage: (m) => {
+        void session.handleWebviewMessage(m, sessionId)
+      },
+      getState: <T,>() => undefined as T | undefined,
+      setState: () => undefined,
+    }
+    const controller = new WebviewSyncController(bridge)
+    controller.mount(document.createElement('div'))
+    session.handleWebviewMessage({ kind: 'ready' }, sessionId)
+    controller.handleHostMessage(toWebview.at(-1)!)
+    return { doc, controller }
+  }
+
+  it('两笔不等 ack 的连续输入：宿主权威文本与本地视图最终一致', async () => {
+    const { doc, controller } = setupPair('abcdef')
+    const view = controller.getView()!
+    view.dispatch({ changes: { from: 0, insert: 'ZZ' } })
+    view.dispatch({ changes: { from: 5, insert: 'X' } }) // 本地 'd' 前（base 系 offset 3）
+    // edit.request 经 bridge 同步入队，宿主串行处理；等待队列清空
+    await new Promise((r) => setTimeout(r, 10))
+    // 出站坐标回 base 系 + 宿主重定位：两笔都落在 'd' 前，权威与本地一致
+    expect(doc.content).toBe('ZZabcXdef')
+    expect(view.state.doc.toString()).toBe('ZZabcXdef')
+  })
+})
+
+describe('doc.changed 版本单调防线（C-4）', () => {
+  it('同版本重复到达的增量被丢弃：仅应用一次', () => {
+    const { bridge } = makeBridge()
+    const c = mount(bridge)
+    init(c, 'abcdef', 1)
+    c.handleHostMessage({
+      kind: 'doc.changed',
+      version: 2,
+      origin: 'external',
+      changes: [{ offset: 0, length: 0, text: 'Z' }],
+    })
+    // 宿主兜底确认竞态下的同版本重复广播：不得重复应用（插入不幂等）
+    c.handleHostMessage({
+      kind: 'doc.changed',
+      version: 2,
+      origin: 'external',
+      changes: [{ offset: 0, length: 0, text: 'Z' }],
+    })
+    expect(c.getView()!.state.doc.toString()).toBe('Zabcdef')
+  })
+
+  it('组合缓冲排队路径同样受版本防线保护', async () => {
+    const { bridge } = makeBridge()
+    const c = mount(bridge)
+    init(c, 'abcdef', 1)
+    c.getView()!.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    c.handleHostMessage({
+      kind: 'doc.changed',
+      version: 2,
+      origin: 'external',
+      changes: [{ offset: 0, length: 0, text: 'Z' }],
+    })
+    // 同版本重复在组合中到达：排队阶段即被丢弃
+    c.handleHostMessage({
+      kind: 'doc.changed',
+      version: 2,
+      origin: 'external',
+      changes: [{ offset: 0, length: 0, text: 'Z' }],
+    })
+    c.getView()!.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(c.getView()!.state.doc.toString()).toBe('Zabcdef')
   })
 })
 

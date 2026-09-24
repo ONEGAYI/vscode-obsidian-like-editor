@@ -40,6 +40,7 @@ import { TreeFragment, type SyntaxNode, type Tree } from '@lezer/common'
 import {
   chainAt,
   docInput,
+  FM_SCAN_LIMIT,
   frontmatterRange,
   markdownTreeParser,
   visitRange,
@@ -415,9 +416,7 @@ function frontmatterOf(doc: Text): SourceRange | null {
   return frontmatterRange(headText(doc))
 }
 
-const FM_SCAN_LIMIT = 8192
-
-/** 文档头部字符串（frontmatter 判定的输入，有界） */
+/** 文档头部字符串（frontmatter 判定的输入，有界；截断口径同源 markdownDoc） */
 function headText(doc: Text): string {
   return doc.sliceString(0, Math.min(doc.length, FM_SCAN_LIMIT))
 }

@@ -15,6 +15,8 @@ const CRLF_DOC = '标题一\r\n正文 A 行\r\n正文 B 行\r\n'
 const SPLIT_DOC = 'split 起始行\n'
 const UNDO_DOC = '撤销链路第一行\n撤销链路第二行\n'
 const UNDO2_DOC = '全局命令撤销甲行\n全局命令撤销乙行\n'
+const UNDO3_DOC = '撤销守卫甲行\n撤销守卫乙行\n'
+const ACKORDER_DOC = '顺序观测起始行\n顺序观测第二行\n'
 const RESYNC_DOC = '重同步起始内容\n重同步第二段\n'
 const CONFLICT_DOC = '第一段原文甲\n第二段原文乙\n'
 const SPLIT_CONFLICT_DOC = '分裂测试行一\n分裂测试行二\n'
@@ -99,6 +101,8 @@ try {
   writeFileSync(path.join(wsDir, 'split.md'), SPLIT_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'undo.md'), UNDO_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'undo2.md'), UNDO2_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'undo3.md'), UNDO3_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'ackorder.md'), ACKORDER_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'resync.md'), RESYNC_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'conflict.md'), CONFLICT_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'splitconflict.md'), SPLIT_CONFLICT_DOC, 'utf8')
@@ -130,6 +134,8 @@ try {
     extensionTestsEnv: {
       WORKSPACE_DIR: wsDir,
       LARGE_DOC_LINES: String(LARGE_LINES),
+      // C-11：开启 _test.* 测试钩子命令（生产/常规开发不注册）
+      OILE_TEST_HOOKS: '1',
     },
   })
 } catch (err) {

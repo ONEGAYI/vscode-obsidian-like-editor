@@ -1117,4 +1117,84 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const st = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
     assert(st.appliedEdits === 0, '大围栏细分链路零写回')
   }],
+
+  ['C-5：活动 tab 非本面板文档时 webview 的 undo 请求被忽略', async () => {
+    await openWithEditor('undo3.md')
+    const session = await waitSessionReady('undo3.md')
+    const uri = wsUri('undo3.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('undo3.md'))
+    const original = '撤销守卫甲行\n撤销守卫乙行\n'
+    const edited = '撤销守卫甲行【写入】\n撤销守卫乙行\n'
+    assert(doc.getText() === original, `初始文本不符：${JSON.stringify(doc.getText())}`)
+
+    // 面板注入编辑：'撤销守卫甲行' 为 6 字符，行末插入点 LF offset 6
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, {
+      kind: 'edit.request',
+      sessionId: '',
+      docUri: uri,
+      seq: 1,
+      baseVersion: session.version,
+      changes: [{ offset: 6, length: 0, text: '【写入】' }],
+    })
+    await poll('编辑写入宿主文档', () => (doc.getText() === edited ? true : undefined))
+
+    // 活动编辑器切到原生文本编辑器（同一文档）：custom editor 面板不再是活动 tab
+    await vscode.window.showTextDocument(doc)
+
+    // webview 发起 undo：必须被忽略——宿主 undo 命令作用于活动编辑器，
+    // 归属不符时执行会撤销到错误目标（VSCode undo 栈按文档资源）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await new Promise((r) => setTimeout(r, 1000))
+    assert(doc.getText() === edited, `活动 tab 非本面板时 undo 不得执行，实际 ${JSON.stringify(doc.getText())}`)
+    // 还原（编辑器关闭前的清理在 runner finally 统一处理）
+    await doc.save()
+  }],
+
+  ['ack 与 doc.changed 到达顺序：确认后的外部增量版本更高且内容一致（B 观测）', async () => {
+    await openWithEditor('ackorder.md')
+    await waitSessionReady('ackorder.md')
+    await openWithEditor('ackorder.md', true)
+    await poll('双面板就绪', async () => {
+      const state = (await vscode.commands.executeCommand(CMD.sessionState, wsUri('ackorder.md').toString())) as SessionState | undefined
+      return state && state.panels.filter((p) => p.ready).length >= 2 ? state : undefined
+    })
+    const uri = wsUri('ackorder.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('ackorder.md'))
+    const base = '顺序观测起始行\n顺序观测第二行\n'
+
+    // 面板 1 注入编辑 '甲' → 宿主确认（ack ok，权威 v2）；广播让面板 2 的
+    // 真实 webview 同步（注入路径的编辑不经发起面板自身 webview 显示）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, {
+      kind: 'edit.request',
+      sessionId: '',
+      docUri: uri,
+      seq: 1,
+      baseVersion: 1,
+      changes: [{ offset: 0, length: 0, text: '甲' }],
+    }, 0)
+    const afterFirst = await poll('第一笔确认', async () => {
+      const state = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState | undefined
+      return state && doc.getText() === `甲${base}` ? state : undefined
+    })
+    assert(afterFirst.version > 1, '确认后权威版本应推进')
+
+    // 外部修改（其他来源，两面板均为 doc.changed 广播）：在 v2 权威的
+    // offset 1 插 '乙'。发起面板收到 ack 的版本是 v2，此后到达的 doc.changed
+    // 版本必须更高（v3）——否则被版本防线丢弃后内容失配
+    const extEdit = new vscode.WorkspaceEdit()
+    extEdit.insert(wsUri('ackorder.md'), new vscode.Position(0, 1), '乙')
+    assert(await vscode.workspace.applyEdit(extEdit), '外部修改应成功')
+    const expected = `甲乙${base}`
+    await poll('外部修改写入权威', () => (doc.getText() === expected ? true : undefined))
+    // 面板 2 经历完整广播链（'甲' + '乙'）：内容与权威一致
+    const panel2 = await waitViewState('ackorder.md', (v) => v.text === expected, 1)
+    assert(panel2.text === expected, `面板 2 应同步到权威文本：${JSON.stringify(panel2.text)}`)
+    // 发起面板（面板 1）注入路径无自身回显，本地为 base；外部增量 v3 未被
+    // 版本防线误丢、正确应用在本地文本上（base 的 offset 1 插 '乙'）
+    const panel1Expected = `顺乙${base.slice(1)}`
+    const panel1 = await waitViewState('ackorder.md', (v) => v.text === panel1Expected, 0)
+    assert(panel1.text === panel1Expected, `面板 1 应正确应用外部增量：${JSON.stringify(panel1.text)}`)
+    const finalState = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(finalState.version > afterFirst.version, `外部增量版本必须大于 ack 版本（${finalState.version} <= ${afterFirst.version}）`)
+  }],
 ]

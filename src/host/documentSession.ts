@@ -80,6 +80,9 @@ interface PanelEntry {
   lastReadingPerfReport?: Extract<WebviewToHost, { kind: 'reading.perf.report' }>
   /** 冲突通知只发一次（避免通知风暴） */
   conflictNotified: boolean
+  /** webview 曾在会话内重载（ready 重复到达，B-2）：暂停面板复制未确认
+   *  输入时跳过面板查询（重载后 view.state 是权威全文，不代表冲突前输入） */
+  reloaded: boolean
 }
 
 const ACK_CACHE_LIMIT = 64
@@ -97,7 +100,16 @@ function changesEqual(a: readonly SerChange[], b: readonly SerChange[]): boolean
 
 export class DocumentSession {
   private readonly panels = new Map<string, PanelEntry>()
-  private readonly versionLog: { version: number; changes: SerChange[] }[] = []
+  /** versionLog 同时保存宿主与 LF 两种形态：重定位在 LF 空间进行（C-1），
+   *  行尾分布变化在 LF 空间是 no-op，先转后移会把 no-op 当平移错位 */
+  private readonly versionLog: {
+    version: number
+    changes: SerChange[]
+    lfChanges: SerChange[]
+  }[] = []
+  /** 兜底确认记录（C-4）：applyEdit resolve 后回流迟到时，回流到达按
+   *  (version, changes) 匹配识别为自家确认，不作为外部变更重复广播 */
+  private readonly confirmedEchoes: { version: number; changes: SerChange[] }[] = []
   /** 换行协调：webview 侧统一 LF 坐标，宿主侧负责与权威文本的 CRLF 双向转换 */
   private readonly newline = new NewlineCoordinator()
   private queue: Promise<void> = Promise.resolve()
@@ -127,6 +139,7 @@ export class DocumentSession {
       suspended: false,
       conflictFragments: [],
       conflictNotified: false,
+      reloaded: false,
     })
     return sessionId
   }
@@ -155,6 +168,7 @@ export class DocumentSession {
     this.disposed = true
     this.panels.clear()
     this.versionLog.length = 0
+    this.confirmedEchoes.length = 0
   }
 
   /** webview 消息入口（provider 接到 webview.onDidReceiveMessage 后调用） */
@@ -167,8 +181,14 @@ export class DocumentSession {
       return Promise.resolve()
     }
     switch (message.kind) {
-      case 'ready':
+      case 'ready': {
+        const wasReady = panel.ready
         this.sendInit(panel)
+        if (wasReady) {
+          // 重复 ready = webview 重载（B-2）：init 已重发权威全文，此后暂停
+          // 面板的 view.state 不再代表冲突前的未确认输入
+          panel.reloaded = true
+        }
         if (panel.suspended) {
           // webview 重载（retainContextWhenHidden 关闭）后恢复暂停提示：
           // 快照保留在宿主侧，取回途径不受重载影响
@@ -179,6 +199,7 @@ export class DocumentSession {
           })
         }
         return Promise.resolve()
+      }
       case 'edit.request': {
         if (!panel.ready || message.docUri !== this.docUri) {
           return Promise.resolve()
@@ -188,6 +209,9 @@ export class DocumentSession {
         return task
       }
       case 'conflict.report': {
+        if (message.docUri !== this.docUri) {
+          return Promise.resolve() // C-6：与 edit.request 对称的 docUri 校验
+        }
         // webview 冲突快照：与请求片段并存（fragments 是逐笔输入，全文是
         // 完整上下文），用户取回时优先最新 view.state，此处留存兜底
         panel.conflictWebviewText = message.text
@@ -195,6 +219,9 @@ export class DocumentSession {
         return Promise.resolve()
       }
       case 'conflict.action': {
+        if (message.docUri !== this.docUri) {
+          return Promise.resolve() // C-6：非本文档的冲突动作不得影响本面板
+        }
         if (message.action === 'copy') {
           this.notify({ type: 'copy-request', sessionId, docUri: this.docUri })
         } else {
@@ -207,7 +234,9 @@ export class DocumentSession {
         // 已完整应用（含回流确认）的编辑；undo/redo 的文档变更经
         // handleDocChanged 回流广播（逆变更不匹配任何 pending 正向变更，
         // 天然走 external 分支，不会作为确认吞掉）
-        if (!panel.ready) {
+        if (!panel.ready || panel.suspended) {
+          // 暂停面板忽略（B-4，与 edit.request 一致）：宿主 undo 命令作用于
+          // 活动编辑器，暂停面板的请求会撤销到其他目标文档
           return Promise.resolve()
         }
         const op = message.op
@@ -246,13 +275,19 @@ export class DocumentSession {
     if (this.disposed) {
       return
     }
-    this.versionLog.push({ version, changes })
-    if (this.versionLog.length > VERSION_LOG_LIMIT) {
-      this.versionLog.splice(0, this.versionLog.length - VERSION_LOG_LIMIT)
-    }
     // 一切 LF 转换都基于变更前的行尾位置表（changes/pending 坐标均指变更前
     // 文档），全部发送完成后再以变更后的全文重建位置表
     const lfChanges = this.newline.hostChangesToLf(changes)
+    this.versionLog.push({ version, changes, lfChanges })
+    if (this.versionLog.length > VERSION_LOG_LIMIT) {
+      this.versionLog.splice(0, this.versionLog.length - VERSION_LOG_LIMIT)
+    }
+    // 兜底确认的迟到回流（C-4）：日志仍需完整（重定位依赖变更史），
+    // 但不作为外部变更重复广播
+    if (this.confirmedEchoes.some((e) => e.version === version && changesEqual(e.changes, changes))) {
+      this.newline.rebuild(this.doc.getText())
+      return
+    }
     try {
       for (const panel of this.panels.values()) {
         const head = panel.pending[0]
@@ -326,8 +361,9 @@ export class DocumentSession {
       return
     }
     if (panel.suspended) {
-      // 暂停写回：请求不写入权威文档，输入片段留存到快照（不丢字）
-      this.collectFragments(panel.conflictFragments, message.changes)
+      // 暂停写回：请求不写入权威文档，输入片段留存到快照（不丢字）。
+      // collectFragments 以宿主系为入参口径（B-6 统一 LF 入库）
+      this.collectFragments(panel.conflictFragments, this.newline.lfChangesToHost(message.changes))
       this.sendAck(panel, {
         kind: 'edit.ack',
         seq: message.seq,
@@ -339,12 +375,15 @@ export class DocumentSession {
       return
     }
     let mapped: SerChange[] | null
-    // webview 消息为 LF 坐标，先转换为宿主坐标再校验/重定位/应用
-    const hostChanges = this.newline.lfChangesToHost(message.changes)
     if (message.baseVersion === this.doc.version) {
-      mapped = hostChanges
+      // webview 消息为 LF 坐标，先转换为宿主坐标再校验/应用
+      mapped = this.newline.lfChangesToHost(message.changes)
     } else if (message.baseVersion < this.doc.version) {
-      mapped = this.relocateChanges(message.baseVersion, hostChanges)
+      // 重定位全程在 LF 空间进行（C-1）：versionLog 的 LF 形态变更组与
+      // webview 的 LF 坐标同一参考系（行尾变化在 LF 空间是 no-op，不会被
+      // 当作平移）；完成后再以当前行尾表一次性转宿主坐标
+      const relocatedLf = this.relocateLfChanges(message.baseVersion, message.changes)
+      mapped = relocatedLf === null ? null : this.newline.lfChangesToHost(relocatedLf)
     } else {
       // webview 版本超前（迟到异常），按不可安全应用处理
       mapped = null
@@ -352,7 +391,7 @@ export class DocumentSession {
     if (!mapped) {
       // 不可安全应用：保留输入、暂停写回、提示——不再以全文覆盖 webview
       this.suspendPanel(panel)
-      this.collectFragments(panel.conflictFragments, message.changes)
+      this.collectFragments(panel.conflictFragments, this.newline.lfChangesToHost(message.changes))
       this.sendAck(panel, {
         kind: 'edit.ack',
         seq: message.seq,
@@ -375,7 +414,7 @@ export class DocumentSession {
       // 写回通道失败：编辑未进入权威文档，同样保留输入并暂停（不虚报成功）
       panel.pending.splice(panel.pending.indexOf(entry), 1)
       this.suspendPanel(panel)
-      this.collectFragments(panel.conflictFragments, message.changes)
+      this.collectFragments(panel.conflictFragments, mapped)
       this.sendAck(panel, {
         kind: 'edit.ack',
         seq: message.seq,
@@ -388,8 +427,13 @@ export class DocumentSession {
       return
     }
     if (!entry.confirmed) {
-      // applyEdit 已 resolve 但回流事件尚未到达（或被合并），以当前版本兜底确认
+      // applyEdit 已 resolve 但回流事件尚未到达（或被合并），以当前版本兜底确认；
+      // 记录 (version, changes) 供迟到回流匹配，防止重复广播（C-4）
       this.confirmPending(panel, entry, this.doc.version)
+      this.confirmedEchoes.push({ version: this.doc.version, changes: mapped })
+      while (this.confirmedEchoes.length > ACK_CACHE_LIMIT) {
+        this.confirmedEchoes.shift()
+      }
     }
   }
 
@@ -403,15 +447,17 @@ export class DocumentSession {
     return this.versionLog[0].version <= baseVersion + 1
   }
 
-  private relocateChanges(baseVersion: number, hostChanges: SerChange[]): SerChange[] | null {
+  /** 把 baseVersion 系的 LF 变更组穿过 versionLog 的 LF 形态变更组；
+   *  日志不覆盖或区间不可安全映射时返回 null。 */
+  private relocateLfChanges(baseVersion: number, lfChanges: SerChange[]): SerChange[] | null {
     if (!this.logCovers(baseVersion)) {
       return null
     }
     const groups = this.versionLog
       .filter((g) => g.version > baseVersion)
-      .map((g) => g.changes)
+      .map((g) => g.lfChanges)
     const mapped: SerChange[] = []
-    for (const change of hostChanges) {
+    for (const change of lfChanges) {
       const result = mapChangeThroughChanges(change, groups)
       if (result === null) {
         return null
@@ -454,6 +500,7 @@ export class DocumentSession {
     panel.conflictWebviewText = undefined
     panel.conflictWebviewVersion = undefined
     panel.conflictNotified = false
+    panel.reloaded = false
     panel.pending.length = 0
     if (panel.ready) {
       panel.port.send({
@@ -473,6 +520,9 @@ export class DocumentSession {
     fragments: string[]
     webviewText: string | undefined
     webviewVersion: number | undefined
+    /** webview 曾重载（B-2）：暂停面板的 view.state 是重载装载的权威全文，
+     *  复制未确认输入时应跳过面板查询、直接用宿主快照 */
+    reloaded: boolean
   } | undefined {
     const panel = this.panels.get(sessionId)
     if (!panel) {
@@ -483,11 +533,14 @@ export class DocumentSession {
       fragments: [...panel.conflictFragments],
       webviewText: panel.conflictWebviewText,
       webviewVersion: panel.conflictWebviewVersion,
+      reloaded: panel.reloaded,
     }
   }
 
-  private collectFragments(into: string[], changes: SerChange[]): void {
-    for (const c of changes) {
+  /** 留存输入片段：入参为宿主系变更组，统一转 LF 形态入库（B-6）——
+   *  片段面向用户取回（剪贴板/通知），与 webview 输入的 LF 形态一致 */
+  private collectFragments(into: string[], hostChanges: SerChange[]): void {
+    for (const c of this.newline.hostChangesToLf(hostChanges)) {
       if (c.text.length > 0) {
         into.push(c.text)
       }

@@ -2,7 +2,7 @@
 
 VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 
-> 当前状态：工单 #2 已落地基础骨架——可选自定义编辑器（Reopen With 启用）打开 `.md`，CM6 承载全文、增量写回 TextDocument。功能范围与规格见 [docs/specs/mvp.md](docs/specs/mvp.md)。本文件是项目级 agent 规则的**单一事实源**。
+> 当前状态：工单 #2–#8 已交付——可选自定义编辑器（Reopen With 启用）打开 `.md`，CM6 承载全文、增量写回 TextDocument；中文输入/宿主撤销、外部修改安全同步与冲突保留（#3–#4）、视口渲染实测（#5/#7）、实时预览与阅读双模式及基础 Markdown 语法显示（#6/#8）均已落地。进行中：#9 任务勾选、#10–#11 双链、#12–#13 表格、#14 查找、#15 打包验收。功能范围与规格见 [docs/specs/mvp.md](docs/specs/mvp.md)。本文件是项目级 agent 规则的**单一事实源**。
 
 ## 约定
 

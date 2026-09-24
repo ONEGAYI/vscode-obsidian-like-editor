@@ -57,7 +57,10 @@ export type HostToWebview =
 
 /** webview → 宿主消息 */
 export type WebviewToHost =
-  /** webview 脚本加载完成，请求 init */
+  /** webview 脚本加载完成，请求 init。
+   *  已知限制（C-8）：ready 与 init 之间的毫秒级窗口内到达的 doc.changed
+   *  会被未 ready 面板丢弃——装载以 init 全文为准，内容不丢；仅当窗口内
+   *  版本推进且 init 竞态落后时理论可见，宿主按事件序串行发送可缓解 */
   | { kind: 'ready' }
   /** 编辑请求：seq 会话内单调递增；baseVersion 为发送方自认的权威版本 */
   | {

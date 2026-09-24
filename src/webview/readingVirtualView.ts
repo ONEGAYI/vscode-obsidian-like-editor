@@ -129,6 +129,13 @@ export class VirtualReadingView {
     this.blocks = splitReadingBlocks(text)
     this.heights = estimateHeights(this.blocks, text, this.calib)
     this.tops = blockTops(this.heights)
+    // C-9：旧挂载元素逐个解除观察后再丢弃——ResizeObserver 对元素是
+    // 强引用，直接清空会留下游离观察并阻碍节点回收
+    if (this.observer) {
+      for (const el of this.elements.values()) {
+        this.observer.unobserve(el)
+      }
+    }
     this.elements.clear()
     this.mounted = null
     this.detachSpacers()

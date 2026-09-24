@@ -12,6 +12,22 @@ import type { HostToWebview, SerChange } from '../shared/protocol'
 
 export const VIEW_TYPE = 'onegayi.obsidian-like-markdown-editor'
 
+/** 活动标签是否为指定文档的本扩展 custom editor（C-5）。
+ *  webview 转发的 undo/redo 经宿主全局命令执行，而该命令作用于活动
+ *  编辑器——请求前必须确认活动 tab 归属本面板文档，否则会撤销其他文档 */
+export function isActiveTabCustomEditorOf(
+  tab: vscode.Tab | undefined,
+  viewType: string,
+  uriStr: string,
+): boolean {
+  const input = tab?.input
+  return (
+    input instanceof vscode.TabInputCustom &&
+    input.viewType === viewType &&
+    input.uri.toString() === uriStr
+  )
+}
+
 interface SessionEntry {
   session: DocumentSession
   doc: vscode.TextDocument
@@ -54,7 +70,10 @@ export function createTextEditorProvider(
       return
     }
     const state = entry.session.getConflictState(sessionId)
-    const live = await fetchPanelText(entry, sessionId)
+    // 重载后的暂停面板（B-2）：webview 已装载权威全文（init），view.state
+    // 不再代表冲突前的未确认输入——跳过面板查询，直接用宿主留存的快照
+    const live =
+      state?.suspended && state.reloaded ? undefined : await fetchPanelText(entry, sessionId)
     const text = live ?? state?.webviewText ?? state?.fragments.join('\n') ?? ''
     if (text) {
       await vscode.env.clipboard.writeText(text)
@@ -152,9 +171,21 @@ export function createTextEditorProvider(
       // 撤销/重做走宿主全局命令：活动编辑器为 CustomEditorInput 时，VSCode
       // 1.86 的 undo MultiCommand 含 custom-editor 实现（priority 105），直接
       // 调 undoRedoService.undo(resource) 作用于本文档的权威文本栈；产生的
-      // 变更经 onDidChangeTextDocument 回流广播，不经过 applyEdit（无回声）
-      undo: () => Promise.resolve(vscode.commands.executeCommand('undo')).then(() => true, () => false),
-      redo: () => Promise.resolve(vscode.commands.executeCommand('redo')).then(() => true, () => false),
+      // 变更经 onDidChangeTextDocument 回流广播，不经过 applyEdit（无回声）。
+      // C-5：webview 请求必须确认活动 tab 是本面板文档的 custom editor——
+      // 全局命令作用于活动编辑器，归属不符时静默忽略（不得撤销其他文档）
+      undo: async () => {
+        if (!isActiveTabCustomEditorOf(vscode.window.tabGroups.activeTabGroup.activeTab, VIEW_TYPE, doc.uri.toString())) {
+          return false
+        }
+        return vscode.commands.executeCommand('undo').then(() => true, () => false)
+      },
+      redo: async () => {
+        if (!isActiveTabCustomEditorOf(vscode.window.tabGroups.activeTabGroup.activeTab, VIEW_TYPE, doc.uri.toString())) {
+          return false
+        }
+        return vscode.commands.executeCommand('redo').then(() => true, () => false)
+      },
     }
     fresh.session = new DocumentSession(port, {
       docUri: key,
@@ -192,7 +223,15 @@ export function createTextEditorProvider(
         releaseEntryIfIdle(document.uri)
       })
 
-      webviewPanel.webview.options = { enableScripts: true }
+      webviewPanel.webview.options = {
+        enableScripts: true,
+        // C-7：显式收紧资源根到扩展产物与样式目录（脚本/CSS 均在其内），
+        // 不留整个扩展目录的默认可读面
+        localResourceRoots: [
+          vscode.Uri.joinPath(context.extensionUri, 'out'),
+          vscode.Uri.joinPath(context.extensionUri, 'media'),
+        ],
+      }
       webviewPanel.webview.html = buildWebviewHtml(webviewPanel.webview, context.extensionUri)
     },
   }
@@ -246,8 +285,10 @@ export function createTextEditorProvider(
     }),
   )
 
-  // ---- 测试钩子命令：仅用于集成测试观测与注入，生产无副作用 ----
-  context.subscriptions.push(
+  // ---- 测试钩子命令：仅集成测试经 runTest.mjs 注入 OILE_TEST_HOOKS=1 时
+  // 注册（C-11），生产 VSIX 与常规 F5 开发不暴露 ----
+  if (process.env.OILE_TEST_HOOKS === '1') {
+    context.subscriptions.push(
     vscode.commands.registerCommand('onegayi.obsidian-like-editor._test.getSessionState', (uriStr: string) => {
       const entry = getEntry(vscode.Uri.parse(uriStr))
       if (!entry) {
@@ -392,7 +433,8 @@ export function createTextEditorProvider(
         return entry.session.getLastReadingPerfReport(panel.sessionId)
       },
     ),
-  )
+    )
+  }
 
   return provider
 }

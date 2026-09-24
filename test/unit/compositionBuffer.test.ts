@@ -319,3 +319,40 @@ describe('组合期间 webview 不发送重复请求', () => {
     expect(c.getView()!.state.doc.toString()).toBe('Abc')
   })
 })
+
+describe('B-1：暂停 + 组合中收到 doc.resync 的恢复', () => {
+  it('flush 后解除暂停并装载全文（resync 兼作恢复信号）', async () => {
+    const { bridge, sent } = makeBridge()
+    const c = mount(bridge)
+    init(c, '草稿', 1)
+    // 进入暂停（无未确认输入：ack 失败附全文重置 + 暂停）
+    c.handleHostMessage({ kind: 'edit.ack', seq: 9, ok: false, reason: 'conflict', version: 2, text: '权威' })
+    // 组合中收到 doc.resync（协议明文：resync 对暂停面板兼作恢复信号）
+    startComposition(c)
+    c.handleHostMessage({ kind: 'doc.resync', version: 5, text: '恢复全文' })
+    endComposition(c)
+    await waitFlush()
+    expect(c.getView()!.state.doc.toString()).toBe('恢复全文')
+    // 暂停解除：后续输入恢复发送（baseVersion 已推进）
+    c.getView()!.dispatch({ changes: { from: 0, insert: '新' } })
+    const req = sent.at(-1) as Extract<WebviewToHost, { kind: 'edit.request' }>
+    expect(req.kind).toBe('edit.request')
+    expect(req.baseVersion).toBe(5)
+  })
+
+  it('对照：暂停前组合中缓冲的 ack 失败附文不解除暂停（仅 resync 来源恢复）', async () => {
+    const { bridge, sent } = makeBridge()
+    const c = mount(bridge)
+    init(c, '草稿', 1)
+    startComposition(c)
+    // 组合中 ack 失败附全文：缓冲为全文形态（来源非 resync），并进入暂停
+    c.handleHostMessage({ kind: 'edit.ack', seq: 9, ok: false, reason: 'conflict', version: 2, text: '权威' })
+    endComposition(c)
+    await waitFlush()
+    expect(c.getView()!.state.doc.toString()).toBe('权威')
+    // 仍处暂停：输入不发送（ack 附文不兼作恢复信号）
+    const before = sent.filter((m) => m.kind === 'edit.request').length
+    c.getView()!.dispatch({ changes: { from: 0, insert: 'x' } })
+    expect(sent.filter((m) => m.kind === 'edit.request').length).toBe(before)
+  })
+})

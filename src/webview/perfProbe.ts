@@ -10,6 +10,10 @@
 //
 // 探针结束后文档文本与选区还原；headingStats 一并回报（键入路径重扫行数
 // 应与文档体量无关，验证增量装饰策略在真实视图中生效）。
+//
+// 已知限制（C-10）：探针假设测量期间文档静止——外部变更（doc.changed）
+// 或用户并发输入不在样本控制内，混入时输入延迟样本含同步噪声，应以
+// 独立宿主（--disable-extensions、无外部写入）的重复测量为准。
 import { EditorView } from '@codemirror/view'
 import type { PerfSnapshot } from '../shared/protocol'
 import { getHeadingStats } from './liveDecorations'

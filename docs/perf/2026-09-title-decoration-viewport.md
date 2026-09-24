@@ -1,5 +1,11 @@
 # 标题装饰切片的视口渲染实测数据（工单 #5）
 
+> **勘误（2026-09-23）**：本文描述的 `headings.ts` 实现已被工单 #8 的
+> `liveDecorations.ts`（@lezer 语法树驱动）取代，见
+> [live-syntax-decorations.md](2026-09-live-syntax-decorations.md)。
+> 文中「代码围栏内伪标题误判」的限制已随语法树判定解决；本文数据保留为
+> 视口渲染策略（直接/间接装饰、增量维护）的历史实测依据。
+
 状态：2026-09-23 实测。**本文为工程门槛实测数据，非官方承诺**；对应规格见 [MVP 性能契约](../specs/mvp.md)，架构约束见 [ADR-0005](../adr/0005-viewport-rendering.md)。
 
 ## ## 被测对象

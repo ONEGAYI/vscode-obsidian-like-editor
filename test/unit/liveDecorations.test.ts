@@ -487,3 +487,30 @@ describe('livePreviewDecorations：装配导出（field + viewport plugin）', (
     expect((livePreviewDecorations as unknown[]).length).toBeGreaterThanOrEqual(2)
   })
 })
+
+describe('B-3：frontmatter 截断口径两视图同源', () => {
+  const makeDoc = (fmBodyLen: number): string =>
+    `---\n${'x'.repeat(fmBodyLen)}\n---\n\n# 标题\n`
+
+  const frontmatterDecoCount = (doc: string): number =>
+    (byClass(build(doc)).get(LIVE_CLASS_NAMES.frontmatterLine) ?? []).length
+
+  it('结束行在扫描上限内：两视图都识别 frontmatter', async () => {
+    const { frontmatterRange, FM_SCAN_LIMIT } = await import('../../src/webview/markdownDoc')
+    const { splitReadingBlocks } = await import('../../src/webview/readingBlocks')
+    const doc = makeDoc(FM_SCAN_LIMIT - 200)
+    expect(frontmatterRange(doc)).not.toBeNull()
+    expect(splitReadingBlocks(doc)[0]!.kind).toBe('frontmatter')
+    expect(frontmatterDecoCount(doc)).toBe(3) // ---/body/--- 三行
+  })
+
+  it('结束行超出扫描上限：两视图一致降级（都不识别）', async () => {
+    const { frontmatterRange, FM_SCAN_LIMIT } = await import('../../src/webview/markdownDoc')
+    const { splitReadingBlocks } = await import('../../src/webview/readingBlocks')
+    const doc = makeDoc(FM_SCAN_LIMIT + 200)
+    // 截断口径上移进 frontmatterRange：找不到结束行 → null（不视为 frontmatter）
+    expect(frontmatterRange(doc)).toBeNull()
+    expect(splitReadingBlocks(doc)[0]!.kind).not.toBe('frontmatter')
+    expect(frontmatterDecoCount(doc)).toBe(0)
+  })
+})
