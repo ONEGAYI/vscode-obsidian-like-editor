@@ -34,6 +34,8 @@ export const READING_CLASS_NAMES = {
   listItem: 'oile-reading-list-item',
   task: 'oile-reading-task',
   taskCheckbox: 'oile-reading-task-checkbox',
+  /** #12 表格块（内含 markdown-it 渲染的真实 table/thead/tbody 标签） */
+  tableBlock: 'oile-reading-table',
   /** #7 视口占位 spacer（屏外块的高度占位，非内容节点） */
   spacer: 'oile-reading-spacer',
   spacerTop: 'oile-reading-spacer-top',
@@ -71,6 +73,9 @@ function blockClassNames(block: ReadingBlock): string[] {
       break
     case 'frontmatter':
       names.push(READING_CLASS_NAMES.frontmatter)
+      break
+    case 'table':
+      names.push(READING_CLASS_NAMES.tableBlock)
       break
   }
   return names

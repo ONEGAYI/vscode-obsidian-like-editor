@@ -335,10 +335,13 @@ describe('模式切换协议（#6）', () => {
       liveInlineCodeDecorationColor: 'rgb(7, 8, 9)',
       liveCodeLineDecorationColor: null,
       readingStrongDecorationColor: 'rgb(10, 11, 12)',
+      liveTablePipeDecorationColor: 'rgb(19, 20, 21)',
+      readingTableDecorationColor: null,
     }
     expect(isWebviewToHost({ ...baseViewState, cssProbe: probe })).toBe(true)
     expect(isWebviewToHost({ ...baseViewState, cssProbe: { ...probe, readingVarProbe: 42 } })).toBe(false)
     expect(isWebviewToHost({ ...baseViewState, cssProbe: { ...probe, liveStrongDecorationColor: 7 } })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, cssProbe: { ...probe, liveTablePipeDecorationColor: 9 } })).toBe(false)
     expect(isWebviewToHost({ ...baseViewState, cssProbe: { liveHeadingDecorationColor: 'x' } })).toBe(false)
     expect(isWebviewToHost({ ...baseViewState, cssProbe: null })).toBe(false)
     expect(isWebviewToHost({ ...baseViewState, cssProbe: 'x' })).toBe(false)
@@ -358,6 +361,8 @@ describe('模式切换协议（#6）', () => {
       frontmatterLines: 0,
       taskGlyphs: 2,
       taskChecked: 1,
+      tableLines: 4,
+      tableCells: 6,
     }
     const reading = {
       headings: 2,
@@ -370,10 +375,13 @@ describe('模式切换协议（#6）', () => {
       listItems: 3,
       taskCheckboxes: 2,
       taskChecked: 1,
+      tables: 1,
     }
     expect(isWebviewToHost({ ...baseViewState, liveSyntax: live, readingSyntax: reading })).toBe(true)
     expect(isWebviewToHost({ ...baseViewState, liveSyntax: { ...live, strongSpans: -1 } })).toBe(false)
     expect(isWebviewToHost({ ...baseViewState, liveSyntax: { ...live, taskGlyphs: '2' } })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, liveSyntax: { ...live, tableCells: -1 } })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, readingSyntax: { ...reading, tables: '1' } })).toBe(false)
     expect(isWebviewToHost({ ...baseViewState, readingSyntax: { ...reading, headings: 1.5 } })).toBe(false)
     expect(isWebviewToHost({ ...baseViewState, liveSyntax: null })).toBe(false)
   })

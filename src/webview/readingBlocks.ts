@@ -26,7 +26,7 @@ import {
 } from './readingMarkdown'
 import type { Env, Token } from 'markdown-it'
 
-/** 阅读块种类（#8：完整 Markdown 语义） */
+/** 阅读块种类（#8：完整 Markdown 语义；#12 表格独立成块） */
 export type ReadingBlockKind =
   | 'frontmatter'
   | 'heading'
@@ -35,6 +35,7 @@ export type ReadingBlockKind =
   | 'blockquote'
   | 'code-block'
   | 'hr'
+  | 'table'
 
 /** 一个阅读块：源文本的 [start, end) 区间、渲染身份与内部 HTML */
 export interface ReadingBlock {
@@ -230,6 +231,11 @@ function pushBlock(
     }
     case 'hr':
       blocks.push({ kind: 'hr', start, end, html: renderTokenHtml(md, group, env) })
+      return
+    case 'table_open':
+      // #12：表格独立成块（markdown-it GFM 渲染真实 <table>，列对齐保留在
+      // th/td 的内联 style；块整体只读，与挂载/回收机制同构）
+      blocks.push({ kind: 'table', start, end, html: renderTokenHtml(md, group, env) })
       return
     default:
       // code_block（缩进代码）与其他形态：按段落语义渲染（局部降级）

@@ -195,6 +195,10 @@ export interface CssProbeReport {
   liveCodeLineDecorationColor: string | null
   /** #8：阅读视图内语义 strong 经 `.oile-view-reading strong` 命中的属性值 */
   readingStrongDecorationColor: string | null
+  /** #12：live 表格管道符经 `.oile-table-pipe` 命中的属性值；无目标为 null */
+  liveTablePipeDecorationColor: string | null
+  /** #12：阅读表格经 `.oile-reading-block table` 命中的属性值；无目标为 null */
+  readingTableDecorationColor: string | null
 }
 
 /** live 侧语法装饰统计（#8：装饰集合计数，覆盖标题/行内/块级/任务/降级观测） */
@@ -214,6 +218,10 @@ export interface LiveSyntaxProbe {
   /** 任务字形数与其中勾选数 */
   taskGlyphs: number
   taskChecked: number
+  /** #12：表格行装饰数（表头+分隔+数据行） */
+  tableLines: number
+  /** #12：单元格内容 mark 数 */
+  tableCells: number
 }
 
 /** reading 侧渲染语义统计（#8：DOM 级计数，用于双视图一致性对拍） */
@@ -228,6 +236,8 @@ export interface ReadingSyntaxProbe {
   listItems: number
   taskCheckboxes: number
   taskChecked: number
+  /** #12：表格元素数（块级 table 标签；虚拟化下仅统计已挂载块） */
+  tables: number
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -287,7 +297,9 @@ function isCssProbeReport(v: unknown): v is CssProbeReport {
     isNullOrString(v.liveStrongDecorationColor) &&
     isNullOrString(v.liveInlineCodeDecorationColor) &&
     isNullOrString(v.liveCodeLineDecorationColor) &&
-    isNullOrString(v.readingStrongDecorationColor)
+    isNullOrString(v.readingStrongDecorationColor) &&
+    isNullOrString(v.liveTablePipeDecorationColor) &&
+    isNullOrString(v.readingTableDecorationColor)
   )
 }
 
@@ -305,7 +317,9 @@ function isLiveSyntaxProbe(v: unknown): v is LiveSyntaxProbe {
     isNonNegativeInt(v.hrLines) &&
     isNonNegativeInt(v.frontmatterLines) &&
     isNonNegativeInt(v.taskGlyphs) &&
-    isNonNegativeInt(v.taskChecked)
+    isNonNegativeInt(v.taskChecked) &&
+    isNonNegativeInt(v.tableLines) &&
+    isNonNegativeInt(v.tableCells)
   )
 }
 
@@ -321,7 +335,8 @@ function isReadingSyntaxProbe(v: unknown): v is ReadingSyntaxProbe {
     isNonNegativeInt(v.hrCount) &&
     isNonNegativeInt(v.listItems) &&
     isNonNegativeInt(v.taskCheckboxes) &&
-    isNonNegativeInt(v.taskChecked)
+    isNonNegativeInt(v.taskChecked) &&
+    isNonNegativeInt(v.tables)
   )
 }
 

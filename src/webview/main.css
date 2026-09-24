@@ -171,6 +171,41 @@ body {
   line-height: 1;
 }
 
+/* 表格（#12）：编辑面即源文本行——管道符保持可见（点击定位与光标编辑
+   直接落在源区间），装饰只做表格样式标记；类名为稳定样式入口，
+   Obsidian 对应 .HyperMD-table-line 方向（见选择器映射表） */
+#app .cm-editor .cm-scroller .oile-table-line {
+  font-family: var(--vscode-editor-font-family, monospace);
+  background-color: var(--oile-table-background, rgba(128, 128, 128, 0.05));
+}
+
+/* 表头行加粗 + 底缘分隔 */
+#app .cm-editor .cm-scroller .oile-table-header-line {
+  font-weight: 600;
+  box-shadow: inset 0 -1px 0 var(--vscode-panel-border, rgba(128, 128, 128, 0.45));
+}
+
+/* 分隔行弱化（保留可见：编辑/结构判定都以源文为准） */
+#app .cm-editor .cm-scroller .oile-table-delimiter-line {
+  opacity: 0.55;
+}
+
+/* 管道符样式化为列分隔（保持占位，不隐藏） */
+#app .cm-editor .cm-scroller .oile-table-pipe {
+  color: var(--vscode-editorLineNumber-foreground, rgba(128, 128, 128, 0.8));
+  font-weight: 400;
+}
+
+/* 单元格内容对齐类（oile-table-align-left/center/right，GFM 分隔行声明）：
+   稳定样式入口。首版 live 是源码形态（管道与内容保持源文一维布局，
+   列对齐由源文排版决定），不施加 inline-block/width 等破坏行内映射的
+   布局——阅读视图（markdown-it 真实 table）呈现 GFM 对齐语义 */
+
+/* 表头单元格内容强调 */
+#app .cm-editor .cm-scroller .oile-table-cell-header {
+  color: var(--vscode-symbolIcon-fieldForeground, inherit);
+}
+
 /* ---- 阅读视图（#6 基础版，#8 完整 Markdown 显示）----
    .oile-view-reading 为阅读视图稳定容器类（Obsidian 对应 .markdown-preview-view）。
    公开 CSS 变量入口（外部片段可覆盖）：--oile-reading-font-size / -max-width /
@@ -273,6 +308,32 @@ body {
   border: none;
   border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.45));
   margin: 0.8em 0;
+}
+
+/* 表格块（#12）：markdown-it 渲染的真实 table（只读呈现；GFM 列对齐保留在
+   th/td 内联 style）。Obsidian 对应 .markdown-preview-view table 方向 */
+#app .oile-view-reading .oile-reading-table table {
+  border-collapse: collapse;
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
+  margin: 0.4em 0;
+}
+
+#app .oile-view-reading .oile-reading-table th,
+#app .oile-view-reading .oile-reading-table td {
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.4));
+  padding: 4px 12px;
+}
+
+#app .oile-view-reading .oile-reading-table th {
+  background-color: var(--oile-table-background, rgba(128, 128, 128, 0.1));
+  font-weight: 600;
+}
+
+#app .oile-view-reading .oile-reading-table td {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.92em;
 }
 
 #app .oile-view-reading .oile-reading-frontmatter pre {
