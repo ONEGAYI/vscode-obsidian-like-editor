@@ -51,7 +51,7 @@ import { createReadingContainer, prepareReadingImages } from './readingView'
 import { READING_MARKDOWN_CLASS_NAMES } from './readingMarkdown'
 import { resolveStaleTaskToggle } from './taskToggle'
 import { VirtualReadingView } from './readingVirtualView'
-import { tableEditing } from './tableEditing'
+import { runTableEdit, tableEditing } from './tableEditing'
 
 /** rAF 不可用环境（旧 jsdom）退化为短超时（与 readingVirtualView 同款） */
 function scheduleFrame(fn: () => void): void {
@@ -630,6 +630,30 @@ export class WebviewSyncController {
       case 'view.find.step':
         this.findStep(message.direction)
         break
+      case 'table.command': {
+        // 表格增删行列（#13）：仅 live 模式执行（阅读除勾选任务外只读）；
+        // 操作经 CM6 事务走标准出站链路（一笔 edit.request = 撤销一次），
+        // 暂停态下与 live 输入同语义（本地保留、不写回）
+        if (this.view && this.viewMode === 'live') {
+          runTableEdit(this.view, message.op)
+        }
+        break
+      }
+      case 'table.test.key': {
+        // 测试钩子（#13）：向真实编辑器派发 Tab keydown（与用户按键同一
+        // keymap 链路；纯选区导航零写回）
+        if (this.view) {
+          this.view.contentDOM.dispatchEvent(
+            new KeyboardEvent('keydown', {
+              key: 'Tab',
+              shiftKey: message.key === 'shift-tab',
+              bubbles: true,
+              cancelable: true,
+            }),
+          )
+        }
+        break
+      }
       case 'view.locate': {
         // 定位（#10 查找/跳转入口）：光标移到源 offset；reading 滚动到块。
         // 纯视图操作——事务不带 changes，不产生编辑历史

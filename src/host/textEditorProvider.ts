@@ -16,7 +16,7 @@ import {
   type ImageResolution,
   type LinkContext,
 } from './linkTarget'
-import type { HostToWebview, SerChange } from '../shared/protocol'
+import type { HostToWebview, SerChange, TableEditOp } from '../shared/protocol'
 
 export const VIEW_TYPE = 'onegayi.obsidian-like-markdown-editor'
 
@@ -52,8 +52,8 @@ export interface LinkLogEntry {
 interface SessionEntry {
   session: DocumentSession
   doc: vscode.TextDocument
-  /** 面板发送通道（测试钩子 requestViewState 复用） */
-  sends: Map<string, (message: HostToWebview) => void>
+  /** 面板句柄（#13 表格命令需定位活动面板；写操作只作用于光标所在面板） */
+  panels: Map<string, vscode.WebviewPanel>
   appliedEdits: number
   /** #10 链接跳转执行日志（容量有界） */
   linkLog: LinkLogEntry[]
@@ -192,7 +192,7 @@ export function createTextEditorProvider(
     if (entry) {
       return entry
     }
-    const fresh: SessionEntry = { session: undefined as never, doc, sends: new Map(), appliedEdits: 0, linkLog: [] }
+    const fresh: SessionEntry = { session: undefined as never, doc, panels: new Map(), appliedEdits: 0, linkLog: [] }
     const port: HostDocumentPort = {
       get version() {
         return doc.version
@@ -263,14 +263,14 @@ export function createTextEditorProvider(
         return resolveWorkspaceImage(src, linkCtx, webviewPanel.webview)
       }
       const sessionId = entry.session.attachPanel({ send, openLink, resolveImage })
-      entry.sends.set(sessionId, send)
+      entry.panels.set(sessionId, webviewPanel)
 
       const messageSub = webviewPanel.webview.onDidReceiveMessage((message) => {
         void entry.session.handleWebviewMessage(message, sessionId)
       })
       const closeSub = webviewPanel.onDidDispose(() => {
         entry.session.detachPanel(sessionId)
-        entry.sends.delete(sessionId)
+        entry.panels.delete(sessionId)
         messageSub.dispose()
         closeSub.dispose()
         releaseEntryIfIdle(document.uri)
@@ -365,6 +365,37 @@ export function createTextEditorProvider(
       return false
     }),
   )
+
+  // ---- 表格结构命令（#13）：活动 tab 为本扩展 custom editor 时向其面板发送
+  // table.command（webview 在光标处执行，走标准出站链路）。与模式切换/查找
+  // 不同，这是写操作：只发活动面板（表格上下文在各面板光标处独立） ----
+  const TABLE_COMMANDS: Array<[string, TableEditOp]> = [
+    ['onegayi.obsidian-like-editor.table.insertRowAbove', 'insertRowAbove'],
+    ['onegayi.obsidian-like-editor.table.insertRowBelow', 'insertRowBelow'],
+    ['onegayi.obsidian-like-editor.table.deleteRow', 'deleteRow'],
+    ['onegayi.obsidian-like-editor.table.insertColumnLeft', 'insertColumnLeft'],
+    ['onegayi.obsidian-like-editor.table.insertColumnRight', 'insertColumnRight'],
+    ['onegayi.obsidian-like-editor.table.deleteColumn', 'deleteColumn'],
+  ]
+  for (const [command, op] of TABLE_COMMANDS) {
+    context.subscriptions.push(
+      vscode.commands.registerCommand(command, async (): Promise<boolean> => {
+        // 遍历全部会话找活动面板（vscode 无全局「webview 面板焦点」句柄）
+        for (const entry of sessions.values()) {
+          for (const [sessionId, panel] of entry.panels) {
+            if (panel.active && entry.session.getInfo().panels.some((p) => p.sessionId === sessionId && p.ready)) {
+              entry.session.postToPanel(sessionId, { kind: 'table.command', op })
+              return true
+            }
+          }
+        }
+        await vscode.window.showWarningMessage(
+          '请先聚焦一个 Obsidian-like Markdown Editor 编辑器面板（光标置于表格内），再执行表格操作',
+        )
+        return false
+      }),
+    )
+  }
 
   // ---- 测试钩子命令：仅集成测试经 runTest.mjs 注入 OILE_TEST_HOOKS=1 时
   // 注册（C-11），生产 VSIX 与常规 F5 开发不暴露 ----

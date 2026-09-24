@@ -38,6 +38,36 @@
         "command": "onegayi.obsidian-like-editor.find",
         "title": "查找（编辑区）",
         "category": "Obsidian-like Markdown Editor"
+      },
+      {
+        "command": "onegayi.obsidian-like-editor.table.insertRowAbove",
+        "title": "表格：上方插入行",
+        "category": "Obsidian-like Markdown Editor"
+      },
+      {
+        "command": "onegayi.obsidian-like-editor.table.insertRowBelow",
+        "title": "表格：下方插入行",
+        "category": "Obsidian-like Markdown Editor"
+      },
+      {
+        "command": "onegayi.obsidian-like-editor.table.deleteRow",
+        "title": "表格：删除行",
+        "category": "Obsidian-like Markdown Editor"
+      },
+      {
+        "command": "onegayi.obsidian-like-editor.table.insertColumnLeft",
+        "title": "表格：左侧插入列",
+        "category": "Obsidian-like Markdown Editor"
+      },
+      {
+        "command": "onegayi.obsidian-like-editor.table.insertColumnRight",
+        "title": "表格：右侧插入列",
+        "category": "Obsidian-like Markdown Editor"
+      },
+      {
+        "command": "onegayi.obsidian-like-editor.table.deleteColumn",
+        "title": "表格：删除列",
+        "category": "Obsidian-like Markdown Editor"
       }
     ],
     "keybindings": [

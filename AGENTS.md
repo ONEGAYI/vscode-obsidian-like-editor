@@ -101,6 +101,7 @@ vscode-obsidian-like-editor/
 │       ├── syncController.ts     # CM6 同步控制器
 │       ├── tableCells.ts         # 表格单元格拆分纯函数（#12）
 │       ├── tableEditing.ts       # 表格输入钩子（#12）
+│       ├── tableStructure.ts     # 表格导航与增删行列纯函数（#13）
 │       └── taskToggle.ts         # 任务勾选解析纯函数（#9）
 ├── test/             # 测试根
 │   ├── integration/ # 真宿主集成测试
@@ -137,6 +138,8 @@ vscode-obsidian-like-editor/
 │       ├── readingVirtualView.test.ts # 虚拟化装配契约测试
 │       ├── suspendResume.test.ts      # 暂停恢复契约测试
 │       ├── tableCells.test.ts         # 单元格拆分契约测试（#12）
+│       ├── tableOps.test.ts           # 表格导航与结构命令链路契约（#13）
+│       ├── tableStructure.test.ts     # 表格结构操作纯函数契约（#13）
 │       ├── taskInteraction.test.ts    # 任务勾选交互契约测试（#9）
 │       ├── taskToggle.test.ts         # 任务勾选解析纯函数契约测试
 │       ├── viewMode.test.ts           # 模式切换状态机契约测试

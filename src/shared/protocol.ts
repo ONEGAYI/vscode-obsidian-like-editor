@@ -12,6 +12,15 @@ export interface SerChange {
   text: string
 }
 
+/** 表格结构操作（#13）：宿主命令面板命令 → webview 在光标处执行（live 模式） */
+export type TableEditOp =
+  | 'insertRowAbove'
+  | 'insertRowBelow'
+  | 'deleteRow'
+  | 'insertColumnLeft'
+  | 'insertColumnRight'
+  | 'deleteColumn'
+
 /** 宿主 → webview 消息 */
 export type HostToWebview =
   /** ready 后首发：全文 + 当前权威版本 */
@@ -75,6 +84,14 @@ export type HostToWebview =
   | { kind: 'view.find.open'; query?: string }
   | { kind: 'view.find.close' }
   | { kind: 'view.find.step'; direction: 'next' | 'prev' }
+  /** 表格结构操作（#13）：在面板光标处执行增删行列（仅 live 模式；阅读
+   *  模式只读忽略）。变更经 webview 的 CM6 事务走标准出站链路
+   *  （edit.request 一笔 = 宿主撤销一次） */
+  | { kind: 'table.command'; op: TableEditOp }
+  /** 测试钩子（#13）：向真实编辑器派发 Tab/Shift+Tab keydown（与用户按键
+   *  同一 keymap 链路；纯选区导航，零写回）。宿主测试无法向 webview 派发
+   *  真实键盘事件，以此通道验证导航装配 */
+  | { kind: 'table.test.key'; key: 'tab' | 'shift-tab' }
 
 /** webview → 宿主消息 */
 export type WebviewToHost =
@@ -318,6 +335,18 @@ export interface FindSessionProbe {
   /** 当前匹配区间（UTF-16 offset；无匹配为 null） */
   currentFrom: number | null
   currentTo: number | null
+}
+
+/** 表格结构操作码校验（#13） */
+function isTableEditOp(v: unknown): v is TableEditOp {
+  return (
+    v === 'insertRowAbove' ||
+    v === 'insertRowBelow' ||
+    v === 'deleteRow' ||
+    v === 'insertColumnLeft' ||
+    v === 'insertColumnRight' ||
+    v === 'deleteColumn'
+  )
 }
 
 function isFindSessionProbe(v: unknown): v is FindSessionProbe {
@@ -661,6 +690,10 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return true
     case 'view.find.step':
       return v.direction === 'next' || v.direction === 'prev'
+    case 'table.command':
+      return isTableEditOp(v.op)
+    case 'table.test.key':
+      return v.key === 'tab' || v.key === 'shift-tab'
     default:
       return false
   }

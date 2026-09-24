@@ -203,6 +203,29 @@ describe('isHostToWebview', () => {
     expect(isHostToWebview({ kind: 'ready' })).toBe(false)
     expect(isHostToWebview({ kind: 'edit.request', sessionId: 's', docUri: 'u', seq: 1, baseVersion: 1, changes: [] })).toBe(false)
   })
+
+  it('接受全部合法 table.command 操作码，拒绝未知操作码与缺字段（#13）', () => {
+    for (const op of [
+      'insertRowAbove',
+      'insertRowBelow',
+      'deleteRow',
+      'insertColumnLeft',
+      'insertColumnRight',
+      'deleteColumn',
+    ]) {
+      expect(isHostToWebview({ kind: 'table.command', op })).toBe(true)
+    }
+    expect(isHostToWebview({ kind: 'table.command', op: 'mergeCells' })).toBe(false)
+    expect(isHostToWebview({ kind: 'table.command' })).toBe(false)
+    expect(isHostToWebview({ kind: 'table.command', op: 1 })).toBe(false)
+  })
+
+  it('接受合法 table.test.key，拒绝未知键名（#13 测试钩子）', () => {
+    expect(isHostToWebview({ kind: 'table.test.key', key: 'tab' })).toBe(true)
+    expect(isHostToWebview({ kind: 'table.test.key', key: 'shift-tab' })).toBe(true)
+    expect(isHostToWebview({ kind: 'table.test.key', key: 'enter' })).toBe(false)
+    expect(isHostToWebview({ kind: 'table.test.key' })).toBe(false)
+  })
 })
 
 
