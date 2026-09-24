@@ -14,9 +14,12 @@ import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/sync
 import {
   LINK_CLASS_NAMES,
   LiveImageWidget,
+  WIDGET_DECO_CACHE_LIMIT,
   activateLinkAtPos,
   buildLinkImageDecorations,
+  imageWidgetDeco,
   makeLinkMouseDownHandler,
+  wikilinkWidgetDeco,
 } from '../../src/webview/liveLinks'
 import { liveDecorationsField } from '../../src/webview/liveDecorations'
 import { isHostToWebview, isWebviewToHost, type WebviewToHost } from '../../src/shared/protocol'
@@ -403,5 +406,35 @@ describe('点击与图片全链路零写回（核心不变量）', () => {
     const state = viewState(c, h)
     expect(state.text).toBe(LINK_DOC)
     expect(sentOf(h, 'edit.request').length).toBe(0)
+  })
+})
+
+describe('装饰实例缓存上限（widget deco cache）', () => {
+  // 契约：以用户内容为键的 widget 装饰缓存必须有界——无上限时大文档滚动
+  // 会按出现过的双链/图片文本无限累积实例。命中复用 + 超限逐最旧（LRU）
+  it('同 display/src+alt 复用同一装饰实例', () => {
+    expect(wikilinkWidgetDeco('显示甲')).toBe(wikilinkWidgetDeco('显示甲'))
+    expect(imageWidgetDeco('src-a', 'alt', undefined)).toBe(imageWidgetDeco('src-a', 'alt', undefined))
+    expect(imageWidgetDeco('src-a', 'alt', undefined)).not.toBe(imageWidgetDeco('src-b', 'alt', undefined))
+  })
+
+  it('超限后逐最旧回收：早期键重新获取得到新实例', () => {
+    const first = wikilinkWidgetDeco('首个显示')
+    for (let i = 0; i < WIDGET_DECO_CACHE_LIMIT + 16; i++) {
+      wikilinkWidgetDeco(`批量显示 ${i}`)
+    }
+    // 「首个显示」已被淘汰：再次获取重建实例（不等于旧引用）
+    expect(wikilinkWidgetDeco('首个显示')).not.toBe(first)
+  })
+
+  it('近期访问的键不被淘汰（LRU 而非 FIFO）', () => {
+    const pinned = wikilinkWidgetDeco('常驻显示')
+    for (let i = 0; i < WIDGET_DECO_CACHE_LIMIT + 8; i++) {
+      if (i % 64 === 0) {
+        wikilinkWidgetDeco('常驻显示') // 周期性命中刷新热度
+      }
+      wikilinkWidgetDeco(`竞争显示 ${i}`)
+    }
+    expect(wikilinkWidgetDeco('常驻显示')).toBe(pinned)
   })
 })

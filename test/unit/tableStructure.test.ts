@@ -333,6 +333,16 @@ describe('planTableEdit：删除列', () => {
     const after = apply(doc, plan.changes)
     expect(after.split('\n')[2]).toBe('| 1 |')
   })
+
+  it('单列表删除唯一列：拒绝（返回 null，与最小表格删表头同口径）', () => {
+    // 删空唯一列会留下三行裸管道（表格解体为残缺文本），拒绝更符合
+    // 「结构行保护」的既有口径（探针实证：放行结果是 "|\n|\n|\n"）
+    const doc = '| a |\n| --- |\n| b |\n'
+    const rows = rowsOf(doc, [0, 1, 2], ['header', 'delimiter', 'row'])
+    expect(planTableEdit(doc, rows, doc.indexOf('a') + 1, 'deleteColumn')).toBeNull()
+    expect(planTableEdit(doc, rows, doc.indexOf('---') + 1, 'deleteColumn')).toBeNull()
+    expect(planTableEdit(doc, rows, doc.indexOf('b') + 1, 'deleteColumn')).toBeNull()
+  })
 })
 
 // ---- 边界与拒绝 ----

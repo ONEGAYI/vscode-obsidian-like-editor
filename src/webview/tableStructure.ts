@@ -244,6 +244,11 @@ export function planTableEdit(
       return focus >= 0 ? { changes, selection: focus } : null
     }
     case 'deleteColumn': {
+      // 唯一列保护（与最小表格删表头同口径）：删空唯一列会留下三行裸管道
+      // （表格解体为残缺文本），拒绝（零变更）
+      if (rowCells(rows[delimIdx]!).length <= 1) {
+        return null
+      }
       const changes: PlannedTableEdit['changes'] = []
       let focus = -1
       let delta = 0 // 光标行之前各行的删除总长（行首左移量）

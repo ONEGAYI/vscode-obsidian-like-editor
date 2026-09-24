@@ -213,19 +213,29 @@ describe('匹配计算与反馈（基于文本模型，含中文与 emoji）', (
     expect(viewState(c, h).find?.currentFrom).toBe(DOC.indexOf('🎉'))
   })
 
-  it('大小写语义：默认区分，切换按钮翻转后重算', () => {
+  it('大小写语义：默认区分，切换按钮（忽略大小写，aria 语义一致）翻转后重算', () => {
     const h = makeBridge()
     const text = 'Hello hello HELLO\n中文编辑测试\n'
     const c = mountFind(h, text)
     c.handleHostMessage({ kind: 'view.find.open', query: 'hello' })
     expect(viewState(c, h).find?.total).toBe(1)
     const btn = parent!.querySelector<HTMLButtonElement>('.oile-find-case')!
+    // 按钮语义为「忽略大小写」开关：默认区分（未激活、未按下）
+    expect(btn.textContent).toBe('忽略大小写')
     expect(btn.classList.contains('oile-find-case-active')).toBe(false)
+    expect(btn.getAttribute('aria-pressed')).toBe('false')
     btn.click()
+    // 激活 = 忽略大小写生效（active 类与 aria-pressed 同步表示）
     expect(btn.classList.contains('oile-find-case-active')).toBe(true)
+    expect(btn.getAttribute('aria-pressed')).toBe('true')
     const state = viewState(c, h)
     expect(state.find?.caseSensitive).toBe(false)
     expect(state.find?.total).toBe(3)
+    // 再点回区分大小写
+    btn.click()
+    expect(btn.classList.contains('oile-find-case-active')).toBe(false)
+    expect(btn.getAttribute('aria-pressed')).toBe('false')
+    expect(viewState(c, h).find?.total).toBe(1)
   })
 })
 

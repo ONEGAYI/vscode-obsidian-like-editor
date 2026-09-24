@@ -123,6 +123,16 @@ function isInsideRoot(
   return rel !== '..' && !rel.startsWith(`..${ops.sep}`) && !ops.isAbsolute(rel)
 }
 
+/** Windows 宿主的 Win32 规范化怪异形态：basename 含 ':'（NTFS 备用数据流，
+ *  如 note.md::$DATA 会读备用数据流）或尾随 '.'/空格（规范化剥除后不指向
+ *  用户可见文件）——两者都不该被放行为工作区目标。判定用 trim 前的原文
+ *  （尾随空格 trim 后不可恢复），且先剥 hash/query */
+function isWin32OddBasename(raw: string): boolean {
+  const rawPath = raw.split('#')[0]!.split('?')[0]!
+  const base = path.win32.basename(rawPath)
+  return base.includes(':') || /[. ]$/.test(base)
+}
+
 /** 通用分类前半段：外链放行 / 空白与锚点拦截 / scheme 拦截 / 盘符拦截 */
 function preClassify(
   raw: string,
@@ -131,7 +141,7 @@ function preClassify(
   | { kind: 'external'; url: string }
   | {
       kind: 'blocked'
-      reason: 'empty' | 'scheme' | 'windows-drive-on-posix'
+      reason: 'empty' | 'scheme' | 'escape' | 'windows-drive-on-posix'
       scheme?: string
       detail?: string
     }
@@ -148,16 +158,27 @@ function preClassify(
   // 单字母 scheme（怪异且非白名单）——按"Windows 路径出现在远程宿主"拦截
   if (WINDOWS_DRIVE_RE.test(href)) {
     if (ctx.isWindowsHost) {
+      if (isWin32OddBasename(raw)) {
+        return { kind: 'blocked', reason: 'escape', detail: href }
+      }
       return { kind: 'path', pathText: href }
     }
     return { kind: 'blocked', reason: 'windows-drive-on-posix' }
   }
   const s = schemeOf(href)
-  if (s) {
+  // 单字母或含 '.' 的"scheme"不是现实协议（注册 scheme 无此形态），而是
+  // 文件名形态：a:b.md / note.md:stream——POSIX 宿主上是合法相对文件名，
+  // Windows 宿主上属 NTFS ADS 怪异形态（下方统一拦截）
+  if (s && s.scheme.length > 1 && !s.scheme.includes('.')) {
     if (s.scheme === 'http' || s.scheme === 'https') {
       return { kind: 'external', url: href }
     }
     return { kind: 'blocked', reason: 'scheme', scheme: s.scheme }
+  }
+  // 文件名形态（无 scheme，或单字母/含点 scheme）：Windows 宿主上 basename
+  // 含 ':' 或尾随 '.'/空格的一律按越界口径拦截（POSIX 上这些是合法文件名字符）
+  if (ctx.isWindowsHost && isWin32OddBasename(raw)) {
+    return { kind: 'blocked', reason: 'escape', detail: href }
   }
   return { kind: 'path', pathText: href }
 }

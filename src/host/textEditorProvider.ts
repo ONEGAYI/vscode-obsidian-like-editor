@@ -305,7 +305,12 @@ export function createTextEditorProvider(
     const out: string[] = []
     for (const uri of uris) {
       const rel = path.relative(rootFsPath, uri.fsPath)
-      if (rel !== '' && (rel.startsWith('..') || path.isAbsolute(rel))) {
+      // 精确越界判定（与 linkTarget 的 isInsideRoot 同口径）：`..foo.md`
+      // 是同级合法文件名，粗判 startsWith('..') 会误排除
+      if (
+        rel !== '' &&
+        (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel))
+      ) {
         continue // 多根工作区：只取当前文档所属文件夹内的文件
       }
       out.push(uri.fsPath)

@@ -5,7 +5,12 @@
 // - 中文/emoji（代理对）按码点边界对齐：匹配不得起止于代理对中间
 // - 非重叠、从左到右；空查询无匹配；无匹配返回空数组
 import { describe, it, expect } from 'vitest'
-import { computeFindMatches } from '../../src/webview/findSession'
+import { EditorState } from '@codemirror/state'
+import {
+  computeFindMatches,
+  findStateField,
+  setFindMatches,
+} from '../../src/webview/findSession'
 
 describe('基础匹配语义', () => {
   it('英文多个匹配：非重叠、从左到右', () => {
@@ -124,5 +129,38 @@ describe('长文档（文本模型全量计算，非 DOM）', () => {
     for (const probe of [ms[0]!, ms[5_000]!, ms[9_999]!]) {
       expect(text.slice(probe.from, probe.to)).toBe('查找目标')
     }
+  })
+})
+
+describe('当前匹配装饰随文档变更映射（findStateField）', () => {
+  // 契约：整组替换（setFindMatches）前，文档变更事务先把既有装饰随
+  // tr.changes 平移——控制器的重算在微任务中异步完成，纯映射兜底消除
+  // 「重算前一帧用旧坐标渲染」的时序窗口（结构上不再依赖微任务时序闭合）
+  const docText = '0123456789abcd5678'
+
+  function currentRange(state: EditorState): { from: number; to: number } | undefined {
+    // RangeCursor 非 JS iterator 协议：初始即指向首个区间，value 为空表示无区间
+    const cursor = state.field(findStateField).decos.iter()
+    return cursor.value ? { from: cursor.from, to: cursor.to } : undefined
+  }
+
+  it('匹配前插入文本：装饰区间随变更平移', () => {
+    const state = EditorState.create({ doc: docText, extensions: [findStateField] })
+    const marked = state.update({
+      effects: setFindMatches.of({ matches: [{ from: 10, to: 14 }], index: 0 }),
+    }).state
+    expect(currentRange(marked)).toEqual({ from: 10, to: 14 })
+    // 文档开头插入 3 字符：当前匹配装饰应平移到 [13,17)
+    const shifted = marked.update({ changes: { from: 0, insert: '新增三' } }).state
+    expect(currentRange(shifted)).toEqual({ from: 13, to: 17 })
+  })
+
+  it('删除覆盖匹配的文本：装饰区间被删除塌缩（不出越界区间）', () => {
+    const state = EditorState.create({ doc: docText, extensions: [findStateField] })
+    const marked = state.update({
+      effects: setFindMatches.of({ matches: [{ from: 10, to: 14 }], index: 0 }),
+    }).state
+    const collapsed = marked.update({ changes: { from: 8, to: 16 } }).state
+    expect(currentRange(collapsed)).toBeUndefined()
   })
 })

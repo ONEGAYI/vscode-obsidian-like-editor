@@ -165,6 +165,30 @@ describe('Windows 与远程（POSIX 宿主）不混用', () => {
   })
 })
 
+describe('Windows 宿主的 Win32 规范化怪异形态（NTFS ADS 等）', () => {
+  // basename 含 ':'（如 note.md::$DATA）会被当作 NTFS 备用数据流读取，
+  // 尾随 '.'/空格 会被 Win32 规范化剥除——两者都不指向用户可见文件，
+  // 一律拦截（POSIX 宿主上 ':' 是合法文件名字符，不适用该过滤）
+  it('ADS 形态（basename 含冒号）拦截：链接与图片通道同口径', () => {
+    for (const href of ['note.md::$DATA', 'note.md:stream', '子目录/记:怪']) {
+      const t = classifyLinkTarget(href, WIN)
+      expect(t).toMatchObject({ kind: 'blocked', reason: 'escape' })
+      const img = classifyImageTarget(href, WIN)
+      expect(img).toMatchObject({ kind: 'blocked' })
+    }
+  })
+
+  it('basename 尾随点或空格拦截（Win32 规范化会剥除）', () => {
+    expect(classifyLinkTarget('note.md.', WIN)).toMatchObject({ kind: 'blocked', reason: 'escape' })
+    expect(classifyLinkTarget('note.md ', WIN)).toMatchObject({ kind: 'blocked', reason: 'escape' })
+  })
+
+  it('POSIX 宿主不适用该过滤（冒号/尾随点是合法文件名）', () => {
+    expect(classifyLinkTarget('a:b.md', POSIX)).toMatchObject({ kind: 'doc' })
+    expect(classifyLinkTarget('weird.', POSIX)).toMatchObject({ kind: 'doc' })
+  })
+})
+
 describe('图片目标分类（classifyImageTarget）', () => {
   it('工作区内相对图片解析为待读文件路径（空格/中文/%编码）', () => {
     const raw = classifyImageTarget('./assets/图 片.png', WIN)

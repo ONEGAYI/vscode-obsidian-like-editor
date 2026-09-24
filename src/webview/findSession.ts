@@ -199,6 +199,12 @@ export const findStateField = StateField.define<FindDecoState>({
         }
       }
     }
+    if (tr.docChanged) {
+      // 文档变更兜底映射：控制器的匹配重算在微任务中整组替换（权威），
+      // 此处先把既有装饰随 tr.changes 平移——消除「重算前一帧用旧坐标
+      // 渲染」的时序窗口，装饰结构不依赖微任务时序闭合
+      return { ...value, decos: value.decos.map(tr.changes) }
+    }
     return value
   },
   provide: (f) => EditorView.decorations.from(f, (s) => s.decos),

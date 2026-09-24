@@ -1394,7 +1394,9 @@ export class WebviewSyncController {
       b.addEventListener('click', onClick)
       return b
     }
-    const caseBtn = mkBtn(FIND_CLASS_NAMES.caseToggle, '区分大小写', () => {
+    // 大小写切换按钮：语义为「忽略大小写」开关——active 类与 aria-pressed
+    // 同步表示「忽略生效」，默认区分大小写（未激活、未按下）
+    const caseBtn = mkBtn(FIND_CLASS_NAMES.caseToggle, '忽略大小写', () => {
       this.findCaseSensitive = !this.findCaseSensitive
       caseBtn.classList.toggle(FIND_CLASS_NAMES.caseActive, !this.findCaseSensitive)
       caseBtn.setAttribute('aria-pressed', String(!this.findCaseSensitive))

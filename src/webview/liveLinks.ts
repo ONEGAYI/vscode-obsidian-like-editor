@@ -47,14 +47,42 @@ const hideDeco = Decoration.replace({})
 // ---- #11 双链装饰实例缓存（同 display 复用同一实例，RangeSet.eq 成立） ----
 
 const wikilinkMarkDeco = Decoration.mark({ class: WIKILINK_CLASS_NAMES.wikilink })
+
+/** widget 装饰缓存上限：键是用户内容（双链 display / 图片 src+alt），无上限
+ *  会随大文档滚动无限累积——视口内同时可见的双链/图片远小于此，超限逐最旧 */
+export const WIDGET_DECO_CACHE_LIMIT = 512
+
+/** Map 的 LRU 化访问：命中即重插到迭代序末尾（Map 迭代序 = 插入序），
+ *  超限逐迭代序最旧项 */
+function lruGet<V>(cache: Map<string, V>, key: string): V | undefined {
+  const hit = cache.get(key)
+  if (hit !== undefined) {
+    cache.delete(key)
+    cache.set(key, hit)
+  }
+  return hit
+}
+
+function lruEvict<V>(cache: Map<string, V>, limit: number): void {
+  while (cache.size > limit) {
+    const oldest = cache.keys().next().value
+    if (oldest === undefined) {
+      break
+    }
+    cache.delete(oldest)
+  }
+}
+
 const wikilinkWidgetDecos = new Map<string, ReturnType<typeof Decoration.replace>>()
 
-function wikilinkWidgetDeco(display: string): ReturnType<typeof Decoration.replace> {
-  let deco = wikilinkWidgetDecos.get(display)
-  if (!deco) {
-    deco = Decoration.replace({ widget: new LiveWikilinkWidget(display) })
-    wikilinkWidgetDecos.set(display, deco)
+export function wikilinkWidgetDeco(display: string): ReturnType<typeof Decoration.replace> {
+  const hit = lruGet(wikilinkWidgetDecos, display)
+  if (hit) {
+    return hit
   }
+  const deco = Decoration.replace({ widget: new LiveWikilinkWidget(display) })
+  wikilinkWidgetDecos.set(display, deco)
+  lruEvict(wikilinkWidgetDecos, WIDGET_DECO_CACHE_LIMIT)
   return deco
 }
 
@@ -114,7 +142,7 @@ const NO_MANAGER = {}
  *  RangeSet.eq 成立；不同管理器/会话不得共享 widget 实例） */
 const imageWidgetDecos = new WeakMap<object, Map<string, ReturnType<typeof Decoration.replace>>>()
 
-function imageWidgetDeco(src: string, alt: string, images: ImageResourceManager | undefined) {
+export function imageWidgetDeco(src: string, alt: string, images: ImageResourceManager | undefined) {
   const holder: object = images ?? NO_MANAGER
   let cache = imageWidgetDecos.get(holder)
   if (!cache) {
@@ -122,11 +150,13 @@ function imageWidgetDeco(src: string, alt: string, images: ImageResourceManager 
     imageWidgetDecos.set(holder, cache)
   }
   const key = `${src}\u0000${alt}`
-  let deco = cache.get(key)
-  if (!deco) {
-    deco = Decoration.replace({ widget: new LiveImageWidget(src, alt, images) })
-    cache.set(key, deco)
+  const hit = lruGet(cache, key)
+  if (hit) {
+    return hit
   }
+  const deco = Decoration.replace({ widget: new LiveImageWidget(src, alt, images) })
+  cache.set(key, deco)
+  lruEvict(cache, WIDGET_DECO_CACHE_LIMIT)
   return deco
 }
 
