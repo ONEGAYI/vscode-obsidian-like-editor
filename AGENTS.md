@@ -84,6 +84,7 @@ vscode-obsidian-like-editor/
 │   │   └── protocol.ts      # 消息协议单一事实源
 │   └── webview/     # webview 端实现
 │       ├── css.d.ts              # CSS 导入类型声明
+│       ├── findSession.ts        # 查找匹配纯函数（#14）
 │       ├── imageResource.ts      # 图片资源状态机（#10）
 │       ├── liveDecorations.ts    # 语法树驱动 Live 装饰（#8）
 │       ├── liveLinks.ts          # live 链接装饰与跳转（#10）
@@ -116,6 +117,8 @@ vscode-obsidian-like-editor/
 │       ├── compositionBuffer.test.ts  # 组合期间缓冲契约测试
 │       ├── conflictRetention.test.ts  # 冲突保留与暂停契约测试
 │       ├── documentSession.test.ts    # 文档会话契约
+│       ├── find.test.ts               # 查找会话契约测试（#14）
+│       ├── findSession.test.ts        # 查找匹配语义测试（#14）
 │       ├── historyForwarding.test.ts  # 撤销重做转发契约测试
 │       ├── imageResource.test.ts      # 图片资源管理器契约测试
 │       ├── linkInteraction.test.ts    # 链接交互契约测试（#10）

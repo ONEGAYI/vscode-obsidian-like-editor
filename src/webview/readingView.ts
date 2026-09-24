@@ -41,6 +41,8 @@ export const READING_CLASS_NAMES = {
   spacer: 'oile-reading-spacer',
   spacerTop: 'oile-reading-spacer-top',
   spacerBottom: 'oile-reading-spacer-bottom',
+  /** #14 查找当前匹配所在块的高亮（块级；面板关闭即清除） */
+  findHit: 'oile-reading-find-hit',
 } as const
 
 /** 创建阅读视图容器（稳定类名 + 模式标记；初始由调用方控制显隐） */

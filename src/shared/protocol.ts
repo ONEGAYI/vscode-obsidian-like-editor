@@ -69,6 +69,12 @@ export type HostToWebview =
       reason: 'blocked' | 'outside-workspace' | 'not-found' | 'read-error'
       detail?: string
     }
+  /** 查找会话指令（#14）：open 打开 webview 内浮动查找面板（可预置查询词，
+   *  焦点进输入框）；close 关闭并归还焦点；step 循环定位上一/下一匹配。
+   *  查找是纯只读视图操作：不写文档、不产生编辑历史、无 webview→宿主消息 */
+  | { kind: 'view.find.open'; query?: string }
+  | { kind: 'view.find.close' }
+  | { kind: 'view.find.step'; direction: 'next' | 'prev' }
 
 /** webview → 宿主消息 */
 export type WebviewToHost =
@@ -150,6 +156,8 @@ export type WebviewToHost =
       readingImageCount?: number
       /** 图片槽位状态计数（#10：当前视图内 loading/loaded/error） */
       imageStates?: ImageStateCounts
+      /** 查找会话观测（#14）：首次打开后回报（未打开过时缺省） */
+      find?: FindSessionProbe
     }
       /** 阅读视图性能探针回报（#7）：滚动往返期间的挂载/回收与解析观测 */
   | {
@@ -294,6 +302,35 @@ export interface ReadingSyntaxProbe {
   taskChecked: number
   /** #12：表格元素数（块级 table 标签；虚拟化下仅统计已挂载块） */
   tables: number
+}
+
+/** 查找会话观测（#14）：匹配集来自 webview 全文文本模型（屏外内容同样计数） */
+export interface FindSessionProbe {
+  /** 面板当前是否打开（关闭后仍回报 open:false） */
+  open: boolean
+  query: string
+  /** 大小写语义：默认 true（区分） */
+  caseSensitive: boolean
+  /** 匹配总数（文本模型全量计算） */
+  total: number
+  /** 当前匹配序号（1 基；无匹配为 0） */
+  index: number
+  /** 当前匹配区间（UTF-16 offset；无匹配为 null） */
+  currentFrom: number | null
+  currentTo: number | null
+}
+
+function isFindSessionProbe(v: unknown): v is FindSessionProbe {
+  return (
+    isObject(v) &&
+    typeof v.open === 'boolean' &&
+    isString(v.query) &&
+    typeof v.caseSensitive === 'boolean' &&
+    isNonNegativeInt(v.total) &&
+    isNonNegativeInt(v.index) &&
+    (v.currentFrom === null || isNonNegativeInt(v.currentFrom)) &&
+    (v.currentTo === null || isNonNegativeInt(v.currentTo))
+  )
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -483,7 +520,8 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.liveImageCount === undefined || isNonNegativeInt(v.liveImageCount)) &&
         (v.readingLinkCount === undefined || isNonNegativeInt(v.readingLinkCount)) &&
         (v.readingImageCount === undefined || isNonNegativeInt(v.readingImageCount)) &&
-        (v.imageStates === undefined || isImageStateCounts(v.imageStates))
+        (v.imageStates === undefined || isImageStateCounts(v.imageStates)) &&
+        (v.find === undefined || isFindSessionProbe(v.find))
       )
     case 'reading.perf.report':
       return (
@@ -617,6 +655,12 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
         )
       }
       return false
+    case 'view.find.open':
+      return v.query === undefined || isString(v.query)
+    case 'view.find.close':
+      return true
+    case 'view.find.step':
+      return v.direction === 'next' || v.direction === 'prev'
     default:
       return false
   }
