@@ -613,11 +613,36 @@ export function createTextEditorProvider(
       const remembered = readRemembered()
       const resolveBehavior = decideResolveBehavior(remembered, uriInDiffContext(document.uri))
       if (resolveBehavior === 'bounce-to-source') {
-        // 弹回同样经 openWith('default')（新开 tab）：完成后清理被弹回的
-        // 本 custom tab（dirty 保守保留，与 toSource 命令同口径）
-        void vscode.commands
-          .executeCommand('vscode.openWith', document.uri, 'default')
-          .then(() => closeStaleVsidianTabs(document.uri))
+        // 弹回：resolve 运行在 custom input 的 open 管线内，立即操纵标签
+        // 会与管线完成时的激活意图竞态（实测 flaky：原生 tab 的激活可被本
+        // custom tab 反超或被后续激活覆盖，空白面板滞留并占据活动位，且会
+        // 被后续 openWith 重显成永不就绪的面板）。故延迟到本面板激活事件
+        // （open 管线收尾的标志）后再弹回；showTextDocument 物化原生编辑器
+        // 控件（openWith('default') 对已存在原生 tab 的 reveal 偶发只置活动
+        // 标记不物化，实测 activeTextEditor 为空），原生激活后本面板已非活动，
+        // dispose 无再激活副作用。preview:false 与 openWith 的 pinned:true
+        // 同语义；closeStaleTabs 作残余清扫
+        const bounceToSource = (): void => {
+          void vscode.window
+            .showTextDocument(document, { preview: false })
+            .then(() => webviewPanel.dispose())
+            .then(() => closeStaleTabs(document.uri, 'text'))
+        }
+        if (webviewPanel.active) {
+          bounceToSource()
+        } else {
+          const activateSub = webviewPanel.onDidChangeViewState((e) => {
+            if (!e.webviewPanel.active) {
+              return
+            }
+            activateSub.dispose()
+            bounceToSource()
+          })
+          const closeSub = webviewPanel.onDidDispose(() => {
+            activateSub.dispose()
+            closeSub.dispose()
+          })
+        }
         return
       }
       const entry = openEntry(document)
@@ -709,12 +734,17 @@ export function createTextEditorProvider(
   //  升级为三态循环。模式是 webview 视图状态，切换不写 TextDocument ----
 
   /** 活动标签的模式推导：本扩展面板取活动面板缓存（缺省 live）；原生
-   *  .md/.markdown 文本编辑器为 source；其余语境不可切换 */
+   *  .md/.markdown 文本编辑器为 source（优先读活动 tab 的 TabInputText——
+   *  activeTextEditor 在 1.86.2 双标签脏态保存后可为空（保存会把活动位翻
+   *  到原生 tab 而不物化控件，实测），不能作为唯一依据）；其余语境不可切换 */
   const deriveActiveTabMode = (): { mode: TriViewMode; uri: vscode.Uri } | undefined => {
     const tab = vscode.window.tabGroups.activeTabGroup.activeTab
     const input = tab?.input
     if (input instanceof vscode.TabInputCustom && input.viewType === VIEW_TYPE) {
       return { mode: activePanelMode(input.uri.toString()) ?? 'live', uri: input.uri }
+    }
+    if (input instanceof vscode.TabInputText && isMarkdownFile(input.uri)) {
+      return { mode: 'source', uri: input.uri }
     }
     const editor = vscode.window.activeTextEditor
     if (editor && isMarkdownFile(editor.document.uri)) {
@@ -723,26 +753,68 @@ export function createTextEditorProvider(
     return undefined
   }
 
+  /** #38 单标签清理的 uri 等值判定：Windows 下 Tab API 与 TextDocument
+   *  对同一资源的盘符大小写不稳定（实测同一文档在两个 surface 分别为
+   *  /C:/ 与 /c:/，取决于 tab 的创建路径），按宿主平台归一化比较
+   *  （POSIX 宿主保持大小写敏感） */
+  const isSameDocUri = (a: vscode.Uri, b: vscode.Uri): boolean => {
+    const x = a.toString()
+    const y = b.toString()
+    return process.platform === 'win32' ? x.toLowerCase() === y.toLowerCase() : x === y
+  }
+
   /** 1.86 的 vscode.openWith 对「同资源不同编辑器」是新开 tab 而非原位
-   *  替换（实测）：切到源码编辑器后关闭被替换的旧 Vsidian tab 完成原位
-   *  切换体验。dirty 时保守保留——1.86 关闭 dirty tab 有 revert 风险
-   *  （即使另一视图显示同一文档，见 diff 陷阱笔记陷阱 3），留给用户处理 */
-  const closeStaleVsidianTabs = async (uri: vscode.Uri): Promise<void> => {
+   *  替换（实测；T1 查证 1.86.0 源码：workbench.action.reopenWithEditor 虽
+   *  内部走 replaceEditors，但硬编码 override: EditorResolution.PICK 必弹
+   *  用户选择器，没有可编程指定目标编辑器的命令形态）——切换后关闭被替换
+   *  的旧 tab 完成原位切换体验。旧 tab 覆盖两类：本扩展 custom tab（toSource
+   *  与弹回方向）与原生文本 tab（toLive 方向，#38 修复源码态与预览态并存
+   *  双标签）。
+   *  expectKind 为新编辑器的 tab 形态：新 tab 的激活可能晚于打开动作返回
+   *  （弹回链路实测在激活前清理会误关刚开的原生 tab），先等它成为活动
+   *  tab 再清理其余非活动 tab；等待超时则本次放弃清理（残留旧 tab 不影响
+   *  新视图，下次切换复用清理）。
+   *  dirty：1.86.2 关闭带未保存内容的旧 tab 会把 TextDocument revert 回
+   *  磁盘内容——custom 与原生两个方向皆然，且与另一编辑器是否已打开同一
+   *  文档无关（集成用例 A/B 实测裁决）。dirty 时保守保留旧 tab（双标签为
+   *  已知代价，见 mvp.md），保存后再次切换复用本清理 */
+  const closeStaleTabs = async (uri: vscode.Uri, expectKind: 'text' | 'custom'): Promise<void> => {
     const doc = vscode.workspace.textDocuments.find(
-      (d) => d.uri.toString() === uri.toString(),
+      (d) => isSameDocUri(d.uri, uri),
     )
     if (doc?.isDirty) {
       return
     }
+    const deadline = Date.now() + 3000
+    for (;;) {
+      const active = vscode.window.tabGroups.activeTabGroup.activeTab
+      const activeInput = active?.input
+      const newTabActive =
+        expectKind === 'text'
+          ? activeInput instanceof vscode.TabInputText &&
+            isSameDocUri(activeInput.uri, uri)
+          : activeInput instanceof vscode.TabInputCustom &&
+            activeInput.viewType === VIEW_TYPE &&
+            isSameDocUri(activeInput.uri, uri)
+      if (newTabActive) {
+        break
+      }
+      if (Date.now() > deadline) {
+        return
+      }
+      await new Promise((r) => setTimeout(r, 50))
+    }
     for (const group of vscode.window.tabGroups.all) {
       for (const tab of group.tabs) {
         const input = tab.input
-        if (
-          tab !== group.activeTab &&
+        const staleCustom =
           input instanceof vscode.TabInputCustom &&
           input.viewType === VIEW_TYPE &&
-          input.uri.toString() === uri.toString()
-        ) {
+          isSameDocUri(input.uri, uri)
+        const staleNative =
+          input instanceof vscode.TabInputText &&
+          isSameDocUri(input.uri, uri)
+        if (tab !== group.activeTab && (staleCustom || staleNative)) {
           try {
             await vscode.window.tabGroups.close(tab)
           } catch {
@@ -768,6 +840,19 @@ export function createTextEditorProvider(
     }
   }
 
+  /** 落位原生源码编辑器（#38）：经文本编辑器管线（openTextDocument +
+   *  showTextDocument）而非 openWith('default')——后者对「原生 tab 已存在」
+   *  的 reveal 偶发只置活动标记而不重建编辑器控件（实测 activeTextEditor/
+   *  visibleTextEditors 皆空）；showTextDocument 强制原生（EXCLUSIVE_ONLY）
+   *  并返回 TextEditor，控件必然物化。preview:false 与 openWith 的
+   *  pinned:true 同语义（不产生预览态标签） */
+  const ensureSourceEditor = async (uri: vscode.Uri): Promise<boolean> => {
+    const doc = await vscode.workspace.openTextDocument(uri)
+    await vscode.window.showTextDocument(doc, { preview: false })
+    await closeStaleTabs(uri, 'text')
+    return true
+  }
+
   /** 执行动作计划。记忆写入时序（viewCycle 模块约定）：open-in-vsidian
    *  必须先写记忆再 openWith（resolve 的弹回/恢复读最新记忆，后写会被
    *  弹回或落到错误模式）；其余动作成功后写 */
@@ -776,13 +861,15 @@ export function createTextEditorProvider(
       case 'open-in-vsidian': {
         await writeRemembered(plan.mode)
         await vscode.commands.executeCommand('vscode.openWith', uri, VIEW_TYPE)
+        // #38 单标签：关闭被替换的旧原生 tab（dirty 保留，见 closeStaleTabs
+        // 注释）
+        await closeStaleTabs(uri, 'custom')
         // 重显面板的模式补发语义见 postModeToReadyPanels
         postModeToReadyPanels(uri, plan.mode)
         return true
       }
       case 'open-in-source-editor': {
-        await vscode.commands.executeCommand('vscode.openWith', uri, 'default')
-        await closeStaleVsidianTabs(uri)
+        await ensureSourceEditor(uri)
         await writeRemembered('source')
         return true
       }
@@ -832,6 +919,17 @@ export function createTextEditorProvider(
       return false
     }
     const target = explicitTarget ?? nextTriMode(active.mode)
+    // 已在源码态的显式 toSource：不做纯 no-op——双标签脏态下保存会把活动
+    // 位翻到原生 tab 而不物化编辑器控件（1.86.2 实测 activeTextEditor 为
+    // 空，模式推导因此只能依赖 tab input），此路径 re-affirm 落位控件并
+    // 复用单标签清理；健康状态下为幂等操作（重激活 + 空清扫）。diff 语境
+    // 仍走 planViewSwitch 的拒绝（D10 守卫不得被绕过——diff 侧 activeTextEditor
+    // 也是 .md 文档，不门控会落位原生编辑器毁掉对比视图）
+    if (!inDiffContext && active.mode === 'source' && target === 'source') {
+      await ensureSourceEditor(active.uri)
+      await writeRemembered('source')
+      return true
+    }
     const entry = getEntry(active.uri)
     const hasReadyPanel = entry?.session.getInfo().panels.some((p) => p.ready) ?? false
     const ok = await applyViewSwitch(active.uri, planViewSwitch(active.mode, target, hasReadyPanel, inDiffContext))
