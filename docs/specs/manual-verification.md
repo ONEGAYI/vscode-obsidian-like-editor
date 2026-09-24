@@ -242,7 +242,7 @@
 
 预期：行号始终对应源文件物理行（不按阅读块/视觉行编号）；开关即时生效且持久化；行号栏落在正文左缘留白带内，不遮挡正文、不移动 #32 排版基线；阅读模式无行号；大文档行号 DOM 有界、滚动流畅。
 
-自动化已覆盖（2026-09-24，真实 1.86.2 宿主，集成用例 9 例 + #34 相关单测 18 例）：上述 1/2/3（含两面板广播与新面板拉取持久值、开关不改文档版本与写回）/4/5 的可观测部分——第 2 条编辑场景全覆盖（开头/中部插入多行、单事务粘贴多行、表格命令真实删除行、宿主 WorkspaceEdit 外部变更增删行、CRLF 文档编辑与撤销随动）；large.md 经 `view.locate` 滚到底部实测 6 位行号 scaleX<1 且正文左缘 24px 基线恒定、滚回顶部档位恢复；行号 DOM 数量有界（视口级）。单测层另有降级公式与 main.css 变量/字号规则的双写钉子（lineNumberCssContract.test.ts，防两处落点漂移）。待人工项：10 万行 6 位压缩行号的目视可读性（集成只能断言数值与几何，观感需人眼）、真实重启 VSCode 后开关回读（集成单进程无法等价模拟重启；globalState 持久化语义已经 #33 单测层同一持久层重建服务验证）、长文档滚动中行号跟随的手感。
+自动化已覆盖（2026-09-24，真实 1.86.2 宿主，集成用例 9 例 + #34 相关单测 18 例）：上述 1/2/3（含两面板广播与新面板拉取持久值、开关不改文档版本与写回）/4/5 的可观测部分——第 2 条编辑场景全覆盖（开头/中部插入多行、单事务粘贴多行、表格命令真实删除行、宿主 WorkspaceEdit 外部变更增删行、CRLF 文档编辑与撤销随动）；large.md 布局契约按流内布局断言（10 万行 6 位编号列宽全程预留，开启行号正文内缩 89.6px 恒定、滚动无回流，关闭回到 24px 基线；宽编号压缩机制已随布局修订移除）；行号 DOM 数量有界（视口级）。单测层另有 main.css 变量/字号规则的双写钉子（lineNumberCssContract.test.ts，防两处落点漂移）。待人工项：真实重启 VSCode 后开关回读（集成单进程无法等价模拟重启；globalState 持久化语义已经 #33 单测层同一持久层重建服务验证）、长文档滚动中行号跟随的手感。
 
 > **P0 修复记录（2026-09-24，用户验收发现）**：行号开启时正文整体不可见、行号可被鼠标选中。根因两层——① webview CSP `style-src` 自首个提交起未放行内联样式，CM6（style-mod）运行时注入的 baseTheme 样式表被浏览器拒绝（`<style>` 元素存在但 `sheet` 为 null），`.cm-scroller` 退化为 block；此前无行号栏时 block 与 flex 单子元素视觉等价故从未暴露，#34 行号栏成为第二个 flex 子元素后与正文上下堆叠、正文被推出视口。② CM6 Gutter 以 JS 内联样式设置 `position: sticky`，sticky 被包含块钳制在内容盒左缘，抵消了行号栏的负边距、使其覆盖正文。修复：CSP 追加 `'unsafe-inline'`（仅样式，脚本仍 nonce 门控）；行号栏 `position: relative !important` 压过内联 sticky；`user-select: none` 禁选。新增 `view.state.paint` 绘制层探针与集成用例（正文命中测试可见性 + CM6 注入样式存活 + 行号禁选），既有 DOM 数量/几何坐标类断言无法拦截此类缺陷。
 >
@@ -250,7 +250,7 @@
 >
 > **行号布局修订（2026-09-25，用户决策，取代上述 P0 记录中的留白带叠加方案）**：行号列改为**流内布局**——`行号列 + 固定间距（--vsidian-ln-gap = 2 × VSCode UI 字号，响应界面元素大小）+ 主体文字` 的总宽 = 行号关闭时的正文宽度；列不外扩、正文向右内缩，关闭行号（或阅读模式）时正文回到 24px 页面留白基线。此修订正式取代 #32 验收中"行号栏不得右移正文基线"的旧口径（该口径源于留白带叠加设计，带宽 24px 无法容纳宽编号与合理间距，用户已决策改为内缩式）。scaleX 宽编号压缩机制随带宽约束一并移除：CM6 按文档最大行号预留列宽，真宿主实测 10 万行文档开启行号正文内缩 89.6px 全程恒定（滚动无回流），关闭行号回到 24px 基线。旧 P0 记录中 `position: relative !important` 压制内联 sticky 的做法随之退役（流内静态位与 sticky 钳制一致，无需干预）。
 >
-> **光标与选区主题适配（2026-09-25，用户验收发现）**：深色主题下光标呈黑底黑色不可见。根因同属 CSP 修复后 baseTheme 复活的配套缺失——CM6 默认按浅色主题渲染光标（`border-left: 1.2px solid black`）与选区（浅灰 `#d9d9d9`），dark 变体需显式声明 darkTheme 而扩展从未声明。修复：光标改引 `--vscode-editorCursor-foreground`、选区改引 `--vscode-editor-selectionBackground`（均带回退），随宿主主题（含高对比）自动正确。契约由 test/unit/editorChromeCssContract.test.ts 钉住；观感属目视项，随 A23 人工复核。
+> **光标明暗主题自适应（2026-09-25，用户验收发现两轮）**：深色主题下光标黑底黑色不可见。第一轮诊断有误：`.cm-cursor`/`.cm-selectionBackground` 是 CM6 `drawSelection()` 扩展的产物，本扩展未启用该扩展——光标实为**原生 caret**，颜色由 baseTheme 的 `caret-color` 决定（light 变体写死 black），故第一轮引 `--vscode-editorCursor-foreground` 覆盖 `.cm-cursor` 的规则不命中任何元素（无效修复），运行时探针实证 `cursorBorderColor=null` 后推翻。最终方案（用户指示：**自适应明暗，不硬编码 dark 也不硬编码颜色**）：`syncController` 以 `darkCompartment` 声明 `EditorView.darkTheme`——初始按 webview body 主题 class 判定（`vscode-dark`/`vscode-high-contrast` 为暗，`vscode-light`/`vscode-high-contrast-light` 为亮），MutationObserver 监听 body class 热跟随宿主主题切换；caret 颜色完全交给 baseTheme 内建变体（light: black / dark: white），main.css 零颜色代码。真宿主 Dark+ 实测 `darkTheme=true`、`caret-color=rgb(255,255,255)`。契约由 test/unit/editorChromeCssContract.test.ts 钉住（facet 热跟随行为 + main.css 不得出现 caret/cursor 硬编码规则）；浅色/高对比主题下的观感属目视项，随 A23 人工复核。
 
 ## 已知限制（如实记录）
 

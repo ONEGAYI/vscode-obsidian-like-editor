@@ -1,42 +1,109 @@
 // @vitest-environment jsdom
-// 编辑器铬件（光标/选区）主题适配契约（钉子测试）：CM6 baseTheme 按浅色
-// 主题渲染光标（黑）与选区（浅灰），dark 变体需显式声明 darkTheme 而
-// 扩展未声明——深色 webview 下黑底黑光标（用户验收发现）。main.css 以
-// VSCode 主题变量覆盖，本测试读 CSS 源文本钉住覆盖规则不被无意删改。
-// jsdom 声明仅为与其余 webview 单测同环境；本测试只读文件、不触 DOM。
+// 编辑器铬件明暗主题自适应契约：CM6 dark 声明随宿主 body 主题 class
+// 动态跟随（mount 初始判定 + MutationObserver 热切换），光标颜色交给
+// baseTheme 内建变体（light: caret black / dark: caret white）——不在
+// CSS 硬编码颜色（#34 验收决议：深色主题黑底黑光标的根治方式）。
+// jsdom 无 CSS 引擎，行为断言走 EditorView.darkTheme facet 实值；
+// 另以源文本钉子守住 main.css 不回退到硬编码颜色方案。
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { EditorView } from '@codemirror/view'
+import {
+  WebviewSyncController,
+  isVscodeDarkBody,
+  type VsCodeBridge,
+} from '../../src/webview/syncController'
+import type { WebviewToHost } from '../../src/shared/protocol'
 
 const css = readFileSync(path.resolve(process.cwd(), 'src/webview/main.css'), 'utf8')
 
-function extractOne(label: string, pattern: RegExp): RegExpMatchArray {
-  const matches = [...css.matchAll(pattern)]
-  expect(
-    matches.length,
-    `main.css 中「${label}」应恰好出现一次（模式 ${String(pattern)}，实际 ${matches.length} 处）`,
-  ).toBe(1)
-  return matches[0]!
+function makeBridge(): VsCodeBridge {
+  const sent: WebviewToHost[] = []
+  const bridge: VsCodeBridge = {
+    postMessage: (m) => sent.push(m as WebviewToHost),
+    getState: () => undefined,
+    setState: () => undefined,
+  }
+  return bridge
 }
 
-describe('编辑器铬件主题适配（光标/选区走 VSCode 主题变量）', () => {
-  it('光标颜色：.cm-cursor/.cm-dropCursor 引 --vscode-editorCursor-foreground', () => {
-    const rule = extractOne(
-      '光标颜色规则',
-      /\.cm-cursor,\s*\n#app \.cm-editor \.cm-dropCursor\s*\{[^}]*\}/g,
-    )
-    expect(rule[0], '光标颜色须引主题变量（黑底黑光标的根治）').toMatch(
-      /border-left-color:\s*var\(--vscode-editorCursor-foreground/,
-    )
+/** MutationObserver 回调在微任务后派发；宏任务必在其后 */
+function settle(): Promise<void> {
+  return new Promise((r) => setTimeout(r, 0))
+}
+
+function darkFacet(c: WebviewSyncController): boolean | undefined {
+  return c.getView()?.state.facet(EditorView.darkTheme)
+}
+
+describe('宿主明暗主题判定（isVscodeDarkBody）', () => {
+  function bodyWith(...classes: string[]): HTMLElement {
+    const el = document.createElement('body')
+    el.classList.add(...classes)
+    return el
+  }
+
+  it('深色与暗色高对比为暗；浅色与亮色高对比及无标记为亮', () => {
+    expect(isVscodeDarkBody(bodyWith('vscode-dark', 'vscode-theme'))).toBe(true)
+    expect(isVscodeDarkBody(bodyWith('vscode-high-contrast'))).toBe(true)
+    expect(isVscodeDarkBody(bodyWith('vscode-light', 'vscode-theme'))).toBe(false)
+    expect(isVscodeDarkBody(bodyWith('vscode-high-contrast-light'))).toBe(false)
+    expect(isVscodeDarkBody(bodyWith('vscode-theme'))).toBe(false)
+  })
+})
+
+describe('CM6 dark 声明随宿主主题热跟随', () => {
+  let controller: WebviewSyncController | undefined
+
+  beforeEach(() => {
+    document.body.className = ''
+    controller = new WebviewSyncController(makeBridge())
+    controller.mount(document.createElement('div'))
   })
 
-  it('选区背景：引 --vscode-editor-selectionBackground（含聚焦态覆盖）', () => {
-    const rule = extractOne(
-      '选区背景规则',
-      /\.cm-selectionLayer \.cm-selectionBackground,\s*\n#app \.cm-editor\.cm-focused[^{]*\{[^}]*\}/g,
-    )
-    expect(rule[0], '选区背景须引主题变量（取代 CM6 浅色默认 #d9d9d9）').toMatch(
-      /background:\s*var\(--vscode-editor-selectionBackground/,
-    )
+  afterEach(() => {
+    controller?.dispose()
+    controller = undefined
+    document.body.className = ''
+  })
+
+  it('初始无主题 class 时为亮色声明', () => {
+    expect(darkFacet(controller!)).toBe(false)
+  })
+
+  it('body 加 vscode-dark 后热切换为 dark，移除后回落', async () => {
+    document.body.classList.add('vscode-dark')
+    await settle()
+    expect(darkFacet(controller!)).toBe(true)
+    document.body.classList.remove('vscode-dark')
+    await settle()
+    expect(darkFacet(controller!)).toBe(false)
+  })
+
+  it('暗色高对比（vscode-high-contrast）同样激活，亮色高对比不激活', async () => {
+    document.body.classList.add('vscode-high-contrast')
+    await settle()
+    expect(darkFacet(controller!)).toBe(true)
+    document.body.classList.replace('vscode-high-contrast', 'vscode-high-contrast-light')
+    await settle()
+    expect(darkFacet(controller!)).toBe(false)
+  })
+
+  it('dispose 后不再跟随主题变化（观察者已断开）', async () => {
+    controller!.dispose()
+    controller = undefined
+    document.body.classList.add('vscode-dark')
+    await settle()
+    // dispose 后 getView 为空，无从观察 facet——以不再抛错/无残留副作用为过
+  })
+})
+
+describe('光标颜色零硬编码钉子（main.css 源文本）', () => {
+  it('不得出现 caret-color 或 .cm-cursor/.cm-selectionBackground 颜色覆盖规则', () => {
+    expect(css, 'caret 颜色应由 baseTheme 明暗变体接管，不写 caret-color').not.toMatch(/caret-color/)
+    expect(css, '未启用 drawSelection，不应残留 .cm-cursor 颜色规则').not.toMatch(/\.cm-cursor/)
+    expect(css, '未启用 drawSelection，不应残留 .cm-selectionBackground 颜色规则')
+      .not.toMatch(/\.cm-selectionBackground/)
   })
 })

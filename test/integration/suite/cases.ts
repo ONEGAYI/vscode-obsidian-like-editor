@@ -270,11 +270,13 @@ interface ViewState {
     first: string | null
     last: string | null
   }
-  /** 绘制层探针（P0 回归）：正文可见性 / CM6 注入样式存活 / 行号禁选 */
+  /** 绘制层探针（P0 回归）：正文可见性 / CM6 注入样式存活 / 行号禁选 / 明暗声明与光标实值 */
   paint?: {
     textVisible: boolean
     scrollerDisplay: string | null
     gutterUserSelect: string | null
+    darkTheme: boolean
+    caretColor: string | null
   }
 }
 
@@ -3097,6 +3099,17 @@ export const cases: Array<[string, () => Promise<void>]> = [
         '若为 block 说明 CSP 拦截了 style-mod 注入的样式表）')
     assert(on.paint?.gutterUserSelect === 'none',
       `行号栏应禁选（user-select 应为 none，实际 ${String(on.paint?.gutterUserSelect)}）`)
+    // 光标明暗自适应（深色主题黑底黑光标回归）：本扩展未启用 drawSelection，
+    // CM6 光标即原生 caret；dark 声明须随宿主主题 class 激活（Dark+ 宿主
+    // body 带 vscode-dark），caret 颜色由 baseTheme 内建变体接管而非黑默认
+    const caret = on.paint?.caretColor ?? null
+    console.log(`[P0] darkTheme=${String(on.paint?.darkTheme)}，caret-color=${String(caret)}`)
+    assert(on.paint?.darkTheme === true,
+      `深色宿主应激活 CM6 dark 声明（darkTheme=${String(on.paint?.darkTheme)}；` +
+        '若为 false 说明 body 主题 class 判定或热跟随装配失效，见 syncController.isVscodeDarkBody）')
+    assert(caret !== null, 'caret-color 计算值应可读（caretColor 不应为 null）')
+    assert(caret !== 'rgb(0, 0, 0)' && caret !== '#000000' && caret !== '#000',
+      `深色宿主 caret 应为 baseTheme dark 变体（white）而非黑默认（实际 ${caret}）`)
 
     // 差分自证：关闭行号后正文仍可见（度量在两态下均有效）
     const okSet = (await vscode.commands.executeCommand(CMD.setSettings, {

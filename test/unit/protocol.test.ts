@@ -179,28 +179,46 @@ describe('isWebviewToHost', () => {
 
   it('view.state 的 paint 观测（P0 回归）：合法样本接受、字段非法拒绝', () => {
     const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
-    // 合法：textVisible 布尔；display/userSelect 字符串或 null
+    // 合法：textVisible/darkTheme 布尔；display/userSelect/caretColor 字符串或 null
     expect(
       isWebviewToHost({
         ...base,
-        paint: { textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none' },
+        paint: {
+          textVisible: true,
+          scrollerDisplay: 'flex',
+          gutterUserSelect: 'none',
+          darkTheme: true,
+          caretColor: 'rgb(255, 255, 255)',
+        },
       }),
     ).toBe(true)
     expect(
       isWebviewToHost({
         ...base,
-        paint: { textVisible: false, scrollerDisplay: null, gutterUserSelect: null },
+        paint: {
+          textVisible: false,
+          scrollerDisplay: null,
+          gutterUserSelect: null,
+          darkTheme: false,
+          caretColor: null,
+        },
       }),
     ).toBe(true)
-    // 非法：textVisible 非布尔 / scrollerDisplay 非字符串非 null
+    // 非法：textVisible 非布尔 / scrollerDisplay 非字符串非 null / darkTheme 非布尔 / caretColor 非字符串非 null
     expect(
-      isWebviewToHost({ ...base, paint: { textVisible: 1, scrollerDisplay: 'flex', gutterUserSelect: 'none' } }),
+      isWebviewToHost({ ...base, paint: { textVisible: 1, scrollerDisplay: 'flex', gutterUserSelect: 'none', darkTheme: false, caretColor: null } }),
     ).toBe(false)
     expect(
-      isWebviewToHost({ ...base, paint: { textVisible: true, scrollerDisplay: 3, gutterUserSelect: 'none' } }),
+      isWebviewToHost({ ...base, paint: { textVisible: true, scrollerDisplay: 3, gutterUserSelect: 'none', darkTheme: false, caretColor: null } }),
     ).toBe(false)
     expect(
-      isWebviewToHost({ ...base, paint: { textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: [] } }),
+      isWebviewToHost({ ...base, paint: { textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: [], darkTheme: false, caretColor: null } }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({ ...base, paint: { textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none', darkTheme: 'dark', caretColor: null } }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({ ...base, paint: { textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none', darkTheme: false, caretColor: 0 } }),
     ).toBe(false)
     // 缺省合法（向后兼容：探针未装配的旧 webview）
     expect(isWebviewToHost(base)).toBe(true)

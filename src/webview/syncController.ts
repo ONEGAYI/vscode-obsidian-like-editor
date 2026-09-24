@@ -333,6 +333,16 @@ export class WebviewSyncController {
   private lineNumbersOn = SHOW_LINE_NUMBERS_DEFAULT
   /** 行号扩展的运行时开关通道（extensions 装配点） */
   private readonly lineNumbersCompartment = new Compartment()
+
+  // ---- 宿主主题明暗自适应（不硬编码 dark，也不硬编码颜色）----
+  /** CM6 明暗声明通道：跟随 webview body 的主题 class（vscode-dark 等），
+   *  激活 baseTheme 内建变体（light: caret black / dark: caret white 等），
+   *  本扩展不写任何光标/选区颜色 */
+  private readonly darkCompartment = new Compartment()
+  /** 上次应用值（跳过等值 reconfigure；undefined = 尚未应用过） */
+  private hostDarkApplied: boolean | undefined
+  /** body 主题 class 观察者：宿主切换明暗主题时热跟随 */
+  private hostThemeObserver: MutationObserver | undefined
   /** 当前降级档位（视口最大行号十进制位数；-1 = 未初始化，触发首次计算） */
 
   // ---- 冲突暂停状态（#4）----
@@ -517,10 +527,14 @@ export class WebviewSyncController {
       }
     }
     document.addEventListener('keydown', this.docKeydown, true)
+    // 宿主明暗主题热跟随：body class 由 VSCode 随主题实时更新
+    this.hostThemeObserver = new MutationObserver(() => this.applyHostTheme())
+    this.hostThemeObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] })
     this.view = new EditorView({
       parent: this.liveWrapper,
       state: EditorState.create({ doc: '', extensions: this.extensions() }),
     })
+    this.hostDarkApplied = isVscodeDarkBody()
     this.applyModeDom(this.viewMode)
     this.bridge.postMessage({ kind: 'ready' })
   }
@@ -534,6 +548,8 @@ export class WebviewSyncController {
       clearTimeout(this.flushTimer)
       this.flushTimer = undefined
     }
+    this.hostThemeObserver?.disconnect()
+    this.hostThemeObserver = undefined
     if (this.docKeydown) {
       document.removeEventListener('keydown', this.docKeydown, true)
       this.docKeydown = undefined
@@ -2053,7 +2069,13 @@ export class WebviewSyncController {
     const view = this.view
     const contentEl = view?.dom.querySelector<HTMLElement>('.cm-content')
     if (!view || !contentEl) {
-      return { textVisible: false, scrollerDisplay: null, gutterUserSelect: null }
+      return {
+        textVisible: false,
+        scrollerDisplay: null,
+        gutterUserSelect: null,
+        darkTheme: false,
+        caretColor: null,
+      }
     }
     // elementFromPoint/几何 rect 依赖真实布局：jsdom（单测宿主）无布局能力
     // 且 elementFromPoint 缺失，任何异常都视为不可见（PaintProbe 语义注记：
@@ -2088,10 +2110,21 @@ export class WebviewSyncController {
       textVisible = false
     }
     const guttersEl = view.dom.querySelector<HTMLElement>('.cm-gutters')
+    // 光标取证：本扩展未启用 drawSelection，CM6 光标即原生 caret，颜色
+    // 由 baseTheme 明暗变体决定（light=black / dark=white）。darkTheme 取
+    // facet 实值（jsdom 可读），caretColor 取计算值（jsdom 无 CSS 引擎为 null）
+    let caretColor: string | null = null
+    try {
+      caretColor = getComputedStyle(contentEl).caretColor || null
+    } catch {
+      caretColor = null
+    }
     return {
       textVisible,
       scrollerDisplay: view.scrollDOM ? getComputedStyle(view.scrollDOM).display : null,
       gutterUserSelect: guttersEl ? getComputedStyle(guttersEl).userSelect : null,
+      darkTheme: view.state.facet(EditorView.darkTheme),
+      caretColor,
     }
   }
 
@@ -2135,9 +2168,24 @@ export class WebviewSyncController {
     }
   }
 
+  /** 宿主明暗主题跟随：body class 变化时热重配 dark 声明（等值跳过） */
+  private applyHostTheme(): void {
+    const dark = isVscodeDarkBody()
+    if (dark === this.hostDarkApplied || !this.view) {
+      return
+    }
+    this.hostDarkApplied = dark
+    this.view.dispatch({
+      effects: this.darkCompartment.reconfigure(EditorView.darkTheme.of(dark)),
+    })
+  }
+
   private extensions() {
     return [
       EditorView.lineWrapping,
+      // 宿主明暗主题声明：初始按 body 主题 class 判定，切换时热重配
+      // （applyHostTheme）。baseTheme 内建变体接管 caret 等颜色——不硬编码
+      this.darkCompartment.of(EditorView.darkTheme.of(isVscodeDarkBody())),
       // 行号栏（#34）：源文件行号经 Compartment 装配（设置开关热重配，
       // mount 时按定义默认开）；列在流内、与正文以固定间距相隔的布局
       // 见 main.css 的 #34 段（行号列宽随位数自适应，无降级机制）
@@ -2271,4 +2319,13 @@ export class WebviewSyncController {
       }),
     ]
   }
+}
+
+/** VSCode webview 明暗主题判定：深色（vscode-dark）与暗色高对比
+ *  （vscode-high-contrast）为暗；浅色（vscode-light）与亮色高对比
+ *  （vscode-high-contrast-light）为亮。body class 由 VSCode 随主题
+ *  实时更新，观察者见 WebviewSyncController.applyHostTheme */
+export function isVscodeDarkBody(body: HTMLElement = document.body): boolean {
+  const cl = body.classList
+  return cl.contains('vscode-dark') || cl.contains('vscode-high-contrast')
 }

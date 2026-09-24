@@ -378,6 +378,14 @@ export interface PaintProbe {
   scrollerDisplay: string | null
   /** 行号栏 computed user-select（'none' = 禁选；栏未装配为 null） */
   gutterUserSelect: string | null
+  /** CM6 明暗声明当前激活态（EditorView.darkTheme facet 实值）。随宿主
+   *  body 主题 class 动态跟随；激活后 baseTheme 内建变体接管 caret 等
+   *  颜色——本扩展不硬编码光标色（深色主题黑底黑光标回归的观测位） */
+  darkTheme: boolean
+  /** `.cm-content` computed caret-color（'rgb(...)' 文本）。未启用
+   *  drawSelection 时 CM6 光标即原生 caret，颜色由 baseTheme 明暗变体
+   *  决定（light=black / dark=white）；jsdom 无 CSS 引擎为 null */
+  caretColor: string | null
 }
 
 /** #32 排版一致性探针：正文基础排版四项样本（null = 元素缺失/不可读） */
@@ -529,13 +537,15 @@ function isLineGutterProbe(v: unknown): v is LineGutterProbe {
   )
 }
 
-/** 绘制层探针校验：textVisible 布尔；display/userSelect 为字符串或 null */
+/** 绘制层探针校验：textVisible/darkTheme 布尔；display/userSelect/caretColor 字符串或 null */
 function isPaintProbe(v: unknown): v is PaintProbe {
   return (
     isObject(v) &&
     typeof v.textVisible === 'boolean' &&
     isNullOrString(v.scrollerDisplay) &&
-    isNullOrString(v.gutterUserSelect)
+    isNullOrString(v.gutterUserSelect) &&
+    typeof v.darkTheme === 'boolean' &&
+    isNullOrString(v.caretColor)
   )
 }
 
