@@ -247,6 +247,7 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   writeFileSync(path.join(wsDir, 'fence-chunk.md'), FENCE_CHUNK_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'task.md'), TASK_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'table.md'), TABLE_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'table42.md'), TABLE_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'table13.md'), TABLE13_DOC, 'utf8')
   const largeLines = Array.from({ length: LARGE_DOC_LINES }, (_, i) => `第 ${i + 1} 行 ——固定宽度填充文本，用于长文档视口渲染验证——`)
   writeFileSync(path.join(wsDir, 'large.md'), largeLines.join('\n') + '\n', 'utf8')

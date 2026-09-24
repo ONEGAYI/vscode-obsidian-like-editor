@@ -583,6 +583,9 @@ export function createLinkInteractions(opts: {
           if (event.ctrlKey || event.metaKey) return onMouseDown(event, view)
           if (event.button !== 0) return false
           const target = event.target instanceof Element ? event.target : null
+          // #42 网格中的普通单击先进入对应单元格源码；显式 Ctrl/Cmd
+          // 仍按上方分支跳转，避免整格都是链接时失去点击编辑入口。
+          if (target?.closest('.vsidian-table-grid-row')) return false
           const rendered = target?.closest('[data-vsidian-rendered-wikilink="true"]')
             ? 'wikilink'
             : target?.closest('[data-vsidian-rendered-link="true"]') ? 'link' : null

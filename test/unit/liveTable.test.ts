@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-// 表格单元格编辑契约（工单 #12）：live 装饰 + 单元格编辑链路 + 权威回读。
+// 表格单元格编辑契约（工单 #12/#42）：live 网格装饰 + 编辑链路 + 权威回读。
 //
 // 核心断言（用户可观察行为，非实现复述）：
-// - 装饰：表格行/单元格/管道符/对齐的稳定类名；无 widget 交互控件
-//   （表格编辑面即 CM6 源文本行：编辑直接发生在权威文本上，无覆盖层状态机）
+// - 装饰：表格行/单元格/管道符/对齐的稳定类名；非活动安全表格显示网格，
+//   空单元格仅有零宽定位 widget（编辑仍在 CM6 原文，无覆盖层状态机）
 // - 编辑链路：视图单元格输入（CM6 事务）→ edit.request → 宿主权威文档
 //   → 保存回读（getText）→ 以权威文本重建装饰与编辑后呈现一致
 // - 键入 | 自动转义 \|；代码 span 内不转义；\ 之后不重复转义
@@ -21,6 +21,7 @@ import {
   LIVE_CLASS_NAMES,
   buildLivePreviewDecorations,
   liveDecorationsField,
+  livePreviewDecorations,
 } from '../../src/webview/liveDecorations'
 import { tableEditing, tablePipeKeyHandler } from '../../src/webview/tableEditing'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
@@ -138,7 +139,7 @@ describe('live 表格装饰', () => {
     expect(pipes.map((p) => TABLE_DOC[p.from])).toEqual(['|', '|', '|'])
   })
 
-  it('表格装饰不含任何 widget 或隐藏区间（编辑面即源文本，无交互控件实例）', () => {
+  it('非空表格行没有独立输入 widget 或源区间替换', () => {
     const set = build(TABLE_DOC)
     expect(collect(set).some((i) => i.cls === '__widget__' || i.cls === undefined)).toBe(false)
   })
@@ -153,6 +154,65 @@ describe('live 表格装饰', () => {
     const doc = '---\n| a | b |\n| --- | --- |\n---\n\n正文\n'
     const set = build(doc)
     expect(textsFor(set, LIVE_CLASS_NAMES.tableLine, doc)).toHaveLength(0)
+  })
+
+  it('非活动安全表格形成网格，活动单元格回到原文编辑且选区切换不改文本', () => {
+    const at = TABLE_DOC.indexOf('苹果')
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc: TABLE_DOC, extensions: [livePreviewDecorations] }),
+    })
+    const rows = [...view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')]
+    expect(rows).toHaveLength(3)
+    expect(rows[0]?.dataset['vsidianTableRow']).toBe('header')
+    expect(rows[1]?.dataset['vsidianTableRow']).toBe('row')
+    expect(rows[0]?.style.getPropertyValue('--vsidian-table-columns')).toBe('2')
+    expect(rows[0]?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(2)
+    expect(rows[2]?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(2)
+    expect(rows[1]?.querySelector('.vsidian-table-grid-align-center')).not.toBeNull()
+    expect(view.contentDOM.querySelector('.vsidian-table-grid-delimiter')).not.toBeNull()
+    expect(view.state.doc.toString()).toBe(TABLE_DOC)
+
+    view.dispatch({ selection: EditorSelection.single(at) })
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
+    expect(view.state.doc.toString()).toBe(TABLE_DOC)
+    view.dispatch({ changes: { from: at, to: at + 2, insert: '香蕉' } })
+    expect(view.state.doc.toString()).toContain('| 香蕉 | 3 |')
+    view.destroy()
+  })
+
+  it('空格、转义管道与代码管道保留单格；不安全的列数不一致表格退回源码', () => {
+    const safe = '| A | B |\n| --- | :---: |\n| | x\\|y |\n| `a|b` | z |\n'
+    const safeSet = build(safe, { anchor: safe.length })
+    expect(textsFor(safeSet, LIVE_CLASS_NAMES.tableGridRow, safe)).toHaveLength(3)
+    expect(textsFor(safeSet, LIVE_CLASS_NAMES.tableGridCell, safe)).toHaveLength(6)
+    expect(textsFor(safeSet, LIVE_CLASS_NAMES.tableEscapedPipe, safe)).toEqual(['\\'])
+    const safeView = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc: safe, extensions: [livePreviewDecorations], selection: EditorSelection.single(safe.length) }),
+    })
+    expect(safeView.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(2)
+    expect(safeView.contentDOM.querySelectorAll('.vsidian-table-grid-row')[2]?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(2)
+    safeView.destroy()
+    const empty = '| A | B |\n| --- | --- |\n|| x |\n'
+    const emptySet = build(empty, { anchor: empty.length })
+    expect(textsFor(emptySet, LIVE_CLASS_NAMES.tableGridRow, empty)).toHaveLength(2)
+    expect(collect(emptySet).some((item) => item.cls === '__widget__')).toBe(true)
+    const emptyView = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc: empty, extensions: [livePreviewDecorations], selection: EditorSelection.single(empty.length) }),
+    })
+    const slot = emptyView.contentDOM.querySelector<HTMLElement>('[aria-label="空单元格"]')
+    expect(slot).not.toBeNull()
+    expect(slot!.parentElement?.classList.contains(LIVE_CLASS_NAMES.tableGridRow)).toBe(true)
+    expect(slot!.parentElement?.querySelectorAll(':scope > .cm-widgetBuffer')).toHaveLength(1)
+    slot!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    expect(emptyView.state.selection.main.from).toBe(empty.indexOf('|| x |') + 1)
+    emptyView.destroy()
+    const unsafe = '| A | B |\n| --- | --- |\n| only one |\n'
+    const unsafeSet = build(unsafe)
+    expect(textsFor(unsafeSet, LIVE_CLASS_NAMES.tableGridRow, unsafe)).toHaveLength(0)
+    expect(textsFor(unsafeSet, LIVE_CLASS_NAMES.tableLine, unsafe)).toHaveLength(3)
   })
 
   it('增量维护：单元格编辑后装饰与全量重建对拍一致', () => {
@@ -476,6 +536,16 @@ function bigTableDoc(rows: number): string {
 }
 
 describe('千行单表性能边界', () => {
+  it('网格 DOM 仍由 CM6 视口裁剪，千行表不常驻全部单元格节点', () => {
+    const doc = bigTableDoc(1000)
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc, extensions: [livePreviewDecorations] }),
+    })
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-cell').length).toBeLessThan(150)
+    view.destroy()
+  })
+
   it('装饰全量构建在时限内完成且行数正确', () => {
     const doc = bigTableDoc(1000)
     const text = Text.of(doc.split('\n'))
