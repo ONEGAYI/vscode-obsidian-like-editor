@@ -719,6 +719,28 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(conflictAfter.suspended === false, '恢复后不应处于暂停')
   }],
 
+  ['外部替换与过期本地删除同区间：真实 1.86 宿主保留外部文本并暂停（#44）', async () => {
+    await openWithEditor('ime-escape.md')
+    const initial = await waitSessionReady('ime-escape.md')
+    const uri = wsUri('ime-escape.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('ime-escape.md'))
+    const external = new vscode.WorkspaceEdit()
+    external.replace(wsUri('ime-escape.md'), new vscode.Range(0, 1, 0, 2), '外')
+    assert(await vscode.workspace.applyEdit(external), '外部替换应成功')
+    const authoritative = 'A外B\n'
+    await poll('外部替换进入宿主文档', () => (doc.getText() === authoritative ? true : undefined))
+
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, {
+      kind: 'edit.request', sessionId: '', docUri: uri, seq: 1,
+      baseVersion: initial.version,
+      changes: [{ offset: 1, length: 1, text: '' }],
+    })
+    assert(doc.getText() === authoritative, '过期的同区间删除不得覆盖外部修改')
+    const conflict = (await vscode.commands.executeCommand(CMD.conflictState, uri)) as ConflictState
+    assert(conflict.found && conflict.suspended === true, `同区间真实重叠应暂停：${JSON.stringify(conflict)}`)
+    await waitViewState('ime-escape.md', (v) => v.suspended === true && v.text === authoritative)
+  }],
+
   ['冲突后输入立即留存：关闭面板通知含最后一笔（#21）', async () => {
     await openWithEditor('conflict.md')
     await waitSessionReady('conflict.md')

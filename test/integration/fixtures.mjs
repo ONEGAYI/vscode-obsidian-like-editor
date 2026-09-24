@@ -12,6 +12,7 @@ const UNDO2_DOC = '全局命令撤销甲行\n全局命令撤销乙行\n'
 const UNDO3_DOC = '撤销守卫甲行\n撤销守卫乙行\n'
 const ACKORDER_DOC = '顺序观测起始行\n顺序观测第二行\n'
 const RESYNC_DOC = '重同步起始内容\n重同步第二段\n'
+const IME_ESC_DOC = 'A文B\n'
 const CONFLICT_DOC = '第一段原文甲\n第二段原文乙\n'
 const SPLIT_CONFLICT_DOC = '分裂测试行一\n分裂测试行二\n'
 const HEADING_DOC = '# 顶部一级标题\n普通段落第一行内容\n普通段落第二行内容\n## 中部二级标题\n另一段普通内容结尾\n'
@@ -238,6 +239,7 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   writeFileSync(path.join(wsDir, 'undo3.md'), UNDO3_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'ackorder.md'), ACKORDER_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'resync.md'), RESYNC_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'ime-escape.md'), IME_ESC_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'conflict.md'), CONFLICT_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'splitconflict.md'), SPLIT_CONFLICT_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'heading.md'), HEADING_DOC, 'utf8')

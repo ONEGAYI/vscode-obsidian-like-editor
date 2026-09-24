@@ -122,8 +122,10 @@ function localPosToBase(p: number, sections: readonly ChainSection[]): number {
   return p - delta
 }
 
-/** 插入点落在未确认内容的闭区间，或替换/删除范围与内容真正相交。 */
-function touchesUnconfirmedInsertion(
+/** 新编辑触及未确认变更的插入内容或纯删除塌缩点时，无法安全逆投影。
+ *  纯删除虽无插入内容，紧接着在原位置补字（IME 替换选区的常见顺序）
+ *  仍依赖前笔删除；若立即发旧基线坐标，宿主会与自己的删除判为冲突。 */
+function touchesUnconfirmedChange(
   changes: readonly SerChange[],
   sections: readonly ChainSection[],
 ): boolean {
@@ -131,11 +133,16 @@ function touchesUnconfirmedInsertion(
   for (const s of sections) {
     const afterStart = s.fromA + delta
     const afterEnd = afterStart + s.insLen
-    if (s.insLen > 0 && changes.some((c) => (
-      c.length === 0
-        ? c.offset >= afterStart && c.offset <= afterEnd
-        : c.offset < afterEnd && c.offset + c.length > afterStart
-    ))) {
+    if (changes.some((c) => {
+      if (s.insLen > 0) {
+        return c.length === 0
+          ? c.offset >= afterStart && c.offset <= afterEnd
+          : c.offset < afterEnd && c.offset + c.length > afterStart
+      }
+      return s.fromA < s.toA && (c.length === 0
+        ? c.offset === afterStart
+        : c.offset <= afterStart && c.offset + c.length > afterStart)
+    })) {
       return true
     }
     delta += s.insLen - (s.toA - s.fromA)
@@ -2011,7 +2018,7 @@ export class WebviewSyncController {
             continue
           }
           if (this.deferredLocal || (
-            this.unconfirmed && touchesUnconfirmedInsertion(changes, chainSections(this.unconfirmed))
+            this.unconfirmed && touchesUnconfirmedChange(changes, chainSections(this.unconfirmed))
           )) {
             // 继续乐观回显；待已有请求全部确认后一次性发送净变更。
             this.deferredLocal = this.deferredLocal

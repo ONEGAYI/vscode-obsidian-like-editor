@@ -389,10 +389,86 @@ function setupPair(text: string) {
       idle = messages.length === 0 ? idle + 1 : 0
     }
   }
-  return { doc, controller, settle }
+  return { doc, controller, session, sessionId, settle }
 }
 
 describe('C-2 端到端：未确认期间连续输入经宿主重定位后与本地一致', () => {
+  it('IME Esc 留下拼音：多轮组合和确认回流交错后继续写回', async () => {
+    const { doc, controller, settle } = setupPair('正文')
+    const view = controller.getView()!
+    const content = view.contentDOM
+    content.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.dispatch({ changes: { from: 2, insert: 'n' }, userEvent: 'input.type.compose' })
+    view.dispatch({ changes: { from: 2, to: 3, insert: 'ni' }, userEvent: 'input.type.compose' })
+    content.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    content.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    expect(view.state.doc.toString()).toBe('正文ni')
+    expect(doc.content).toBe('正文ni')
+
+    content.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.dispatch({ changes: { from: 4, insert: 'h' }, userEvent: 'input.type.compose' })
+    view.dispatch({ changes: { from: 4, to: 5, insert: 'hao' }, userEvent: 'input.type.compose' })
+    content.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    expect(view.state.doc.toString()).toBe('正文nihao')
+    expect(doc.content).toBe('正文nihao')
+    view.dispatch({ changes: { from: 7, insert: '!' } })
+    await settle()
+    expect(doc.content).toBe('正文nihao!')
+  })
+
+  it('IME 拼音多次替换且 ack 可在任一轮返回：本地与宿主一致', async () => {
+    const { doc, controller, settle } = setupPair('正文')
+    const view = controller.getView()!
+    let previous = ''
+    for (let round = 0; round < 20; round++) {
+      view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+      for (const candidate of ['n', 'ni', 'nih', 'niha', 'nihao']) {
+        view.dispatch({
+          changes: { from: 2, to: 2 + previous.length, insert: candidate },
+          userEvent: 'input.type.compose',
+        })
+        previous = candidate
+        if ((round + candidate.length) % 3 === 0) await settle()
+      }
+      view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+      await settle()
+    }
+    expect(view.state.doc.toString()).toBe('正文nihao')
+    expect(doc.content).toBe('正文nihao')
+  })
+
+  it('IME 先删除选中文本再留下拼音：不得把自己的删除判为冲突', async () => {
+    const { doc, controller, session, sessionId, settle } = setupPair('A文B')
+    const view = controller.getView()!
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.dispatch({ changes: { from: 1, to: 2, insert: '' }, userEvent: 'input.type.compose' })
+    view.dispatch({ changes: { from: 1, insert: 'ni' }, userEvent: 'input.type.compose' })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    expect(view.state.doc.toString()).toBe('AniB')
+    expect(doc.content).toBe('AniB')
+    expect(session.getConflictState(sessionId)?.suspended).toBe(false)
+    view.dispatch({ changes: { from: 4, insert: '!' } })
+    await settle()
+    expect(doc.content).toBe('AniB!')
+  })
+
+  it('IME 删除选区与真实外部编辑重叠：保留拼音并暂停', async () => {
+    const { doc, controller, session, sessionId, settle } = setupPair('A文B')
+    const view = controller.getView()!
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.dispatch({ changes: { from: 1, to: 2, insert: '' }, userEvent: 'input.type.compose' })
+    view.dispatch({ changes: { from: 1, insert: 'ni' }, userEvent: 'input.type.compose' })
+    // 另一编辑器在首笔本地请求确认前改同一范围。
+    await doc.applyChanges([{ offset: 1, length: 1, text: '外' }])
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    expect(view.state.doc.toString()).toBe('AniB')
+    expect(doc.content).toBe('A外B')
+    expect(session.getConflictState(sessionId)?.suspended).toBe(true)
+  })
   it('两笔不等 ack 的连续输入：宿主权威文本与本地视图最终一致', async () => {
     const { doc, controller } = setupPair('abcdef')
     const view = controller.getView()!
