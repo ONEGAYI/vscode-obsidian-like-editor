@@ -100,17 +100,17 @@
       "editor/title": [
         {
           "command": "onegayi.vsidian.mode.toReading",
-          "when": "activeCustomEditorId == onegayi.vsidian.editor && vsidian.activeMode == live",
+          "when": "activeCustomEditorId == onegayi.vsidian.editor && vsidian.activeMode == live && !isInDiffEditor",
           "group": "navigation"
         },
         {
           "command": "onegayi.vsidian.mode.toSource",
-          "when": "activeCustomEditorId == onegayi.vsidian.editor && vsidian.activeMode == reading",
+          "when": "activeCustomEditorId == onegayi.vsidian.editor && vsidian.activeMode == reading && !isInDiffEditor",
           "group": "navigation"
         },
         {
           "command": "onegayi.vsidian.mode.toLive",
-          "when": "(resourceExtname == .md || resourceExtname == .markdown) && !activeCustomEditorId",
+          "when": "(resourceExtname == .md || resourceExtname == .markdown) && !activeCustomEditorId && !isInDiffEditor",
           "group": "navigation"
         }
       ]

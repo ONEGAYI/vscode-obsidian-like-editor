@@ -33,10 +33,14 @@ import {
 import {
   decideReadingRestore,
   decideResolveBehavior,
+  isDiffContext,
+  isUriInDiffContext,
   LAST_MODE_KEY,
   nextTriMode,
   planViewSwitch,
   readRememberedMode,
+  type DiffTabInfo,
+  type TabInputKind,
   type TriViewMode,
   type ViewSwitchPlan,
 } from './viewCycle'
@@ -48,6 +52,20 @@ export const VIEW_TYPE = 'onegayi.vsidian.editor'
 function isMarkdownFile(uri: vscode.Uri): boolean {
   const ext = path.extname(uri.fsPath)
   return ext === '.md' || ext === '.markdown'
+}
+
+/** tab input 形态归纳（#38 D10：diff 语境检测的 vscode 层映射） */
+function tabInputKindOf(input: unknown): TabInputKind {
+  if (input instanceof vscode.TabInputText) {
+    return 'text'
+  }
+  if (input instanceof vscode.TabInputTextDiff) {
+    return 'text-diff'
+  }
+  if (input instanceof vscode.TabInputCustom) {
+    return 'custom'
+  }
+  return 'other'
 }
 
 /** 活动标签是否为指定文档的本扩展 custom editor（C-5）。
@@ -321,6 +339,29 @@ export function createTextEditorProvider(
     }
   }
 
+  /** 本 uri 是否出现在任一 diff 标签（D10 弹回防御）：文本 diff 按
+   *  original/modified 精确匹配；custom editor 在 diff 一侧时 input 不透明，
+   *  按 label `a ↔ b` 一侧 basename 匹配 */
+  const uriInDiffContext = (uri: vscode.Uri): boolean => {
+    const tabs: DiffTabInfo[] = []
+    for (const group of vscode.window.tabGroups.all) {
+      for (const tab of group.tabs) {
+        const input = tab.input
+        if (input instanceof vscode.TabInputTextDiff) {
+          tabs.push({
+            inputKind: 'text-diff',
+            label: tab.label,
+            original: input.original.toString(),
+            modified: input.modified.toString(),
+          })
+        } else {
+          tabs.push({ inputKind: tabInputKindOf(input), label: tab.label })
+        }
+      }
+    }
+    return isUriInDiffContext(uri.toString(), tabs)
+  }
+
   const openEntry = (doc: vscode.TextDocument): SessionEntry => {
     const key = doc.uri.toString()
     let entry = sessions.get(key)
@@ -560,9 +601,12 @@ export function createTextEditorProvider(
       // 默认把 .md 交给本扩展，用户上次停留在源码态则还原该选择。早退：
       // 不建会话、不写 HTML、不 attach 面板（面板 dispose 链路自然回收）；
       // 弹回动作不写记忆。用户显式「Reopen With → Vsidian」时同样被弹回，
-      // 属接受的代价（可点标题栏铅笔按钮一步切回，见工单 #38）
+      // 属接受的代价（可点标题栏铅笔按钮一步切回，见工单 #38）。
+      // D10：本 uri 处于任一 diff 标签时跳过弹回、正常装配——openWith 会
+      // 把对比折叠成单文件，diff 完整性优先于模式记忆；跳过不改写记忆
       const remembered = readRemembered()
-      if (decideResolveBehavior(remembered) === 'bounce-to-source') {
+      const resolveBehavior = decideResolveBehavior(remembered, uriInDiffContext(document.uri))
+      if (resolveBehavior === 'bounce-to-source') {
         void vscode.commands.executeCommand('vscode.openWith', document.uri, 'default')
         return
       }
@@ -586,7 +630,7 @@ export function createTextEditorProvider(
       entry.panels.set(sessionId, webviewPanel)
       // #38：记忆为 reading 的面板登记待恢复——就绪后首份 view.state 到达
       // 时按「面板自身状态优先」决定是否下发 view.mode.set: reading
-      if (decideResolveBehavior(remembered) === 'restore-reading') {
+      if (resolveBehavior === 'restore-reading') {
         pendingReadingRestore.add(`${document.uri.toString()}::${sessionId}`)
       }
 
@@ -698,17 +742,34 @@ export function createTextEditorProvider(
       }
       case 'reject': {
         await vscode.window.showWarningMessage(
-          plan.reason === 'panel-not-ready'
-            ? 'Vsidian 面板尚未就绪，请稍后重试'
-            : '当前已在源码编辑器中',
+          plan.reason === 'diff-context'
+            ? '对比视图不支持视图切换'
+            : plan.reason === 'panel-not-ready'
+              ? 'Vsidian 面板尚未就绪，请稍后重试'
+              : '当前已在源码编辑器中',
         )
         return false
       }
     }
   }
 
-  /** 三态切换主入口：explicitTarget 缺省时按循环推导下一模式 */
-  const runViewSwitch = async (explicitTarget?: TriViewMode): Promise<boolean> => {
+  /** 三态切换主入口：explicitTarget 缺省时按循环推导下一模式。
+   *  commandUri 为 editor/title 菜单传入的资源（命令面板无）：diff 语境
+   *  检测中用于不透明标签一侧的 basename 匹配（D10） */
+  const runViewSwitch = async (
+    explicitTarget?: TriViewMode,
+    commandUri?: vscode.Uri,
+  ): Promise<boolean> => {
+    // D10 前置守卫：活动标签处于 diff 语境（文本 diff 或 custom editor 在
+    // diff 一侧的不透明标签）时拒绝——openWith 会把对比折叠成单文件
+    const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab
+    const inDiffContext = activeTab
+      ? isDiffContext({
+          inputKind: tabInputKindOf(activeTab.input),
+          label: activeTab.label,
+          contextUri: commandUri?.toString(),
+        })
+      : false
     const active = deriveActiveTabMode()
     if (!active) {
       await vscode.window.showWarningMessage(
@@ -719,7 +780,10 @@ export function createTextEditorProvider(
     const target = explicitTarget ?? nextTriMode(active.mode)
     const entry = getEntry(active.uri)
     const hasReadyPanel = entry?.session.getInfo().panels.some((p) => p.ready) ?? false
-    const ok = await applyViewSwitch(active.uri, planViewSwitch(active.mode, target, hasReadyPanel))
+    const ok = await applyViewSwitch(
+      active.uri,
+      planViewSwitch(active.mode, target, hasReadyPanel, inDiffContext),
+    )
     if (ok) {
       refreshActiveModeContext()
     }
@@ -727,10 +791,20 @@ export function createTextEditorProvider(
   }
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('onegayi.vsidian.toggleViewMode', () => runViewSwitch()),
-    vscode.commands.registerCommand('onegayi.vsidian.mode.toReading', () => runViewSwitch('reading')),
-    vscode.commands.registerCommand('onegayi.vsidian.mode.toSource', () => runViewSwitch('source')),
-    vscode.commands.registerCommand('onegayi.vsidian.mode.toLive', () => runViewSwitch('live')),
+    vscode.commands.registerCommand('onegayi.vsidian.toggleViewMode', (uri?: vscode.Uri) =>
+      runViewSwitch(undefined, uri)),
+    vscode.commands.registerCommand(
+      'onegayi.vsidian.mode.toReading',
+      (uri?: vscode.Uri) => runViewSwitch('reading', uri),
+    ),
+    vscode.commands.registerCommand(
+      'onegayi.vsidian.mode.toSource',
+      (uri?: vscode.Uri) => runViewSwitch('source', uri),
+    ),
+    vscode.commands.registerCommand(
+      'onegayi.vsidian.mode.toLive',
+      (uri?: vscode.Uri) => runViewSwitch('live', uri),
+    ),
   )
 
   // #38：活动编辑器切换（含切到 undefined）时刷新模式 context；面板间
@@ -989,6 +1063,21 @@ export function createTextEditorProvider(
       (uriStr: string) => {
         const entry = getEntry(vscode.Uri.parse(uriStr))
         return { found: !!entry, log: entry ? [...entry.linkLog] : [] }
+      },
+    ),
+    vscode.commands.registerCommand(
+      // #38 全局模式记忆读取（非法值容错同正式链路）：集成测试断言
+      // 切换后记忆写入 / 弹回不写记忆等契约
+      'onegayi.vsidian._test.getLastMode',
+      () => readRemembered(),
+    ),
+    vscode.commands.registerCommand(
+      // #38 全局模式记忆重置（模拟无历史）：globalState 在同一集成进程内
+      // 共享，用例须自带前置重置避免跨用例状态泄漏
+      'onegayi.vsidian._test.resetLastMode',
+      async () => {
+        await context.globalState.update(LAST_MODE_KEY, undefined)
+        return true
       },
     ),
     )
