@@ -21,8 +21,30 @@ export async function run(): Promise<void> {
     try {
       // #38：全局模式记忆（globalState）在同一集成进程内跨用例共享——
       // reading 记忆会让后续用例的新面板被恢复成阅读模式、source 记忆会
-      // 把默认/显式打开弹回原生编辑器。每用例前重置为无历史基线
-      await vscode.commands.executeCommand('onegayi.vsidian._test.resetLastMode')
+      // 把默认/显式打开弹回原生编辑器。每用例前重置为无历史基线。
+      // 1.86.2 的 globalStorage 写入存在迟到回翻（前序用例的旧值广播滞后
+      // 到达会把刚校验过的新值翻回，resetLastMode 注释记录过同类现象；
+      // 实测残留 source 会让下一用例的 openWith 被弹回成原生编辑器、残留
+      // reading 会让依赖 live 视图的断言等不到）：读回校验后加稳定窗复查，
+      // 两轮都为 live 才放行
+      for (let attempt = 0; ; attempt++) {
+        await vscode.commands.executeCommand('onegayi.vsidian._test.resetLastMode')
+        const settled = async (): Promise<boolean> => {
+          const first = (await vscode.commands.executeCommand(
+            'onegayi.vsidian._test.getLastMode')) as string | undefined
+          if (first !== 'live') {
+            return false
+          }
+          await new Promise((r) => setTimeout(r, 250))
+          const second = (await vscode.commands.executeCommand(
+            'onegayi.vsidian._test.getLastMode')) as string | undefined
+          return second === 'live'
+        }
+        if (await settled() || attempt >= 10) {
+          break
+        }
+        await new Promise((r) => setTimeout(r, 50))
+      }
       await fn()
       console.log(`[集成测试][PASS] ${name}`)
     } catch (err) {
@@ -30,7 +52,25 @@ export async function run(): Promise<void> {
       console.error(`[集成测试][FAIL] ${name}`, err)
     } finally {
       try {
-        await vscode.commands.executeCommand('workbench.action.closeAllEditors')
+        // closeAllEditors 偶发遗留 custom tab（webview 销毁时序）：残留的
+        // 死面板会被后续用例的 openWith 重显成永不就绪状态（用例注记录过
+        // 该陷阱），显式逐个关闭并复核，最多重试 5 轮
+        for (let attempt = 0; attempt < 5; attempt++) {
+          await vscode.commands.executeCommand('workbench.action.closeAllEditors')
+          const leftovers = vscode.window.tabGroups.all
+            .flatMap((g) => g.tabs)
+            .filter((t) => t.input instanceof vscode.TabInputCustom)
+          if (leftovers.length === 0) {
+            break
+          }
+          for (const tab of leftovers) {
+            try {
+              await vscode.window.tabGroups.close(tab)
+            } catch {
+              // 留给下一轮重试
+            }
+          }
+        }
       } catch {
         // 忽略清理失败
       }
