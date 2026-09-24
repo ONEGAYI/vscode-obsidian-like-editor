@@ -105,7 +105,7 @@ describe('splitReadingBlocks：语义切块与源锚点', () => {
   it('列表块：整体一块（无序/有序各一）；li 锚点经渲染规则写入 html', () => {
     const [bullet, ordered] = [blocks[4]!, blocks[5]!]
     expect(sliceAt(DOC, bullet)).toBe('- 普通项\n- [ ] 未完成任务\n- [x] 已完成任务')
-    expect(bullet.html).toContain('data-oile-src-start')
+    expect(bullet.html).toContain('data-vsidian-src-start')
     expect(bullet.html).toContain('>普通项</li>')
     expect(sliceAt(DOC, ordered)).toBe('1. 有序一')
     expect(ordered.html).toContain('<ol>')
@@ -131,7 +131,7 @@ describe('splitReadingBlocks：语义切块与源锚点', () => {
     expect(blocks2).toHaveLength(1)
     expect(blocks2[0]!.kind).toBe('blockquote')
     expect(blocks2[0]!.html).toContain('嵌套项')
-    expect(blocks2[0]!.html).toContain('data-oile-src-start="10"') // 嵌套项自身的源锚点
+    expect(blocks2[0]!.html).toContain('data-vsidian-src-start="10"') // 嵌套项自身的源锚点
   })
 
   it('Setext 标题：解析为标题块', () => {
@@ -161,8 +161,8 @@ describe('splitReadingBlocks：语义切块与源锚点', () => {
     const list = blocks2.find((b) => b.kind === 'list')!
     expect(list.itemAnchors).toEqual([text.indexOf('- 甲'), text.indexOf('- [x]')])
     // html 中的 li 锚点与 itemAnchors 一致
-    expect(list.html).toContain(`data-oile-src-start="${text.indexOf('- 甲')}"`)
-    expect(list.html).toContain(`data-oile-src-start="${text.indexOf('- [x]')}"`)
+    expect(list.html).toContain(`data-vsidian-src-start="${text.indexOf('- 甲')}"`)
+    expect(list.html).toContain(`data-vsidian-src-start="${text.indexOf('- [x]')}"`)
   })
 
   it('水平线独立成块', () => {

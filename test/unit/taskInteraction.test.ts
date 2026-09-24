@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // 任务勾选交互契约（工单 #9）：两种模式的勾选走标准出站链路。
-// - live：任务标记 widget（input.oile-task-checkbox）可点击/键盘操作；
+// - live：任务标记 widget（input.vsidian-task-checkbox）可点击/键盘操作；
 //   点击派发精确替换事务 → updateListener 出站 edit.request（同一链路）
 // - reading：checkbox 启用（不再 disabled）；点击经容器事件委托 → 锚点严格
 //   再校验 → 派发同一出站链路；阅读视图乐观重建
@@ -73,13 +73,13 @@ function lastEditRequest(h: Harness) {
 
 /** live 侧任务 checkbox 元素（非活动行） */
 function liveCheckboxes(h: Harness): HTMLInputElement[] {
-  return Array.from(h.parent.querySelectorAll<HTMLInputElement>('input.oile-task-checkbox'))
+  return Array.from(h.parent.querySelectorAll<HTMLInputElement>('input.vsidian-task-checkbox'))
 }
 
 /** reading 侧任务 checkbox 元素 */
 function readingCheckboxes(h: Harness): HTMLInputElement[] {
   return Array.from(
-    h.parent.querySelectorAll<HTMLInputElement>('input.oile-reading-task-checkbox'),
+    h.parent.querySelectorAll<HTMLInputElement>('input.vsidian-reading-task-checkbox'),
   )
 }
 
@@ -235,11 +235,11 @@ describe('reading：checkbox 启用、点击走锚点校验与出站链路', () 
     // 构造过期点击载体：锚点仍是漂移前的位置（模拟对已替换元素的点击）
     const stale = document.createElement('input')
     stale.type = 'checkbox'
-    stale.className = 'oile-reading-task-checkbox'
-    stale.dataset['oileSrcStart'] = String(DOC.indexOf('['))
-    stale.dataset['oileSrcEnd'] = String(DOC.indexOf('[') + 3)
-    stale.dataset['oileChecked'] = 'false'
-    const reading = h.parent.querySelector<HTMLElement>('.oile-view-reading')!
+    stale.className = 'vsidian-reading-task-checkbox'
+    stale.dataset['vsidianSrcStart'] = String(DOC.indexOf('['))
+    stale.dataset['vsidianSrcEnd'] = String(DOC.indexOf('[') + 3)
+    stale.dataset['vsidianChecked'] = 'false'
+    const reading = h.parent.querySelector<HTMLElement>('.vsidian-view-reading')!
     reading.appendChild(stale)
     const before = editRequests(h).length
     stale.click()
@@ -263,9 +263,9 @@ describe('reading：checkbox 启用、点击走锚点校验与出站链路', () 
     expect(readingCheckboxes(h).map((b) => b.checked)).toEqual([true, false, true])
     // 携带过期显示态（未勾选）的点击：权威已是目标态 → 无内容变化
     const staleIntent = readingCheckboxes(h)[0]!.cloneNode() as HTMLInputElement
-    staleIntent.dataset['oileChecked'] = 'false'
+    staleIntent.dataset['vsidianChecked'] = 'false'
     staleIntent.checked = false
-    h.parent.querySelector<HTMLElement>('.oile-view-reading')!.appendChild(staleIntent)
+    h.parent.querySelector<HTMLElement>('.vsidian-view-reading')!.appendChild(staleIntent)
     const before = editRequests(h).length
     staleIntent.click()
     expect(editRequests(h)).toHaveLength(before)
@@ -355,7 +355,7 @@ describe('reading 虚拟化：滚出回收与滚回重挂载后任务状态不�
     const longDoc = lines.join('\n') + '\n'
     const h = makeHarness(longDoc)
     Object.defineProperty(
-      h.parent.querySelector<HTMLElement>('.oile-view-reading')!,
+      h.parent.querySelector<HTMLElement>('.vsidian-view-reading')!,
       'clientHeight',
       { value: 400, configurable: true },
     )

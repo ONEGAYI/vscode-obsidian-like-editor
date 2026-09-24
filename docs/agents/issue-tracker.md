@@ -1,10 +1,10 @@
 # 任务跟踪约定
 
-本项目使用 [GitHub Issues](https://github.com/ONEGAYI/vscode-obsidian-like-editor/issues) 跟踪需求、缺陷、规格与实施任务。
+本项目使用 [GitHub Issues](https://github.com/ONEGAYI/vsidian/issues) 跟踪需求、缺陷、规格与实施任务。
 
 ## 操作方式
 
-- 在仓库目录使用 `gh` CLI，默认从 `origin` 识别仓库；跨目录操作显式添加 `--repo ONEGAYI/vscode-obsidian-like-editor`。
+- 在仓库目录使用 `gh` CLI，默认从 `origin` 识别仓库；跨目录操作显式添加 `--repo ONEGAYI/vsidian`。
 - 读取任务：`gh issue view <编号> --comments`。
 - 列出待处理任务：`gh issue list --state open`。
 - 获得发布授权后创建任务：`gh issue create --title "标题" --body-file <正文文件>`。多行正文先写入 UTF-8 文件，保留真实换行。

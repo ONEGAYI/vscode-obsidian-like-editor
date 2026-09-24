@@ -1,6 +1,6 @@
 {
-  "name": "vscode-obsidian-like-editor",
-  "displayName": "Obsidian-like Markdown Editor",
+  "name": "vsidian",
+  "displayName": "Vsidian",
   "description": "在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验",
   "version": "0.1.0",
   "publisher": "onegayi",
@@ -15,8 +15,8 @@
   "contributes": {
     "customEditors": [
       {
-        "viewType": "onegayi.obsidian-like-markdown-editor",
-        "displayName": "Obsidian-like Markdown Editor",
+        "viewType": "onegayi.vsidian.editor",
+        "displayName": "Vsidian",
         "selector": [
           {
             "filenamePattern": "*.md"
@@ -30,52 +30,52 @@
     ],
     "commands": [
       {
-        "command": "onegayi.obsidian-like-editor.toggleViewMode",
+        "command": "onegayi.vsidian.toggleViewMode",
         "title": "切换实时预览与阅读模式",
-        "category": "Obsidian-like Markdown Editor"
+        "category": "Vsidian"
       },
       {
-        "command": "onegayi.obsidian-like-editor.find",
+        "command": "onegayi.vsidian.find",
         "title": "查找（编辑区）",
-        "category": "Obsidian-like Markdown Editor"
+        "category": "Vsidian"
       },
       {
-        "command": "onegayi.obsidian-like-editor.table.insertRowAbove",
+        "command": "onegayi.vsidian.table.insertRowAbove",
         "title": "表格：上方插入行",
-        "category": "Obsidian-like Markdown Editor"
+        "category": "Vsidian"
       },
       {
-        "command": "onegayi.obsidian-like-editor.table.insertRowBelow",
+        "command": "onegayi.vsidian.table.insertRowBelow",
         "title": "表格：下方插入行",
-        "category": "Obsidian-like Markdown Editor"
+        "category": "Vsidian"
       },
       {
-        "command": "onegayi.obsidian-like-editor.table.deleteRow",
+        "command": "onegayi.vsidian.table.deleteRow",
         "title": "表格：删除行",
-        "category": "Obsidian-like Markdown Editor"
+        "category": "Vsidian"
       },
       {
-        "command": "onegayi.obsidian-like-editor.table.insertColumnLeft",
+        "command": "onegayi.vsidian.table.insertColumnLeft",
         "title": "表格：左侧插入列",
-        "category": "Obsidian-like Markdown Editor"
+        "category": "Vsidian"
       },
       {
-        "command": "onegayi.obsidian-like-editor.table.insertColumnRight",
+        "command": "onegayi.vsidian.table.insertColumnRight",
         "title": "表格：右侧插入列",
-        "category": "Obsidian-like Markdown Editor"
+        "category": "Vsidian"
       },
       {
-        "command": "onegayi.obsidian-like-editor.table.deleteColumn",
+        "command": "onegayi.vsidian.table.deleteColumn",
         "title": "表格：删除列",
-        "category": "Obsidian-like Markdown Editor"
+        "category": "Vsidian"
       }
     ],
     "keybindings": [
       {
-        "command": "onegayi.obsidian-like-editor.find",
+        "command": "onegayi.vsidian.find",
         "key": "ctrl+f",
         "mac": "cmd+f",
-        "when": "activeCustomEditorId == onegayi.obsidian-like-markdown-editor"
+        "when": "activeCustomEditorId == onegayi.vsidian.editor"
       }
     ]
   },
@@ -89,7 +89,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/ONEGAYI/vscode-obsidian-like-editor.git"
+    "url": "https://github.com/ONEGAYI/vsidian.git"
   },
   "private": true,
   "dependencies": {

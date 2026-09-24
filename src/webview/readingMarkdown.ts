@@ -8,7 +8,7 @@
 //   script/iframe/style、行内事件属性、javascript: 链接）
 //
 // 源锚点：list_item_open 渲染规则把 token.map 行区间换算为全文 UTF-16
-// offset 写入 data-oile-src-start/end（与协议坐标同构）；任务项标记的更细
+// offset 写入 data-vsidian-src-start/end（与协议坐标同构）；任务项标记的更细
 // 锚点在 convertTaskItems 中按 li 首行源文计算（#9 勾选写回的定位依据）。
 import MarkdownIt, { type Env, type StateInline, type Token } from 'markdown-it'
 import { WIKILINK_CLASS_NAMES, parseWikilinkInner } from '../shared/wikilink'
@@ -27,19 +27,19 @@ export const TASK_ITEM_RE = /^(\s*)(?:[-*+]|\d{1,9}[.)])\s+\[([ xX])\]\s/
 
 /** 阅读视图稳定类名（阅读侧 #8 新增；与 readingView 常量保持一致的方向） */
 export const READING_MARKDOWN_CLASS_NAMES = {
-  taskItem: 'oile-reading-task',
-  taskCheckbox: 'oile-reading-task-checkbox',
+  taskItem: 'vsidian-reading-task',
+  taskCheckbox: 'vsidian-reading-task-checkbox',
 } as const
 
 /**
- * 双链 inline 规则（#11）：合法 `[[…]]` 渲染为 `<a class="oile-wikilink"
+ * 双链 inline 规则（#11）：合法 `[[…]]` 渲染为 `<a class="vsidian-wikilink"
  * href="原文target">显示文字</a>`。与 live 装饰、宿主解析共用
  * shared/wikilink 形态学（三处语义逐字节一致）；嵌入 `![[…]]`、块引用 `^`、
  * 残缺形态返回 false——markdown-it 按普通文本渲染，源码保真降级。
  * href 为 `|` 之前的原文（未 trim）：单击经 syncController 的事件委托上报
  * wikilink.activate，规范化在宿主侧。
  */
-function oileWikilinkInlineRule(state: StateInline, silent: boolean): boolean {
+function vsidianWikilinkInlineRule(state: StateInline, silent: boolean): boolean {
   const src = state.src
   const start = state.pos
   if (start + 1 >= state.posMax || src.charCodeAt(start) !== 0x5b || src.charCodeAt(start + 1) !== 0x5b) {
@@ -88,7 +88,7 @@ export function createMarkdownRenderer(): InstanceType<typeof MarkdownIt> {
   })
   // #11 双链规则先于 link（[t](u)）：`[[…]]` 在 CommonMark 中只是普通文本，
   // 必须在文本规则消费前拦截
-  md.inline.ruler.before('link', 'oile_wikilink', oileWikilinkInlineRule)
+  md.inline.ruler.before('link', 'vsidian_wikilink', vsidianWikilinkInlineRule)
   md.renderer.rules['list_item_open'] = (tokens, idx, _options, env) => {
     const map = (tokens[idx] as Token).map
     const bounds = env as unknown as ReadingRenderEnv | undefined
@@ -101,7 +101,7 @@ export function createMarkdownRenderer(): InstanceType<typeof MarkdownIt> {
     const base = typeof baseLine === 'number' ? baseLine : 0
     const start = lineStarts[startLine + base] ?? 0
     const end = lineEnds[lastLine + base] ?? start
-    return `<li data-oile-src-start="${start}" data-oile-src-end="${end}">`
+    return `<li data-vsidian-src-start="${start}" data-vsidian-src-end="${end}">`
   }
   return md
 }
@@ -152,14 +152,14 @@ function isDangerousUrl(value: string): boolean {
 
 /**
  * 任务项转换：li 首文本以 `[ ] `/`[x] `/`[X] ` 开头时，替换为启用
- * checkbox（携带 marker 区间锚点与渲染态）并给 li 加 oile-reading-task 类。
- * marker 锚点 = li 首行内 `[` 字符起的三字符区间；data-oile-checked 记录
+ * checkbox（携带 marker 区间锚点与渲染态）并给 li 加 vsidian-reading-task 类。
+ * marker 锚点 = li 首行内 `[` 字符起的三字符区间；data-vsidian-checked 记录
  * 渲染时勾选态（#9 点击意图的确定性来源——不受浏览器原生 checkbox
  * 激活时序影响）。点击交互由阅读容器的事件委托处理（syncController）。
  */
 export function convertTaskItems(root: HTMLElement, text: string): void {
   for (const li of Array.from(root.querySelectorAll('li'))) {
-    const anchorStart = Number(li.dataset['oileSrcStart'])
+    const anchorStart = Number(li.dataset['vsidianSrcStart'])
     if (!Number.isInteger(anchorStart) || anchorStart < 0) {
       continue
     }
@@ -179,9 +179,9 @@ export function convertTaskItems(root: HTMLElement, text: string): void {
     box.type = 'checkbox'
     box.className = READING_MARKDOWN_CLASS_NAMES.taskCheckbox
     box.checked = checked
-    box.dataset['oileChecked'] = String(checked)
-    box.dataset['oileSrcStart'] = String(markerStart)
-    box.dataset['oileSrcEnd'] = String(markerStart + 3)
+    box.dataset['vsidianChecked'] = String(checked)
+    box.dataset['vsidianSrcStart'] = String(markerStart)
+    box.dataset['vsidianSrcEnd'] = String(markerStart + 3)
     firstText.parentNode!.insertBefore(box, firstText)
     firstText.nodeValue = firstText.nodeValue!.slice(4)
     li.classList.add(READING_MARKDOWN_CLASS_NAMES.taskItem)

@@ -173,7 +173,7 @@ export type WebviewToHost =
       readingLinkCount?: number
       /** 阅读挂载块内图片数（#10） */
       readingImageCount?: number
-      /** 阅读挂载块内双链数（#11；markdown-it 渲染的 a.oile-wikilink） */
+      /** 阅读挂载块内双链数（#11；markdown-it 渲染的 a.vsidian-wikilink） */
       readingWikilinkCount?: number
       /** 图片槽位状态计数（#10：当前视图内 loading/loaded/error） */
       imageStates?: ImageStateCounts
@@ -243,9 +243,9 @@ export interface PerfSnapshot {
   renderedLines: number
   /** .cm-content 内全部元素数 */
   contentDomCount: number
-  /** .oile-heading-line 元素数 */
+  /** .vsidian-heading-line 元素数 */
   headingLineCount: number
-  /** .oile-heading-inview 元素数（间接装饰渲染结果） */
+  /** .vsidian-heading-inview 元素数（间接装饰渲染结果） */
   inviewHeadingCount: number
   /** #15：webview JS 堆已用字节数（Chromium performance.memory）；环境不支持为 null */
   jsHeapBytes?: number | null
@@ -274,37 +274,37 @@ export interface ImageStateCounts {
 
 /** CSS 契约探针回报（#6）：一段仅经稳定类名定位的内部测试 CSS 是否生效 */
 export interface CssProbeReport {
-  /** live 一级标题行经 `.oile-heading-line-1` 命中的属性值；无目标元素为 null */
+  /** live 一级标题行经 `.vsidian-heading-line-1` 命中的属性值；无目标元素为 null */
   liveHeadingDecorationColor: string | null
-  /** 阅读一级标题块经 `.oile-reading-heading-1` 命中的属性值；无目标元素为 null */
+  /** 阅读一级标题块经 `.vsidian-reading-heading-1` 命中的属性值；无目标元素为 null */
   readingHeadingDecorationColor: string | null
-  /** `.oile-view-reading` 上被外部片段覆盖的探针变量值；未覆盖为空（null） */
+  /** `.vsidian-view-reading` 上被外部片段覆盖的探针变量值；未覆盖为空（null） */
   readingVarProbe: string | null
-  /** #8：live 粗体 span 经 `.oile-strong` 命中的属性值；无目标为 null */
+  /** #8：live 粗体 span 经 `.vsidian-strong` 命中的属性值；无目标为 null */
   liveStrongDecorationColor: string | null
-  /** #8：live 行内代码 span 经 `.oile-inline-code` 命中的属性值；无目标为 null */
+  /** #8：live 行内代码 span 经 `.vsidian-inline-code` 命中的属性值；无目标为 null */
   liveInlineCodeDecorationColor: string | null
-  /** #8：live 代码行经 `.oile-code-line` 命中的属性值；无目标为 null */
+  /** #8：live 代码行经 `.vsidian-code-line` 命中的属性值；无目标为 null */
   liveCodeLineDecorationColor: string | null
-  /** #8：阅读视图内语义 strong 经 `.oile-view-reading strong` 命中的属性值 */
+  /** #8：阅读视图内语义 strong 经 `.vsidian-view-reading strong` 命中的属性值 */
   readingStrongDecorationColor: string | null
-  /** #9：live 任务 checkbox 经 `.oile-task-checkbox` 命中的属性值；无目标为 null */
+  /** #9：live 任务 checkbox 经 `.vsidian-task-checkbox` 命中的属性值；无目标为 null */
   liveTaskCheckboxDecorationColor: string | null
-  /** #9：阅读任务 checkbox 经 `.oile-reading-task-checkbox` 命中的属性值 */
+  /** #9：阅读任务 checkbox 经 `.vsidian-reading-task-checkbox` 命中的属性值 */
   readingTaskCheckboxDecorationColor: string | null
-  /** #10：live 链接 span 经 `.oile-link` 命中的属性值；无目标为 null */
+  /** #10：live 链接 span 经 `.vsidian-link` 命中的属性值；无目标为 null */
   liveLinkDecorationColor: string | null
-  /** #10：阅读链接经 `.oile-reading-block a` 命中的属性值；无目标为 null */
+  /** #10：阅读链接经 `.vsidian-reading-block a` 命中的属性值；无目标为 null */
   readingLinkDecorationColor: string | null
-  /** #10：阅读图片经 `.oile-reading-block img.oile-image` 命中的属性值 */
+  /** #10：阅读图片经 `.vsidian-reading-block img.vsidian-image` 命中的属性值 */
   readingImageDecorationColor: string | null
-  /** #12：live 表格管道符经 `.oile-table-pipe` 命中的属性值；无目标为 null */
+  /** #12：live 表格管道符经 `.vsidian-table-pipe` 命中的属性值；无目标为 null */
   liveTablePipeDecorationColor: string | null
-  /** #12：阅读表格经 `.oile-reading-block table` 命中的属性值；无目标为 null */
+  /** #12：阅读表格经 `.vsidian-reading-block table` 命中的属性值；无目标为 null */
   readingTableDecorationColor: string | null
-  /** #11：live 双链经 `.oile-wikilink` 命中的属性值；无目标为 null */
+  /** #11：live 双链经 `.vsidian-wikilink` 命中的属性值；无目标为 null */
   liveWikilinkDecorationColor: string | null
-  /** #11：阅读双链经 `.oile-reading-block a.oile-wikilink` 命中的属性值 */
+  /** #11：阅读双链经 `.vsidian-reading-block a.vsidian-wikilink` 命中的属性值 */
   readingWikilinkDecorationColor: string | null
 }
 

@@ -93,11 +93,11 @@ function editRequestCount(h: BridgeHarness): number {
 }
 
 function findPanel(): HTMLElement | null {
-  return parent?.querySelector<HTMLElement>('.oile-find') ?? null
+  return parent?.querySelector<HTMLElement>('.vsidian-find') ?? null
 }
 
 function findInput(): HTMLInputElement | null {
-  return parent?.querySelector<HTMLInputElement>('.oile-find-input') ?? null
+  return parent?.querySelector<HTMLInputElement>('.vsidian-find-input') ?? null
 }
 
 function key(target: EventTarget, k: string, opts: KeyboardEventInit = {}): void {
@@ -122,7 +122,7 @@ describe('打开与关闭（焦点契约）', () => {
     c.handleHostMessage({ kind: 'view.find.open' })
     const panel = findPanel()
     expect(panel).not.toBeNull()
-    expect(panel!.classList.contains('oile-find-open')).toBe(true)
+    expect(panel!.classList.contains('vsidian-find-open')).toBe(true)
     expect(document.activeElement).toBe(findInput())
     const state = viewState(c, h)
     expect(state.find?.open).toBe(true)
@@ -136,7 +136,7 @@ describe('打开与关闭（焦点契约）', () => {
     expect(viewState(c, h).find?.open).toBe(true)
     expect(document.activeElement).toBe(findInput())
     // 焦点被移走后再按 Mod-F：重新聚焦（VSCode find 同款手感）
-    ;(parent!.querySelector('.oile-toolbar button') as HTMLElement).focus()
+    ;(parent!.querySelector('.vsidian-toolbar button') as HTMLElement).focus()
     expect(document.activeElement).not.toBe(findInput())
     key(document, 'f', { metaKey: true })
     expect(document.activeElement).toBe(findInput())
@@ -155,7 +155,7 @@ describe('打开与关闭（焦点契约）', () => {
     const c = mountFind(h)
     c.handleHostMessage({ kind: 'view.find.open', query: '目标词' })
     c.handleHostMessage({ kind: 'view.find.close' })
-    expect(findPanel()!.classList.contains('oile-find-open')).toBe(false)
+    expect(findPanel()!.classList.contains('vsidian-find-open')).toBe(false)
     expect(viewState(c, h).find?.open).toBe(false)
     expect(c.getView()!.state.field(findStateField).matches.length).toBe(0)
   })
@@ -191,14 +191,14 @@ describe('匹配计算与反馈（基于文本模型，含中文与 emoji）', (
     const h = makeBridge()
     const c = mountFind(h)
     c.handleHostMessage({ kind: 'view.find.open', query: '目标词' })
-    const count = parent!.querySelector<HTMLElement>('.oile-find-count')!
+    const count = parent!.querySelector<HTMLElement>('.vsidian-find-count')!
     expect(count.textContent).toBe(`1/${HIT_OFFSETS.length}`)
     // 输入不存在的词
     const input = findInput()!
     input.value = '不存在的词'
     input.dispatchEvent(new Event('input', { bubbles: true }))
     expect(count.textContent).toBe('0/0')
-    expect(count.classList.contains('oile-find-count-empty')).toBe(true)
+    expect(count.classList.contains('vsidian-find-count-empty')).toBe(true)
     const state = viewState(c, h)
     expect(state.find?.total).toBe(0)
     expect(state.find?.index).toBe(0)
@@ -219,21 +219,21 @@ describe('匹配计算与反馈（基于文本模型，含中文与 emoji）', (
     const c = mountFind(h, text)
     c.handleHostMessage({ kind: 'view.find.open', query: 'hello' })
     expect(viewState(c, h).find?.total).toBe(1)
-    const btn = parent!.querySelector<HTMLButtonElement>('.oile-find-case')!
+    const btn = parent!.querySelector<HTMLButtonElement>('.vsidian-find-case')!
     // 按钮语义为「忽略大小写」开关：默认区分（未激活、未按下）
     expect(btn.textContent).toBe('忽略大小写')
-    expect(btn.classList.contains('oile-find-case-active')).toBe(false)
+    expect(btn.classList.contains('vsidian-find-case-active')).toBe(false)
     expect(btn.getAttribute('aria-pressed')).toBe('false')
     btn.click()
     // 激活 = 忽略大小写生效（active 类与 aria-pressed 同步表示）
-    expect(btn.classList.contains('oile-find-case-active')).toBe(true)
+    expect(btn.classList.contains('vsidian-find-case-active')).toBe(true)
     expect(btn.getAttribute('aria-pressed')).toBe('true')
     const state = viewState(c, h)
     expect(state.find?.caseSensitive).toBe(false)
     expect(state.find?.total).toBe(3)
     // 再点回区分大小写
     btn.click()
-    expect(btn.classList.contains('oile-find-case-active')).toBe(false)
+    expect(btn.classList.contains('vsidian-find-case-active')).toBe(false)
     expect(btn.getAttribute('aria-pressed')).toBe('false')
     expect(viewState(c, h).find?.total).toBe(1)
   })
@@ -319,14 +319,14 @@ describe('定位协同：live 选区与阅读视图块级定位', () => {
     const state = viewState(c, h)
     expect(state.find?.currentFrom).toBe(HIT_OFFSETS[listHitIdx])
     expect(state.readingAnchorStart).toBe(listLineStart)
-    const hit = parent!.querySelector<HTMLElement>('.oile-reading-block.oile-reading-find-hit')
+    const hit = parent!.querySelector<HTMLElement>('.vsidian-reading-block.vsidian-reading-find-hit')
     expect(hit).not.toBeNull()
-    expect(hit!.dataset['oileSrcStart']).toBe(String(listLineStart))
+    expect(hit!.dataset['vsidianSrcStart']).toBe(String(listLineStart))
     // 阅读容器在 DOM 中只有当前匹配块带命中类（块级高亮，非全文标注）
-    const hits = parent!.querySelectorAll('.oile-reading-find-hit')
+    const hits = parent!.querySelectorAll('.vsidian-reading-find-hit')
     expect(hits.length).toBe(1)
     c.handleHostMessage({ kind: 'view.find.close' })
-    expect(parent!.querySelectorAll('.oile-reading-find-hit').length).toBe(0)
+    expect(parent!.querySelectorAll('.vsidian-reading-find-hit').length).toBe(0)
   })
 
   it('模式切换保活：live 导航 → reading 锚点为当前匹配块 → 回 live 选区恢复到当前匹配', () => {
@@ -424,7 +424,7 @@ describe('短文档锚点权威性（定位锚点不被视口读数覆盖）', (
     const targetAnchor = target.readingAnchorStart
     expect(targetAnchor).toBe(DOC.indexOf('第二段：又出现目标词了。'))
     // 短文档：内容不超出视口（真实布局里 maxScroll≈0；此处以数值桩模拟）
-    const container = parent!.querySelector<HTMLElement>('.oile-view-reading')!
+    const container = parent!.querySelector<HTMLElement>('.vsidian-view-reading')!
     stubBox(container, 600, 600)
     container.dispatchEvent(new Event('scroll'))
     expect(viewState(c, h).readingAnchorStart).toBe(targetAnchor)
@@ -439,7 +439,7 @@ describe('短文档锚点权威性（定位锚点不被视口读数覆盖）', (
     const targetAnchor = viewState(c, h).readingAnchorStart
     expect(targetAnchor).toBe(DOC.indexOf('第二段：又出现目标词了。'))
     // 可滚动容器：视口读数是权威（jsdom 无布局 → 回退到首个可见块 0）
-    const container = parent!.querySelector<HTMLElement>('.oile-view-reading')!
+    const container = parent!.querySelector<HTMLElement>('.vsidian-view-reading')!
     stubBox(container, 2000, 600)
     container.dispatchEvent(new Event('scroll'))
     expect(viewState(c, h).readingAnchorStart).toBe(0)

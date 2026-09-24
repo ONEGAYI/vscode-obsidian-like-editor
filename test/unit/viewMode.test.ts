@@ -211,13 +211,13 @@ describe('源码位置锚点：live ↔ reading 双向恢复', () => {
 })
 
 describe('切换入口：工具栏按钮', () => {
-  it('点击 oile-mode-toggle 按钮触发与消息一致的切换', () => {
+  it('点击 vsidian-mode-toggle 按钮触发与消息一致的切换', () => {
     const h = makeBridge()
     const parent = document.createElement('div')
     const c = new WebviewSyncController(h.bridge)
     c.mount(parent)
     c.handleHostMessage({ kind: 'init', sessionId: 's1', docUri: DOC_URI, version: 1, text: DOC })
-    const btn = parent.querySelector<HTMLButtonElement>('button.oile-mode-toggle')
+    const btn = parent.querySelector<HTMLButtonElement>('button.vsidian-mode-toggle')
     expect(btn).not.toBeNull()
     btn!.click()
     expect(viewState(c, h).viewMode).toBe('reading')
@@ -231,7 +231,7 @@ describe('切换入口：工具栏按钮', () => {
     const c = new WebviewSyncController(h.bridge)
     c.mount(parent)
     c.handleHostMessage({ kind: 'init', sessionId: 's1', docUri: DOC_URI, version: 1, text: DOC })
-    const btn = parent.querySelector<HTMLButtonElement>('button.oile-mode-toggle')!
+    const btn = parent.querySelector<HTMLButtonElement>('button.vsidian-mode-toggle')!
     const liveLabel = btn.textContent
     expect(liveLabel).toContain('阅读')
     btn.click()
@@ -241,14 +241,14 @@ describe('切换入口：工具栏按钮', () => {
 })
 
 describe('视图容器显隐与稳定类名', () => {
-  it('live 容器 oile-view-live 与阅读容器 oile-view-reading 互斥显示', () => {
+  it('live 容器 vsidian-view-live 与阅读容器 vsidian-view-reading 互斥显示', () => {
     const h = makeBridge()
     const parent = document.createElement('div')
     const c = new WebviewSyncController(h.bridge)
     c.mount(parent)
     c.handleHostMessage({ kind: 'init', sessionId: 's1', docUri: DOC_URI, version: 1, text: DOC })
-    const live = parent.querySelector<HTMLElement>('.oile-view-live')
-    const reading = parent.querySelector<HTMLElement>('.oile-view-reading')
+    const live = parent.querySelector<HTMLElement>('.vsidian-view-live')
+    const reading = parent.querySelector<HTMLElement>('.vsidian-view-reading')
     expect(live).not.toBeNull()
     expect(reading).not.toBeNull()
     expect(live!.style.display).toBe('')
@@ -257,7 +257,7 @@ describe('视图容器显隐与稳定类名', () => {
     expect(live!.style.display).toBe('none')
     expect(reading!.style.display).toBe('')
     // 阅读容器内块带源锚点
-    const block = reading!.querySelector<HTMLElement>('[data-oile-src-start]')
+    const block = reading!.querySelector<HTMLElement>('[data-vsidian-src-start]')
     expect(block).not.toBeNull()
   })
 })

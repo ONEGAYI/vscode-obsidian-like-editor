@@ -2,7 +2,7 @@
 // 单击跳转意图上报。
 //
 // 装饰语义（与既有间接装饰同类，ADR-0005 / #8 分工沿用）：
-// - 链接内容 span：oile-link 稳定类名（Obsidian .cm-link 方向）——活动与
+// - 链接内容 span：vsidian-link 稳定类名（Obsidian .cm-link 方向）——活动与
 //   非活动行都标记（样式语义）；仅非活动行隐藏首尾标记与 URL 尾部
 //   （源码可编辑语义：光标所在行显示原文）
 // - 图片：非活动行整体替换为 LiveImageWidget（进入视口才创建 DOM，
@@ -36,7 +36,7 @@ import {
 /** #10 链接稳定类名（图片类名复用 IMAGE_CLASS_NAMES.image） */
 export const LINK_CLASS_NAMES = {
   /** 链接内容 span（Obsidian `.cm-link`） */
-  link: 'oile-link',
+  link: 'vsidian-link',
 } as const
 
 export { WIKILINK_CLASS_NAMES }
@@ -177,7 +177,7 @@ export class LiveImageWidget extends WidgetType {
   toDOM(): HTMLElement {
     const span = document.createElement('span')
     span.className = IMAGE_CLASS_NAMES.image
-    span.dataset['oileImgState'] = 'loading'
+    span.dataset['vsidianImgState'] = 'loading'
     span.classList.add(IMAGE_CLASS_NAMES.state('loading'))
     span.title = this.alt
     span.textContent = this.alt

@@ -11,80 +11,80 @@
  */
 
 /* live 实时预览：一级标题行（#5 直接装饰类） */
-#app .oile-view-live .oile-heading-line-1 {
+#app .vsidian-view-live .vsidian-heading-line-1 {
   text-decoration-color: rgb(1, 2, 3);
 }
 
 /* reading 阅读视图：一级标题块 */
-#app .oile-view-reading .oile-reading-heading-1 {
+#app .vsidian-view-reading .vsidian-reading-heading-1 {
   text-decoration-color: rgb(4, 5, 6);
 }
 
 /* CSS 变量管道：外部片段可经稳定容器类设置变量并被读取 */
-#app .oile-view-reading {
-  --oile-probe-var-reading: contract-ok;
+#app .vsidian-view-reading {
+  --vsidian-probe-var-reading: contract-ok;
 }
 
 /* ---- #8：span 级稳定类名探针（live 行内格式与代码行） ---- */
 
 /* live 粗体内容 span（Obsidian 对应 .cm-strong） */
-#app .oile-view-live .oile-strong {
+#app .vsidian-view-live .vsidian-strong {
   text-decoration-color: rgb(7, 8, 9);
 }
 
 /* live 行内代码内容 span（Obsidian 对应 .cm-inline-code） */
-#app .oile-view-live .oile-inline-code {
+#app .vsidian-view-live .vsidian-inline-code {
   text-decoration-color: rgb(10, 11, 12);
 }
 
 /* live 围栏代码行（Obsidian 对应 .HyperMD-codeblock） */
-#app .oile-view-live .oile-code-line {
+#app .vsidian-view-live .vsidian-code-line {
   text-decoration-color: rgb(13, 14, 15);
 }
 
 /* reading 阅读视图：语义 strong 标签（Obsidian 对应 .markdown-preview-view strong） */
-#app .oile-view-reading .oile-reading-block strong {
+#app .vsidian-view-reading .vsidian-reading-block strong {
   text-decoration-color: rgb(16, 17, 18);
 }
 
 /* ---- #9：任务勾选稳定类名探针（两种视图的交互 checkbox） ---- */
 
 /* live 任务 checkbox（#8 的只读字形已换为可交互 input） */
-#app .oile-view-live .oile-task-checkbox {
+#app .vsidian-view-live .vsidian-task-checkbox {
   text-decoration-color: rgb(19, 20, 21);
 }
 
 /* reading 任务 checkbox（#9 起启用勾选写回） */
-#app .oile-view-reading .oile-reading-task-checkbox {
+#app .vsidian-view-reading .vsidian-reading-task-checkbox {
   text-decoration-color: rgb(22, 23, 24);
 }
 
 /* ---- #10：链接与图片稳定类名探针 ---- */
 
 /* live 链接内容 span（Obsidian 对应 .cm-link） */
-#app .oile-view-live .oile-link {
+#app .vsidian-view-live .vsidian-link {
   text-decoration-color: rgb(19, 20, 21);
 }
 
 /* reading 链接（Obsidian 对应 .markdown-preview-view a） */
-#app .oile-view-reading .oile-reading-block a {
+#app .vsidian-view-reading .vsidian-reading-block a {
   text-decoration-color: rgb(22, 23, 24);
 }
 
 /* reading 图片槽位（Obsidian 对应 .markdown-preview-view img；本项目加
-   oile-image 稳定类承载状态修饰） */
-#app .oile-view-reading .oile-reading-block img.oile-image {
+   vsidian-image 稳定类承载状态修饰） */
+#app .vsidian-view-reading .vsidian-reading-block img.vsidian-image {
   text-decoration-color: rgb(25, 26, 27);
 }
 /* ---- #12：表格稳定类名探针（live 管道符 / reading 表格标签） ---- */
 
 /* live 表格管道符（Obsidian 对应 .HyperMD-table-line 方向） */
-#app .oile-view-live .oile-table-pipe {
+#app .vsidian-view-live .vsidian-table-pipe {
   text-decoration-color: rgb(19, 20, 21);
 }
 
 /* reading 阅读视图：表格（Obsidian 对应 .markdown-preview-view table） */
-#app .oile-view-reading .oile-reading-block table {
+#app .vsidian-view-reading .vsidian-reading-block table {
   text-decoration-color: rgb(22, 23, 24);
 }
 
@@ -92,11 +92,11 @@
 
 /* live 双链（非活动行 widget 与活动行 mark 共用类名；Obsidian 对应
    .cm-hmd-internal-link） */
-#app .oile-view-live .oile-wikilink {
+#app .vsidian-view-live .vsidian-wikilink {
   text-decoration-color: rgb(28, 29, 30);
 }
 
 /* reading 双链（markdown-it 规则渲染的 a；Obsidian 对应 .internal-link） */
-#app .oile-view-reading .oile-reading-block a.oile-wikilink {
+#app .vsidian-view-reading .vsidian-reading-block a.vsidian-wikilink {
   text-decoration-color: rgb(31, 32, 33);
 }

@@ -92,7 +92,7 @@ function viewState(c: WebviewSyncController, h: Harness) {
 }
 
 function readingContainer(): HTMLElement {
-  return host.querySelector<HTMLElement>('.oile-view-reading')!
+  return host.querySelector<HTMLElement>('.vsidian-view-reading')!
 }
 
 describe('阅读视图：单击链接 = 跳转意图上报', () => {
@@ -267,12 +267,12 @@ describe('图片生命周期（阅读视图，块挂载即装载）', () => {
     const h = makeBridge()
     const c = mount(h)
     c.handleHostMessage({ kind: 'view.mode.set', mode: 'reading' })
-    const image = readingContainer().querySelector<HTMLImageElement>('img.oile-image')!
+    const image = readingContainer().querySelector<HTMLImageElement>('img.vsidian-image')!
     expect(image).not.toBeNull()
     expect(image.getAttribute('src')).toBeNull()
     // markdown-it normalizeLink 产出的编码形态（%20/%E5…）：宿主解码后解析
-    expect(decodeURIComponent(image.dataset['oileImgSrc'] ?? '')).toBe('./assets/图 片.png')
-    expect(image.dataset['oileImgState']).toBe('loading')
+    expect(decodeURIComponent(image.dataset['vsidianImgSrc'] ?? '')).toBe('./assets/图 片.png')
+    expect(image.dataset['vsidianImgState']).toBe('loading')
     expect(image.alt).toBe('图片说明')
     const requests = sentOf(h, 'image.request') as ImageRequest[]
     expect(requests.length).toBe(1)
@@ -287,7 +287,7 @@ describe('图片生命周期（阅读视图，块挂载即装载）', () => {
     const h = makeBridge()
     const c = mount(h)
     c.handleHostMessage({ kind: 'view.mode.set', mode: 'reading' })
-    const image = readingContainer().querySelector<HTMLImageElement>('img.oile-image')!
+    const image = readingContainer().querySelector<HTMLImageElement>('img.vsidian-image')!
     const req = (sentOf(h, 'image.request') as ImageRequest[])[0]!
     c.handleHostMessage({ kind: 'image.result', reqId: req.reqId, ok: true, src: 'https://file+.vscode-resource/x.png' })
     expect(image.getAttribute('src')).toBe('https://file+.vscode-resource/x.png')
@@ -304,10 +304,10 @@ describe('图片生命周期（阅读视图，块挂载即装载）', () => {
     const h = makeBridge()
     const c = mount(h)
     c.handleHostMessage({ kind: 'view.mode.set', mode: 'reading' })
-    const image = readingContainer().querySelector<HTMLImageElement>('img.oile-image')!
+    const image = readingContainer().querySelector<HTMLImageElement>('img.vsidian-image')!
     const reqId = (sentOf(h, 'image.request') as ImageRequest[])[0]!.reqId
     c.handleHostMessage({ kind: 'image.result', reqId, ok: false, reason: 'not-found' })
-    expect(image.dataset['oileImgState']).toBe('error')
+    expect(image.dataset['vsidianImgState']).toBe('error')
     image.click()
     expect((sentOf(h, 'image.request') as ImageRequest[]).length).toBe(2)
   })
@@ -316,13 +316,13 @@ describe('图片生命周期（阅读视图，块挂载即装载）', () => {
     const h = makeBridge()
     const c = mount(h)
     c.handleHostMessage({ kind: 'view.mode.set', mode: 'reading' })
-    const first = readingContainer().querySelector<HTMLImageElement>('img.oile-image')!
+    const first = readingContainer().querySelector<HTMLImageElement>('img.vsidian-image')!
     const reqId = (sentOf(h, 'image.request') as ImageRequest[])[0]!.reqId
     c.handleHostMessage({ kind: 'image.result', reqId, ok: true, src: 'https://res/x.png' })
     first.dispatchEvent(new Event('load'))
     c.handleHostMessage({ kind: 'doc.resync', version: 2, text: '# 新文\n\n![另一图](./b.png)\n' })
     expect(first.getAttribute('src')).toBeNull()
-    expect(first.dataset['oileImgState'] ?? '').toBe('')
+    expect(first.dataset['vsidianImgState'] ?? '').toBe('')
     const requests = sentOf(h, 'image.request') as ImageRequest[]
     expect(requests.length).toBe(2)
     expect(requests[1]!.src).toBe('./b.png')
@@ -339,7 +339,7 @@ describe('实时预览图片（间接装饰 widget）', () => {
     expect(requests.length).toBe(1)
     expect(decodeURIComponent(requests[0]!.src)).toBe('./assets/图 片.png')
     c.handleHostMessage({ kind: 'image.result', reqId: requests[0]!.reqId, ok: true, src: 'https://res/img.png' })
-    const inner = host.querySelector<HTMLElement>('.oile-view-live')!.querySelector<HTMLImageElement>('.oile-image img')!
+    const inner = host.querySelector<HTMLElement>('.vsidian-view-live')!.querySelector<HTMLImageElement>('.vsidian-image img')!
     expect(inner).not.toBeNull()
     expect(inner.getAttribute('src')).toBe('https://res/img.png')
     inner.dispatchEvent(new Event('load'))
@@ -398,7 +398,7 @@ describe('点击与图片全链路零写回（核心不变量）', () => {
     for (const a of Array.from(readingContainer().querySelectorAll<HTMLAnchorElement>('a'))) {
       a.click()
     }
-    const image = readingContainer().querySelector<HTMLImageElement>('img.oile-image')!
+    const image = readingContainer().querySelector<HTMLImageElement>('img.vsidian-image')!
     image.click() // loading 态点击不重试
     const req = (sentOf(h, 'image.request') as ImageRequest[])[0]!
     c.handleHostMessage({ kind: 'image.result', reqId: req.reqId, ok: true, src: 'u' })

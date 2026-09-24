@@ -2,10 +2,10 @@
 // readingViewport 的窗口计算真实按需挂载到容器。
 //
 // 结构（布局可用时，虚拟模式）：
-// <div class="oile-view-reading">
-//   <div class="oile-reading-spacer oile-reading-spacer-top" style="height:…px">
+// <div class="vsidian-view-reading">
+//   <div class="vsidian-reading-spacer vsidian-reading-spacer-top" style="height:…px">
 //   …窗口内块元素（真实按需创建，结构与 #6 全量渲染逐字节一致）…
-//   <div class="oile-reading-spacer oile-reading-spacer-bottom" style="height:…px">
+//   <div class="vsidian-reading-spacer vsidian-reading-spacer-bottom" style="height:…px">
 // </div>
 //
 // 契约要点（ADR-0005 / mvp.md MVP 性能契约）：
@@ -256,7 +256,7 @@ export class VirtualReadingView {
   scrollToSrcStart(srcStart: number): void {
     if (!this.virtualized) {
       const el = this.container.querySelector<HTMLElement>(
-        `.${READING_CLASS_NAMES.block}[data-oile-src-start="${srcStart}"]`,
+        `.${READING_CLASS_NAMES.block}[data-vsidian-src-start="${srcStart}"]`,
       )
       if (el) {
         this.container.scrollTop = el.offsetTop
@@ -336,12 +336,12 @@ export class VirtualReadingView {
   private applyHighlightToDom(): void {
     if (!this.virtualized) {
       const els = this.container.querySelectorAll<HTMLElement>(
-        `.${READING_CLASS_NAMES.block}[data-oile-src-start]`,
+        `.${READING_CLASS_NAMES.block}[data-vsidian-src-start]`,
       )
       for (const el of els) {
         el.classList.toggle(
           READING_CLASS_NAMES.findHit,
-          Number(el.dataset['oileSrcStart']) === this.highlightSrcStart,
+          Number(el.dataset['vsidianSrcStart']) === this.highlightSrcStart,
         )
       }
       return
@@ -364,8 +364,8 @@ export class VirtualReadingView {
   injectTestImage(srcStart: number, initialHeightPx: number, finalHeightPx: number, delayMs: number): boolean {
     let host: HTMLElement | null = null
     for (const el of this.elements.values()) {
-      const s = Number(el.dataset['oileSrcStart'])
-      const e = Number(el.dataset['oileSrcEnd'])
+      const s = Number(el.dataset['vsidianSrcStart'])
+      const e = Number(el.dataset['vsidianSrcEnd'])
       if (s <= srcStart && srcStart < e) {
         host = el
         break
@@ -376,7 +376,7 @@ export class VirtualReadingView {
     }
     const img = document.createElement('img')
     img.setAttribute('src', '') // 空 src：CSP 拦截加载，保留替换元素占位形态
-    img.alt = 'oile-perf-test'
+    img.alt = 'vsidian-perf-test'
     img.style.display = 'block'
     img.style.width = '120px'
     img.style.height = `${initialHeightPx}px`

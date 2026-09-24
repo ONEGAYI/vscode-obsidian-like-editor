@@ -69,7 +69,7 @@ describe('阅读块模型：表格独立成块', () => {
     expect(el.querySelector('table')!.getAttribute('onclick')).toBeNull()
   })
 
-  it('表格块类名为稳定入口（oile-reading-table）', () => {
+  it('表格块类名为稳定入口（vsidian-reading-table）', () => {
     const table = splitReadingBlocks(TABLE_DOC).find((b) => b.kind === 'table')!
     const el = createReadingBlockElement(table, TABLE_DOC)
     expect(el.classList.contains(READING_CLASS_NAMES.tableBlock)).toBe(true)
@@ -131,7 +131,7 @@ describe('虚拟化下的表格块', () => {
     view.updateNow()
     const tableEl = container.querySelector(`.${READING_CLASS_NAMES.tableBlock}`)
     expect(tableEl).not.toBeNull()
-    expect((tableEl as HTMLElement).dataset['oileSrcStart']).toBe(String(text.indexOf('| h1 |')))
+    expect((tableEl as HTMLElement).dataset['vsidianSrcStart']).toBe(String(text.indexOf('| h1 |')))
     // 滚回顶部：表格块回收
     container.scrollTop = 0
     view.updateNow()

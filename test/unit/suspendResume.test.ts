@@ -102,7 +102,7 @@ describe('在途未确认编辑 + 外部增量', () => {
     expect(c.getView()!.state.doc.toString()).toBe('继续abc我的替换')
     expect(editRequests(sent)).toHaveLength(reqCount)
     // 横幅可见
-    const banner = parent.querySelector('.oile-suspend-banner')
+    const banner = parent.querySelector('.vsidian-suspend-banner')
     expect(banner).not.toBeNull()
     expect((banner as HTMLElement).style.display).not.toBe('none')
   })
@@ -212,7 +212,7 @@ describe('ok:false ack 的保留与重置', () => {
       text: '权威全文',
     })
     expect(c.getView()!.state.doc.toString()).toBe('权威全文')
-    const banner = parent.querySelector('.oile-suspend-banner') as HTMLElement
+    const banner = parent.querySelector('.vsidian-suspend-banner') as HTMLElement
     expect(banner).not.toBeNull()
     // 暂停态：后续输入不再发送
     c.getView()!.dispatch({ changes: { from: 0, insert: 'x' } })
@@ -257,7 +257,7 @@ describe('doc.resync 恢复与 session.suspended', () => {
     // 用户选择放弃本地修改，宿主 resumePanel → doc.resync
     c.handleHostMessage({ kind: 'doc.resync', version: 5, text: '权威' })
     expect(c.getView()!.state.doc.toString()).toBe('权威')
-    const banner = parent.querySelector('.oile-suspend-banner') as HTMLElement
+    const banner = parent.querySelector('.vsidian-suspend-banner') as HTMLElement
     expect(banner.style.display).toBe('none')
     c.getView()!.dispatch({ changes: { from: 2, insert: '新' } })
     const req = editRequests(sent).at(-1)!
@@ -270,7 +270,7 @@ describe('doc.resync 恢复与 session.suspended', () => {
     const { c, parent } = mount(bridge)
     init(c, '权威全文', 3)
     c.handleHostMessage({ kind: 'session.suspended', version: 3, reason: 'conflict' })
-    const banner = parent.querySelector('.oile-suspend-banner') as HTMLElement
+    const banner = parent.querySelector('.vsidian-suspend-banner') as HTMLElement
     expect(banner.style.display).not.toBe('none')
     // 暂停态不发送写回
     c.getView()!.dispatch({ changes: { from: 0, insert: 'x' } })
@@ -290,7 +290,7 @@ describe('横幅按钮 → conflict.action', () => {
     const { c, parent } = mount(bridge)
     init(c, 'a', 1)
     suspendByAck(c)
-    ;(parent.querySelector('.oile-suspend-banner button[data-action="copy"]') as HTMLElement).click()
+    ;(parent.querySelector('.vsidian-suspend-banner button[data-action="copy"]') as HTMLElement).click()
     const action = sent.find((m): m is Extract<WebviewToHost, { kind: 'conflict.action' }> => m.kind === 'conflict.action')
     expect(action).toMatchObject({ sessionId: 's1', docUri: DOC_URI, action: 'copy' })
   })
@@ -300,7 +300,7 @@ describe('横幅按钮 → conflict.action', () => {
     const { c, parent } = mount(bridge)
     init(c, 'a', 1)
     suspendByAck(c)
-    ;(parent.querySelector('.oile-suspend-banner button[data-action="resume"]') as HTMLElement).click()
+    ;(parent.querySelector('.vsidian-suspend-banner button[data-action="resume"]') as HTMLElement).click()
     const action = sent.find((m): m is Extract<WebviewToHost, { kind: 'conflict.action' }> => m.kind === 'conflict.action')
     expect(action).toMatchObject({ action: 'resume' })
   })

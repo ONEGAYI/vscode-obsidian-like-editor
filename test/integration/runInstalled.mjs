@@ -37,7 +37,7 @@ function resolveVsix() {
   return path.join(root, candidates[candidates.length - 1])
 }
 
-const wsDir = mkdtempSync(path.join(tmpdir(), 'oile-inst-'))
+const wsDir = mkdtempSync(path.join(tmpdir(), 'vsidian-inst-'))
 try {
   const vsix = resolveVsix()
   writeFixtures(wsDir, { generatePerfSample, generateReadingSample })
@@ -114,7 +114,7 @@ try {
         ...process.env,
         WORKSPACE_DIR: wsDir,
         LARGE_DOC_LINES: String(LARGE_DOC_LINES),
-        OILE_TEST_HOOKS: '1',
+        VSIDIAN_TEST_HOOKS: '1',
       },
       shell,
     })

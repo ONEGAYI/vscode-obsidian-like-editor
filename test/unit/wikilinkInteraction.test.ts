@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 // 双链显示与跳转意图的 webview 契约（工单 #11）：
-// - live 视图：非活动行 `[[…]]` 整体替换为显示文字 widget（oile-wikilink
+// - live 视图：非活动行 `[[…]]` 整体替换为显示文字 widget（vsidian-wikilink
 //   稳定类名）、活动行显示源码（mark 标记）；围栏代码与行内代码内不装饰
 // - live Ctrl/Cmd+单击 = wikilink.activate 上报（原始 target + 源区间）；
 //   普通单击不产生意图；嵌入/块引用形态不上报
-// - 阅读视图：合法双链渲染为 a.oile-wikilink（href=原文 target，显示别名
+// - 阅读视图：合法双链渲染为 a.vsidian-wikilink（href=原文 target，显示别名
 //   或链接名）；单击上报意图；嵌入与块引用按原文显示
 // - 全程零写回（显示与跳转意图不改文档）
 // - 新增协议消息（wikilink.activate）与探针字段的结构校验
@@ -90,7 +90,7 @@ function viewState(c: WebviewSyncController, h: Harness) {
 }
 
 function readingContainer(): HTMLElement {
-  return host.querySelector<HTMLElement>('.oile-view-reading')!
+  return host.querySelector<HTMLElement>('.vsidian-view-reading')!
 }
 
 describe('实时预览：双链间接装饰（视口内、非活动行替换显示文字）', () => {
@@ -216,7 +216,7 @@ describe('实时预览：Ctrl/Cmd+单击 = wikilink.activate 上报', () => {
   })
 })
 
-describe('阅读视图：双链渲染为 a.oile-wikilink 与单击上报', () => {
+describe('阅读视图：双链渲染为 a.vsidian-wikilink 与单击上报', () => {
   it('合法双链渲染为可点击 a：href 为原文 target、显示别名或链接名；数量正确', () => {
     const h = makeBridge()
     const c = mount(h)

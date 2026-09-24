@@ -55,8 +55,8 @@ function snapshot(view: EditorView): PerfSnapshot {
   return {
     renderedLines: count('.cm-line'),
     contentDomCount: content ? content.querySelectorAll('*').length : 0,
-    headingLineCount: count('.oile-heading-line'),
-    inviewHeadingCount: count('.oile-heading-inview'),
+    headingLineCount: count('.vsidian-heading-line'),
+    inviewHeadingCount: count('.vsidian-heading-inview'),
     jsHeapBytes: readUsedJsHeapBytes(),
   }
 }

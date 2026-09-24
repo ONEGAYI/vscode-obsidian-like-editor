@@ -23,9 +23,9 @@ export type ImageSlotState = 'loading' | 'loaded' | 'error'
 
 export const IMAGE_CLASS_NAMES = {
   /** 图片槽位基类（阅读 img 与 live widget 容器共用） */
-  image: 'oile-image',
-  /** 状态修饰类（与 data-oile-img-state 同步） */
-  state: (s: ImageSlotState) => `oile-image-${s}`,
+  image: 'vsidian-image',
+  /** 状态修饰类（与 data-vsidian-img-state 同步） */
+  state: (s: ImageSlotState) => `vsidian-image-${s}`,
 } as const
 
 export interface ImageManagerDeps {
@@ -100,7 +100,7 @@ export class ImageResourceManager {
     }
     rawSrc = normalizeImgSrc(rawSrc)
     slot.classList.add(IMAGE_CLASS_NAMES.image)
-    slot.dataset['oileImgSrc'] = rawSrc
+    slot.dataset['vsidianImgSrc'] = rawSrc
     let entry = this.entries.get(rawSrc)
     if (!entry) {
       if (this.deps.isDirectSrc(rawSrc)) {
@@ -150,7 +150,7 @@ export class ImageResourceManager {
     slot.removeEventListener('error', record.onError)
     slot.removeEventListener('click', record.onClick)
     this.releaseImages(record)
-    delete slot.dataset['oileImgState']
+    delete slot.dataset['vsidianImgState']
     slot.classList.remove(
       IMAGE_CLASS_NAMES.state('loading'),
       IMAGE_CLASS_NAMES.state('loaded'),
@@ -218,7 +218,7 @@ export class ImageResourceManager {
   getStates(): { loading: number; loaded: number; error: number } {
     const out = { loading: 0, loaded: 0, error: 0 }
     for (const slot of this.slots.keys()) {
-      const s = slot.dataset['oileImgState']
+      const s = slot.dataset['vsidianImgState']
       if (s === 'loading' || s === 'loaded' || s === 'error') {
         out[s] += 1
       }
@@ -260,21 +260,21 @@ export class ImageResourceManager {
   }
 
   private setSlotState(slot: HTMLElement, state: ImageSlotState, reason?: string): void {
-    slot.dataset['oileImgState'] = state
+    slot.dataset['vsidianImgState'] = state
     for (const s of ['loading', 'loaded', 'error'] as const) {
       slot.classList.toggle(IMAGE_CLASS_NAMES.state(s), s === state)
     }
     if (state === 'error') {
-      slot.dataset['oileImgReason'] = reason ?? 'unknown'
+      slot.dataset['vsidianImgReason'] = reason ?? 'unknown'
       slot.title = `图片加载失败（${reason ?? '未知原因'}），点击重试`
     } else {
-      delete slot.dataset['oileImgReason']
+      delete slot.dataset['vsidianImgReason']
     }
   }
 
   private handleRetryClick(slot: HTMLElement, event: MouseEvent): void {
     const record = this.slots.get(slot)
-    if (!record || slot.dataset['oileImgState'] !== 'error') {
+    if (!record || slot.dataset['vsidianImgState'] !== 'error') {
       return
     }
     // 阻断冒泡：错误态重试不得触发外层 <a> 导航或容器级点击语义

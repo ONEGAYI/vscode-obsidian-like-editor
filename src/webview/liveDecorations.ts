@@ -10,7 +10,7 @@
 //     深度与有序/子弹区分）、水平线、frontmatter
 //   · 标记隐藏（replace）：非活动行的 #/**/`/>/- 等标记与任务 [x] 字形
 //     widget（光标行显示源码——#5 选区联动语义）
-//   · 内容 span：oile-header-{n} / oile-strong / oile-emphasis / oile-inline-code
+//   · 内容 span：vsidian-header-{n} / vsidian-strong / vsidian-emphasis / vsidian-inline-code
 // - 间接装饰（纯视口内）→ ViewPlugin 按直接装饰集合与 visibleRanges 计算
 //   标题行强调与活动提示（不触碰 view/DOM 测量，防布局循环）
 // - 增量策略：键入路径的重建区间 = 变更行 ∪ 旧树相交装饰节点（映射后）
@@ -56,55 +56,55 @@ import {
 
 /** 标题类名（#5 契约保持不变） */
 export const HEADING_CLASS_NAMES = {
-  line: 'oile-heading-line',
-  level: (lv: number) => `oile-heading-line-${lv}`,
-  inview: 'oile-heading-inview',
-  active: 'oile-heading-active',
+  line: 'vsidian-heading-line',
+  level: (lv: number) => `vsidian-heading-line-${lv}`,
+  inview: 'vsidian-heading-inview',
+  active: 'vsidian-heading-active',
 } as const
 
 /** #8 新增稳定类名（Obsidian 对应选择器见 docs/design/obsidian-selector-map.md） */
 export const LIVE_CLASS_NAMES = {
   /** 标题内容 span（Obsidian `.cm-header-{n}`） */
-  headerSpan: (lv: number) => `oile-header-${Math.min(6, Math.max(1, lv))}`,
+  headerSpan: (lv: number) => `vsidian-header-${Math.min(6, Math.max(1, lv))}`,
   /** 粗体内容 span（`.cm-strong`） */
-  strong: 'oile-strong',
+  strong: 'vsidian-strong',
   /** 斜体内容 span（`.cm-emphasis`） */
-  emphasis: 'oile-emphasis',
+  emphasis: 'vsidian-emphasis',
   /** 行内代码内容 span（`.cm-inline-code`） */
-  inlineCode: 'oile-inline-code',
+  inlineCode: 'vsidian-inline-code',
   /** 引用行（`.HyperMD-quote` / `.cm-quote`） */
-  quoteLine: 'oile-quote-line',
+  quoteLine: 'vsidian-quote-line',
   /** 围栏/缩进代码行（`.HyperMD-codeblock`） */
-  codeLine: 'oile-code-line',
+  codeLine: 'vsidian-code-line',
   /** 列表项行（`.HyperMD-list-line`，本项目自有组合形态） */
-  listLine: 'oile-list-line',
+  listLine: 'vsidian-list-line',
   /** 无序列表行修饰（标记隐藏后以 ::before 呈现圆点） */
-  listBullet: 'oile-list-bullet',
+  listBullet: 'vsidian-list-bullet',
   /** 有序列表行修饰（编号保留可见） */
-  listOrdered: 'oile-list-ordered',
+  listOrdered: 'vsidian-list-ordered',
   /** 任务 checkbox（input，#9 可交互：点击/Enter 切换勾选态） */
-  taskCheckbox: 'oile-task-checkbox',
+  taskCheckbox: 'vsidian-task-checkbox',
   /** 已勾选修饰类（配合 :checked 伪类的稳定类入口） */
-  taskChecked: 'oile-task-checked',
+  taskChecked: 'vsidian-task-checked',
   /** 水平线行（`.cm-hr`） */
-  hrLine: 'oile-hr-line',
+  hrLine: 'vsidian-hr-line',
   /** frontmatter 行（`.cm-hmd-frontmatter` 方向） */
-  frontmatterLine: 'oile-frontmatter-line',
+  frontmatterLine: 'vsidian-frontmatter-line',
   /** ---- 表格（#12）：编辑面即源文本行，装饰只做样式标记（不隐藏源文）---- */
   /** 表格行（表头/分隔/数据行通用；Obsidian 对应 .cm-table 方向） */
-  tableLine: 'oile-table-line',
+  tableLine: 'vsidian-table-line',
   /** 表头行修饰 */
-  tableHeaderLine: 'oile-table-header-line',
+  tableHeaderLine: 'vsidian-table-header-line',
   /** 分隔行修饰 */
-  tableDelimiterLine: 'oile-table-delimiter-line',
+  tableDelimiterLine: 'vsidian-table-delimiter-line',
   /** 单元格内容 span（trim 后区间） */
-  tableCell: 'oile-table-cell',
+  tableCell: 'vsidian-table-cell',
   /** 表头单元格修饰 */
-  tableCellHeader: 'oile-table-cell-header',
+  tableCellHeader: 'vsidian-table-cell-header',
   /** 管道符 span（含首尾边界管道） */
-  tablePipe: 'oile-table-pipe',
+  tablePipe: 'vsidian-table-pipe',
   /** 列对齐修饰（分隔行声明的对齐落到各单元格） */
-  tableAlign: (a: TableAlign) => `oile-table-align-${a}`,
+  tableAlign: (a: TableAlign) => `vsidian-table-align-${a}`,
 } as const
 
 // ---- 装饰实例缓存：增量与全量构建产出相同实例，使 RangeSet.eq 成立 ----

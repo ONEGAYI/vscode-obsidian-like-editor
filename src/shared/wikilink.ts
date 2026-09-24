@@ -24,7 +24,7 @@
  *  `.cm-hmd-internal-link` / `.internal-link`，见选择器映射表） */
 export const WIKILINK_CLASS_NAMES = {
   /** 双链呈现（live 非活动行替换 widget、活动行 mark、阅读 a） */
-  wikilink: 'oile-wikilink',
+  wikilink: 'vsidian-wikilink',
 } as const
 
 /** 解析后的双链结构（trim 后形态；源文原样语义见 inner） */

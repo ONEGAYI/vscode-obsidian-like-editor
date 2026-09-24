@@ -454,9 +454,9 @@ describe('buildViewportLiveDecorations：间接装饰（纯数据输入）', () 
     )
     const items = collect(set)
     expect(items).toEqual([
-      { from: 0, to: 0, cls: 'oile-heading-inview oile-heading-active', widget: undefined },
-      { from: text.line(3).from, to: text.line(3).from, cls: 'oile-heading-inview', widget: undefined },
-      { from: text.line(7).from, to: text.line(7).from, cls: 'oile-heading-inview', widget: undefined },
+      { from: 0, to: 0, cls: 'vsidian-heading-inview vsidian-heading-active', widget: undefined },
+      { from: text.line(3).from, to: text.line(3).from, cls: 'vsidian-heading-inview', widget: undefined },
+      { from: text.line(7).from, to: text.line(7).from, cls: 'vsidian-heading-inview', widget: undefined },
     ])
   })
 
@@ -481,18 +481,18 @@ describe('buildViewportLiveDecorations：间接装饰（纯数据输入）', () 
 
 describe('稳定类名常量（#8 样式契约入口）', () => {
   it('live 侧新增类名与既有 #5 标题类名并存', () => {
-    expect(HEADING_CLASS_NAMES.line).toBe('oile-heading-line')
-    expect(LIVE_CLASS_NAMES.headerSpan(3)).toBe('oile-header-3')
-    expect(LIVE_CLASS_NAMES.strong).toBe('oile-strong')
-    expect(LIVE_CLASS_NAMES.emphasis).toBe('oile-emphasis')
-    expect(LIVE_CLASS_NAMES.inlineCode).toBe('oile-inline-code')
-    expect(LIVE_CLASS_NAMES.quoteLine).toBe('oile-quote-line')
-    expect(LIVE_CLASS_NAMES.codeLine).toBe('oile-code-line')
-    expect(LIVE_CLASS_NAMES.listLine).toBe('oile-list-line')
-    expect(LIVE_CLASS_NAMES.taskCheckbox).toBe('oile-task-checkbox')
-    expect(LIVE_CLASS_NAMES.taskChecked).toBe('oile-task-checked')
-    expect(LIVE_CLASS_NAMES.hrLine).toBe('oile-hr-line')
-    expect(LIVE_CLASS_NAMES.frontmatterLine).toBe('oile-frontmatter-line')
+    expect(HEADING_CLASS_NAMES.line).toBe('vsidian-heading-line')
+    expect(LIVE_CLASS_NAMES.headerSpan(3)).toBe('vsidian-header-3')
+    expect(LIVE_CLASS_NAMES.strong).toBe('vsidian-strong')
+    expect(LIVE_CLASS_NAMES.emphasis).toBe('vsidian-emphasis')
+    expect(LIVE_CLASS_NAMES.inlineCode).toBe('vsidian-inline-code')
+    expect(LIVE_CLASS_NAMES.quoteLine).toBe('vsidian-quote-line')
+    expect(LIVE_CLASS_NAMES.codeLine).toBe('vsidian-code-line')
+    expect(LIVE_CLASS_NAMES.listLine).toBe('vsidian-list-line')
+    expect(LIVE_CLASS_NAMES.taskCheckbox).toBe('vsidian-task-checkbox')
+    expect(LIVE_CLASS_NAMES.taskChecked).toBe('vsidian-task-checked')
+    expect(LIVE_CLASS_NAMES.hrLine).toBe('vsidian-hr-line')
+    expect(LIVE_CLASS_NAMES.frontmatterLine).toBe('vsidian-frontmatter-line')
   })
 })
 

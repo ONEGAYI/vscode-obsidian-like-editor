@@ -3,7 +3,7 @@
 // @vscode/test-electron 以非零码退出。
 //
 // 与扩展的交互全部走公开入口（vscode.openWith）与扩展注册的 _test 辅助命令
-// （onegayi.obsidian-like-editor._test.*）：webview 真实键盘输入无法在
+// （onegayi.vsidian._test.*）：webview 真实键盘输入无法在
 // @vscode/test-electron 中模拟，"webview -> 宿主"链路经 injectWebviewMessage
 // 注入（与真实 webview.onDidReceiveMessage 同一入口），宿主侧行为全部真实。
 import * as vscode from 'vscode'
