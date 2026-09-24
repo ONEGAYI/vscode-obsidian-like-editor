@@ -622,3 +622,55 @@ describe('任务勾选协议（#9）', () => {
     ).toBe(false) // 缺字段（undefined 违反 isNullOrString）
   })
 })
+
+describe('设置消息协议（#33）', () => {
+  const baseViewState = {
+    kind: 'view.state' as const,
+    text: '# t',
+    docLength: 4,
+    lineCount: 1,
+    renderedLines: 1,
+  }
+
+  it('接受合法 settings.open 与 settings.get，拒绝携带多余非法形态', () => {
+    expect(isWebviewToHost({ kind: 'settings.open' })).toBe(true)
+    expect(isWebviewToHost({ kind: 'settings.get' })).toBe(true)
+    // 方向校验：宿主方向不接受
+    expect(isHostToWebview({ kind: 'settings.open' })).toBe(false)
+    expect(isHostToWebview({ kind: 'settings.get' })).toBe(false)
+  })
+
+  it('接受合法 settings.set（标量键值对，含空对象），拒绝非对象 values 与非标量值', () => {
+    expect(isWebviewToHost({ kind: 'settings.set', values: {} })).toBe(true)
+    expect(isWebviewToHost({ kind: 'settings.set', values: { 'editor.lineNumbers': true } })).toBe(true)
+    expect(isWebviewToHost({ kind: 'settings.set', values: { 'a.b': 3, 'c.d': 'x' } })).toBe(true)
+    expect(isWebviewToHost({ kind: 'settings.set' })).toBe(false)
+    expect(isWebviewToHost({ kind: 'settings.set', values: null })).toBe(false)
+    expect(isWebviewToHost({ kind: 'settings.set', values: 'x' })).toBe(false)
+    expect(isWebviewToHost({ kind: 'settings.set', values: { nested: { a: 1 } } })).toBe(false)
+    expect(isWebviewToHost({ kind: 'settings.set', values: { arr: [true] } })).toBe(false)
+    expect(isWebviewToHost({ kind: 'settings.set', values: { nul: null } })).toBe(false)
+    // 方向校验
+    expect(isHostToWebview({ kind: 'settings.set', values: {} })).toBe(false)
+  })
+
+  it('接受合法 settings.snapshot 与 settings.changed，拒绝非法 values', () => {
+    expect(isHostToWebview({ kind: 'settings.snapshot', values: {} })).toBe(true)
+    expect(isHostToWebview({ kind: 'settings.snapshot', values: { 'editor.lineNumbers': false } })).toBe(true)
+    expect(isHostToWebview({ kind: 'settings.changed', values: { 'a.b': true, 'c.d': 2 } })).toBe(true)
+    expect(isHostToWebview({ kind: 'settings.snapshot' })).toBe(false)
+    expect(isHostToWebview({ kind: 'settings.changed', values: [] })).toBe(false)
+    expect(isHostToWebview({ kind: 'settings.changed', values: { bad: undefined } })).toBe(false)
+    // 方向校验：webview 方向不接受
+    expect(isWebviewToHost({ kind: 'settings.snapshot', values: {} })).toBe(false)
+    expect(isWebviewToHost({ kind: 'settings.changed', values: {} })).toBe(false)
+  })
+
+  it('view.state 接受 settings 可选快照字段，拒绝类型错误', () => {
+    expect(isWebviewToHost({ ...baseViewState, settings: { 'editor.lineNumbers': true } })).toBe(true)
+    expect(isWebviewToHost({ ...baseViewState, settings: {} })).toBe(true)
+    expect(isWebviewToHost({ ...baseViewState, settings: { bad: { x: 1 } } })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, settings: { bad: null } })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, settings: 'x' })).toBe(false)
+  })
+})
