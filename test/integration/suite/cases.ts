@@ -1795,6 +1795,37 @@ export const cases: Array<[string, () => Promise<void>]> = [
     )
   }],
 
+  ['实时预览网格切换不写文档，进入单元格后仍由 CM6 写回（#42）', async () => {
+    await openWithEditor('table42.md')
+    const beforeSession = await waitSessionReady('table42.md')
+    const uri = wsUri('table42.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('table42.md'))
+    const before = doc.getText()
+    assert(before === TABLE_DOC_TEXT, '独立表格 fixture 初始文本不符')
+    const at = before.indexOf('苹果') + 2
+
+    // 定位相当于点击单元格后的选区更新；显示状态不应触发 edit.request。
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: at })
+    const located = await waitViewState('table42.md', (v) => v.selectionOffset === at)
+    assert(located.text === before && doc.getText() === before, '进入单元格不得改写 Markdown')
+    const afterLocate = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterLocate.appliedEdits === beforeSession.appliedEdits, '网格进入源码不得产生宿主编辑')
+
+    // 真实 webview 内 CM6 事务写回，与网格显示不建立第二份输入状态。
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sync.test.edit', offset: at, text: '汁' })
+    const edited = before.replace('苹果', '苹果汁')
+    await poll('网格单元格编辑写回', () => (doc.getText() === edited ? true : undefined))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const reading = await waitViewState('table42.md', (v) => v.viewMode === 'reading')
+    assert(reading.text === edited,
+      `阅读模式应读取单元格最新文本：${JSON.stringify({ before, edited, actual: reading.text, host: doc.getText() })}`)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'live' })
+    const live = await waitViewState('table42.md', (v) => v.viewMode === 'live')
+    assert(live.text === edited, `切回实时预览后文本不一致：${JSON.stringify(live.text)}`)
+    assert(await doc.save(), '网格单元格编辑保存失败')
+    assert(await readDisk('table42.md') === edited, '网格单元格编辑的磁盘回读不一致')
+  }],
+
   ['阅读视图表格：真实 table 只读呈现与样式入口（#12）', async () => {
     await openWithEditor('table.md')
     await waitSessionReady('table.md')

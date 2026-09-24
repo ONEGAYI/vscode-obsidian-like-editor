@@ -19,6 +19,8 @@
 // - frontmatter：与阅读视图共用 markdownDoc.frontmatterRange（有界扫描），
 //   头块内不产生 Markdown 装饰（伪标题/伪列表按源码呈现）
 // - 未支持语法（脚注、定义列表等）：无装饰即局部源码降级，不整篇改写
+// - #42 表格：安全的非活动行以原文区间 mark + CSS grid 呈现；活动行恢复
+//   源码布局。没有独立单元格输入模型，DOM 仍由 CM6 视口渲染与回收
 import {
   EditorSelection,
   RangeSet,
@@ -49,6 +51,7 @@ import {
 import { resolveTaskToggleAtMarker } from './taskToggle'
 import {
   barePipeAt,
+  escapedPipeBackslashes,
   parseTableDelimiter,
   splitTableRowCells,
   type TableAlign,
@@ -92,7 +95,7 @@ export const LIVE_CLASS_NAMES = {
   hrLine: 'vsidian-hr-line',
   /** frontmatter 行（`.cm-hmd-frontmatter` 方向） */
   frontmatterLine: 'vsidian-frontmatter-line',
-  /** ---- 表格（#12）：编辑面即源文本行，装饰只做样式标记（不隐藏源文）---- */
+  /** ---- 表格：源文本为唯一编辑面，非活动安全表格呈现网格（#42）---- */
   /** 表格行（表头/分隔/数据行通用；Obsidian 对应 .cm-table 方向） */
   tableLine: 'vsidian-table-line',
   /** 表头行修饰 */
@@ -105,6 +108,11 @@ export const LIVE_CLASS_NAMES = {
   tableCellHeader: 'vsidian-table-cell-header',
   /** 管道符 span（含首尾边界管道） */
   tablePipe: 'vsidian-table-pipe',
+  /** 非活动安全表格的网格行和单元格；行身份另见 data-vsidian-table-row */
+  tableGridRow: 'vsidian-table-grid-row',
+  tableGridCell: 'vsidian-table-grid-cell',
+  tableGridDelimiter: 'vsidian-table-grid-delimiter',
+  tableEscapedPipe: 'vsidian-table-escaped-pipe',
   /** 列对齐修饰（分隔行声明的对齐落到各单元格） */
   tableAlign: (a: TableAlign) => `vsidian-table-align-${a}`,
 } as const
@@ -196,6 +204,102 @@ const taskCheckboxDecos = [
 // （lezer 的 TableCell 节点不识别 \| 与行内代码内管道，不作定位依据）
 
 const tablePipeDeco = Decoration.mark({ class: LIVE_CLASS_NAMES.tablePipe })
+const tableEscapedPipeDeco = Decoration.mark({ class: LIVE_CLASS_NAMES.tableEscapedPipe })
+const tableGridCellDecos = new Map<string, ReturnType<typeof Decoration.mark>>()
+function tableGridCellDeco(align: TableAlign | null): ReturnType<typeof Decoration.mark> {
+  const cls = align
+    ? `${LIVE_CLASS_NAMES.tableGridCell} vsidian-table-grid-align-${align}`
+    : LIVE_CLASS_NAMES.tableGridCell
+  let deco = tableGridCellDecos.get(cls)
+  if (!deco) {
+    deco = Decoration.mark({ class: cls })
+    tableGridCellDecos.set(cls, deco)
+  }
+  return deco
+}
+
+/** 零宽空格仍须占一列；widget 仅在该行进入 CM6 视口时生成 DOM。 */
+class EmptyTableCellWidget extends WidgetType {
+  toDOM(): HTMLElement {
+    const span = document.createElement('span')
+    span.className = LIVE_CLASS_NAMES.tableGridCell
+    span.setAttribute('aria-label', '空单元格')
+    span.addEventListener('mousedown', (event) => {
+      const view = EditorView.findFromDOM(span)
+      if (!view) return
+      const pos = view.posAtDOM(span)
+      view.dispatch({ selection: EditorSelection.single(pos), scrollIntoView: true })
+      event.preventDefault()
+    })
+    return span
+  }
+  ignoreEvent(): boolean {
+    return false
+  }
+}
+const emptyTableCellDeco = Decoration.widget({ widget: new EmptyTableCellWidget() })
+
+type GridRowKind = 'header' | 'row'
+interface TableGridPlan {
+  columns: number
+  rows: Map<number, GridRowKind>
+  delimiterLine: number
+}
+
+/**
+ * 仅对源区间与显示格一一对应的表格启用网格。缺列/多列以及无法解析的
+ * 分隔行保持源码形态，避免视觉点击落到错误列。
+ */
+function tableGridPlan(doc: Text, table: SyntaxNode): TableGridPlan | null {
+  const rows = new Map<number, GridRowKind>()
+  let delimiterLine = 0
+  let columns = 0
+  let headers = 0
+  for (let c = table.firstChild; c; c = c.nextSibling) {
+    if (c.name !== 'TableHeader' && c.name !== 'TableDelimiter' && c.name !== 'TableRow') {
+      return null
+    }
+    const line = doc.lineAt(c.from)
+    if (c.name === 'TableDelimiter') {
+      const aligns = parseTableDelimiter(line.text)
+      if (!aligns || delimiterLine !== 0) {
+        return null
+      }
+      delimiterLine = line.number
+      columns = aligns.length
+    } else {
+      const kind: GridRowKind = c.name === 'TableHeader' ? 'header' : 'row'
+      if (kind === 'header') headers += 1
+      rows.set(line.number, kind)
+    }
+  }
+  if (headers !== 1 || delimiterLine === 0 || columns === 0 || rows.size === 0) {
+    return null
+  }
+  for (const lineNo of rows.keys()) {
+    if (splitTableRowCells(doc.line(lineNo).text, 0).length !== columns) {
+      return null
+    }
+  }
+  return { columns, rows, delimiterLine }
+}
+
+const gridLineDecos = new Map<string, ReturnType<typeof Decoration.line>>()
+function tableGridLineDeco(cls: string, kind: GridRowKind, plan: TableGridPlan): ReturnType<typeof Decoration.line> {
+  const key = `${cls}\u0000${kind}\u0000${plan.columns}`
+  let deco = gridLineDecos.get(key)
+  if (!deco) {
+    deco = Decoration.line({
+      class: cls,
+      attributes: {
+        'data-vsidian-table-row': kind,
+        style: `--vsidian-table-columns: ${plan.columns}`,
+      },
+    })
+    gridLineDecos.set(key, deco)
+  }
+  return deco
+}
 
 /** 单元格 mark 实例缓存：header × 对齐的有限组合，增量与全量产出相同实例 */
 const tableCellDecos = new Map<string, ReturnType<typeof Decoration.mark>>()
@@ -263,6 +367,7 @@ function emitTableRowMarks(
   doc: Text,
   node: SyntaxNode,
   path: SyntaxNode[],
+  grid: boolean,
 ): void {
   const line = doc.lineAt(node.from)
   const header = node.name === 'TableHeader'
@@ -270,9 +375,19 @@ function emitTableRowMarks(
   const cells = splitTableRowCells(line.text, line.from)
   for (let col = 0; col < cells.length; col++) {
     const cell = cells[col]!
+    if (grid) {
+      out.push(cell.to > cell.from
+        ? tableGridCellDeco(aligns?.[col] ?? null).range(cell.from, cell.to)
+        : emptyTableCellDeco.range(cell.from))
+    }
     if (cell.contentTo > cell.contentFrom) {
       const deco = tableCellDeco(header, aligns && col < aligns.length ? aligns[col]! : null)
       out.push(deco.range(cell.contentFrom, cell.contentTo))
+    }
+  }
+  if (grid) {
+    for (const pos of escapedPipeBackslashes(line.text)) {
+      out.push(tableEscapedPipeDeco.range(line.from + pos, line.from + pos + 1))
     }
   }
   emitTablePipeMarks(out, doc, line.from)
@@ -364,6 +479,8 @@ function emitForRange(
 ): Array<Range<Decoration>> {
   const out: Array<Range<Decoration>> = []
   const lineCls: Array<Set<string> | undefined> = new Array(toLine - fromLine + 1).fill(undefined)
+  const gridLines = new Map<number, { kind: GridRowKind; plan: TableGridPlan }>()
+  const gridTables = new Map<number, TableGridPlan | null>()
   const addLineCls = (lineNo: number, cls: string): void => {
     const idx = lineNo - fromLine
     let set = lineCls[idx]
@@ -430,22 +547,39 @@ function emitForRange(
       case 'HorizontalRule':
         eachNodeLine(doc, node, fromLine, toLine, (n) => addLineCls(n, LIVE_CLASS_NAMES.hrLine))
         return
-      // ---- 表格（#12）：行级类 + GFM 语义单元格 mark；管道符保持可见 ----
-      case 'Table':
+      // 表格始终保留原文；安全且非活动的行额外呈现网格。
+      case 'Table': {
         eachNodeLine(doc, node, fromLine, toLine, (n) => addLineCls(n, LIVE_CLASS_NAMES.tableLine))
+        const plan = tableGridPlan(doc, node)
+        gridTables.set(node.from, plan)
+        if (plan) {
+          for (const [lineNo, kind] of plan.rows) {
+            if (lineNo >= fromLine && lineNo <= toLine && !isLineActive(selection, doc, lineNo)) {
+              addLineCls(lineNo, LIVE_CLASS_NAMES.tableGridRow)
+              gridLines.set(lineNo, { kind, plan })
+            }
+          }
+          if (plan.delimiterLine >= fromLine && plan.delimiterLine <= toLine &&
+              !isLineActive(selection, doc, plan.delimiterLine)) {
+            addLineCls(plan.delimiterLine, LIVE_CLASS_NAMES.tableGridDelimiter)
+          }
+        }
         return
+      }
       case 'TableHeader': {
         const lineNo = doc.lineAt(node.from).number
         if (lineNo >= fromLine && lineNo <= toLine) {
           addLineCls(lineNo, LIVE_CLASS_NAMES.tableHeaderLine)
-          emitTableRowMarks(out, doc, node, path)
+          const grid = gridTables.get(tableAncestor(path)?.from ?? -1)
+          emitTableRowMarks(out, doc, node, path, Boolean(grid && gridLines.has(lineNo)))
         }
         return
       }
       case 'TableRow': {
         const lineNo = doc.lineAt(node.from).number
         if (lineNo >= fromLine && lineNo <= toLine) {
-          emitTableRowMarks(out, doc, node, path)
+          const grid = gridTables.get(tableAncestor(path)?.from ?? -1)
+          emitTableRowMarks(out, doc, node, path, Boolean(grid && gridLines.has(lineNo)))
         }
         return
       }
@@ -551,7 +685,9 @@ function emitForRange(
     const set = lineCls[i]
     if (set && set.size > 0) {
       const line = doc.line(fromLine + i)
-      out.push(lineDeco([...set].sort().join(' ')).range(line.from))
+      const cls = [...set].sort().join(' ')
+      const grid = gridLines.get(line.number)
+      out.push((grid ? tableGridLineDeco(cls, grid.kind, grid.plan) : lineDeco(cls)).range(line.from))
     }
   }
   return out

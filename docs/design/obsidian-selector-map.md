@@ -1,6 +1,6 @@
 # Obsidian 选择器映射表（一期稳定样式契约）
 
-状态：工单 #6 交付物，2026-09-23；#8 补 span 级映射与阅读语义标签结构（2026-09-24）；#9 补任务勾选交互类（2026-09-24）；#10 补链接/图片映射（2026-09-24）；#12 补表格映射（2026-09-24）；#11 补双链映射（2026-09-24）。依据 [ADR-0004](../adr/0004-stable-styling-contract.md)。
+状态：工单 #6 交付物，2026-09-23；#8 补 span 级映射与阅读语义标签结构（2026-09-24）；#9 补任务勾选交互类（2026-09-24）；#10 补链接/图片映射（2026-09-24）；#12 补表格映射（2026-09-24）；#11 补双链映射（2026-09-24）；#42 补实时预览表格网格入口（2026-09-24）。依据 [ADR-0004](../adr/0004-stable-styling-contract.md)。
 
 本文记录一期已建立的稳定类名/CSS 变量入口与 Obsidian 同款选择器的核对结果，供二期自定义 CSS 片段兼容使用。**边界声明**：
 
@@ -41,17 +41,20 @@
 | `.vsidian-hr-line` | 水平线行 | `.cm-hr`（Obsidian 水平线 token 类） | 语义等价（行级呈现，`---` 源文保留可见） |
 | `.vsidian-frontmatter-line` | frontmatter 行（头块按源码呈现、语法不解析） | `.cm-hmd-frontmatter`（Obsidian frontmatter 类） | 语义对应（类名不同）；frontmatter 边界由 `markdownDoc.frontmatterRange` 两视图共用判定 |
 
-## 表格（#12 新增）
+## 表格（#12 基础编辑，#42 网格呈现）
 
-#12 起 live 视图对表格行建立装饰。**形态声明**：编辑面即 CM6 源文本行——管道符**保持可见**（点击定位与光标编辑直接落在源区间，无覆盖层/整表控件），装饰只做样式标记；单元格边界按 GFM 语义自研拆分（`\|` 与行内代码内的 `|` 不切分，见 `src/webview/tableCells.ts`），lezer 的 TableCell 节点不作定位依据。单元格内键入 `|` 自动写为 `\|`（输入钩子，经 CM6 事务走标准出站链路）。
+编辑面仍是 CM6 源文本行。#42 起非活动安全表格用 CSS grid 呈现表头、单元格边框、等宽列与 GFM 对齐；管道符和分隔行在网格状态隐藏。光标或选区进入行后，该行回到源码形态，直接复用 CM6 输入、IME、导航及宿主写回。列数不一致等无法逐格映射的表格维持整表可编辑源码。单元格边界按 GFM 语义自研拆分（`\|` 与行内代码内的 `|` 不切分，见 `src/webview/tableCells.ts`），lezer 的 TableCell 节点不作定位依据。
 
 | 本项目稳定类名 | 本项目用途 | Obsidian 对应选择器 | 核对结果 |
 | --- | --- | --- | --- |
-| `.vsidian-table-line` | 表格行（表头/分隔/数据行通用） | `.HyperMD-table-line` 方向（Obsidian live 表格行类族；其 1.5 前源码形态同源文） | 语义对应（行级）；本项目管道符可见的源码形态为自有取舍 |
+| `.vsidian-table-line` | 表格行（表头/分隔/数据行通用） | `.HyperMD-table-line` 方向（Obsidian live 表格行类族） | 语义对应（行级）；源码降级和活动行仍显示管道符 |
 | `.vsidian-table-header-line` / `.vsidian-table-delimiter-line` | 表头行 / 分隔行修饰 | 无直接对应（Obsidian 以 thead 样式承担） | 本项目自有修饰形态 |
 | `.vsidian-table-cell`（+ `-header` 修饰） | 单元格内容 span（trim 后区间） | `.cm-table-cell` 方向（社区主题常用） | 语义等价（span 级）；GFM 拆分语义自研 |
-| `.vsidian-table-pipe` | 管道符 span（含首尾边界管道） | 无对应（Obsidian 隐藏或原样呈现管道） | 本项目自有形态；保持占位不隐藏 |
-| `.vsidian-table-align-{left/center/right}` | 分隔行声明的列对齐修饰 | 无对应（对齐由渲染布局承担） | 本项目自有：live 源码形态不重排（类为样式入口），对齐视觉语义由阅读视图承担 |
+| `.vsidian-table-pipe` | 管道符 span（含首尾边界管道） | 无对应（Obsidian 隐藏或原样呈现管道） | 本项目自有形态；网格状态隐藏，源码状态可见 |
+| `.vsidian-table-align-{left/center/right}` | 分隔行声明的列对齐修饰（trim 后内容） | 无对应（对齐由渲染布局承担） | 本项目自有稳定类；网格实际布局由下项承担 |
+| `.vsidian-table-grid-row` / `.vsidian-table-grid-cell` | 非活动安全表格的网格行/单元格；行附 `data-vsidian-table-row=header/row` 和 `--vsidian-table-columns` | Obsidian live 网格方向 | 本项目自有 CSS grid 结构；单元格仍与源区间对应，并非独立表格数据模型 |
+| `.vsidian-table-grid-delimiter` / `.vsidian-table-grid-align-{left/center/right}` | 网格状态的分隔行隐藏与列对齐 | Obsidian 表格对齐方向 | 本项目自有修饰；活动分隔行回到源码 |
+| `.vsidian-table-escaped-pipe` | 网格中隐藏转义管道符前的反斜杠 | 无直接对应 | 只改变显示，不改 Markdown 原文 |
 
 ## 阅读视图块级结构（#6 结构 + #8 markdown-it 语义内容）
 

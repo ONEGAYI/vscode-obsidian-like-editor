@@ -172,6 +172,26 @@ describe('实时预览：渲染态单击跳转，源码态普通单击编辑', (
     }
   })
 
+  it('表格网格中的链接普通单击进入单元格编辑，Ctrl+单击仍跳转', () => {
+    const h = makeBridge()
+    const text = '前文\n\n| [目标](./目标.md) | 数量 |\n| --- | --- |\n| 甲 | 1 |\n'
+    const c = mount(h, text)
+    const view = c.getView()!
+    const hit = vi.spyOn(view, 'posAtCoords').mockReturnValue(text.indexOf('目标'))
+    try {
+      const rendered = host.querySelector<HTMLElement>('.vsidian-table-grid-row .vsidian-link')!
+      expect(rendered).not.toBeNull()
+      rendered.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }))
+      view.contentDOM.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }))
+      expect(sentOf(h, 'link.activate')).toHaveLength(0)
+      rendered.dispatchEvent(new MouseEvent('mousedown', { ctrlKey: true, bubbles: true, cancelable: true, clientX: 10, clientY: 10 }))
+      expect(sentOf(h, 'link.activate')).toHaveLength(1)
+    } finally {
+      hit.mockRestore()
+      c.dispose()
+    }
+  })
+
   function liveWithDoc(): { view: EditorView; parent: HTMLElement } {
     const state = EditorState.create({ doc: LINK_DOC, extensions: [liveDecorationsField] })
     const parent = document.createElement('div')

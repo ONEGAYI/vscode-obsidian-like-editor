@@ -113,6 +113,20 @@ export function barePipeAt(lineText: string, i: number): boolean {
   return !scanCodeSpans(lineText)[i]
 }
 
+/** 非代码 span 中被反斜杠转义的管道符，其紧邻的反斜杠位置。网格显示
+ * 隐藏这一枚转义标记，源文本及编辑行为保持不变。 */
+export function escapedPipeBackslashes(lineText: string): number[] {
+  if (!lineText.includes('\\|')) return []
+  const inSpan = scanCodeSpans(lineText)
+  const out: number[] = []
+  for (let i = 1; i < lineText.length; i++) {
+    if (lineText[i] === '|' && !inSpan[i] && isEscapedAt(lineText, i)) {
+      out.push(i - 1)
+    }
+  }
+  return out
+}
+
 /**
  * GFM 语义切分一行表格行为单元格。
  * 调用方负责判定该行确为表格行（表头/数据行）；非表格行（无裸管道）返回 []。
