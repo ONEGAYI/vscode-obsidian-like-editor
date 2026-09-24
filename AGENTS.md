@@ -2,9 +2,9 @@
 
 VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 
-> 当前状态：**MVP 主要功能已实施，整体验收未结**。双视图编辑器、增量写回、任务、链接与图片、双链、表格和查找已落地；本分支完成 #45 后台集成宿主、#44 IME 取消候选同步修复、#42 实时预览表格网格与 #43 悬停控件及拖排行。#26–#27 等人工与跨环境事项仍按验证清单跟进。
+> 当前状态：**MVP 主要功能已实施，整体验收未结**。双视图编辑器、增量写回、任务、链接与图片、双链、表格和查找已落地；本分支完成 #45 后台集成宿主、#44 IME 取消候选同步修复、#42 实时预览逐格编辑、#43 悬停控件及拖排行，以及中英双语建表命令。#26–#27 等人工与跨环境事项仍按验证清单跟进。
 >
-> 本分支自动化基线为 713 项 Vitest 单测、6 项启动器契约测试，以及开发态与安装态各 61 项真实 VSCode 1.86.2 宿主集成用例通过；这不代表真实 IME、物理鼠标和视觉效果已由用户验收。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能数据与待验项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 和 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
+> 本分支自动化基线为 726 项 Vitest 单测、6 项启动器契约测试，以及开发态与安装态各 63 项真实 VSCode 1.86.2 宿主集成用例通过；这不代表真实 IME、物理鼠标和视觉效果已由用户验收。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能数据与待验项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 和 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
 
 ## 约定
 
