@@ -530,11 +530,11 @@ describe('标题装饰装配（#5 切片：jsdom 下验证 DOM 形态）', () =>
     const lines = Array.from(view.dom.querySelectorAll<HTMLElement>('.cm-line'))
     expect(lines.length).toBeGreaterThanOrEqual(4)
     // 行 1（光标 0 所在，活动）：源码态，DOM 文本含 '#'
-    expect(lines[0]!.classList.contains('oile-heading-line')).toBe(true)
-    expect(lines[0]!.classList.contains('oile-heading-line-1')).toBe(true)
+    expect(lines[0]!.classList.contains('vsidian-heading-line')).toBe(true)
+    expect(lines[0]!.classList.contains('vsidian-heading-line-1')).toBe(true)
     expect(lines[0]!.textContent).toBe('# 一级标题')
     // 行 3（非活动）：标记被 replace 隐藏，DOM 文本只剩标题内容
-    expect(lines[2]!.classList.contains('oile-heading-line-2')).toBe(true)
+    expect(lines[2]!.classList.contains('vsidian-heading-line-2')).toBe(true)
     expect(lines[2]!.textContent).toBe('二级标题')
   })
 
@@ -544,10 +544,10 @@ describe('标题装饰装配（#5 切片：jsdom 下验证 DOM 形态）', () =>
     init(c, HEADING_DOC)
     const lines = Array.from(c.getView()!.dom.querySelectorAll<HTMLElement>('.cm-line'))
     // jsdom 无布局，全部行都在初始视口内（间接装饰应覆盖）
-    expect(lines[0]!.classList.contains('oile-heading-inview')).toBe(true)
-    expect(lines[0]!.classList.contains('oile-heading-active')).toBe(true)
-    expect(lines[2]!.classList.contains('oile-heading-inview')).toBe(true)
-    expect(lines[2]!.classList.contains('oile-heading-active')).toBe(false)
+    expect(lines[0]!.classList.contains('vsidian-heading-inview')).toBe(true)
+    expect(lines[0]!.classList.contains('vsidian-heading-active')).toBe(true)
+    expect(lines[2]!.classList.contains('vsidian-heading-inview')).toBe(true)
+    expect(lines[2]!.classList.contains('vsidian-heading-active')).toBe(false)
   })
 
   it('选区进出标题行：源码态跟随选区切换（增量，无需重新 init）', () => {
@@ -570,7 +570,7 @@ describe('标题装饰装配（#5 切片：jsdom 下验证 DOM 形态）', () =>
     const c = mount(bridge)
     init(c, HEADING_DOC)
     const view = c.getView()!
-    const headingLinesBefore = view.dom.querySelectorAll('.oile-heading-line').length
+    const headingLinesBefore = view.dom.querySelectorAll('.vsidian-heading-line').length
     // 行 2（普通段落）改为三级标题
     const line2 = view.state.doc.line(2)
     c.handleHostMessage({
@@ -580,8 +580,8 @@ describe('标题装饰装配（#5 切片：jsdom 下验证 DOM 形态）', () =>
       changes: [{ offset: line2.from, length: line2.to - line2.from, text: '### 新标题' }],
     })
     const lines = Array.from(view.dom.querySelectorAll<HTMLElement>('.cm-line'))
-    expect(view.dom.querySelectorAll('.oile-heading-line').length).toBe(headingLinesBefore + 1)
-    expect(lines[1]!.classList.contains('oile-heading-line-3')).toBe(true)
+    expect(view.dom.querySelectorAll('.vsidian-heading-line').length).toBe(headingLinesBefore + 1)
+    expect(lines[1]!.classList.contains('vsidian-heading-line-3')).toBe(true)
     expect(lines[1]!.textContent).toBe('新标题') // 非活动 → 标记隐藏
   })
 })

@@ -26,25 +26,25 @@ export interface FindMatch {
   to: number
 }
 
-/** 查找稳定类名（ADR-0004 稳定样式入口；`oile-` 前缀） */
+/** 查找稳定类名（ADR-0004 稳定样式入口；`vsidian-` 前缀） */
 export const FIND_CLASS_NAMES = {
   /** 浮动查找面板容器（webview 内，非 VSCode 原生 find） */
-  panel: 'oile-find',
-  open: 'oile-find-open',
-  input: 'oile-find-input',
-  count: 'oile-find-count',
-  countEmpty: 'oile-find-count-empty',
-  caseToggle: 'oile-find-case',
-  caseActive: 'oile-find-case-active',
-  prev: 'oile-find-prev',
-  next: 'oile-find-next',
-  close: 'oile-find-close',
+  panel: 'vsidian-find',
+  open: 'vsidian-find-open',
+  input: 'vsidian-find-input',
+  count: 'vsidian-find-count',
+  countEmpty: 'vsidian-find-count-empty',
+  caseToggle: 'vsidian-find-case',
+  caseActive: 'vsidian-find-case-active',
+  prev: 'vsidian-find-prev',
+  next: 'vsidian-find-next',
+  close: 'vsidian-find-close',
   /** Live 全部匹配装饰（视口内间接装饰） */
-  match: 'oile-find-match',
+  match: 'vsidian-find-match',
   /** Live 当前匹配装饰（直接装饰） */
-  matchCurrent: 'oile-find-match-current',
+  matchCurrent: 'vsidian-find-match-current',
   /** 阅读视图当前匹配所在块的高亮（块级） */
-  readingHit: 'oile-reading-find-hit',
+  readingHit: 'vsidian-reading-find-hit',
 } as const
 
 // ---- 码点边界工具 ----

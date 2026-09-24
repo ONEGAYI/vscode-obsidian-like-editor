@@ -16,7 +16,7 @@ body {
 
 #app {
   height: 100%;
-  /* 查找面板（.oile-find）以此为定位包含块（#14） */
+  /* 查找面板（.vsidian-find）以此为定位包含块（#14） */
   position: relative;
 }
 
@@ -36,41 +36,41 @@ body {
 
 /* 标题实时预览（#5 切片）：类名为稳定样式入口（ADR-0004），字号/字重
    改变行高——因此必须是直接装饰（StateField），见 liveDecorations.ts */
-#app .cm-editor .cm-scroller .oile-heading-line {
+#app .cm-editor .cm-scroller .vsidian-heading-line {
   font-weight: 600;
   color: var(--vscode-editor-foreground);
 }
 
-#app .cm-editor .cm-scroller .oile-heading-line-1 { font-size: 1.55em; }
-#app .cm-editor .cm-scroller .oile-heading-line-2 { font-size: 1.35em; }
-#app .cm-editor .cm-scroller .oile-heading-line-3 { font-size: 1.2em; }
-#app .cm-editor .cm-scroller .oile-heading-line-4 { font-size: 1.1em; }
-#app .cm-editor .cm-scroller .oile-heading-line-5 { font-size: 1em; }
-#app .cm-editor .cm-scroller .oile-heading-line-6 { font-size: 1em; }
+#app .cm-editor .cm-scroller .vsidian-heading-line-1 { font-size: 1.55em; }
+#app .cm-editor .cm-scroller .vsidian-heading-line-2 { font-size: 1.35em; }
+#app .cm-editor .cm-scroller .vsidian-heading-line-3 { font-size: 1.2em; }
+#app .cm-editor .cm-scroller .vsidian-heading-line-4 { font-size: 1.1em; }
+#app .cm-editor .cm-scroller .vsidian-heading-line-5 { font-size: 1em; }
+#app .cm-editor .cm-scroller .vsidian-heading-line-6 { font-size: 1em; }
 
 /* 间接装饰（视口内纯样式，不改变高度）：标题行左缘强调与活动行源码态提示。
-   --oile-heading-accent 为稳定 CSS 变量入口（ADR-0004），外部片段可覆盖 */
-#app .cm-editor .cm-scroller .oile-heading-inview {
-  box-shadow: inset 3px 0 0 var(--oile-heading-accent, var(--vscode-textLink-foreground, #4fc1ff));
+   --vsidian-heading-accent 为稳定 CSS 变量入口（ADR-0004），外部片段可覆盖 */
+#app .cm-editor .cm-scroller .vsidian-heading-inview {
+  box-shadow: inset 3px 0 0 var(--vsidian-heading-accent, var(--vscode-textLink-foreground, #4fc1ff));
 }
 
-#app .cm-editor .cm-scroller .oile-heading-inview.oile-heading-active {
+#app .cm-editor .cm-scroller .vsidian-heading-inview.vsidian-heading-active {
   background-color: var(--vscode-editor-lineHighlightBackground, rgba(128, 128, 128, 0.12));
 }
 
 /* ---- 模式切换（#6）：live 容器 / 工具栏 ----
-   .oile-view-live 为 live 视图稳定容器类（Obsidian 对应
+   .vsidian-view-live 为 live 视图稳定容器类（Obsidian 对应
    .markdown-source-view.mod-cm6；映射见 docs/design/obsidian-selector-map.md） */
-#app .oile-view-live .cm-editor {
+#app .vsidian-view-live .cm-editor {
   height: 100%;
 }
 
-#app .oile-view-live {
+#app .vsidian-view-live {
   height: calc(100% - 30px);
 }
 
 /* 切换工具栏：按钮与宿主命令走同一状态机 */
-.oile-toolbar {
+.vsidian-toolbar {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -80,7 +80,7 @@ body {
   border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
 }
 
-.oile-toolbar .oile-mode-toggle {
+.vsidian-toolbar .vsidian-mode-toggle {
   font-family: var(--vscode-font-family);
   font-size: var(--vscode-font-size, 13px);
   padding: 1px 10px;
@@ -91,68 +91,68 @@ body {
 }
 
 /* ---- Live Preview 语法装饰（#8：标题之外的覆盖语法）----
-   行级类（oile-code/quote/list/hr/frontmatter-line）只做背景/边框等着色，
+   行级类（vsidian-code/quote/list/hr/frontmatter-line）只做背景/边框等着色，
    不改变行高（行高估算不因装饰失真；标题字号仍由 #5 的标题行类承担）。
    类名与 Obsidian 选择器映射见 docs/design/obsidian-selector-map.md */
-#app .cm-editor .cm-scroller .oile-code-line {
+#app .cm-editor .cm-scroller .vsidian-code-line {
   font-family: var(--vscode-editor-font-family, monospace);
-  background-color: var(--oile-live-code-background, rgba(128, 128, 128, 0.09));
+  background-color: var(--vsidian-live-code-background, rgba(128, 128, 128, 0.09));
 }
 
-#app .cm-editor .cm-scroller .oile-quote-line {
+#app .cm-editor .cm-scroller .vsidian-quote-line {
   box-shadow: inset 3px 0 0 var(--vscode-textBlockQuote-border, rgba(128, 128, 128, 0.5));
   background-color: var(--vscode-textBlockQuote-background, rgba(128, 128, 128, 0.08));
 }
 
-#app .cm-editor .cm-scroller .oile-list-line {
+#app .cm-editor .cm-scroller .vsidian-list-line {
   padding-left: 0;
 }
 
 /* 无序列表：标记隐藏后以圆点呈现（嵌套深度 d1..d8 提供缩进） */
-#app .cm-editor .cm-scroller .oile-list-line.oile-list-bullet::before {
+#app .cm-editor .cm-scroller .vsidian-list-line.vsidian-list-bullet::before {
   content: '•';
   margin-right: 7px;
   color: var(--vscode-editorLineNumber-foreground, rgba(128, 128, 128, 0.8));
 }
 
-#app .cm-editor .cm-scroller .oile-list-line-d2 { padding-left: 1.6em; }
-#app .cm-editor .cm-scroller .oile-list-line-d3 { padding-left: 2.4em; }
-#app .cm-editor .cm-scroller .oile-list-line-d4 { padding-left: 3.2em; }
-#app .cm-editor .cm-scroller .oile-list-line-d5 { padding-left: 4em; }
-#app .cm-editor .cm-scroller .oile-list-line-d6 { padding-left: 4.8em; }
-#app .cm-editor .cm-scroller .oile-list-line-d7 { padding-left: 5.6em; }
-#app .cm-editor .cm-scroller .oile-list-line-d8 { padding-left: 6.4em; }
+#app .cm-editor .cm-scroller .vsidian-list-line-d2 { padding-left: 1.6em; }
+#app .cm-editor .cm-scroller .vsidian-list-line-d3 { padding-left: 2.4em; }
+#app .cm-editor .cm-scroller .vsidian-list-line-d4 { padding-left: 3.2em; }
+#app .cm-editor .cm-scroller .vsidian-list-line-d5 { padding-left: 4em; }
+#app .cm-editor .cm-scroller .vsidian-list-line-d6 { padding-left: 4.8em; }
+#app .cm-editor .cm-scroller .vsidian-list-line-d7 { padding-left: 5.6em; }
+#app .cm-editor .cm-scroller .vsidian-list-line-d8 { padding-left: 6.4em; }
 
-#app .cm-editor .cm-scroller .oile-hr-line {
+#app .cm-editor .cm-scroller .vsidian-hr-line {
   color: var(--vscode-inputValidation-infoBorder, rgba(128, 128, 128, 0.6));
 }
 
-#app .cm-editor .cm-scroller .oile-frontmatter-line {
+#app .cm-editor .cm-scroller .vsidian-frontmatter-line {
   font-family: var(--vscode-editor-font-family, monospace);
   opacity: 0.75;
 }
 
 /* 行内格式 span（非活动行呈现格式；类名为稳定样式入口，Obsidian 对应
    .cm-header-N/.cm-strong/.cm-emphasis/.cm-inline-code，见映射表） */
-#app .cm-editor .cm-scroller .oile-strong {
+#app .cm-editor .cm-scroller .vsidian-strong {
   font-weight: 700;
 }
 
-#app .cm-editor .cm-scroller .oile-emphasis {
+#app .cm-editor .cm-scroller .vsidian-emphasis {
   font-style: italic;
 }
 
-#app .cm-editor .cm-scroller .oile-inline-code {
+#app .cm-editor .cm-scroller .vsidian-inline-code {
   font-family: var(--vscode-editor-font-family, monospace);
-  background-color: var(--oile-live-code-background, rgba(128, 128, 128, 0.14));
+  background-color: var(--vsidian-live-code-background, rgba(128, 128, 128, 0.14));
   border-radius: 3px;
   padding: 0 2px;
 }
 
 /* 任务 checkbox（#9 可交互：input[type=checkbox] 替换 [ ]/[x] 标记）。
    appearance 关闭原生形态，沿用 #8 字形绘制语义（颜色跟随 VSCode 变量）；
-   .oile-task-checked 为稳定修饰类（与 :checked 伪类双入口） */
-#app .cm-editor .cm-scroller .oile-task-checkbox {
+   .vsidian-task-checked 为稳定修饰类（与 :checked 伪类双入口） */
+#app .cm-editor .cm-scroller .vsidian-task-checkbox {
   appearance: none;
   -webkit-appearance: none;
   display: inline-block;
@@ -168,14 +168,14 @@ body {
   background: transparent;
 }
 
-#app .cm-editor .cm-scroller .oile-task-checkbox:checked,
-#app .cm-editor .cm-scroller .oile-task-checkbox.oile-task-checked {
+#app .cm-editor .cm-scroller .vsidian-task-checkbox:checked,
+#app .cm-editor .cm-scroller .vsidian-task-checkbox.vsidian-task-checked {
   background-color: var(--vscode-settings-checkboxBackground, #4fc1ff);
   border-color: var(--vscode-focusBorder, #4fc1ff);
 }
 
-#app .cm-editor .cm-scroller .oile-task-checkbox:checked::after,
-#app .cm-editor .cm-scroller .oile-task-checkbox.oile-task-checked::after {
+#app .cm-editor .cm-scroller .vsidian-task-checkbox:checked::after,
+#app .cm-editor .cm-scroller .vsidian-task-checkbox.vsidian-task-checked::after {
   content: '✓';
   color: var(--vscode-settings-checkboxForeground, #ffffff);
   font-size: 0.8em;
@@ -184,55 +184,55 @@ body {
 }
 
 /* 键盘可达（#9）：Tab 聚焦任务 checkbox 时的可见焦点框 */
-#app .cm-editor .cm-scroller .oile-task-checkbox:focus-visible {
+#app .cm-editor .cm-scroller .vsidian-task-checkbox:focus-visible {
   outline: 1px solid var(--vscode-focusBorder, #4fc1ff);
   outline-offset: 1px;
 }
 
 /* ---- #10：链接（live 视图）----
-   .oile-link 为链接内容 span 稳定类名（Obsidian 对应 .cm-link）；
+   .vsidian-link 为链接内容 span 稳定类名（Obsidian 对应 .cm-link）；
    非活动行隐藏 ](url) 尾部，活动行显示源码（编辑语义）。
    单击 = 光标编辑；Ctrl/Cmd+单击 = 跳转（宿主执行），故不给 pointer 光标 */
-#app .cm-editor .cm-scroller .oile-link {
+#app .cm-editor .cm-scroller .vsidian-link {
   color: var(--vscode-textLink-foreground, #4fc1ff);
 }
 
 /* ---- #11：双链（live 视图）----
-   .oile-wikilink 为双链稳定类名（Obsidian 对应 .cm-hmd-internal-link）：
+   .vsidian-wikilink 为双链稳定类名（Obsidian 对应 .cm-hmd-internal-link）：
    非活动行是显示文字 widget（替换整个 [[…]]），活动行是源码 mark。
    点击语义与链接一致（Ctrl/Cmd+单击跳转），不给 pointer 光标 */
-#app .cm-editor .cm-scroller .oile-wikilink {
+#app .cm-editor .cm-scroller .vsidian-wikilink {
   color: var(--vscode-textLink-foreground, #4fc1ff);
 }
 
-/* ---- #10：图片槽位（双视图共用 oile-image + 状态修饰类）----
+/* ---- #10：图片槽位（双视图共用 vsidian-image + 状态修饰类）----
    阅读视图：槽位即 <img>（块挂载时创建，卸载释放）；
    live 视图：槽位为 widget 容器 span（内部 <img> 由资源管理器装载）。
    图片加载后的高度变化：阅读侧经虚拟化高度实测回填与滚动锚定（#7 机制），
    live 侧由 CM6 视口重测承接 */
-#app .oile-view-reading .oile-reading-block img.oile-image {
+#app .vsidian-view-reading .vsidian-reading-block img.vsidian-image {
   max-width: 100%;
   vertical-align: bottom;
 }
 
-#app .cm-editor .cm-scroller .oile-image {
+#app .cm-editor .cm-scroller .vsidian-image {
   display: inline-block;
   max-width: 100%;
   vertical-align: bottom;
 }
 
-#app .cm-editor .cm-scroller .oile-image img {
+#app .cm-editor .cm-scroller .vsidian-image img {
   display: block;
   max-width: 100%;
 }
 
 /* 占位（loading）：alt 文本形态，弱化呈现 */
-#app .oile-image.oile-image-loading {
+#app .vsidian-image.vsidian-image-loading {
   opacity: 0.65;
 }
 
 /* 失败态：可见的错误轮廓 + 点击重试（管理器阻断冒泡，不触发外层链接） */
-#app .oile-image.oile-image-error {
+#app .vsidian-image.vsidian-image-error {
   cursor: pointer;
   border: 1px dashed var(--vscode-inputValidation-errorBorder, #be1100);
   border-radius: 3px;
@@ -244,47 +244,47 @@ body {
 /* 表格（#12）：编辑面即源文本行——管道符保持可见（点击定位与光标编辑
    直接落在源区间），装饰只做表格样式标记；类名为稳定样式入口，
    Obsidian 对应 .HyperMD-table-line 方向（见选择器映射表） */
-#app .cm-editor .cm-scroller .oile-table-line {
+#app .cm-editor .cm-scroller .vsidian-table-line {
   font-family: var(--vscode-editor-font-family, monospace);
-  background-color: var(--oile-table-background, rgba(128, 128, 128, 0.05));
+  background-color: var(--vsidian-table-background, rgba(128, 128, 128, 0.05));
 }
 
 /* 表头行加粗 + 底缘分隔 */
-#app .cm-editor .cm-scroller .oile-table-header-line {
+#app .cm-editor .cm-scroller .vsidian-table-header-line {
   font-weight: 600;
   box-shadow: inset 0 -1px 0 var(--vscode-panel-border, rgba(128, 128, 128, 0.45));
 }
 
 /* 分隔行弱化（保留可见：编辑/结构判定都以源文为准） */
-#app .cm-editor .cm-scroller .oile-table-delimiter-line {
+#app .cm-editor .cm-scroller .vsidian-table-delimiter-line {
   opacity: 0.55;
 }
 
 /* 管道符样式化为列分隔（保持占位，不隐藏） */
-#app .cm-editor .cm-scroller .oile-table-pipe {
+#app .cm-editor .cm-scroller .vsidian-table-pipe {
   color: var(--vscode-editorLineNumber-foreground, rgba(128, 128, 128, 0.8));
   font-weight: 400;
 }
 
-/* 单元格内容对齐类（oile-table-align-left/center/right，GFM 分隔行声明）：
+/* 单元格内容对齐类（vsidian-table-align-left/center/right，GFM 分隔行声明）：
    稳定样式入口。首版 live 是源码形态（管道与内容保持源文一维布局，
    列对齐由源文排版决定），不施加 inline-block/width 等破坏行内映射的
    布局——阅读视图（markdown-it 真实 table）呈现 GFM 对齐语义 */
 
 /* 表头单元格内容强调 */
-#app .cm-editor .cm-scroller .oile-table-cell-header {
+#app .cm-editor .cm-scroller .vsidian-table-cell-header {
   color: var(--vscode-symbolIcon-fieldForeground, inherit);
 }
 
 /* ---- 阅读视图（#6 基础版，#8 完整 Markdown 显示）----
-   .oile-view-reading 为阅读视图稳定容器类（Obsidian 对应 .markdown-preview-view）。
-   公开 CSS 变量入口（外部片段可覆盖）：--oile-reading-font-size / -max-width /
+   .vsidian-view-reading 为阅读视图稳定容器类（Obsidian 对应 .markdown-preview-view）。
+   公开 CSS 变量入口（外部片段可覆盖）：--vsidian-reading-font-size / -max-width /
    -line-height / -code-background */
-#app .oile-view-reading {
-  --oile-reading-font-size: 15px;
-  --oile-reading-max-width: 760px;
-  --oile-reading-line-height: 1.6;
-  --oile-reading-code-background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.12));
+#app .vsidian-view-reading {
+  --vsidian-reading-font-size: 15px;
+  --vsidian-reading-max-width: 760px;
+  --vsidian-reading-line-height: 1.6;
+  --vsidian-reading-code-background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.12));
   height: calc(100% - 30px);
   overflow-y: auto;
   /* #7：滚动锚定由虚拟化视图自研（视口顶块平移补偿），关闭浏览器原生
@@ -292,72 +292,72 @@ body {
   overflow-anchor: none;
   box-sizing: border-box;
   padding: 12px 24px 40vh;
-  font-size: var(--oile-reading-font-size);
-  line-height: var(--oile-reading-line-height);
+  font-size: var(--vsidian-reading-font-size);
+  line-height: var(--vsidian-reading-line-height);
 }
 
-#app .oile-view-reading .oile-reading-block {
-  max-width: var(--oile-reading-max-width);
+#app .vsidian-view-reading .vsidian-reading-block {
+  max-width: var(--vsidian-reading-max-width);
   margin: 0 0 0.75em;
 }
 
 /* 视口占位 spacer（#7 按需挂载）：屏外块的布局信息占位（高度 = 块高度表
    前后缀和），非内容节点；不参与 Obsidian 选择器兼容（见选择器映射表） */
-#app .oile-view-reading .oile-reading-spacer {
+#app .vsidian-view-reading .vsidian-reading-spacer {
   margin: 0;
   padding: 0;
-  max-width: var(--oile-reading-max-width);
+  max-width: var(--vsidian-reading-max-width);
 }
 
-#app .oile-view-reading .oile-reading-heading-1 { font-size: 1.6em; font-weight: 600; margin: 0.6em 0 0.4em; }
-#app .oile-view-reading .oile-reading-heading-2 { font-size: 1.38em; font-weight: 600; margin: 0.6em 0 0.4em; }
-#app .oile-view-reading .oile-reading-heading-3 { font-size: 1.2em; font-weight: 600; margin: 0.6em 0 0.4em; }
-#app .oile-view-reading .oile-reading-heading-4 { font-size: 1.1em; font-weight: 600; margin: 0.6em 0 0.4em; }
-#app .oile-view-reading .oile-reading-heading-5 { font-size: 1em; font-weight: 600; margin: 0.6em 0 0.4em; }
-#app .oile-view-reading .oile-reading-heading-6 { font-size: 1em; font-weight: 600; margin: 0.6em 0 0.4em; }
+#app .vsidian-view-reading .vsidian-reading-heading-1 { font-size: 1.6em; font-weight: 600; margin: 0.6em 0 0.4em; }
+#app .vsidian-view-reading .vsidian-reading-heading-2 { font-size: 1.38em; font-weight: 600; margin: 0.6em 0 0.4em; }
+#app .vsidian-view-reading .vsidian-reading-heading-3 { font-size: 1.2em; font-weight: 600; margin: 0.6em 0 0.4em; }
+#app .vsidian-view-reading .vsidian-reading-heading-4 { font-size: 1.1em; font-weight: 600; margin: 0.6em 0 0.4em; }
+#app .vsidian-view-reading .vsidian-reading-heading-5 { font-size: 1em; font-weight: 600; margin: 0.6em 0 0.4em; }
+#app .vsidian-view-reading .vsidian-reading-heading-6 { font-size: 1em; font-weight: 600; margin: 0.6em 0 0.4em; }
 
-#app .oile-view-reading .oile-reading-list-item {
+#app .vsidian-view-reading .vsidian-reading-list-item {
   padding-left: 0.5em;
 }
 
 /* 任务项（#9 实现勾选写回：checkbox 启用，点击切换 Markdown 任务状态） */
-#app .oile-view-reading .oile-reading-task .oile-reading-task-checkbox {
+#app .vsidian-view-reading .vsidian-reading-task .vsidian-reading-task-checkbox {
   margin-right: 6px;
   vertical-align: middle;
   cursor: pointer;
 }
 
 /* 键盘可达（#9）：Tab 聚焦阅读任务 checkbox 时的可见焦点框 */
-#app .oile-view-reading .oile-reading-task-checkbox:focus-visible {
+#app .vsidian-view-reading .vsidian-reading-task-checkbox:focus-visible {
   outline: 1px solid var(--vscode-focusBorder, #4fc1ff);
   outline-offset: 1px;
 }
 
 /* ---- #8：markdown-it 语义标签的阅读样式 ---- */
-#app .oile-view-reading .oile-reading-block pre {
+#app .vsidian-view-reading .vsidian-reading-block pre {
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 0.92em;
   margin: 0;
   padding: 8px 12px;
   border-radius: 4px;
-  background-color: var(--oile-reading-code-background);
+  background-color: var(--vsidian-reading-code-background);
   white-space: pre-wrap;
 }
 
-#app .oile-view-reading .oile-reading-block pre code {
+#app .vsidian-view-reading .vsidian-reading-block pre code {
   font-family: inherit;
   background: none;
   padding: 0;
 }
 
-#app .oile-view-reading .oile-reading-block code {
+#app .vsidian-view-reading .vsidian-reading-block code {
   font-family: var(--vscode-editor-font-family, monospace);
-  background-color: var(--oile-reading-code-background);
+  background-color: var(--vsidian-reading-code-background);
   border-radius: 3px;
   padding: 0 3px;
 }
 
-#app .oile-view-reading .oile-reading-block blockquote {
+#app .vsidian-view-reading .vsidian-reading-block blockquote {
   margin: 0.4em 0;
   padding: 0.1em 0.9em;
   border-left: 3px solid var(--vscode-textBlockQuote-border, rgba(128, 128, 128, 0.5));
@@ -365,22 +365,22 @@ body {
   color: var(--vscode-textBlockQuote-foreground, inherit);
 }
 
-#app .oile-view-reading .oile-reading-block blockquote p,
-#app .oile-view-reading .oile-reading-block p {
+#app .vsidian-view-reading .vsidian-reading-block blockquote p,
+#app .vsidian-view-reading .vsidian-reading-block p {
   margin: 0.2em 0;
 }
 
-#app .oile-view-reading .oile-reading-block ul,
-#app .oile-view-reading .oile-reading-block ol {
+#app .vsidian-view-reading .vsidian-reading-block ul,
+#app .vsidian-view-reading .vsidian-reading-block ol {
   margin: 0.2em 0;
   padding-left: 1.7em;
 }
 
-#app .oile-view-reading .oile-reading-block li {
+#app .vsidian-view-reading .vsidian-reading-block li {
   margin: 0.15em 0;
 }
 
-#app .oile-view-reading .oile-reading-hr hr {
+#app .vsidian-view-reading .vsidian-reading-hr hr {
   border: none;
   border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.45));
   margin: 0.8em 0;
@@ -388,7 +388,7 @@ body {
 
 /* 表格块（#12）：markdown-it 渲染的真实 table（只读呈现；GFM 列对齐保留在
    th/td 内联 style）。Obsidian 对应 .markdown-preview-view table 方向 */
-#app .oile-view-reading .oile-reading-table table {
+#app .vsidian-view-reading .vsidian-reading-table table {
   border-collapse: collapse;
   max-width: 100%;
   display: block;
@@ -396,38 +396,38 @@ body {
   margin: 0.4em 0;
 }
 
-#app .oile-view-reading .oile-reading-table th,
-#app .oile-view-reading .oile-reading-table td {
+#app .vsidian-view-reading .vsidian-reading-table th,
+#app .vsidian-view-reading .vsidian-reading-table td {
   border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.4));
   padding: 4px 12px;
 }
 
-#app .oile-view-reading .oile-reading-table th {
-  background-color: var(--oile-table-background, rgba(128, 128, 128, 0.1));
+#app .vsidian-view-reading .vsidian-reading-table th {
+  background-color: var(--vsidian-table-background, rgba(128, 128, 128, 0.1));
   font-weight: 600;
 }
 
-#app .oile-view-reading .oile-reading-table td {
+#app .vsidian-view-reading .vsidian-reading-table td {
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 0.92em;
 }
 
-#app .oile-view-reading .oile-reading-frontmatter pre {
+#app .vsidian-view-reading .vsidian-reading-frontmatter pre {
   opacity: 0.8;
 }
 
-#app .oile-view-reading .oile-reading-block a {
+#app .vsidian-view-reading .vsidian-reading-block a {
   color: var(--vscode-textLink-foreground, #4fc1ff);
 }
 
-/* #11 阅读视图双链：a.oile-wikilink（Obsidian 对应 .internal-link 方向）；
+/* #11 阅读视图双链：a.vsidian-wikilink（Obsidian 对应 .internal-link 方向）；
    一期不区分目标存在与否（不查询工作区），颜色与链接一致 */
-#app .oile-view-reading .oile-reading-block a.oile-wikilink {
+#app .vsidian-view-reading .vsidian-reading-block a.vsidian-wikilink {
   color: var(--vscode-textLink-foreground, #4fc1ff);
 }
 
 /* 冲突暂停横幅（#4）：稳定类名入口，颜色跟随 VSCode CSS 变量 */
-.oile-suspend-banner {
+.vsidian-suspend-banner {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
@@ -437,11 +437,11 @@ body {
   color: var(--vscode-editor-foreground);
 }
 
-.oile-suspend-banner-text {
+.vsidian-suspend-banner-text {
   font-size: var(--vscode-font-size, 13px);
 }
 
-.oile-suspend-banner button {
+.vsidian-suspend-banner button {
   font-family: var(--vscode-font-family);
   font-size: var(--vscode-font-size, 13px);
   padding: 2px 10px;
@@ -451,16 +451,16 @@ body {
   border: none;
 }
 
-.oile-suspend-banner button + button {
+.vsidian-suspend-banner button + button {
   background-color: var(--vscode-button-secondaryBackground);
   color: var(--vscode-button-secondaryForeground);
 }
 
 /* ---- 编辑区查找（#14）：webview 内浮动查找面板 ----
-   稳定样式入口（ADR-0004）：面板与匹配高亮均经 oile-find-* 类定位；
+   稳定样式入口（ADR-0004）：面板与匹配高亮均经 vsidian-find-* 类定位；
    custom editor webview 不可用 VSCode 原生 find 控件，此为自有 UI。
-   --oile-find-match-background / -current-background 为可覆盖变量入口 */
-.oile-find {
+   --vsidian-find-match-background / -current-background 为可覆盖变量入口 */
+.vsidian-find {
   position: absolute;
   top: 36px;
   right: 14px;
@@ -476,11 +476,11 @@ body {
   box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
 }
 
-.oile-find.oile-find-open {
+.vsidian-find.vsidian-find-open {
   display: flex;
 }
 
-.oile-find .oile-find-input {
+.vsidian-find .vsidian-find-input {
   width: 180px;
   box-sizing: border-box;
   padding: 2px 6px;
@@ -492,7 +492,7 @@ body {
   outline: none;
 }
 
-.oile-find .oile-find-count {
+.vsidian-find .vsidian-find-count {
   min-width: 46px;
   text-align: center;
   font-size: var(--vscode-font-size, 12px);
@@ -500,11 +500,11 @@ body {
   white-space: nowrap;
 }
 
-.oile-find .oile-find-count-empty {
+.vsidian-find .vsidian-find-count-empty {
   color: var(--vscode-errorForeground, #f48771);
 }
 
-.oile-find button {
+.vsidian-find button {
   font-family: var(--vscode-font-family);
   font-size: var(--vscode-font-size, 12px);
   line-height: 1;
@@ -518,27 +518,27 @@ body {
 }
 
 /* 大小写切换的激活态（不区分大小写时点亮） */
-.oile-find .oile-find-case-active {
+.vsidian-find .vsidian-find-case-active {
   color: var(--vscode-button-foreground);
   background-color: var(--vscode-button-background);
 }
 
 /* Live 匹配装饰：全部匹配（视口内间接装饰）与当前匹配（直接装饰）。
-   --oile-find-* 为稳定 CSS 变量入口，外部片段可覆盖 */
-#app .cm-editor .cm-content .oile-find-match {
-  background-color: var(--oile-find-match-background, rgba(234, 179, 8, 0.28));
+   --vsidian-find-* 为稳定 CSS 变量入口，外部片段可覆盖 */
+#app .cm-editor .cm-content .vsidian-find-match {
+  background-color: var(--vsidian-find-match-background, rgba(234, 179, 8, 0.28));
   border-radius: 2px;
 }
 
-#app .cm-editor .cm-content .oile-find-match-current {
-  background-color: var(--oile-find-match-current-background, rgba(255, 141, 55, 0.65));
-  outline: 1px solid var(--oile-find-match-current-outline, rgba(255, 141, 55, 0.9));
+#app .cm-editor .cm-content .vsidian-find-match-current {
+  background-color: var(--vsidian-find-match-current-background, rgba(255, 141, 55, 0.65));
+  outline: 1px solid var(--vsidian-find-match-current-outline, rgba(255, 141, 55, 0.9));
   border-radius: 2px;
 }
 
 /* 阅读视图命中块高亮（块级：只高亮当前匹配所在块） */
-#app .oile-view-reading .oile-reading-block.oile-reading-find-hit {
-  box-shadow: inset 3px 0 0 var(--oile-find-match-current-background, rgba(255, 141, 55, 0.85));
-  background-color: var(--oile-find-hit-block-background, rgba(255, 141, 55, 0.08));
+#app .vsidian-view-reading .vsidian-reading-block.vsidian-reading-find-hit {
+  box-shadow: inset 3px 0 0 var(--vsidian-find-match-current-background, rgba(255, 141, 55, 0.85));
+  background-color: var(--vsidian-find-hit-block-background, rgba(255, 141, 55, 0.08));
   border-radius: 2px;
 }

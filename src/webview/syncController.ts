@@ -284,9 +284,9 @@ export class WebviewSyncController {
   private viewMode: ViewMode
   /** 最近模式锚点：live=光标主位；reading=锚点块 src-start（源码位置锚点） */
   private modeAnchor: number | null
-  /** live 容器（稳定类名 oile-view-live，内含 CM6 编辑器） */
+  /** live 容器（稳定类名 vsidian-view-live，内含 CM6 编辑器） */
   private liveWrapper: HTMLElement | undefined
-  /** 阅读容器（稳定类名 oile-view-reading，块级源锚点结构） */
+  /** 阅读容器（稳定类名 vsidian-view-reading，块级源锚点结构） */
   private readingContainer: HTMLElement | undefined
   /** 阅读视图虚拟化控制器（#7：接管阅读容器的按需挂载/回收/锚点定位） */
   private readingView: VirtualReadingView | undefined
@@ -371,7 +371,7 @@ export class WebviewSyncController {
     this.banner = this.buildBanner()
     this.findPanel = this.buildFindPanel()
     this.liveWrapper = document.createElement('div')
-    this.liveWrapper.className = 'oile-view-live'
+    this.liveWrapper.className = 'vsidian-view-live'
     this.readingContainer = createReadingContainer()
     this.readingContainer.style.display = 'none'
     this.images = new ImageResourceManager({
@@ -413,7 +413,7 @@ export class WebviewSyncController {
     })
     // 任务勾选（#9）：阅读模式除任务勾选外只读——checkbox 点击经容器事件
     // 委托处理（虚拟化下元素按需创建/回收，不做逐元素监听）。
-    // 点击意图取渲染态锚点（data-oile-checked），不受浏览器原生 checkbox
+    // 点击意图取渲染态锚点（data-vsidian-checked），不受浏览器原生 checkbox
     // 激活时序影响；校验失败（过期锚点）即放弃，保持视图一致
     this.readingContainer.addEventListener('click', (event) => {
       const target = event.target
@@ -432,7 +432,7 @@ export class WebviewSyncController {
     })
     // 阅读链接单击 = 跳转意图上报（#10：执行归宿主；preventDefault 阻断
     // webview 原生导航——相对路径在本 origin 下必然失败且产生控制台噪声）。
-    // #11：a.oile-wikilink 走双链意图（按名/路径解析），其余走 URI 意图
+    // #11：a.vsidian-wikilink 走双链意图（按名/路径解析），其余走 URI 意图
     this.readingContainer.addEventListener('click', (event) => {
       const target = event.target as HTMLElement | null
       const anchor = target?.closest?.('a')
@@ -444,9 +444,9 @@ export class WebviewSyncController {
       if (href === null) {
         return // 渲染层已净化的危险链接（无 href）
       }
-      const block = anchor.closest<HTMLElement>('[data-oile-src-start]')
-      const srcStart = Number(block?.dataset['oileSrcStart'] ?? 0)
-      const srcEnd = Number(block?.dataset['oileSrcEnd'] ?? srcStart)
+      const block = anchor.closest<HTMLElement>('[data-vsidian-src-start]')
+      const srcStart = Number(block?.dataset['vsidianSrcStart'] ?? 0)
+      const srcEnd = Number(block?.dataset['vsidianSrcEnd'] ?? srcStart)
       if (!this.sessionId) {
         return
       }
@@ -799,7 +799,7 @@ export class WebviewSyncController {
     let headingActiveText: string | undefined
     let headingHiddenText: string | undefined
     if (content) {
-      for (const el of Array.from(content.querySelectorAll<HTMLElement>('.oile-heading-line'))) {
+      for (const el of Array.from(content.querySelectorAll<HTMLElement>('.vsidian-heading-line'))) {
         const text = el.textContent ?? ''
         if (text.startsWith('#')) {
           headingActiveText ??= text
@@ -824,7 +824,7 @@ export class WebviewSyncController {
     let readingAnchorTopPx: number | undefined
     if (readingActive && readingAnchorStart !== undefined && this.readingContainer) {
       const el = this.readingContainer.querySelector<HTMLElement>(
-        `.oile-reading-block[data-oile-src-start="${readingAnchorStart}"]`,
+        `.vsidian-reading-block[data-vsidian-src-start="${readingAnchorStart}"]`,
       )
       if (el) {
         const box = this.readingContainer.getBoundingClientRect()
@@ -839,7 +839,7 @@ export class WebviewSyncController {
       renderedLines: this.view?.dom.querySelectorAll('.cm-line').length ?? 0,
       suspended: this.suspended,
       contentDomCount: content ? content.querySelectorAll('*').length : 0,
-      headingLineCount: content ? content.querySelectorAll('.oile-heading-line').length : 0,
+      headingLineCount: content ? content.querySelectorAll('.vsidian-heading-line').length : 0,
       headingActiveText,
       headingHiddenText,
       viewMode: this.viewMode,
@@ -859,8 +859,8 @@ export class WebviewSyncController {
       liveSyntax: this.collectLiveSyntax(),
       readingSyntax: this.viewMode === 'reading' ? this.collectReadingSyntax() : undefined,
       // #10 链接/图片观测（DOM 级：live 限视口，reading 限挂载块）
-      liveLinkCount: content ? content.querySelectorAll('.oile-link').length : 0,
-      liveImageCount: content ? content.querySelectorAll('.oile-image').length : 0,
+      liveLinkCount: content ? content.querySelectorAll('.vsidian-link').length : 0,
+      liveImageCount: content ? content.querySelectorAll('.vsidian-image').length : 0,
       // #11 双链观测（live：非活动行 widget + 活动行 mark；reading：a）
       liveWikilinkCount: content
         ? content.querySelectorAll(`.${WIKILINK_CLASS_NAMES.wikilink}`).length
@@ -1059,7 +1059,7 @@ export class WebviewSyncController {
     }
   }
 
-  /** 容器显隐与按钮文案（稳定类名 oile-view-live / oile-view-reading） */
+  /** 容器显隐与按钮文案（稳定类名 vsidian-view-live / vsidian-view-reading） */
   private applyModeDom(mode: ViewMode): void {
     this.viewMode = mode
     if (this.liveWrapper) {
@@ -1068,7 +1068,7 @@ export class WebviewSyncController {
     if (this.readingContainer) {
       this.readingContainer.style.display = mode === 'reading' ? '' : 'none'
     }
-    const btn = this.toolbar?.querySelector<HTMLButtonElement>('button.oile-mode-toggle')
+    const btn = this.toolbar?.querySelector<HTMLButtonElement>('button.vsidian-mode-toggle')
     if (btn) {
       btn.textContent = mode === 'live' ? '切换到阅读模式' : '切换到实时预览'
     }
@@ -1121,9 +1121,9 @@ export class WebviewSyncController {
     if (!view) {
       return
     }
-    const start = Number(box.dataset['oileSrcStart'])
-    const end = Number(box.dataset['oileSrcEnd'])
-    const displayedChecked = box.dataset['oileChecked'] === 'true'
+    const start = Number(box.dataset['vsidianSrcStart'])
+    const end = Number(box.dataset['vsidianSrcEnd'])
+    const displayedChecked = box.dataset['vsidianChecked'] === 'true'
     if (!Number.isInteger(start) || !Number.isInteger(end)) {
       return
     }
@@ -1166,8 +1166,8 @@ export class WebviewSyncController {
     if (!scope) {
       return out
     }
-    for (const el of Array.from(scope.querySelectorAll<HTMLElement>('[data-oile-img-state]'))) {
-      const s = el.dataset['oileImgState']
+    for (const el of Array.from(scope.querySelectorAll<HTMLElement>('[data-vsidian-img-state]'))) {
+      const s = el.dataset['vsidianImgState']
       if (s === 'loading' || s === 'loaded' || s === 'error') {
         out[s] += 1
       }
@@ -1179,31 +1179,31 @@ export class WebviewSyncController {
    *  测试片段仅经稳定类名定位；此处在 view.state 请求时读取 computed style
    *  回报。jsdom 无样式表计算，值可为空串/空变量（返回 null），真实断言在集成。 */
   private collectCssProbe(): CssProbeReport {
-    const liveEl = this.liveWrapper?.querySelector('.oile-heading-line-1') ?? null
-    const readingEl = this.readingContainer?.querySelector('.oile-reading-heading-1') ?? null
-    const liveStrong = this.liveWrapper?.querySelector('.oile-strong') ?? null
-    const liveInlineCode = this.liveWrapper?.querySelector('.oile-inline-code') ?? null
-    const liveCodeLine = this.liveWrapper?.querySelector('.oile-code-line') ?? null
-    const liveTablePipe = this.liveWrapper?.querySelector('.oile-table-pipe') ?? null
-    const readingStrong = this.readingContainer?.querySelector('.oile-reading-block strong') ?? null
+    const liveEl = this.liveWrapper?.querySelector('.vsidian-heading-line-1') ?? null
+    const readingEl = this.readingContainer?.querySelector('.vsidian-reading-heading-1') ?? null
+    const liveStrong = this.liveWrapper?.querySelector('.vsidian-strong') ?? null
+    const liveInlineCode = this.liveWrapper?.querySelector('.vsidian-inline-code') ?? null
+    const liveCodeLine = this.liveWrapper?.querySelector('.vsidian-code-line') ?? null
+    const liveTablePipe = this.liveWrapper?.querySelector('.vsidian-table-pipe') ?? null
+    const readingStrong = this.readingContainer?.querySelector('.vsidian-reading-block strong') ?? null
     const liveTaskBox = this.liveWrapper?.querySelector(`.${LIVE_CLASS_NAMES.taskCheckbox}`) ?? null
     const readingTaskBox = this.readingContainer?.querySelector(
       `.${READING_MARKDOWN_CLASS_NAMES.taskCheckbox}`,
     ) ?? null
-    const liveLink = this.liveWrapper?.querySelector('.oile-link') ?? null
-    const readingLink = this.readingContainer?.querySelector('.oile-reading-block a') ?? null
-    const readingImage = this.readingContainer?.querySelector('.oile-reading-block img.oile-image') ?? null
-    const readingTable = this.readingContainer?.querySelector('.oile-reading-block table') ?? null
+    const liveLink = this.liveWrapper?.querySelector('.vsidian-link') ?? null
+    const readingLink = this.readingContainer?.querySelector('.vsidian-reading-block a') ?? null
+    const readingImage = this.readingContainer?.querySelector('.vsidian-reading-block img.vsidian-image') ?? null
+    const readingTable = this.readingContainer?.querySelector('.vsidian-reading-block table') ?? null
     const liveWikilink = this.liveWrapper?.querySelector(`.${WIKILINK_CLASS_NAMES.wikilink}`) ?? null
     const readingWikilink = this.readingContainer?.querySelector(
-      `.oile-reading-block a.${WIKILINK_CLASS_NAMES.wikilink}`,
+      `.vsidian-reading-block a.${WIKILINK_CLASS_NAMES.wikilink}`,
     ) ?? null
     const read = (el: Element | null): string | null =>
       el ? getComputedStyle(el).textDecorationColor : null
     let readingVarProbe: string | null = null
     if (this.readingContainer) {
       const value = getComputedStyle(this.readingContainer)
-        .getPropertyValue('--oile-probe-var-reading')
+        .getPropertyValue('--vsidian-probe-var-reading')
         .trim()
       readingVarProbe = value === '' ? null : value
     }
@@ -1255,30 +1255,30 @@ export class WebviewSyncController {
           const spec = value.spec as { class?: string; widget?: { checked?: boolean } }
           if (typeof spec['class'] === 'string') {
             const cls = spec['class']
-            if (cls.includes('oile-heading-line') && !cls.includes('oile-heading-inview')) {
+            if (cls.includes('vsidian-heading-line') && !cls.includes('vsidian-heading-inview')) {
               counts.headingLines += 1
-            } else if (cls.includes('oile-header-')) {
+            } else if (cls.includes('vsidian-header-')) {
               counts.headerSpans += 1
-            } else if (cls.includes('oile-strong')) {
+            } else if (cls.includes('vsidian-strong')) {
               counts.strongSpans += 1
-            } else if (cls.includes('oile-emphasis')) {
+            } else if (cls.includes('vsidian-emphasis')) {
               counts.emphasisSpans += 1
-            } else if (cls.includes('oile-inline-code')) {
+            } else if (cls.includes('vsidian-inline-code')) {
               counts.inlineCodeSpans += 1
-            } else if (cls.includes('oile-quote-line')) {
+            } else if (cls.includes('vsidian-quote-line')) {
               counts.quoteLines += 1
-            } else if (cls.includes('oile-code-line')) {
+            } else if (cls.includes('vsidian-code-line')) {
               counts.codeLines += 1
-            } else if (cls.includes('oile-list-line')) {
+            } else if (cls.includes('vsidian-list-line')) {
               counts.listLines += 1
-            } else if (cls.includes('oile-hr-line')) {
+            } else if (cls.includes('vsidian-hr-line')) {
               counts.hrLines += 1
-            } else if (cls.includes('oile-frontmatter-line')) {
+            } else if (cls.includes('vsidian-frontmatter-line')) {
               counts.frontmatterLines += 1
-            } else if (cls.includes('oile-table-cell')) {
+            } else if (cls.includes('vsidian-table-cell')) {
               // #12：单元格内容 mark（cellHeader/align 修饰并入计数，不重复）
               counts.tableCells += 1
-            } else if (cls.includes('oile-table-line')) {
+            } else if (cls.includes('vsidian-table-line')) {
               // 行级类包含全部表格行；cellHeader/align 修饰行已在前序命中
               counts.tableLines += 1
             }
@@ -1315,21 +1315,21 @@ export class WebviewSyncController {
     const count = (selector: string): number => container.querySelectorAll(selector).length
     return {
       headings: count(
-        '.oile-reading-block h1, .oile-reading-block h2, .oile-reading-block h3, .oile-reading-block h4, .oile-reading-block h5, .oile-reading-block h6',
+        '.vsidian-reading-block h1, .vsidian-reading-block h2, .vsidian-reading-block h3, .vsidian-reading-block h4, .vsidian-reading-block h5, .vsidian-reading-block h6',
       ),
-      strongCount: count('.oile-reading-block strong'),
-      emphasisCount: count('.oile-reading-block em'),
-      inlineCodeCount: count('.oile-reading-block code:not(pre code)'),
-      blockquoteBlocks: count('.oile-reading-block blockquote'),
-      codeBlocks: count('.oile-reading-block:not(.oile-reading-frontmatter) pre'),
-      hrCount: count('.oile-reading-block hr'),
-      listItems: count('.oile-reading-block li'),
-      taskCheckboxes: count('.oile-reading-task-checkbox'),
+      strongCount: count('.vsidian-reading-block strong'),
+      emphasisCount: count('.vsidian-reading-block em'),
+      inlineCodeCount: count('.vsidian-reading-block code:not(pre code)'),
+      blockquoteBlocks: count('.vsidian-reading-block blockquote'),
+      codeBlocks: count('.vsidian-reading-block:not(.vsidian-reading-frontmatter) pre'),
+      hrCount: count('.vsidian-reading-block hr'),
+      listItems: count('.vsidian-reading-block li'),
+      taskCheckboxes: count('.vsidian-reading-task-checkbox'),
       taskChecked: Array.from(
-        container.querySelectorAll<HTMLInputElement>('.oile-reading-task-checkbox'),
+        container.querySelectorAll<HTMLInputElement>('.vsidian-reading-task-checkbox'),
       ).filter((b) => b.checked).length,
       // #12：表格语义计数（块级 table 元素；只读呈现）
-      tables: count('.oile-reading-block table'),
+      tables: count('.vsidian-reading-block table'),
     }
   }
 
@@ -1347,10 +1347,10 @@ export class WebviewSyncController {
   /** 切换入口工具栏（#6）：按钮与宿主命令走同一状态机 */
   private buildToolbar(): HTMLElement {
     const bar = document.createElement('div')
-    bar.className = 'oile-toolbar'
+    bar.className = 'vsidian-toolbar'
     const btn = document.createElement('button')
     btn.type = 'button'
-    btn.className = 'oile-mode-toggle'
+    btn.className = 'vsidian-mode-toggle'
     btn.textContent = '切换到阅读模式'
     btn.addEventListener('click', () => this.setViewMode('toggle'))
     bar.appendChild(btn)
@@ -1872,10 +1872,10 @@ export class WebviewSyncController {
   /** 暂停提示横幅：说明输入已保留、写回已暂停，提供取回与恢复按钮 */
   private buildBanner(): HTMLElement {
     const banner = document.createElement('div')
-    banner.className = 'oile-suspend-banner'
+    banner.className = 'vsidian-suspend-banner'
     banner.style.display = 'none'
     const label = document.createElement('span')
-    label.className = 'oile-suspend-banner-text'
+    label.className = 'vsidian-suspend-banner-text'
     label.textContent = '检测到无法安全同步的外部修改：写回已暂停，本地输入已保留，不会被覆盖。'
     banner.appendChild(label)
     const copy = document.createElement('button')

@@ -3,7 +3,7 @@
 // 坐标契约（#6 确立，#7/#9 依赖，本票保持不变）：
 // - start/end 为 LF 全文 UTF-16 code unit offset（与协议 SerChange、
 //   CodeMirror 文档定位同构），end 不含块尾换行符
-// - 每个块元素携带 data-oile-src-start/end；#7 按需挂载以块为最小单位，
+// - 每个块元素携带 data-vsidian-src-start/end；#7 按需挂载以块为最小单位，
 //   #9 任务勾选经 li/checkbox 的 marker 区间锚点构造精确 edit.request
 //
 // #8 语义升级（取代 #6 的手工行切分）：
@@ -89,7 +89,7 @@ export function splitReadingBlocks(text: string): ReadingBlock[] {
       kind: 'frontmatter',
       start: 0,
       end: fm.end,
-      html: `<pre class="oile-reading-frontmatter-text">${escapeHtml(text.slice(0, fm.end))}</pre>`,
+      html: `<pre class="vsidian-reading-frontmatter-text">${escapeHtml(text.slice(0, fm.end))}</pre>`,
     })
     return splitBody(text, env, fmEndLine + 1, blocks)
   }

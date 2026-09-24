@@ -22,7 +22,7 @@ function img(): HTMLImageElement {
 }
 
 function state(el: HTMLElement): string {
-  return el.dataset['oileImgState'] ?? ''
+  return el.dataset['vsidianImgState'] ?? ''
 }
 
 describe('装载与占位状态', () => {
@@ -33,8 +33,8 @@ describe('装载与占位状态', () => {
     expect(state(el)).toBe('loading')
     expect(el.getAttribute('src')).toBeNull()
     expect(posted).toEqual([{ src: './assets/图 片.png', reqId: 1 }])
-    expect(el.classList.contains('oile-image')).toBe(true)
-    expect(el.dataset['oileImgSrc']).toBe('./assets/图 片.png')
+    expect(el.classList.contains('vsidian-image')).toBe(true)
+    expect(el.dataset['vsidianImgSrc']).toBe('./assets/图 片.png')
   })
 
   it('https 直连图源不经宿主：立即应用原始 src', () => {
@@ -75,7 +75,7 @@ describe('结果应用与状态迁移', () => {
     manager.handleResult({ reqId: posted[0]!.reqId, ok: true, src: 'vscode-webview://res/broken.png' })
     el.dispatchEvent(new Event('error'))
     expect(state(el)).toBe('error')
-    expect(el.dataset['oileImgReason']).toBeDefined()
+    expect(el.dataset['vsidianImgReason']).toBeDefined()
     // 重试：重新应用同一 src
     el.click()
     expect(state(el)).toBe('loading')
@@ -88,7 +88,7 @@ describe('结果应用与状态迁移', () => {
     manager.attach(el, './missing.png')
     manager.handleResult({ reqId: posted[0]!.reqId, ok: false, reason: 'not-found' })
     expect(state(el)).toBe('error')
-    expect(el.dataset['oileImgReason']).toBe('not-found')
+    expect(el.dataset['vsidianImgReason']).toBe('not-found')
     el.click()
     expect(state(el)).toBe('loading')
     expect(posted.length).toBe(2) // 新请求（新 reqId）
@@ -175,7 +175,7 @@ describe('释放与回收', () => {
     const reading = img()
     manager.attach(reading, './keep.png')
     manager.sweep()
-    expect(reading.dataset['oileImgState']).toBe('loading')
+    expect(reading.dataset['vsidianImgState']).toBe('loading')
   })
 
   it('在途请求的最后一个槽位 detach 后：结果到达不复活任何槽位', () => {

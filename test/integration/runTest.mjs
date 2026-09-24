@@ -11,7 +11,7 @@ import { writeFixtures, LARGE_DOC_LINES } from './fixtures.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
-const wsDir = mkdtempSync(path.join(tmpdir(), 'oile-itest-'))
+const wsDir = mkdtempSync(path.join(tmpdir(), 'vsidian-itest-'))
 try {
   writeFixtures(wsDir, { generatePerfSample, generateReadingSample })
 
@@ -25,7 +25,7 @@ try {
       WORKSPACE_DIR: wsDir,
       LARGE_DOC_LINES: String(LARGE_DOC_LINES),
       // C-11：开启 _test.* 测试钩子命令（生产/常规开发不注册）
-      OILE_TEST_HOOKS: '1',
+      VSIDIAN_TEST_HOOKS: '1',
     },
   })
 } catch (err) {

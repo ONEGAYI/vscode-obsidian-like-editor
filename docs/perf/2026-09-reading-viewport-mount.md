@@ -6,7 +6,7 @@
 
 阅读视图的分块按需挂载完整链路（`src/webview/readingVirtualView.ts`）：
 
-- **挂载窗口**：与缓冲区间（视口两侧各外扩约 1.5 倍视口高）相交的块真实创建 DOM 节点；窗口外的屏外块不创建内容节点，由上下两个 spacer（`oile-reading-spacer`）以高度表前后缀和占位。不是 `content-visibility`，也不是整篇渲染后隐藏
+- **挂载窗口**：与缓冲区间（视口两侧各外扩约 1.5 倍视口高）相交的块真实创建 DOM 节点；窗口外的屏外块不创建内容节点，由上下两个 spacer（`vsidian-reading-spacer`）以高度表前后缀和占位。不是 `content-visibility`，也不是整篇渲染后隐藏
 - **解析与挂载分离**：全文切块（`splitReadingBlocks`）仅在 `setDocument`（装载/外部变更重建）时执行一次；滚动路径只做窗口差分与 DOM 增删，不重新解析
 - **高度表**：未挂载块 = 行数估计（实测样本标定行高，漂移超 2% 时重估未测块）；挂载块回填实测外高，回收后保留实测值
 - **自研滚动锚定**：视口顶块的顶部位置因实测/尺寸变化偏移时，scrollTop 平移补偿同量（容器 `overflow-anchor: none`，避免与浏览器原生锚定叠加）；动态尺寸变化（图片加载等）经 ResizeObserver 捕获

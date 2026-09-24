@@ -25,7 +25,7 @@ import { parseWikilinkInner } from '../shared/wikilink'
 import { NewlineCoordinator } from '../shared/newline'
 import type { HostToWebview, SerChange, TableEditOp } from '../shared/protocol'
 
-export const VIEW_TYPE = 'onegayi.obsidian-like-markdown-editor'
+export const VIEW_TYPE = 'onegayi.vsidian.editor'
 
 /** 活动标签是否为指定文档的本扩展 custom editor（C-5）。
  *  webview 转发的 undo/redo 经宿主全局命令执行，而该命令作用于活动
@@ -43,7 +43,7 @@ export function isActiveTabCustomEditorOf(
   )
 }
 
-/** 链接跳转执行日志（#10 测试钩子观测：OILE_TEST_HOOKS 下集成测试断言
+/** 链接跳转执行日志（#10 测试钩子观测：VSIDIAN_TEST_HOOKS 下集成测试断言
  *  宿主收到的跳转意图与处置结果） */
 export interface LinkLogEntry {
   kind: 'external' | 'doc' | 'blocked' | 'not-found'
@@ -326,7 +326,7 @@ export function createTextEditorProvider(
    *   live 模式光标+滚动
    * - 其余：文本编辑器打开；有标题时以标题行 selection reveal（1.86 API 面）
    * 全程只读：不触碰 TextDocument、不建索引、不自动创建文件。
-   * 测试钩子模式（OILE_TEST_HOOKS）下歧义只记录不弹 QuickPick（与 #10 外链
+   * 测试钩子模式（VSIDIAN_TEST_HOOKS）下歧义只记录不弹 QuickPick（与 #10 外链
    * 不真开浏览器同口径）。
    */
   const executeWikilinkIntent = async (
@@ -375,7 +375,7 @@ export function createTextEditorProvider(
     if (resolution.kind === 'ambiguous') {
       const candidates = [...resolution.fsPaths]
       pushLog({ kind: 'wikilink-ambiguous', target: parsed.path, candidates })
-      if (process.env.OILE_TEST_HOOKS === '1') {
+      if (process.env.VSIDIAN_TEST_HOOKS === '1') {
         return // 集成测试环境无法驱动 QuickPick：只记录候选（手感留 #15 人工验证）
       }
       const items = candidates.map((p) => ({
@@ -517,7 +517,7 @@ export function createTextEditorProvider(
   // ---- 模式切换命令（#6）：活动 tab 为本扩展 custom editor 时向其面板
   // 发送 view.mode.set；模式是 webview 视图状态，不写 TextDocument ----
   context.subscriptions.push(
-    vscode.commands.registerCommand('onegayi.obsidian-like-editor.toggleViewMode', async () => {
+    vscode.commands.registerCommand('onegayi.vsidian.toggleViewMode', async () => {
       const tab = vscode.window.tabGroups.activeTabGroup.activeTab
       const input = tab?.input
       // 1.86 类型契约：custom editor 的 tab input 为 TabInputCustom（uri + viewType）
@@ -538,7 +538,7 @@ export function createTextEditorProvider(
         }
       }
       await vscode.window.showWarningMessage(
-        '请先聚焦一个 Obsidian-like Markdown Editor 编辑器面板，再切换实时预览/阅读模式',
+        '请先聚焦一个 Vsidian 编辑器面板，再切换实时预览/阅读模式',
       )
       return false
     }),
@@ -547,7 +547,7 @@ export function createTextEditorProvider(
   // ---- 查找命令（#14）：活动 tab 为本扩展 custom editor 时向其面板发送
   // view.find.open（webview 内浮动查找面板）。查找是纯只读视图操作 ----
   context.subscriptions.push(
-    vscode.commands.registerCommand('onegayi.obsidian-like-editor.find', async () => {
+    vscode.commands.registerCommand('onegayi.vsidian.find', async () => {
       const tab = vscode.window.tabGroups.activeTabGroup.activeTab
       const input = tab?.input
       if (
@@ -564,7 +564,7 @@ export function createTextEditorProvider(
         }
       }
       await vscode.window.showWarningMessage(
-        '请先聚焦一个 Obsidian-like Markdown Editor 编辑器面板，再使用编辑区查找',
+        '请先聚焦一个 Vsidian 编辑器面板，再使用编辑区查找',
       )
       return false
     }),
@@ -574,12 +574,12 @@ export function createTextEditorProvider(
   // table.command（webview 在光标处执行，走标准出站链路）。与模式切换/查找
   // 不同，这是写操作：只发活动面板（表格上下文在各面板光标处独立） ----
   const TABLE_COMMANDS: Array<[string, TableEditOp]> = [
-    ['onegayi.obsidian-like-editor.table.insertRowAbove', 'insertRowAbove'],
-    ['onegayi.obsidian-like-editor.table.insertRowBelow', 'insertRowBelow'],
-    ['onegayi.obsidian-like-editor.table.deleteRow', 'deleteRow'],
-    ['onegayi.obsidian-like-editor.table.insertColumnLeft', 'insertColumnLeft'],
-    ['onegayi.obsidian-like-editor.table.insertColumnRight', 'insertColumnRight'],
-    ['onegayi.obsidian-like-editor.table.deleteColumn', 'deleteColumn'],
+    ['onegayi.vsidian.table.insertRowAbove', 'insertRowAbove'],
+    ['onegayi.vsidian.table.insertRowBelow', 'insertRowBelow'],
+    ['onegayi.vsidian.table.deleteRow', 'deleteRow'],
+    ['onegayi.vsidian.table.insertColumnLeft', 'insertColumnLeft'],
+    ['onegayi.vsidian.table.insertColumnRight', 'insertColumnRight'],
+    ['onegayi.vsidian.table.deleteColumn', 'deleteColumn'],
   ]
   for (const [command, op] of TABLE_COMMANDS) {
     context.subscriptions.push(
@@ -605,18 +605,18 @@ export function createTextEditorProvider(
           }
         }
         await vscode.window.showWarningMessage(
-          '请先聚焦一个 Obsidian-like Markdown Editor 编辑器面板（光标置于表格内），再执行表格操作',
+          '请先聚焦一个 Vsidian 编辑器面板（光标置于表格内），再执行表格操作',
         )
         return false
       }),
     )
   }
 
-  // ---- 测试钩子命令：仅集成测试经 runTest.mjs 注入 OILE_TEST_HOOKS=1 时
+  // ---- 测试钩子命令：仅集成测试经 runTest.mjs 注入 VSIDIAN_TEST_HOOKS=1 时
   // 注册（C-11），生产 VSIX 与常规 F5 开发不暴露 ----
-  if (process.env.OILE_TEST_HOOKS === '1') {
+  if (process.env.VSIDIAN_TEST_HOOKS === '1') {
     context.subscriptions.push(
-    vscode.commands.registerCommand('onegayi.obsidian-like-editor._test.getSessionState', (uriStr: string) => {
+    vscode.commands.registerCommand('onegayi.vsidian._test.getSessionState', (uriStr: string) => {
       const entry = getEntry(vscode.Uri.parse(uriStr))
       if (!entry) {
         return { found: false, panels: [], version: 0, appliedEdits: 0 }
@@ -629,7 +629,7 @@ export function createTextEditorProvider(
       }
     }),
     vscode.commands.registerCommand(
-      'onegayi.obsidian-like-editor._test.injectWebviewMessage',
+      'onegayi.vsidian._test.injectWebviewMessage',
       async (uriStr: string, message: Record<string, unknown>, panelIndex = 0) => {
         const entry = getEntry(vscode.Uri.parse(uriStr))
         const panel = entry?.session.getInfo().panels[panelIndex]
@@ -647,7 +647,7 @@ export function createTextEditorProvider(
     vscode.commands.registerCommand(
       // 宿主 → webview 方向的消息注入钩子：与 injectWebviewMessage（webview →
       // 宿主）对称，供集成测试驱动 view.mode.set / view.locate 等正式消息
-      'onegayi.obsidian-like-editor._test.postToPanel',
+      'onegayi.vsidian._test.postToPanel',
       async (uriStr: string, message: Record<string, unknown>, panelIndex = 0) => {
         const entry = getEntry(vscode.Uri.parse(uriStr))
         const panels = entry?.session.getInfo().panels.filter((p) => p.ready) ?? []
@@ -660,7 +660,7 @@ export function createTextEditorProvider(
       },
     ),
     vscode.commands.registerCommand(
-      'onegayi.obsidian-like-editor._test.getConflictState',
+      'onegayi.vsidian._test.getConflictState',
       (uriStr: string, panelIndex = 0) => {
         const entry = getEntry(vscode.Uri.parse(uriStr))
         const panel = entry?.session.getInfo().panels[panelIndex]
@@ -673,7 +673,7 @@ export function createTextEditorProvider(
     vscode.commands.registerCommand(
       // 宿主缓存的 view.state（模式主动回报的观测面）：断言宿主侧写命令
       // 拦截所依据的 viewMode 缓存已就位/常新
-      'onegayi.obsidian-like-editor._test.getPanelViewStateCache',
+      'onegayi.vsidian._test.getPanelViewStateCache',
       (uriStr: string, panelIndex = 0) => {
         const entry = getEntry(vscode.Uri.parse(uriStr))
         const panel = entry?.session.getInfo().panels[panelIndex]
@@ -685,7 +685,7 @@ export function createTextEditorProvider(
       },
     ),
     vscode.commands.registerCommand(
-      'onegayi.obsidian-like-editor._test.resumePanel',
+      'onegayi.vsidian._test.resumePanel',
       (uriStr: string, panelIndex = 0) => {
         const entry = getEntry(vscode.Uri.parse(uriStr))
         const panel = entry?.session.getInfo().panels[panelIndex]
@@ -696,7 +696,7 @@ export function createTextEditorProvider(
       },
     ),
     vscode.commands.registerCommand(
-      'onegayi.obsidian-like-editor._test.requestViewState',
+      'onegayi.vsidian._test.requestViewState',
       async (uriStr: string, panelIndex = 0) => {
         const entry = getEntry(vscode.Uri.parse(uriStr))
         const panels = entry?.session.getInfo().panels.filter((p) => p.ready) ?? []
@@ -718,7 +718,7 @@ export function createTextEditorProvider(
       },
     ),
     vscode.commands.registerCommand(
-      'onegayi.obsidian-like-editor._test.perfProbe',
+      'onegayi.vsidian._test.perfProbe',
       async (
         uriStr: string,
         options: { typingRounds: number; scrollRounds: number },
@@ -750,7 +750,7 @@ export function createTextEditorProvider(
     ),
     vscode.commands.registerCommand(
       // 阅读视图性能探针（#7）：与 perfProbe 同构的轮询通道
-      'onegayi.obsidian-like-editor._test.readingPerf',
+      'onegayi.vsidian._test.readingPerf',
       async (uriStr: string, options: { scrollRounds: number }, panelIndex = 0) => {
         const entry = getEntry(vscode.Uri.parse(uriStr))
         const panels = entry?.session.getInfo().panels.filter((p) => p.ready) ?? []
@@ -777,7 +777,7 @@ export function createTextEditorProvider(
     vscode.commands.registerCommand(
       // 链接跳转执行日志（#10）：集成测试经注入 link.observe 消息断言宿主
       // 收到的意图与处置（external/blocked/doc/not-found）
-      'onegayi.obsidian-like-editor._test.getLinkLog',
+      'onegayi.vsidian._test.getLinkLog',
       (uriStr: string) => {
         const entry = getEntry(vscode.Uri.parse(uriStr))
         return { found: !!entry, log: entry ? [...entry.linkLog] : [] }
@@ -825,7 +825,7 @@ async function executeLinkIntent(
   const target = classifyLinkTarget(intent.href, ctx)
   if (target.kind === 'external') {
     pushLog({ kind: 'external', href: intent.href })
-    if (process.env.OILE_TEST_HOOKS === '1') {
+    if (process.env.VSIDIAN_TEST_HOOKS === '1') {
       // 集成测试环境不真开系统浏览器（CI 无浏览器且产生噪声）；
       // 分类正确性已由单测钉死，真实外开留给人工验收（#15）
       return
@@ -915,7 +915,7 @@ function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): st
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link href="${styleUri}" rel="stylesheet">
 <link href="${probeCssUri}" rel="stylesheet">
-<title>Obsidian-like Markdown Editor</title>
+<title>Vsidian</title>
 </head>
 <body>
 <div id="app"></div>

@@ -36,7 +36,7 @@ function stubClientHeight(container: HTMLElement, h: number): void {
 
 function mountedStarts(container: HTMLElement): string[] {
   return Array.from(container.querySelectorAll<HTMLElement>(`.${READING_CLASS_NAMES.block}`)).map(
-    (el) => el.dataset['oileSrcStart'] ?? '',
+    (el) => el.dataset['vsidianSrcStart'] ?? '',
   )
 }
 

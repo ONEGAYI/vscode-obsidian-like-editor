@@ -6,9 +6,9 @@
 
 ## 通用准备
 
-- 安装 VSIX（`vscode-obsidian-like-editor-0.1.0.vsix`）到 VSCode 1.86+：命令面板 →「Extensions: Install from VSIX…」。
-- 打开方式：对 `.md` 文件右键 →「打开方式…」→「Obsidian-like Markdown Editor」（默认打开仍是原生文本编辑器，不自动接管）。
-- 切换视图：命令面板 →「Obsidian-like Markdown Editor: 切换实时预览与阅读模式」，或编辑器工具栏按钮。
+- 安装 VSIX（`vsidian-0.1.0.vsix`）到 VSCode 1.86+：命令面板 →「Extensions: Install from VSIX…」。
+- 打开方式：对 `.md` 文件右键 →「打开方式…」→「Vsidian」（默认打开仍是原生文本编辑器，不自动接管）。
+- 切换视图：命令面板 →「Vsidian: 切换实时预览与阅读模式」，或编辑器工具栏按钮。
 
 ## 一、输入与组合（#3 / #12 / #13）
 

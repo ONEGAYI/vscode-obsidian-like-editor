@@ -3,19 +3,19 @@
 // 字节级断言），路径经环境变量 WORKSPACE_DIR 传入。
 import * as vscode from 'vscode'
 
-const VIEW_TYPE = 'onegayi.obsidian-like-markdown-editor'
-const EXT_ID = 'onegayi.vscode-obsidian-like-editor'
+const VIEW_TYPE = 'onegayi.vsidian.editor'
+const EXT_ID = 'onegayi.vsidian'
 const CMD = {
-  sessionState: 'onegayi.obsidian-like-editor._test.getSessionState',
-  injectMessage: 'onegayi.obsidian-like-editor._test.injectWebviewMessage',
-  postToPanel: 'onegayi.obsidian-like-editor._test.postToPanel',
-  viewState: 'onegayi.obsidian-like-editor._test.requestViewState',
-  conflictState: 'onegayi.obsidian-like-editor._test.getConflictState',
-  viewStateCache: 'onegayi.obsidian-like-editor._test.getPanelViewStateCache',
-  resumePanel: 'onegayi.obsidian-like-editor._test.resumePanel',
-  perfProbe: 'onegayi.obsidian-like-editor._test.perfProbe',
-  readingPerf: 'onegayi.obsidian-like-editor._test.readingPerf',
-  linkLog: 'onegayi.obsidian-like-editor._test.getLinkLog',
+  sessionState: 'onegayi.vsidian._test.getSessionState',
+  injectMessage: 'onegayi.vsidian._test.injectWebviewMessage',
+  postToPanel: 'onegayi.vsidian._test.postToPanel',
+  viewState: 'onegayi.vsidian._test.requestViewState',
+  conflictState: 'onegayi.vsidian._test.getConflictState',
+  viewStateCache: 'onegayi.vsidian._test.getPanelViewStateCache',
+  resumePanel: 'onegayi.vsidian._test.resumePanel',
+  perfProbe: 'onegayi.vsidian._test.perfProbe',
+  readingPerf: 'onegayi.vsidian._test.readingPerf',
+  linkLog: 'onegayi.vsidian._test.getLinkLog',
 }
 
 const wsDir = process.env['WORKSPACE_DIR'] ?? ''
@@ -226,7 +226,7 @@ interface ViewState {
   liveImageCount?: number
   readingLinkCount?: number
   readingImageCount?: number
-  /** #11 双链观测（live：widget+mark；reading：a.oile-wikilink） */
+  /** #11 双链观测（live：widget+mark；reading：a.vsidian-wikilink） */
   liveWikilinkCount?: number
   readingWikilinkCount?: number
   imageStates?: { loading: number; loaded: number; error: number }
@@ -862,7 +862,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const stateAfterEdit = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
 
     // 正式命令切换到阅读模式（活动 tab 为本编辑器）
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     const readingView = await poll('切换到阅读模式', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' ? v : undefined
@@ -879,7 +879,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(diskMid === diskBefore, '切换不得写磁盘')
 
     // 切回实时预览：内容与光标语义保留
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     const backView = await poll('切回实时预览', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'live' ? v : undefined
@@ -912,7 +912,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(located.selectionOffset === target, `定位后光标应在 ${target}，实际 ${located.selectionOffset}`)
 
     // 切到阅读：锚点映射到包含 target 的块（'最后段落结束' start=21）
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     const readingView = await poll('阅读模式锚点', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' && v.readingAnchorStart !== undefined ? v : undefined
@@ -922,7 +922,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(readingView.text.includes('最后段落结束'), '阅读视图文本同步')
 
     // 切回实时预览：光标恢复到锚点块源 start（对应段落与光标，非百分比）
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     const backView = await poll('恢复光标', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'live' && v.selectionOffset === target ? v : undefined
@@ -938,15 +938,15 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await waitSessionReady('mode.md')
     const uri = wsUri('mode.md').toString()
 
-    // live：探针片段经 .oile-heading-line-1 命中（text-decoration-color 无视觉影响）
+    // live：探针片段经 .vsidian-heading-line-1 命中（text-decoration-color 无视觉影响）
     const liveView = await waitViewState('mode.md', (v) => v.cssProbe?.liveHeadingDecorationColor !== undefined && v.viewMode === 'live')
     assert(
       liveView.cssProbe!.liveHeadingDecorationColor === 'rgb(1, 2, 3)',
       `live 一级标题应被测试片段命中 rgb(1, 2, 3)，实际 ${liveView.cssProbe!.liveHeadingDecorationColor}`,
     )
 
-    // reading：.oile-reading-heading-1 命中 + .oile-view-reading 变量可被覆盖读取
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    // reading：.vsidian-reading-heading-1 命中 + .vsidian-view-reading 变量可被覆盖读取
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     const readingView = await poll('阅读模式样式探针', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' && v.cssProbe?.readingHeadingDecorationColor !== undefined ? v : undefined
@@ -966,7 +966,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await waitSessionReady('mode.md')
     const uri = wsUri('mode.md').toString()
 
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     await poll('进入阅读模式', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' ? true : undefined
@@ -989,7 +989,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await openWithEditor('reading-1k.md')
     await waitSessionReady('reading-1k.md')
     const uri = wsUri('reading-1k.md').toString()
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     const view = await poll('切换并虚拟化', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' && v.readingVirtualized === true ? v : undefined
@@ -1013,7 +1013,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
       await openWithEditor(file)
       await waitSessionReady(file)
       const uri = wsUri(file).toString()
-      await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+      await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
       const v = await poll(`切换并虚拟化 ${file}`, async () => {
         const s = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
         return s?.viewMode === 'reading' && s.readingVirtualized === true ? s : undefined
@@ -1040,7 +1040,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await waitSessionReady('reading-100k.md')
     const uri = wsUri('reading-100k.md').toString()
     const sessionBefore = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     await poll('切换并虚拟化', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' && v.readingVirtualized === true ? true : undefined
@@ -1076,7 +1076,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await openWithEditor('reading-100k.md')
     await waitSessionReady('reading-100k.md')
     const uri = wsUri('reading-100k.md').toString()
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     await poll('切换并虚拟化', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' && v.readingVirtualized === true ? true : undefined
@@ -1104,7 +1104,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await openWithEditor('reading-image.md')
     await waitSessionReady('reading-image.md')
     const uri = wsUri('reading-image.md').toString()
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     await poll('切换并虚拟化', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' && v.readingVirtualized === true ? true : undefined
@@ -1181,7 +1181,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(ls.taskGlyphs === 2 && ls.taskChecked === 1, `任务字形应为 2（1 勾选），实际 ${ls.taskGlyphs}/${ls.taskChecked}`)
 
     // reading 侧：同一样例的渲染语义
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     const reading = await poll('切换并读取阅读语义', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' && v.readingSyntax !== undefined && v.readingSyntax.headings >= 3 ? v : undefined
@@ -1214,7 +1214,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // 标题恰好 3 个（不含围栏内），任务恰好 2 个（不含围栏内）
     assert(live.liveSyntax!.headingLines === 3, `围栏内伪标题被误判：标题行 ${live.liveSyntax!.headingLines}`)
     assert(live.liveSyntax!.taskGlyphs === 2, `围栏内伪任务被误判：任务字形 ${live.liveSyntax!.taskGlyphs}`)
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     const reading = await poll('阅读模式语义', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' && v.readingSyntax !== undefined ? v : undefined
@@ -1233,7 +1233,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // 脚注 [^1] 与原始 HTML 在 live 侧无任何装饰（不产生 span/隐藏）
     // ——liveSyntax 计数不含脚注/HTML 语法（其只按普通段落装饰为 0 类）
     assert(live.text.includes('脚注 [^1] 文本'), '脚注文本保留')
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     const reading = await poll('阅读模式读取', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' && v.readingSyntax !== undefined ? v : undefined
@@ -1252,7 +1252,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(live.liveSyntax!.frontmatterLines === 4, `frontmatter 应为 4 行，实际 ${live.liveSyntax!.frontmatterLines}`)
     // '# frontmatter 内伪标题' 不产生标题装饰（标题恰 3：h1/h2/setext）
     assert(live.liveSyntax!.headingLines === 3, 'frontmatter 内伪标题不得判定为标题')
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     const reading = await poll('阅读模式 frontmatter', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' && v.readingSyntax !== undefined ? v : undefined
@@ -1275,7 +1275,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
       live.cssProbe!.liveInlineCodeDecorationColor === 'rgb(10, 11, 12)',
       `live 行内代码 span 应被片段命中，实际 ${live.cssProbe!.liveInlineCodeDecorationColor}`,
     )
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     const reading = await poll('阅读模式样式探针', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' && v.cssProbe?.readingStrongDecorationColor !== undefined ? v : undefined
@@ -1290,7 +1290,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await openWithEditor('fence-chunk.md')
     await waitSessionReady('fence-chunk.md')
     const uri = wsUri('fence-chunk.md').toString()
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     const view = await poll('切换并虚拟化', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' && v.readingVirtualized === true ? v : undefined
@@ -1356,7 +1356,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const uri = wsUri('task.md').toString()
     const doc = await vscode.workspace.openTextDocument(wsUri('task.md'))
 
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     const reading = await poll('进入阅读模式并读取任务语义', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' && (v.readingSyntax?.taskCheckboxes ?? 0) === 3 ? v : undefined
@@ -1393,7 +1393,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
       `live 任务 checkbox 应被测试片段命中 rgb(19, 20, 21)，实际 ${live.cssProbe!.liveTaskCheckboxDecorationColor}`,
     )
 
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     const reading = await poll('阅读模式任务样式探针', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' && v.cssProbe?.readingTaskCheckboxDecorationColor !== undefined ? v : undefined
@@ -1492,7 +1492,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await openWithEditor('links.md')
     const session = await waitSessionReady('links.md')
     const uri = wsUri('links.md').toString()
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     await poll('进入阅读模式', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' ? true : undefined
@@ -1590,7 +1590,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await openWithEditor('images.md')
     await waitSessionReady('images.md')
     const uri = wsUri('images.md').toString()
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     // 真实 webview：宿主 asWebviewUri → img.src → load 事件 → loaded 态
     const view = await poll('图片装载完成', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
@@ -1628,7 +1628,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
       return v && (v.imageStates?.loaded ?? 0) >= 1 ? true : undefined
     })
     // 阅读侧：链接与图片探针 + 挂载计数
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     const reading = await poll('阅读模式链接/图片观测', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' && v.readingLinkCount !== undefined && v.readingImageCount !== undefined ? v : undefined
@@ -1774,7 +1774,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const sessionBefore = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
     const doc = await vscode.workspace.openTextDocument(wsUri('reading-100k.md'))
     const text = doc.getText()
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     await poll('切换并虚拟化', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' && v.readingVirtualized === true ? true : undefined
@@ -1845,7 +1845,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
 
     // 切到阅读：会话保活，锚点映射到当前匹配所在块（等待定位落定：
     // 虚拟化滚动/实测修正期间的瞬时锚点以最终落定值为准）
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     const para2Start = text.indexOf('第二段：又出现目标词了。')
     v = await poll('阅读模式保活与锚点落定', async () => {
       const s = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
@@ -1855,7 +1855,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(v.readingAnchorStart === para2Start, `阅读锚点应为当前匹配块 start，实际 ${v.readingAnchorStart}`)
 
     // 切回 live：选区恢复到当前匹配（源锚点映射，非块首）
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     v = await poll('切回 live 恢复', async () => {
       const s = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return s?.viewMode === 'live' && s.find?.open === true ? s : undefined
@@ -1886,8 +1886,8 @@ export const cases: Array<[string, () => Promise<void>]> = [
       live.cssProbe!.liveWikilinkDecorationColor === 'rgb(28, 29, 30)',
       `live 双链应被测试片段命中 rgb(28, 29, 30)，实际 ${live.cssProbe!.liveWikilinkDecorationColor}`,
     )
-    // 阅读侧：a.oile-wikilink 数量与探针 + 降级形态按原文显示
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    // 阅读侧：a.vsidian-wikilink 数量与探针 + 降级形态按原文显示
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     const reading = await poll('阅读模式双链观测', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' && v.readingWikilinkCount !== undefined ? v : undefined
@@ -1992,7 +1992,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const diskTarget = await readDisk('目标笔记.md')
 
     // 目标面板切到阅读模式（活动 tab = 目标面板）
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     const before = await poll('目标进入阅读模式', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, targetUri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' && v.readingTotalBlocks !== undefined ? v : undefined
@@ -2120,7 +2120,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
       kind: 'view.locate',
       offset: original.indexOf('苹果') + 1,
     })
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.table.insertRowBelow')
+    await vscode.commands.executeCommand('onegayi.vsidian.table.insertRowBelow')
     const inserted = original.replace(
       '| 苹果 | 3 |\n| `x|y` | 4 |',
       '| 苹果 | 3 |\n| | |\n| `x|y` | 4 |',
@@ -2144,7 +2144,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
       kind: 'view.locate',
       offset: original.indexOf('苹果') + 1,
     })
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.table.insertRowBelow')
+    await vscode.commands.executeCommand('onegayi.vsidian.table.insertRowBelow')
     await poll('再次插入', () => (doc.getText() === inserted ? true : undefined))
     assert(await doc.save(), '保存失败')
     const disk = await readDisk('table13.md')
@@ -2167,7 +2167,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
       kind: 'view.locate',
       offset: original.indexOf('名字') + 1,
     })
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.table.deleteRow')
+    await vscode.commands.executeCommand('onegayi.vsidian.table.deleteRow')
     const promoted = original.replace(
       '| 名字 | 数量 |\n| --- | :---: |\n| 苹果 | 3 |\n',
       '| 苹果 | 3 |\n| --- | :---: |\n',
@@ -2180,7 +2180,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
       kind: 'view.locate',
       offset: promoted.indexOf(':---:'),
     })
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.table.deleteRow')
+    await vscode.commands.executeCommand('onegayi.vsidian.table.deleteRow')
     await new Promise((r) => setTimeout(r, 800))
     assert(doc.getText() === promoted, '分隔行删除必须被拒绝')
     const afterReject = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
@@ -2191,7 +2191,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
       kind: 'view.locate',
       offset: promoted.indexOf('苹果') + 1,
     })
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.table.insertColumnRight')
+    await vscode.commands.executeCommand('onegayi.vsidian.table.insertColumnRight')
     const columned = promoted
       .replace('| 苹果 | 3 |', '| 苹果 | | 3 |')
       .replace('| --- | :---: |', '| --- | --- | :---: |')
@@ -2208,7 +2208,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
       kind: 'view.locate',
       offset: columned.indexOf('| 苹果 | | 3 |') + 7,
     })
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.table.deleteColumn')
+    await vscode.commands.executeCommand('onegayi.vsidian.table.deleteColumn')
     const deleted = columned
       .replace('| 苹果 | | 3 |', '| 苹果 | 3 |')
       .replace('| --- | --- | :---: |', '| --- | :---: |')
@@ -2283,7 +2283,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
       kind: 'view.locate',
       offset: text.indexOf('苹果') + 1,
     })
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     await poll('进入阅读模式', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' ? true : undefined
@@ -2300,7 +2300,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // 正式命令路径（宿主注册器）：reading 面板被拦截给可见反馈，不投递
     // webview（活动 tab 为本面板）——零写回且命令完成不挂起
     const intercepted = (await vscode.commands.executeCommand(
-      'onegayi.obsidian-like-editor.table.insertRowBelow',
+      'onegayi.vsidian.table.insertRowBelow',
     )) as boolean
     assert(intercepted === true, '被拦截的命令仍应完成（true = 已处理并反馈）')
     // webview 直发路径同样只读（双重防线）
@@ -2312,7 +2312,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(session1.version === session0.version, `阅读模式命令不得改变版本（${session0.version} → ${session1.version}）`)
     assert(session1.appliedEdits === session0.appliedEdits, `阅读模式命令不得产生写回，实际 ${session1.appliedEdits}`)
     // 切回 live 验证面板仍可用
-    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     await waitViewState('table13.md', (v) => v.viewMode === 'live')
   }],
 ]

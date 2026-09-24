@@ -2,7 +2,7 @@
 
 已根据用户批准的 MVP 与后续性能要求开票，2026-09-23。2026-09-24 更新：#2–#15 均已实现并通过验收（工单流见各 Issue；性能与人工验证记录见 docs/perf/ 与 docs/specs/manual-verification.md）。
 
-- [MVP 规格与总览 #1](https://github.com/ONEGAYI/vscode-obsidian-like-editor/issues/1)
+- [MVP 规格与总览 #1](https://github.com/ONEGAYI/vsidian/issues/1)
 - [本地规格](mvp.md)
 
 ## 实施票与阻塞关系
@@ -33,4 +33,4 @@
 上述父子与阻塞关系已使用 GitHub 原生关系建立；正文保留 Blocked by 以便工具读取。沿用仓库现有标签，不新建 triage 标签；可实施状态以阻塞关系为准。
 
 
-上表中的编号对应 `ONEGAYI/vscode-obsidian-like-editor`；实时状态以 GitHub 为准。
+上表中的编号对应 `ONEGAYI/vsidian`；实时状态以 GitHub 为准。

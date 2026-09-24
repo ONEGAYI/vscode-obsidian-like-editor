@@ -28,7 +28,7 @@ export interface HeightCalibration {
 /** 默认行高估计：15px 字号 × 1.6 行高（阅读视图 CSS 默认值） */
 export const DEFAULT_LINE_HEIGHT_PX = 24
 
-/** 标题级别 → 字号缩放（与 main.css 的 .oile-reading-heading-N 同向一致） */
+/** 标题级别 → 字号缩放（与 main.css 的 .vsidian-reading-heading-N 同向一致） */
 export const HEADING_HEIGHT_SCALES: Record<number, number> = {
   1: 1.6,
   2: 1.38,

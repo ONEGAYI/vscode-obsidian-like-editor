@@ -23,11 +23,11 @@
 
 ## 已知限制（如实清单）
 
-1. **live 跨管道 code span 无内联代码高亮**：`@lezer/markdown` 的 TableCell 切分不识别行内代码内的 `|`（把 `` `x|y` `` 切散），跨 cell 的 InlineCode 节点不存在——本项目单元格定位用自研 GFM 拆分（`tableCells.ts`）不受影响，但 lezer 驱动的 `oile-inline-code` 装饰在此形态下不发射（源文照常可见可编辑）。
+1. **live 跨管道 code span 无内联代码高亮**：`@lezer/markdown` 的 TableCell 切分不识别行内代码内的 `|`（把 `` `x|y` `` 切散），跨 cell 的 InlineCode 节点不存在——本项目单元格定位用自研 GFM 拆分（`tableCells.ts`）不受影响，但 lezer 驱动的 `vsidian-inline-code` 装饰在此形态下不发射（源文照常可见可编辑）。
 2. **阅读视图对代码内管道的渲染偏差**：markdown-it 的 `escapedSplit` 同样不识别行内代码内的 `|`——`` | `x|y` | `` 的 cell 被错切、多余列丢弃；若表头含此形态导致列数不匹配，整表降级为普通段落（局部源码降级语义）。GitHub（cmark-gfm）按 GFM 规范不切分。修复需替换 markdown-it 的 table block 规则（复制 vendor 实现约 150 行），一期不做。
 3. **粘贴含 `|` 文本不自动转义**：键入钩子只覆盖 `|` 键（keydown 路径）；粘贴内容中的裸管道保持原样写入（保存后渲染按未转义管道切列）。#13 已评估并保持不动（工单范围固定单点粘贴语义，不做区域粘贴处理）；如后续支持须补 paste 钩子。
 4. **`\`` 转义反引号不参与 code span 配对扫描**（`tableCells.ts` 简化，罕见形态）：`\`` 后的 `` ` `` 仍按普通反引号参与 run 匹配，极端构造下单元格边界判定与 GitHub 有差异。
-5. **live 源码形态不重排列对齐**：GFM `:---:`/`---:` 对齐以稳定类（`oile-table-align-*`）落在单元格上，但源文一维布局不改变（对齐的视觉语义由阅读视图的真实 table 呈现）；写回不做重排对齐（所见即所键）。
+5. **live 源码形态不重排列对齐**：GFM `:---:`/`---:` 对齐以稳定类（`vsidian-table-align-*`）落在单元格上，但源文一维布局不改变（对齐的视觉语义由阅读视图的真实 table 呈现）；写回不做重排对齐（所见即所键）。
 
 ## 回归入口
 

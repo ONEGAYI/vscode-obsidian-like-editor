@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // 阅读视图 DOM 结构契约（工单 #8：markdown-it 渲染形态）：
-// - 稳定类名入口（oile-view-reading / oile-reading-block / 细分类）
-// - 源位置锚点 data-oile-src-start|end（LF 全文 UTF-16 offset，与协议
+// - 稳定类名入口（vsidian-view-reading / vsidian-reading-block / 细分类）
+// - 源位置锚点 data-vsidian-src-start|end（LF 全文 UTF-16 offset，与协议
 //   SerChange 坐标同构；#7 按需挂载与 #9 任务定位依赖此结构）
 // - 块内容为语义标签（h1/p/blockquote/ul/pre…），行内语义（em/strong/code）
 //   随 markdown-it 渲染；Obsidian 片段的标签选择器可命中
@@ -25,10 +25,10 @@ function rendered() {
 }
 
 describe('createReadingContainer：稳定容器类名', () => {
-  it('容器带 oile-view-reading 稳定类名与模式标记', () => {
+  it('容器带 vsidian-view-reading 稳定类名与模式标记', () => {
     const container = createReadingContainer()
     expect(container.classList.contains(READING_CLASS_NAMES.view)).toBe(true)
-    expect(container.dataset['oileMode']).toBe('reading')
+    expect(container.dataset['vsidianMode']).toBe('reading')
   })
 })
 
@@ -41,12 +41,12 @@ describe('renderReadingBlocks：块结构与源锚点', () => {
     expect(count).toBe(5)
   })
 
-  it('每块带 data-oile-src-start/end，区间内容与源文本一致', () => {
+  it('每块带 data-vsidian-src-start/end，区间内容与源文本一致', () => {
     const { container } = rendered()
     const els = Array.from(container.querySelectorAll<HTMLElement>(`.${READING_CLASS_NAMES.block}`))
     for (const el of els) {
-      const start = Number(el.dataset['oileSrcStart'])
-      const end = Number(el.dataset['oileSrcEnd'])
+      const start = Number(el.dataset['vsidianSrcStart'])
+      const end = Number(el.dataset['vsidianSrcEnd'])
       expect(Number.isInteger(start)).toBe(true)
       expect(end).toBeGreaterThan(start)
       expect(DOC.slice(start, end).length).toBe(end - start)
@@ -89,17 +89,17 @@ describe('任务语义入口（#9：可交互勾选）', () => {
     expect(boxes[0]!.checked).toBe(false)
     expect(boxes[1]!.checked).toBe(true)
     // checkbox 的 data 锚点指向源文 [ ]/[x] 标记区间（#9 写回定位依据）
-    const s = Number(boxes[1]!.dataset['oileSrcStart'])
-    const e = Number(boxes[1]!.dataset['oileSrcEnd'])
+    const s = Number(boxes[1]!.dataset['vsidianSrcStart'])
+    const e = Number(boxes[1]!.dataset['vsidianSrcEnd'])
     expect(DOC.slice(s, e)).toBe('[x]')
-    // 渲染态锚点（data-oile-checked）：点击意图的确定性来源（不受原生
+    // 渲染态锚点（data-vsidian-checked）：点击意图的确定性来源（不受原生
     // checkbox 激活时序影响）
-    expect(boxes[0]!.dataset['oileChecked']).toBe('false')
-    expect(boxes[1]!.dataset['oileChecked']).toBe('true')
+    expect(boxes[0]!.dataset['vsidianChecked']).toBe('false')
+    expect(boxes[1]!.dataset['vsidianChecked']).toBe('true')
     // 任务 li 带任务语义类与自身锚点
     const tasks = container.querySelectorAll(`li.${READING_CLASS_NAMES.task}`)
     expect(tasks.length).toBe(2)
-    expect(DOC.slice(Number(tasks[0]!.querySelector('input')!.dataset['oileSrcStart']), Number(tasks[0]!.querySelector('input')!.dataset['oileSrcEnd']))).toBe('[ ]')
+    expect(DOC.slice(Number(tasks[0]!.querySelector('input')!.dataset['vsidianSrcStart']), Number(tasks[0]!.querySelector('input')!.dataset['vsidianSrcEnd']))).toBe('[ ]')
   })
 })
 
@@ -142,7 +142,7 @@ describe('阅读锚点定位', () => {
   it('findReadingAnchor：无布局信息（jsdom offsetTop 全 0）回退第一个块', () => {
     const { container } = rendered()
     const first = container.querySelector<HTMLElement>(`.${READING_CLASS_NAMES.block}`)!
-    expect(findReadingAnchor(container)).toBe(Number(first.dataset['oileSrcStart']))
+    expect(findReadingAnchor(container)).toBe(Number(first.dataset['vsidianSrcStart']))
   })
 
   it('findReadingAnchor：有布局时返回视口内首个可见块的源 start', () => {
@@ -154,7 +154,7 @@ describe('阅读锚点定位', () => {
     })
     container.scrollTop = 150 // 视口顶在 150：第一块 [0,50) 第二块 [100,150) 第三块 [200,250)
     const anchor = findReadingAnchor(container)
-    expect(anchor).toBe(Number(els[2]!.dataset['oileSrcStart']))
+    expect(anchor).toBe(Number(els[2]!.dataset['vsidianSrcStart']))
   })
 
   it('scrollReadingToSrcStart：滚动到目标块（按源 start 定位元素）', () => {
@@ -164,7 +164,7 @@ describe('阅读锚点定位', () => {
       Object.defineProperty(el, 'offsetTop', { value: i * 100 })
     })
     const target = els[3]!
-    scrollReadingToSrcStart(container, Number(target.dataset['oileSrcStart']))
+    scrollReadingToSrcStart(container, Number(target.dataset['vsidianSrcStart']))
     expect(container.scrollTop).toBe(300)
   })
 

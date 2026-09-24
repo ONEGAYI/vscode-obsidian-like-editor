@@ -10,13 +10,13 @@
 // - 滚动回收（10 次往返滚动后回顶的 DOM 快照对比）
 import * as vscode from 'vscode'
 
-const VIEW_TYPE = 'onegayi.obsidian-like-markdown-editor'
+const VIEW_TYPE = 'onegayi.vsidian.editor'
 const CMD = {
-  sessionState: 'onegayi.obsidian-like-editor._test.getSessionState',
-  viewState: 'onegayi.obsidian-like-editor._test.requestViewState',
-  perfProbe: 'onegayi.obsidian-like-editor._test.perfProbe',
-  readingPerf: 'onegayi.obsidian-like-editor._test.readingPerf',
-  toggleViewMode: 'onegayi.obsidian-like-editor.toggleViewMode',
+  sessionState: 'onegayi.vsidian._test.getSessionState',
+  viewState: 'onegayi.vsidian._test.requestViewState',
+  perfProbe: 'onegayi.vsidian._test.perfProbe',
+  readingPerf: 'onegayi.vsidian._test.readingPerf',
+  toggleViewMode: 'onegayi.vsidian.toggleViewMode',
 }
 
 const wsDir = process.env['WORKSPACE_DIR'] ?? ''
