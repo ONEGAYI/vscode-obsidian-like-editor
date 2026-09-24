@@ -8,7 +8,7 @@
 // - doc.resync 恢复：重置文本、解除暂停、清未确认集，后续输入正常发送
 // - session.suspended 消息：重载后的 webview 恢复暂停态（横幅提示）
 // - 横幅提供 copy / resume 按钮 → conflict.action 消息（宿主执行剪贴板与恢复）
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
 import type { WebviewToHost } from '../../src/shared/protocol'
 
@@ -348,5 +348,94 @@ describe('view.state 暂停标记', () => {
     c.handleHostMessage({ kind: 'view.state.request' })
     const suspendedState = sent.find((m) => m.kind === 'view.state') as Extract<WebviewToHost, { kind: 'view.state' }>
     expect(suspendedState.suspended).toBe(true)
+  })
+})
+
+describe('暂停/暂缓态本地输入的快照刷新（R-1）', () => {
+  // 场景：conflict.report 仅在 enterSuspended 时刻上报一次（或暂缓集根本
+  // 不上报）；此后暂停态继续输入或暂缓集累积的文本宿主拿不到——面板关闭/
+  // 断连后「复制未确认输入」缺这部分内容。修复契约：暂停态与暂缓态的本地
+  // 输入变化后 500ms 防抖重发 conflict.report 刷新宿主全文快照。
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function suspendByOverlap(c: WebviewSyncController): void {
+    // 在途未确认替换 + 重叠外部增量 → 冲突暂停（enterSuspended 首报一次）
+    c.getView()!.dispatch({ changes: { from: 3, to: 6, insert: '我的替换' } })
+    c.handleHostMessage({
+      kind: 'doc.changed',
+      version: 2,
+      origin: 'external',
+      changes: [{ offset: 4, length: 1, text: 'X' }],
+    })
+  }
+
+  it('暂停后继续输入：防抖重发 conflict.report，快照含新输入全文', async () => {
+    vi.useFakeTimers()
+    const { bridge, sent } = makeBridge()
+    const { c } = mount(bridge)
+    init(c, 'abcdef', 1)
+    suspendByOverlap(c)
+    expect(conflictReports(sent)).toHaveLength(1)
+
+    c.getView()!.dispatch({ changes: { from: 0, insert: '新增输入' } })
+    // 防抖窗口内不重发
+    expect(conflictReports(sent)).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(600)
+    const reports = conflictReports(sent)
+    expect(reports).toHaveLength(2)
+    expect(reports[1]).toMatchObject({
+      sessionId: 's1',
+      docUri: DOC_URI,
+      text: '新增输入abc我的替换',
+    })
+  })
+
+  it('暂停后多次输入合并为一次防抖重发', async () => {
+    vi.useFakeTimers()
+    const { bridge, sent } = makeBridge()
+    const { c } = mount(bridge)
+    init(c, 'abcdef', 1)
+    suspendByOverlap(c)
+    const before = conflictReports(sent).length
+    c.getView()!.dispatch({ changes: { from: 0, insert: '一' } })
+    await vi.advanceTimersByTimeAsync(200)
+    c.getView()!.dispatch({ changes: { from: 1, insert: '二' } })
+    await vi.advanceTimersByTimeAsync(400)
+    // 第二次输入落在防抖窗口内：合并到同一次重发
+    expect(conflictReports(sent)).toHaveLength(before + 1)
+    expect(conflictReports(sent).at(-1)).toMatchObject({ text: '一二abc我的替换' })
+  })
+
+  it('恢复（doc.resync）后挂起的防抖不再发 conflict.report', async () => {
+    vi.useFakeTimers()
+    const { bridge, sent } = makeBridge()
+    const { c } = mount(bridge)
+    init(c, 'abcdef', 1)
+    suspendByOverlap(c)
+    const before = conflictReports(sent).length
+    c.getView()!.dispatch({ changes: { from: 0, insert: '新' } })
+    // 恢复先于防抖到期：此后不再处于暂停/暂缓态，重报不发出
+    c.handleHostMessage({ kind: 'doc.resync', version: 3, text: '权威全文' })
+    await vi.advanceTimersByTimeAsync(600)
+    expect(conflictReports(sent)).toHaveLength(before)
+  })
+
+  it('暂缓集形成时同样上报：宿主留存含在途+暂缓输入的全文', async () => {
+    vi.useFakeTimers()
+    const { bridge, sent } = makeBridge()
+    const { c } = mount(bridge)
+    init(c, 'abcdef', 1)
+    // 输入 A（在途未确认）
+    c.getView()!.dispatch({ changes: { from: 0, insert: 'A' } })
+    expect(conflictReports(sent)).toHaveLength(0)
+    // 输入 B 触及 A（插入点落在未确认内容闭区间）→ 进暂缓集
+    c.getView()!.dispatch({ changes: { from: 1, insert: 'B' } })
+    expect(editRequests(sent).length).toBeGreaterThanOrEqual(1)
+    await vi.advanceTimersByTimeAsync(600)
+    const reports = conflictReports(sent)
+    expect(reports).toHaveLength(1)
+    expect(reports[0]).toMatchObject({ text: 'ABabcdef' })
   })
 })

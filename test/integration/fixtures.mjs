@@ -211,6 +211,17 @@ const WIKILINK_TARGET_DOC = (() => {
   out.push('## 深处小节', '', '小节内容。', '')
   return out.join('\n')
 })()
+// CRLF 目标（view.locate 坐标系断言载体）：宿主系 offset 与 LF offset 在
+// CRLF 文档上按行数差漂移，面板定位链路发送前必须转换（行内容与 LF 文档
+// 同构，仅行尾为 \r\n）
+const WIKILINK_CRLF_TARGET_DOC = (() => {
+  const out = ['# CRLF 目标标题', '', '开篇段落。', '']
+  for (let i = 2; i <= 30; i++) {
+    out.push(`第 ${i} 段正文。`, '')
+  }
+  out.push('## CRLF 深处小节', '', '小节内容。', '')
+  return out.join('\r\n')
+})()
 
 /**
  * 向目录写入全部集成测试 fixture（字节由脚本直接生成，不经 git 检出，
@@ -266,6 +277,7 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   writeFileSync(path.join(wsDir, 'wikilinks.md'), WIKILINKS_DOC, 'utf8')
   writeFileSync(path.join(wsDir, '目标笔记.md'), TARGET_NOTE_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'wikilink-target.md'), WIKILINK_TARGET_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'wikilink-crlf-target.md'), WIKILINK_CRLF_TARGET_DOC, 'utf8')
   mkdirSync(path.join(wsDir, 'dup'), { recursive: true })
   writeFileSync(path.join(wsDir, 'dup', '甲.md'), '# 重名甲（dup 目录）\n', 'utf8')
   mkdirSync(path.join(wsDir, 'other'), { recursive: true })

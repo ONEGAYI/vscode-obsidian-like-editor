@@ -69,6 +69,11 @@ export interface VsCodeBridge {
   setState(state: unknown): void
 }
 
+/** 暂停/暂缓态本地输入的快照刷新防抖窗口（R-1）：宿主的全文留存只在
+ *  enterSuspended 时刻上报一次，此后暂停态继续输入与暂缓集累积都到不了
+ *  宿主——面板关闭/断连后取回缺这部分。输入变化后按此窗口合并重发。 */
+const CONFLICT_REPORT_DEBOUNCE_MS = 500
+
 /** 视图模式（#6）：live=实时预览（CM6 编辑），reading=阅读（只读渲染） */
 export type ViewMode = 'live' | 'reading'
 
@@ -346,6 +351,8 @@ export class WebviewSyncController {
   /** 最近一次接受的 doc.changed 版本（C-4 单调防线：重复/迟到广播直接
    *  丢弃，覆盖直发与组合排队两条路径，防止同版本增量重复应用） */
   private lastDocChangedVersion = 0
+  /** 暂停/暂缓态快照刷新防抖句柄（R-1） */
+  private conflictReportTimer: ReturnType<typeof setTimeout> | undefined
 
   constructor(private readonly bridge: VsCodeBridge) {
     const saved = bridge.getState<PersistedState>()
@@ -542,6 +549,9 @@ export class WebviewSyncController {
           restoreAnchor: true,
           source: 'init',
         })
+        // init 后主动回报一次视图状态（含持久化恢复的模式）：宿主的模式
+        // 缓存尽早建立，重载场景（retainContextWhenHidden 关闭）不留窗口
+        this.reportViewState()
         break
       case 'edit.ack': {
         if (this.suspended) {
@@ -754,93 +764,7 @@ export class WebviewSyncController {
           this.findEnsureFresh()
           this.findRender()
         }
-        const doc = this.view?.state.doc
-        const content = this.view?.dom.querySelector('.cm-content')
-        // 标题装饰的可观测 DOM 文本：活动（源码态）与非活动（隐藏标记）
-        // 各取第一个样本，供集成测试断言 Live Preview 语义
-        let headingActiveText: string | undefined
-        let headingHiddenText: string | undefined
-        if (content) {
-          for (const el of Array.from(content.querySelectorAll<HTMLElement>('.oile-heading-line'))) {
-            const text = el.textContent ?? ''
-            if (text.startsWith('#')) {
-              headingActiveText ??= text
-            } else {
-              headingHiddenText ??= text
-            }
-            if (headingActiveText !== undefined && headingHiddenText !== undefined) {
-              break
-            }
-          }
-        }
-        const readingActive = this.viewMode === 'reading' && this.readingView
-        const rStats = readingActive ? this.readingView!.getStats() : undefined
-        const rScroll = readingActive ? this.readingView!.getScrollObservation() : undefined
-        // 锚点块 start 经源 offset → 块身份的纯数据映射（不依赖布局；
-        // 虚拟化下含未挂载目标——块模型是映射依据）
-        const readingAnchorStart =
-          readingActive && this.modeAnchor !== null
-            ? (this.readingView!.anchorStartFor(this.clampToDoc(this.modeAnchor)) ?? undefined)
-            : undefined
-        // 锚点块的布局顶部位置（挂载时取真实 offsetTop 语义；未挂载为 undefined）
-        let readingAnchorTopPx: number | undefined
-        if (readingActive && readingAnchorStart !== undefined && this.readingContainer) {
-          const el = this.readingContainer.querySelector<HTMLElement>(
-            `.oile-reading-block[data-oile-src-start="${readingAnchorStart}"]`,
-          )
-          if (el) {
-            const box = this.readingContainer.getBoundingClientRect()
-            readingAnchorTopPx = el.getBoundingClientRect().top - box.top + this.readingContainer.scrollTop
-          }
-        }
-        this.bridge.postMessage({
-          kind: 'view.state',
-          text: doc?.toString() ?? '',
-          docLength: doc?.length ?? 0,
-          lineCount: doc?.lines ?? 0,
-          renderedLines: this.view?.dom.querySelectorAll('.cm-line').length ?? 0,
-          suspended: this.suspended,
-          contentDomCount: content ? content.querySelectorAll('*').length : 0,
-          headingLineCount: content ? content.querySelectorAll('.oile-heading-line').length : 0,
-          headingActiveText,
-          headingHiddenText,
-          viewMode: this.viewMode,
-          selectionOffset: this.view?.state.selection.main.from ?? 0,
-          readingBlockCount: rStats?.mountedBlocks ?? 0,
-          readingAnchorStart,
-          // #7 按需挂载观测：块模型总量/挂载量/DOM 计数/解析次数/虚拟化状态
-          readingTotalBlocks: rStats?.totalBlocks,
-          readingMountedBlocks: rStats?.mountedBlocks,
-          readingContentDomCount: rStats?.contentDomCount,
-          readingParseCount: rStats?.parseCount,
-          readingVirtualized: rStats?.virtualized,
-          readingAnchorTopPx,
-          readingScrollTopPx: rScroll?.scrollTop,
-          readingScrollHeightPx: rScroll?.scrollHeight,
-          cssProbe: this.collectCssProbe(),
-          liveSyntax: this.collectLiveSyntax(),
-          readingSyntax: this.viewMode === 'reading' ? this.collectReadingSyntax() : undefined,
-          // #10 链接/图片观测（DOM 级：live 限视口，reading 限挂载块）
-          liveLinkCount: content ? content.querySelectorAll('.oile-link').length : 0,
-          liveImageCount: content ? content.querySelectorAll('.oile-image').length : 0,
-          // #11 双链观测（live：非活动行 widget + 活动行 mark；reading：a）
-          liveWikilinkCount: content
-            ? content.querySelectorAll(`.${WIKILINK_CLASS_NAMES.wikilink}`).length
-            : 0,
-          readingLinkCount: readingActive
-            ? this.readingContainer!.querySelectorAll('a').length
-            : 0,
-          readingImageCount: readingActive
-            ? this.readingContainer!.querySelectorAll('img').length
-            : 0,
-          readingWikilinkCount: readingActive
-            ? this.readingContainer!.querySelectorAll(`a.${WIKILINK_CLASS_NAMES.wikilink}`).length
-            : 0,
-          // 图片状态计数按当前视图作用域（隐藏视图的槽位不计入——同一管理器
-          // 服务双视图，隐藏侧的 DOM 不代表用户可见状态）
-          imageStates: this.collectImageStates(),
-          find: this.collectFindProbe(),
-        })
+        this.reportViewState()
         break
       }
       case 'perf.probe': {
@@ -855,6 +779,102 @@ export class WebviewSyncController {
         break
       }
     }
+  }
+
+  /**
+   * 视图状态回报（view.state）：宿主按需请求（view.state.request）与本控制
+   * 器主动推送（模式切换后）共用。主动推送让宿主的模式缓存常新——表格
+   * 结构命令等宿主侧写操作据此在 reading 面板上给出可见反馈（不再静默
+   * 丢弃后虚报成功）。
+   */
+  private reportViewState(): void {
+    const doc = this.view?.state.doc
+    const content = this.view?.dom.querySelector('.cm-content')
+    // 标题装饰的可观测 DOM 文本：活动（源码态）与非活动（隐藏标记）
+    // 各取第一个样本，供集成测试断言 Live Preview 语义
+    let headingActiveText: string | undefined
+    let headingHiddenText: string | undefined
+    if (content) {
+      for (const el of Array.from(content.querySelectorAll<HTMLElement>('.oile-heading-line'))) {
+        const text = el.textContent ?? ''
+        if (text.startsWith('#')) {
+          headingActiveText ??= text
+        } else {
+          headingHiddenText ??= text
+        }
+        if (headingActiveText !== undefined && headingHiddenText !== undefined) {
+          break
+        }
+      }
+    }
+    const readingActive = this.viewMode === 'reading' && this.readingView
+    const rStats = readingActive ? this.readingView!.getStats() : undefined
+    const rScroll = readingActive ? this.readingView!.getScrollObservation() : undefined
+    // 锚点块 start 经源 offset → 块身份的纯数据映射（不依赖布局；
+    // 虚拟化下含未挂载目标——块模型是映射依据）
+    const readingAnchorStart =
+      readingActive && this.modeAnchor !== null
+        ? (this.readingView!.anchorStartFor(this.clampToDoc(this.modeAnchor)) ?? undefined)
+        : undefined
+    // 锚点块的布局顶部位置（挂载时取真实 offsetTop 语义；未挂载为 undefined）
+    let readingAnchorTopPx: number | undefined
+    if (readingActive && readingAnchorStart !== undefined && this.readingContainer) {
+      const el = this.readingContainer.querySelector<HTMLElement>(
+        `.oile-reading-block[data-oile-src-start="${readingAnchorStart}"]`,
+      )
+      if (el) {
+        const box = this.readingContainer.getBoundingClientRect()
+        readingAnchorTopPx = el.getBoundingClientRect().top - box.top + this.readingContainer.scrollTop
+      }
+    }
+    this.bridge.postMessage({
+      kind: 'view.state',
+      text: doc?.toString() ?? '',
+      docLength: doc?.length ?? 0,
+      lineCount: doc?.lines ?? 0,
+      renderedLines: this.view?.dom.querySelectorAll('.cm-line').length ?? 0,
+      suspended: this.suspended,
+      contentDomCount: content ? content.querySelectorAll('*').length : 0,
+      headingLineCount: content ? content.querySelectorAll('.oile-heading-line').length : 0,
+      headingActiveText,
+      headingHiddenText,
+      viewMode: this.viewMode,
+      selectionOffset: this.view?.state.selection.main.from ?? 0,
+      readingBlockCount: rStats?.mountedBlocks ?? 0,
+      readingAnchorStart,
+      // #7 按需挂载观测：块模型总量/挂载量/DOM 计数/解析次数/虚拟化状态
+      readingTotalBlocks: rStats?.totalBlocks,
+      readingMountedBlocks: rStats?.mountedBlocks,
+      readingContentDomCount: rStats?.contentDomCount,
+      readingParseCount: rStats?.parseCount,
+      readingVirtualized: rStats?.virtualized,
+      readingAnchorTopPx,
+      readingScrollTopPx: rScroll?.scrollTop,
+      readingScrollHeightPx: rScroll?.scrollHeight,
+      cssProbe: this.collectCssProbe(),
+      liveSyntax: this.collectLiveSyntax(),
+      readingSyntax: this.viewMode === 'reading' ? this.collectReadingSyntax() : undefined,
+      // #10 链接/图片观测（DOM 级：live 限视口，reading 限挂载块）
+      liveLinkCount: content ? content.querySelectorAll('.oile-link').length : 0,
+      liveImageCount: content ? content.querySelectorAll('.oile-image').length : 0,
+      // #11 双链观测（live：非活动行 widget + 活动行 mark；reading：a）
+      liveWikilinkCount: content
+        ? content.querySelectorAll(`.${WIKILINK_CLASS_NAMES.wikilink}`).length
+        : 0,
+      readingLinkCount: readingActive
+        ? this.readingContainer!.querySelectorAll('a').length
+        : 0,
+      readingImageCount: readingActive
+        ? this.readingContainer!.querySelectorAll('img').length
+        : 0,
+      readingWikilinkCount: readingActive
+        ? this.readingContainer!.querySelectorAll(`a.${WIKILINK_CLASS_NAMES.wikilink}`).length
+        : 0,
+      // 图片状态计数按当前视图作用域（隐藏视图的槽位不计入——同一管理器
+      // 服务双视图，隐藏侧的 DOM 不代表用户可见状态）
+      imageStates: this.collectImageStates(),
+      find: this.collectFindProbe(),
+    })
   }
 
   /**
@@ -886,6 +906,31 @@ export class WebviewSyncController {
     this.deferredLocal = null
     this.inFlight.clear()
     this.pendingExternal = []
+  }
+
+  /**
+   * 暂停/暂缓态本地输入的快照刷新（R-1）：输入变化后 500ms 防抖重发
+   * conflict.report，刷新宿主留存的全文快照——暂停态输入不发 edit.request、
+   * 暂缓集（deferredLocal）内容同样不在宿主 pending 里，缺此刷新则面板
+   * 关闭/断连后「复制未确认输入」取不到这部分内容。到期时已恢复（非
+   * 暂停且暂缓集已清空）则不发送。
+   */
+  private scheduleConflictReport(): void {
+    if (this.conflictReportTimer !== undefined) {
+      return
+    }
+    this.conflictReportTimer = setTimeout(() => {
+      this.conflictReportTimer = undefined
+      if (this.sessionId && (this.suspended || this.deferredLocal)) {
+        this.bridge.postMessage({
+          kind: 'conflict.report',
+          sessionId: this.sessionId,
+          docUri: this.docUri,
+          version: this.baseVersion,
+          text: this.view?.state.doc.toString() ?? '',
+        })
+      }
+    }, CONFLICT_REPORT_DEBOUNCE_MS)
   }
 
   /** 全文同步（init / doc.resync）：组合中缓冲，否则立即重置。
@@ -1024,6 +1069,12 @@ export class WebviewSyncController {
       btn.textContent = mode === 'live' ? '切换到阅读模式' : '切换到实时预览'
     }
     this.persistState()
+    // 模式变化主动回报（宿主缓存常新：表格结构命令在 reading 面板上据此
+    // 给出可见反馈，不再静默丢弃）。握手前（无 sessionId）不回报——宿主
+    // 尚不认识此面板，mount 阶段的 DOM 初始化不算模式变化
+    if (this.sessionId) {
+      this.reportViewState()
+    }
   }
 
   /** 阅读模式下按当前 CM6 文本重建阅读视图（保留滚动锚点）。
@@ -1912,7 +1963,9 @@ export class WebviewSyncController {
             continue
           }
           if (this.suspended) {
-            // 暂停写回：本地文本继续保留累积，但不回传、不追踪同步状态
+            // 暂停写回：本地文本继续保留累积，但不回传、不追踪同步状态；
+            // 防抖重报刷新宿主全文快照（R-1：关闭/断连后取回不缺新输入）
+            this.scheduleConflictReport()
             continue
           }
           const changes: SerChange[] = []
@@ -1936,6 +1989,9 @@ export class WebviewSyncController {
               ? this.deferredLocal.compose(tr.changes)
               : tr.changes
             this.unconfirmed = this.unconfirmed ? this.unconfirmed.compose(tr.changes) : tr.changes
+            // 暂缓集内容不在宿主 pending 里：防抖上报全文快照（R-1），面板
+            // 关闭/断连后取回不缺这部分输入
+            this.scheduleConflictReport()
             continue
           }
           // 出站坐标先逆穿本事务前的未确认集，回到 baseVersion 参考系（C-2）

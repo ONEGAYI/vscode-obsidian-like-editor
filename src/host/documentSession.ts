@@ -55,7 +55,15 @@ export interface PanelPort {
 export type SessionNotice =
   | { type: 'conflict'; sessionId: string; docUri: string }
   | { type: 'copy-request'; sessionId: string; docUri: string }
-  | { type: 'panel-closed-with-input'; sessionId: string; docUri: string; fragments: string[] }
+  | {
+      type: 'panel-closed-with-input'
+      sessionId: string
+      docUri: string
+      fragments: string[]
+      /** webview 防抖重报的最新全文快照（R-1）：含暂停后继续输入与暂缓集
+       *  内容，比 fragments 更完整；复制取回时优先 */
+      webviewText?: string
+    }
 
 export interface DocumentSessionOptions {
   docUri?: string
@@ -78,6 +86,8 @@ interface PanelEntry {
   lastViewState?: Extract<WebviewToHost, { kind: 'view.state' }>
   /** 暂停写回状态（#4）：不可安全应用外部更新或写回失败时置位 */
   suspended: boolean
+  /** 暂停的真实原因（重载恢复提示透传，协议 session.suspended 的 reason） */
+  suspendedReason: 'conflict' | 'host-error'
   /** 被拒绝请求的输入文本片段（用户未确认输入的宿主侧留存） */
   conflictFragments: string[]
   /** webview 冲突上报的本地全文快照（conflict.report） */
@@ -155,6 +165,7 @@ export class DocumentSession {
       pending: [],
       ackCache: new Map(),
       suspended: false,
+      suspendedReason: 'conflict',
       conflictFragments: [],
       conflictNotified: false,
       reloaded: false,
@@ -176,7 +187,15 @@ export class DocumentSession {
         }
       }
       if (panel.suspended || fragments.length > 0) {
-        this.notify({ type: 'panel-closed-with-input', sessionId, docUri: this.docUri, fragments })
+        this.notify({
+          type: 'panel-closed-with-input',
+          sessionId,
+          docUri: this.docUri,
+          fragments,
+          // 快照随通知带走（面板即将注销，事后无从查询）；暂停后新输入
+          // 与暂缓集内容只在快照里（R-1）
+          webviewText: panel.conflictWebviewText,
+        })
       }
     }
     this.panels.delete(sessionId)
@@ -211,11 +230,12 @@ export class DocumentSession {
         }
         if (panel.suspended) {
           // webview 重载（retainContextWhenHidden 关闭）后恢复暂停提示：
-          // 快照保留在宿主侧，取回途径不受重载影响
+          // 快照保留在宿主侧，取回途径不受重载影响；reason 透传真实暂停
+          // 原因（conflict / host-error），不硬编码
           panel.port.send({
             kind: 'session.suspended',
             version: this.doc.version,
-            reason: 'conflict',
+            reason: panel.suspendedReason,
           })
         }
         return Promise.resolve()
@@ -517,7 +537,7 @@ export class DocumentSession {
     if (!ok) {
       // 写回通道失败：编辑未进入权威文档，同样保留输入并暂停（不虚报成功）
       panel.pending.splice(panel.pending.indexOf(entry), 1)
-      this.suspendPanel(panel)
+      this.suspendPanel(panel, 'host-error')
       this.collectFragments(panel.conflictFragments, mapped)
       this.sendAck(panel, {
         kind: 'edit.ack',
@@ -571,12 +591,14 @@ export class DocumentSession {
     return mapped
   }
 
-  /** 暂停面板写回：在途未确认请求一并拒绝并留存输入 */
-  private suspendPanel(panel: PanelEntry): void {
+  /** 暂停面板写回：在途未确认请求一并拒绝并留存输入（reason 记录真实
+   *  暂停原因，供 webview 重载后的 session.suspended 透传） */
+  private suspendPanel(panel: PanelEntry, reason: 'conflict' | 'host-error' = 'conflict'): void {
     if (panel.suspended) {
       return
     }
     panel.suspended = true
+    panel.suspendedReason = reason
     for (const p of panel.pending) {
       if (!p.confirmed) {
         this.collectFragments(panel.conflictFragments, p.changes)

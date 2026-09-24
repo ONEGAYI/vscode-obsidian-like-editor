@@ -11,6 +11,7 @@ const CMD = {
   postToPanel: 'onegayi.obsidian-like-editor._test.postToPanel',
   viewState: 'onegayi.obsidian-like-editor._test.requestViewState',
   conflictState: 'onegayi.obsidian-like-editor._test.getConflictState',
+  viewStateCache: 'onegayi.obsidian-like-editor._test.getPanelViewStateCache',
   resumePanel: 'onegayi.obsidian-like-editor._test.resumePanel',
   perfProbe: 'onegayi.obsidian-like-editor._test.perfProbe',
   readingPerf: 'onegayi.obsidian-like-editor._test.readingPerf',
@@ -318,6 +319,21 @@ const TARGET_NOTE_TEXT = (() => {
 })()
 /** 屏外标题的源 offset（阅读挂载定位断言依据） */
 const DEEP_HEADING_OFFSET = TARGET_NOTE_TEXT.indexOf('# 深处的标题')
+
+/** CRLF 双链目标镜像（fixtures.mjs 的 WIKILINK_CRLF_TARGET_DOC 逐字节一致，
+ *  LF 形态——标题 LF offset 断言依据：宿主 getText 保留 \r\n，直发宿主系
+ *  坐标给 LF 坐标系的 webview 会按行数差漂移） */
+const WIKILINK_CRLF_TARGET_LF = (() => {
+  const out = ['# CRLF 目标标题', '', '开篇段落。', '']
+  for (let i = 2; i <= 30; i++) {
+    out.push(`第 ${i} 段正文。`, '')
+  }
+  out.push('## CRLF 深处小节', '', '小节内容。', '')
+  return out.join('\n')
+})()
+/** CRLF 目标中部标题的 LF offset（定位断言依据；其前有 30+ 个 CRLF 行尾，
+ *  宿主系 offset 比 LF offset 大出该行数） */
+const CRLF_HEADING_LF_OFFSET = WIKILINK_CRLF_TARGET_LF.indexOf('## CRLF 深处小节')
 
 /** 注入双链意图（与真实 webview 消息同一校验与处理入口；#11） */
 async function injectWikilink(uri: string, target: string): Promise<void> {
@@ -2003,6 +2019,39 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(await readDisk('目标笔记.md') === diskTarget, '跳转不得改写目标文档')
   }],
 
+  ['双链标题跳转（CRLF 目标面板）：view.locate 坐标转 LF 系后定位正确（#11）', async () => {
+    // 目标文档为 CRLF 行尾：findHeadingOffset 基于 getText()（宿主系，保留
+    // \r\n）计算 offset，view.locate 发给 LF 坐标系的 webview 前必须转换——
+    // 直发宿主系坐标在 30+ 个 CRLF 行尾的文档上定位漂移同数量字符
+    await openWithEditor('wikilinks.md')
+    await waitSessionReady('wikilinks.md')
+    const sourceUri = wsUri('wikilinks.md').toString()
+    await openWithEditor('wikilink-crlf-target.md', true)
+    const targetSession = await waitSessionReady('wikilink-crlf-target.md')
+    const diskSource = await readDisk('wikilinks.md')
+    const diskTarget = await readDisk('wikilink-crlf-target.md')
+    assert(diskTarget.includes('\r\n'), '目标 fixture 应为 CRLF 行尾')
+
+    // live 模式：view.locate 直接设置光标（LF 坐标），从源面板发起标题跳转
+    await injectWikilink(sourceUri, 'wikilink-crlf-target#CRLF 深处小节')
+    const logData = await waitWikilinkLog(sourceUri, (e) =>
+      e.kind === 'wikilink-doc' && e.heading === 'CRLF 深处小节',
+    )
+    assert(logData!.locate === 'custom-panel', `面板路径应记录 locate=custom-panel，实际 ${logData!.locate}`)
+    const located = await waitViewState('wikilink-crlf-target.md', (v) =>
+      v.selectionOffset === CRLF_HEADING_LF_OFFSET,
+    )
+    assert(
+      located.selectionOffset === CRLF_HEADING_LF_OFFSET,
+      `CRLF 目标定位应落标题行 LF offset ${CRLF_HEADING_LF_OFFSET}，实际 ${located.selectionOffset}`,
+    )
+
+    // 双侧零写回
+    assert(targetSession.appliedEdits === 0, `目标面板不得产生 applyEdit，实际 ${targetSession.appliedEdits}`)
+    assert(await readDisk('wikilinks.md') === diskSource, '跳转不得改写源文档')
+    assert(await readDisk('wikilink-crlf-target.md') === diskTarget, '跳转不得改写目标文档（CRLF 保真）')
+  }],
+
   ['双链歧义与缺失：重名记录候选待选择（测试钩子不弹窗）、缺失提示、不支持降级、不自动建文件（#11）', async () => {
     await openWithEditor('wikilinks.md')
     await waitSessionReady('wikilinks.md')
@@ -2221,7 +2270,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(doc.getText() === text, '导航后权威文本不变')
   }],
 
-  ['阅读模式表格操作忽略：只读语义零写回（#13）', async () => {
+  ['阅读模式表格操作忽略：只读语义零写回，宿主按模式缓存给可见反馈（#13）', async () => {
     await openWithEditor('table13.md')
     await waitSessionReady('table13.md')
     const uri = wsUri('table13.md').toString()
@@ -2239,6 +2288,22 @@ export const cases: Array<[string, () => Promise<void>]> = [
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'reading' ? true : undefined
     })
+    // 模式主动回报刷新宿主缓存（宿主命令拦截的数据源；无缓存则退化为
+    // 静默忽略后虚报成功）
+    const cache = await poll('宿主模式缓存刷新', async () => {
+      const c = (await vscode.commands.executeCommand(CMD.viewStateCache, uri, 0)) as
+        | { found: boolean; viewMode?: string }
+        | undefined
+      return c?.found && c.viewMode === 'reading' ? c : undefined
+    })
+    assert(cache.viewMode === 'reading', `宿主模式缓存应为 reading，实际 ${cache.viewMode}`)
+    // 正式命令路径（宿主注册器）：reading 面板被拦截给可见反馈，不投递
+    // webview（活动 tab 为本面板）——零写回且命令完成不挂起
+    const intercepted = (await vscode.commands.executeCommand(
+      'onegayi.obsidian-like-editor.table.insertRowBelow',
+    )) as boolean
+    assert(intercepted === true, '被拦截的命令仍应完成（true = 已处理并反馈）')
+    // webview 直发路径同样只读（双重防线）
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.command', op: 'insertRowBelow' })
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'tab' })
     await new Promise((r) => setTimeout(r, 800))

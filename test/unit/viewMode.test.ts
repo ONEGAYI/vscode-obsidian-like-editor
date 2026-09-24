@@ -87,6 +87,33 @@ describe('初始状态与默认模式', () => {
   })
 })
 
+describe('模式变化主动回报（宿主模式缓存数据源）', () => {
+  // 契约：宿主的表格结构命令按缓存的 viewMode 拦截 reading 面板（可见
+  // 反馈），缓存依赖 webview 在模式变化时主动推送 view.state——不主动
+  // 推送则 reading 命令被 webview 静默忽略且宿主虚报成功
+  function spontaneousStates(h: BridgeHarness) {
+    return h.sent.filter((m): m is Extract<WebviewToHost, { kind: 'view.state' }> => m.kind === 'view.state')
+  }
+
+  it('init 后主动回报一次（含持久化恢复的模式）', () => {
+    const h = makeBridge({ viewMode: 'reading' })
+    mountMode(h)
+    expect(spontaneousStates(h).length).toBeGreaterThanOrEqual(1)
+    expect(spontaneousStates(h)[0]).toMatchObject({ viewMode: 'reading' })
+  })
+
+  it('每次模式切换主动回报最新 viewMode', () => {
+    const h = makeBridge()
+    const c = mountMode(h)
+    const before = spontaneousStates(h).length
+    c.handleHostMessage({ kind: 'view.mode.set', mode: 'reading' })
+    expect(spontaneousStates(h).at(-1)).toMatchObject({ viewMode: 'reading' })
+    c.handleHostMessage({ kind: 'view.mode.set', mode: 'live' })
+    expect(spontaneousStates(h).at(-1)).toMatchObject({ viewMode: 'live' })
+    expect(spontaneousStates(h).length).toBeGreaterThanOrEqual(before + 2)
+  })
+})
+
 describe('切换入口：view.mode.set 消息', () => {
   it('toggle 消息进入 reading，view.state 回报模式与阅读锚点', () => {
     const h = makeBridge()

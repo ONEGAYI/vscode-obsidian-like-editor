@@ -101,8 +101,10 @@ describe('本地编辑 → edit.request', () => {
         { from: 5, to: 6, insert: '乙' },
       ],
     })
-    expect(sent).toHaveLength(2) // ready + 一条 edit.request
-    const req = sent[1] as Extract<WebviewToHost, { kind: 'edit.request' }>
+    // ready + init 主动回报 view.state（模式缓存数据源）+ 一条 edit.request
+    expect(sent.filter((m) => m.kind === 'edit.request')).toHaveLength(1)
+    expect(sent.filter((m) => m.kind !== 'view.state')).toHaveLength(2)
+    const req = sent.find((m): m is Extract<WebviewToHost, { kind: 'edit.request' }> => m.kind === 'edit.request')!
     expect(req.changes).toEqual([
       { offset: 0, length: 1, text: '甲' },
       { offset: 5, length: 1, text: '乙' },
@@ -238,7 +240,8 @@ describe('view.state 诊断', () => {
     const c = mount(bridge)
     init(c, '# 标题\n正文', 1)
     c.handleHostMessage({ kind: 'view.state.request' })
-    const msg = sent.find((m) => m.kind === 'view.state') as Extract<WebviewToHost, { kind: 'view.state' }>
+    // init 主动回报在前，此处取请求触发的最新一条
+    const msg = sent.filter((m): m is Extract<WebviewToHost, { kind: 'view.state' }> => m.kind === 'view.state').at(-1)!
     expect(msg.text).toBe('# 标题\n正文')
     expect(msg.docLength).toBe('# 标题\n正文'.length)
     expect(msg.lineCount).toBe(2)

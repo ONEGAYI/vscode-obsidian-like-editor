@@ -277,8 +277,21 @@ describe('隐藏恢复（webview 重载）与暂停生命周期', () => {
     const msgs = s.sent.get(id)!
     const initIdx = msgs.map((m) => m.kind).lastIndexOf('init')
     const afterInit = msgs[initIdx + 1]
-    expect(afterInit).toMatchObject({ kind: 'session.suspended' })
+    expect(afterInit).toMatchObject({ kind: 'session.suspended', reason: 'conflict' })
     expect(s.session.getConflictState(id)?.fragments).toEqual(['A'])
+  })
+
+  it('宿主错误（applyEdit 失败）导致的暂停：重载后 session.suspended 透传真实原因', async () => {
+    const s = setup()
+    const id = s.attach()
+    await readyPanel(s, id)
+    s.doc.applyResult = false // 写回通道失败 → 暂停原因是 host-error 而非 conflict
+    await s.send(id, editRequest(id, 1, 1, [{ offset: 0, length: 3, text: '替换' }]))
+    expect(s.session.getConflictState(id)?.suspended).toBe(true)
+    await s.send(id, { kind: 'ready' })
+    const msgs = s.sent.get(id)!
+    const initIdx = msgs.map((m) => m.kind).lastIndexOf('init')
+    expect(msgs[initIdx + 1]).toMatchObject({ kind: 'session.suspended', reason: 'host-error' })
   })
 
   it('未暂停面板 ready 重发普通 init，不携带 session.suspended', async () => {
@@ -350,5 +363,62 @@ describe('第二视图（split）：冲突暂停只影响冲突面板', () => {
     await s.send(idB, editRequest(idB, 1, s.doc.ver, [{ offset: 0, length: 0, text: 'B 输入' }]))
     expect(acksOf(s, idB).at(-1)).toMatchObject({ seq: 1, ok: true })
     expect(s.session.getConflictState(idB)?.suspended).toBe(false)
+  })
+})
+
+describe('R-1：暂停/暂缓输入经 conflict.report 刷新后的关闭取回', () => {
+  // 场景：暂停后继续输入只存在于 webview 本地（不发 edit.request），
+  // 面板关闭后 fetchPanelText 超时、fragments 只含暂停时刻片段——完整
+  // 取回依赖 webview 防抖重报的 conflict.report 全文快照随通知带走。
+  it('暂停面板关闭：通知携带最新快照全文（含暂停后新输入）', async () => {
+    const s = setup()
+    const id = s.attach()
+    await readyPanel(s, id)
+    // 制造暂停（不可安全应用路径）
+    await s.send(id, editRequest(id, 1, 1, [{ offset: 0, length: 3, text: '整段替换' }]))
+    await s.send(id, editRequest(id, 2, 1, [{ offset: 1, length: 1, text: 'A' }]))
+    // webview 防抖重报：全文含暂停后新输入
+    await s.send(id, {
+      kind: 'conflict.report',
+      sessionId: id,
+      docUri: DOC_URI,
+      version: 1,
+      text: '暂停后新输入+整段替换内容',
+    })
+    s.session.detachPanel(id)
+    const notice = s.notices.find((n) => n.type === 'panel-closed-with-input')
+    expect(notice).toBeDefined()
+    if (notice?.type === 'panel-closed-with-input') {
+      expect(notice.fragments).toEqual(['A'])
+      expect(notice.webviewText).toBe('暂停后新输入+整段替换内容')
+    }
+  })
+
+  it('暂缓集场景（未暂停）：conflict.report 快照同样随关闭通知带走', async () => {
+    const s = setup('abc')
+    const id = s.attach()
+    await readyPanel(s, id)
+    // 在途未确认（applyGate 挂起）+ webview 暂缓集上报全文
+    let release!: () => void
+    s.doc.applyGate = new Promise((r) => {
+      release = r
+    })
+    const pending = s.send(id, editRequest(id, 1, 1, [{ offset: 3, length: 0, text: '在途A' }]))
+    await new Promise((r) => setTimeout(r, 0))
+    await s.send(id, {
+      kind: 'conflict.report',
+      sessionId: id,
+      docUri: DOC_URI,
+      version: 1,
+      text: 'abc在途A暂缓B',
+    })
+    s.session.detachPanel(id)
+    release()
+    await pending
+    const notice = s.notices.find((n) => n.type === 'panel-closed-with-input')
+    expect(notice).toBeDefined()
+    if (notice?.type === 'panel-closed-with-input') {
+      expect(notice.webviewText).toBe('abc在途A暂缓B')
+    }
   })
 })

@@ -22,6 +22,7 @@ import {
   type WikilinkResolveContext,
 } from './wikilinkTarget'
 import { parseWikilinkInner } from '../shared/wikilink'
+import { NewlineCoordinator } from '../shared/newline'
 import type { HostToWebview, SerChange, TableEditOp } from '../shared/protocol'
 
 export const VIEW_TYPE = 'onegayi.obsidian-like-markdown-editor'
@@ -197,18 +198,19 @@ export function createTextEditorProvider(
       return
     }
     // panel-closed-with-input：面板关闭（或 SSH 断连触发的 dispose）时未确认
-    // 输入仍在宿主快照中——提示取回，不得误报已保存
-    const preview = notice.fragments.join('\n')
+    // 输入仍在宿主快照中——提示取回，不得误报已保存。文本优先取 webview
+    // 防抖重报的全文快照（R-1：含暂停后新输入与暂缓集内容），回退逐笔片段
+    const closedText = notice.webviewText ?? notice.fragments.join('\n')
     void vscode.window
       .showWarningMessage(
-        `“${name}”的编辑器已关闭（或连接断开），存在未保存的未确认输入：${preview.slice(0, 120)}`,
+        `“${name}”的编辑器已关闭（或连接断开），存在未保存的未确认输入：${closedText.slice(0, 120)}`,
         '复制未确认输入',
       )
       .then((pick) => {
         if (pick === '复制未确认输入') {
           const state = sessions.get(uriStr)?.session.getConflictState(notice.sessionId)
           void vscode.env.clipboard.writeText(
-            state?.fragments.join('\n') ?? notice.fragments.join('\n'),
+            state?.webviewText ?? notice.webviewText ?? state?.fragments.join('\n') ?? notice.fragments.join('\n'),
           )
         }
       })
@@ -390,12 +392,15 @@ export function createTextEditorProvider(
 
     const targetUri = vscode.Uri.file(targetPath)
     const display = `[[${parsed.path}${parsed.heading !== null ? `#${parsed.heading}` : ''}]]`
-    // 标题定位：先读目标内容算 offset（openTextDocument 只装载不显示）
+    // 标题定位：先读目标内容算 offset（openTextDocument 只装载不显示）。
+    // offset 是宿主系（getText 保留 \r\n）——text-editor 分支用 positionAt
+    // 在宿主系内闭合不受影响；面板分支发 view.locate 前须转 LF 系（见下）
     let headingOffset: { offset: number; end: number } | null = null
     let headingMissing = false
+    let headingDoc: vscode.TextDocument | undefined
     if (parsed.heading !== null) {
-      const targetDoc = await vscode.workspace.openTextDocument(targetUri)
-      headingOffset = findHeadingOffset(targetDoc.getText(), parsed.heading)
+      headingDoc = await vscode.workspace.openTextDocument(targetUri)
+      headingOffset = findHeadingOffset(headingDoc.getText(), parsed.heading)
       headingMissing = headingOffset === null
     }
 
@@ -410,11 +415,14 @@ export function createTextEditorProvider(
       locate: headingOffset ? (targetEntry ? 'custom-panel' : 'text-editor') : 'none',
     })
     if (targetEntry) {
-      // 目标已是本扩展面板：reveal 面板后 view.locate（reading 挂载定位路径）
+      // 目标已是本扩展面板：reveal 面板后 view.locate（reading 挂载定位路径）。
+      // CRLF 目标：findHeadingOffset 是宿主系坐标（getText 保留 \r\n），而
+      // webview 全程 LF 坐标——发送前经 newline 协调器转换，否则按 \r\n 行数漂移
       await vscode.commands.executeCommand('vscode.openWith', targetUri, VIEW_TYPE)
       const sessionId = await waitForReadyPanel(targetEntry)
-      if (headingOffset && sessionId) {
-        targetEntry.session.postToPanel(sessionId, { kind: 'view.locate', offset: headingOffset.offset })
+      if (headingOffset && headingDoc && sessionId) {
+        const lfOffset = new NewlineCoordinator(headingDoc.getText()).hostOffsetToLf(headingOffset.offset)
+        targetEntry.session.postToPanel(sessionId, { kind: 'view.locate', offset: lfOffset })
       }
     } else {
       const targetDoc = await vscode.workspace.openTextDocument(targetUri)
@@ -575,6 +583,17 @@ export function createTextEditorProvider(
         for (const entry of sessions.values()) {
           for (const [sessionId, panel] of entry.panels) {
             if (panel.active && entry.session.getInfo().panels.some((p) => p.sessionId === sessionId && p.ready)) {
+              // 阅读模式只读：命令在 webview 侧会被忽略（写操作仅 live 执行），
+              // 静默丢弃后仍返回成功属虚报——按宿主缓存的模式给出可见反馈
+              // （模式经 view.state 主动回报保持常新；无缓存时不拦截，面板
+              // 默认 live）。不 await：命令无需用户选择，通知停留即可
+              const viewMode = entry.session.getViewState(sessionId)?.viewMode
+              if (viewMode === 'reading') {
+                void vscode.window.showWarningMessage(
+                  '阅读模式为只读视图：切换到实时预览后再执行表格操作',
+                )
+                return true
+              }
               entry.session.postToPanel(sessionId, { kind: 'table.command', op })
               return true
             }
@@ -644,6 +663,20 @@ export function createTextEditorProvider(
           return { found: false }
         }
         return { found: true, sessionId: panel.sessionId, ...entry.session.getConflictState(panel.sessionId) }
+      },
+    ),
+    vscode.commands.registerCommand(
+      // 宿主缓存的 view.state（模式主动回报的观测面）：断言宿主侧写命令
+      // 拦截所依据的 viewMode 缓存已就位/常新
+      'onegayi.obsidian-like-editor._test.getPanelViewStateCache',
+      (uriStr: string, panelIndex = 0) => {
+        const entry = getEntry(vscode.Uri.parse(uriStr))
+        const panel = entry?.session.getInfo().panels[panelIndex]
+        if (!entry || !panel) {
+          return { found: false }
+        }
+        const cached = entry.session.getViewState(panel.sessionId)
+        return { found: cached !== undefined, viewMode: cached?.viewMode }
       },
     ),
     vscode.commands.registerCommand(
