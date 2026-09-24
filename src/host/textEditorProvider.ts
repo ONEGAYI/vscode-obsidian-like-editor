@@ -623,10 +623,26 @@ export function createTextEditorProvider(
         // dispose 无再激活副作用。preview:false 与 openWith 的 pinned:true
         // 同语义；closeStaleTabs 作残余清扫
         const bounceToSource = (): void => {
-          void vscode.window
-            .showTextDocument(document, { preview: false })
-            .then(() => webviewPanel.dispose())
-            .then(() => closeStaleTabs(document.uri, 'text'))
+          // showTextDocument 返回 1.86 的 Thenable（无 .catch），async 包装
+          void (async (): Promise<void> => {
+            try {
+              await vscode.window.showTextDocument(document, { preview: false })
+              // dirty 时跳过 dispose：1.86.2 关 dirty tab 会 revert
+              // TextDocument（集成实测，已装配面板的 custom 侧亦然）——Hot
+              // Exit 恢复 dirty 面板或原生 dirty + Reopen With 均可达此处。
+              // 空面板 dispose 虽实测未触发 revert，但那是无守护的宿主行为
+              // 细节；统一走 dirty 保留口径（空面板留存为已知代价，见
+              // mvp.md），保存后再次切换复用清理收敛
+              if (!document.isDirty) {
+                webviewPanel.dispose()
+              }
+              await closeStaleTabs(document.uri, 'text')
+            } catch {
+              // showTextDocument 失败（uri 失效/宿主竞态）：dispose 幂等兜底
+              // 清场，避免空白面板滞留；面板此时无 dirty 语义，直接可关
+              webviewPanel.dispose()
+            }
+          })()
         }
         if (webviewPanel.active) {
           bounceToSource()
@@ -760,7 +776,10 @@ export function createTextEditorProvider(
   const isSameDocUri = (a: vscode.Uri, b: vscode.Uri): boolean => {
     const x = a.toString()
     const y = b.toString()
-    return process.platform === 'win32' ? x.toLowerCase() === y.toLowerCase() : x === y
+    // darwin 默认文件系统（APFS）大小写不敏感，与 win32 同归一化；
+    // POSIX（linux 远程宿主）保持大小写敏感
+    const caseInsensitive = process.platform === 'win32' || process.platform === 'darwin'
+    return caseInsensitive ? x.toLowerCase() === y.toLowerCase() : x === y
   }
 
   /** 1.86 的 vscode.openWith 对「同资源不同编辑器」是新开 tab 而非原位
@@ -777,14 +796,20 @@ export function createTextEditorProvider(
    *  dirty：1.86.2 关闭带未保存内容的旧 tab 会把 TextDocument revert 回
    *  磁盘内容——custom 与原生两个方向皆然，且与另一编辑器是否已打开同一
    *  文档无关（集成用例 A/B 实测裁决）。dirty 时保守保留旧 tab（双标签为
-   *  已知代价，见 mvp.md），保存后再次切换复用本清理 */
+   *  已知代价，见 mvp.md），保存后再次切换复用本清理。检查在入口与每次
+   *  关闭前各做一次——等待激活的窗口（上限 3 秒）内文档可能被用户改脏，
+   *  入口快照会过时。
+   *  并发防御：只清理发起时已存在的 tab（快照）——快速连点三态按钮时，
+   *  另一方向的清理会撞上本方向刚创建、尚未激活的新 tab，无快照会把它
+   *  误关（用户停在错误视图）。其他组的活动 tab 不清理：split 布局是用户
+   *  刻意摆放的视图，切换命令只收敛发起时可见的旧标签 */
   const closeStaleTabs = async (uri: vscode.Uri, expectKind: 'text' | 'custom'): Promise<void> => {
-    const doc = vscode.workspace.textDocuments.find(
-      (d) => isSameDocUri(d.uri, uri),
-    )
-    if (doc?.isDirty) {
+    const docDirty = (): boolean =>
+      vscode.workspace.textDocuments.some((d) => isSameDocUri(d.uri, uri) && d.isDirty)
+    if (docDirty()) {
       return
     }
+    const knownTabs = new Set(vscode.window.tabGroups.all.flatMap((g) => [...g.tabs]))
     const deadline = Date.now() + 3000
     for (;;) {
       const active = vscode.window.tabGroups.activeTabGroup.activeTab
@@ -806,6 +831,9 @@ export function createTextEditorProvider(
     }
     for (const group of vscode.window.tabGroups.all) {
       for (const tab of group.tabs) {
+        if (!knownTabs.has(tab)) {
+          continue
+        }
         const input = tab.input
         const staleCustom =
           input instanceof vscode.TabInputCustom &&
@@ -815,6 +843,9 @@ export function createTextEditorProvider(
           input instanceof vscode.TabInputText &&
           isSameDocUri(input.uri, uri)
         if (tab !== group.activeTab && (staleCustom || staleNative)) {
+          if (docDirty()) {
+            return
+          }
           try {
             await vscode.window.tabGroups.close(tab)
           } catch {

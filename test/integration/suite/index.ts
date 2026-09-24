@@ -41,6 +41,15 @@ export async function run(): Promise<void> {
           return second === 'live'
         }
         if (await settled() || attempt >= 10) {
+          if (attempt >= 10) {
+            // 放弃时不静默：真实回归（某路径反复写回非 live 值）会被吞成
+            // 后续用例的莫名失败，留痕把归因窗口缩短到本用例
+            const final = (await vscode.commands.executeCommand(
+              'onegayi.vsidian._test.getLastMode')) as string | undefined
+            console.warn(
+              `[集成测试][WARN] 记忆重置 10 次未稳定为 live（最终读值 ${String(final)}），放行用例「${name}」`,
+            )
+          }
           break
         }
         await new Promise((r) => setTimeout(r, 50))

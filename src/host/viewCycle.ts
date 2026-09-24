@@ -176,7 +176,10 @@ export type ViewSwitchPlan =
   /** 面板内切模式：向活动文档的全部 ready 面板发 view.mode.set，成功后写记忆 */
   | { kind: 'switch-panel-mode'; mode: 'live' | 'reading' }
   /** 拒绝：diff-context=活动标签处于对比视图（D10）；panel-not-ready=无
-   *  就绪面板（装载中）；no-op=已在源码编辑器 */
+   *  就绪面板（装载中）；no-op=已在源码编辑器（注意：宿主命令层在调用
+   *  本函数前对 source→source 有 re-affirm 前置拦截——落位原生控件并复
+   *  用清理，故 no-op 分支经命令入口不可达，仅在无该拦截的语义下成立，
+   *  见 textEditorProvider 的 runViewSwitch） */
   | { kind: 'reject'; reason: 'diff-context' | 'panel-not-ready' | 'no-op' }
 
 /** 动作映射：当前模式 + 目标模式 → 动作计划。
