@@ -151,6 +151,16 @@ interface ViewState {
     taskCheckboxes: number
     taskChecked: number
   }
+  /** #14 查找会话观测（首次打开后回报；匹配集来自文本模型全量计算） */
+  find?: {
+    open: boolean
+    query: string
+    caseSensitive: boolean
+    total: number
+    index: number
+    currentFrom: number | null
+    currentTo: number | null
+  }
 }
 
 /** #7 阅读视图探针回报（reading.perf.report） */
@@ -1196,5 +1206,158 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(panel1.text === panel1Expected, `面板 1 应正确应用外部增量：${JSON.stringify(panel1.text)}`)
     const finalState = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
     assert(finalState.version > afterFirst.version, `外部增量版本必须大于 ack 版本（${finalState.version} <= ${afterFirst.version}）`)
+  }],
+
+  ['编辑区查找：文本模型全量匹配、无匹配反馈与只读契约（#14）', async () => {
+    await openWithEditor('find.md')
+    const session0 = await waitSessionReady('find.md')
+    const uri = wsUri('find.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('find.md'))
+    const text = doc.getText()
+    const diskBefore = await readDisk('find.md')
+
+    // 打开（预置查询）：匹配总数 = 文本模型全量计数（非可见 DOM）；
+    // '目标词' 在 fixture 中出现 4 次
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.find.open', query: '目标词' })
+    let v = await waitViewState('find.md', (s) => s.find?.open === true && s.find?.total === 4)
+    assert(v.find!.index === 1, `当前序号应为 1，实际 ${v.find!.index}`)
+    assert(v.find!.currentFrom === text.indexOf('目标词'), '当前匹配应为文本模型中的首个命中')
+    assert(v.selectionOffset === text.indexOf('目标词'), `live 定位应把光标移到当前匹配，实际 ${v.selectionOffset}`)
+
+    // 下一项：光标与当前匹配同步前移（屏外段落同样定位——文本模型语义）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.find.step', direction: 'next' })
+    v = await waitViewState('find.md', (s) => s.find?.index === 2)
+    assert(v.find!.currentFrom === text.indexOf('目标词', text.indexOf('目标词') + 1), '第 2 个匹配应为段落二中的命中')
+    assert(v.selectionOffset === v.find!.currentFrom, `光标应跟随当前匹配，实际 ${v.selectionOffset}`)
+
+    // 中文与 emoji：🎉 匹配 1 次（码点安全）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.find.open', query: '🎉' })
+    v = await waitViewState('find.md', (s) => s.find?.query === '🎉')
+    assert(v.find!.total === 1, `emoji 查询应命中 1 次，实际 ${v.find!.total}`)
+    assert(v.find!.currentFrom === text.indexOf('🎉'), 'emoji 命中应在码点边界上')
+
+    // 无匹配：0/0 明确反馈
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.find.open', query: '不存在的词' })
+    v = await waitViewState('find.md', (s) => s.find?.total === 0)
+    const none = v.find!
+    assert(none.index === 0, `无匹配时序号应为 0，实际 ${none.index}`)
+    assert(none.currentFrom === null, '无匹配时当前区间为 null')
+
+    // 关闭：会话回报关闭态
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.find.close' })
+    v = await waitViewState('find.md', (s) => s.find?.open === false)
+
+    // 只读契约：全程文档版本、applyEdit、文本与磁盘不变（查找不入撤销栈、
+    // 不触发保存——保存内容不因查找改变）
+    const session1 = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(session1.version === session0.version, `查找不得改变文档版本（${session0.version} → ${session1.version}）`)
+    assert(session1.appliedEdits === session0.appliedEdits, `查找不得产生写回（${session0.appliedEdits} → ${session1.appliedEdits}）`)
+    assert(v.text === text, '查找后 webview 文本逐字节不变')
+    assert(doc.getText() === text, '查找后权威文本不变')
+    assert(!doc.isDirty, '查找后文档不得 dirty')
+    assert(await readDisk('find.md') === diskBefore, '查找后磁盘字节不变')
+  }],
+
+  ['编辑区查找：阅读视图屏外匹配定位与按需挂载保持（#14）', async () => {
+    await openWithEditor('reading-100k.md')
+    await waitSessionReady('reading-100k.md')
+    const uri = wsUri('reading-100k.md').toString()
+    const sessionBefore = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    const doc = await vscode.workspace.openTextDocument(wsUri('reading-100k.md'))
+    const text = doc.getText()
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await poll('切换并虚拟化', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' && v.readingVirtualized === true ? true : undefined
+    })
+
+    // 唯一命中的屏外段落（第 9995 段，文档 9.995% 处，远在首屏之外）
+    const para = '第 9995 段 阅读段落样本文本'
+    const paraOffset = text.indexOf(para)
+    assert(paraOffset > 0, 'fixture 中应存在目标段')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.find.open', query: para })
+    let v = await waitViewState('reading-100k.md', (s) => s.find?.total === 1 && s.readingAnchorStart === paraOffset)
+    assert(v.find!.currentFrom === paraOffset, `当前匹配应在文本模型中的唯一位置，实际 ${v.find!.currentFrom}`)
+    // 阅读锚点 = 目标块源 start；目标块已真实挂载（有布局顶位置）且发生滚动
+    assert(v.readingAnchorStart === paraOffset, `阅读锚点应为目标段块 start=${paraOffset}，实际 ${v.readingAnchorStart}`)
+    assert(v.readingAnchorTopPx !== undefined, '屏外匹配定位后目标块应已挂载')
+    assert((v.readingScrollTopPx ?? 0) > 0, `定位屏外匹配应发生滚动，实际 scrollTop=${v.readingScrollTopPx}`)
+    // 不为查找常驻全文 DOM：仍只挂载窗口块；无重新解析
+    assert((v.readingMountedBlocks ?? 0) < (v.readingTotalBlocks ?? 1), `定位后仍应只挂载窗口块（${v.readingMountedBlocks}/${v.readingTotalBlocks}）`)
+    assert((v.readingParseCount ?? 0) === 1, `查找定位不得触发全文重解析，实际 ${v.readingParseCount}`)
+
+    // 多匹配深跳：'阅读标题样本行' 每 50 块一个标题（100000/50=2000 个）。
+    // 先 view.locate 回顶（参考位置确定：当前匹配取参考位置后首个），
+    // 从第 1 个 prev 回绕到末个（第 100000 节，文档末尾屏外）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: 0 })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.find.open', query: '阅读标题样本行' })
+    v = await waitViewState('reading-100k.md', (s) => s.find?.total === 2000 && s.find?.index === 1)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.find.step', direction: 'prev' })
+    // 循环导航：从第 1 个 prev 回绕到末个（第 100000 节）；末屏的视口顶块
+    // 是它前面的块（#7 已知布局行为，maxScroll clamp），此处只断言匹配序号
+    v = await waitViewState('reading-100k.md', (s) => s.find?.index === 2000)
+    const lastHeadingLine = text.indexOf('## 第 100000 节 阅读标题样本行')
+    const lastHeadingText = '## 第 100000 节 阅读标题样本行'
+    assert(v.find!.currentFrom === lastHeadingLine + lastHeadingText.indexOf('阅读标题样本行'), `回绕后应为末个标题命中，实际 ${v.find!.currentFrom}`)
+    // 末屏锚点语义下深跳断言改用可达视口顶的目标：第 99950 节（近末尾）
+    const deepHeading = '## 第 99950 节 阅读标题样本行'
+    const deepLineStart = text.lastIndexOf(deepHeading)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.find.open', query: '第 99950 节' })
+    v = await waitViewState('reading-100k.md', (s) => s.find?.total === 1 && s.readingAnchorStart === deepLineStart)
+    assert(v.find!.currentFrom === deepLineStart + deepHeading.indexOf('第 99950 节'), `唯一命中应在第 99950 节标题行，实际 ${v.find!.currentFrom}`)
+    assert(v.readingAnchorStart === deepLineStart, `深跳后阅读锚点应为目标标题块 start=${deepLineStart}，实际 ${v.readingAnchorStart}`)
+    assert(v.readingAnchorTopPx !== undefined, '深跳后目标块应已挂载')
+    assert((v.readingParseCount ?? 0) === 1, '循环导航不得触发全文重解析')
+    assert((v.readingMountedBlocks ?? 0) < (v.readingTotalBlocks ?? 1), '深跳后仍应只挂载窗口块')
+
+    // 只读契约：版本/写回/文本不变
+    const sessionAfter = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(sessionAfter.version === sessionBefore.version, `查找不得改变文档版本（${sessionBefore.version} → ${sessionAfter.version}）`)
+    assert(sessionAfter.appliedEdits === sessionBefore.appliedEdits, '查找不得产生写回')
+    assert(v.text === text, '查找后 webview 文本不变')
+
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.find.close' })
+    await waitViewState('reading-100k.md', (s) => s.find?.open === false)
+  }],
+
+  ['编辑区查找：模式切换会话保活与源锚点位置恢复（#14）', async () => {
+    await openWithEditor('find.md')
+    await waitSessionReady('find.md')
+    const uri = wsUri('find.md').toString()
+    const text = (await vscode.workspace.openTextDocument(wsUri('find.md'))).getText()
+    const diskBefore = await readDisk('find.md')
+
+    // live 导航到第 2 个匹配（段落二）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.find.open', query: '目标词' })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.find.step', direction: 'next' })
+    let v = await waitViewState('find.md', (s) => s.find?.index === 2)
+    const matchFrom = v.find!.currentFrom!
+    assert(text.slice(matchFrom, matchFrom + 3) === '目标词', '当前匹配区间应还原为查询本身')
+
+    // 切到阅读：会话保活，锚点映射到当前匹配所在块（等待定位落定：
+    // 虚拟化滚动/实测修正期间的瞬时锚点以最终落定值为准）
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    const para2Start = text.indexOf('第二段：又出现目标词了。')
+    v = await poll('阅读模式保活与锚点落定', async () => {
+      const s = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return s?.viewMode === 'reading' && s.find?.open === true && s.readingAnchorStart === para2Start ? s : undefined
+    })
+    assert(v.find!.index === 2, `会话保活：当前序号仍为 2，实际 ${v.find!.index}`)
+    assert(v.readingAnchorStart === para2Start, `阅读锚点应为当前匹配块 start，实际 ${v.readingAnchorStart}`)
+
+    // 切回 live：选区恢复到当前匹配（源锚点映射，非块首）
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    v = await poll('切回 live 恢复', async () => {
+      const s = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return s?.viewMode === 'live' && s.find?.open === true ? s : undefined
+    })
+    assert(v.selectionOffset === matchFrom, `切回后光标应恢复到当前匹配 ${matchFrom}，实际 ${v.selectionOffset}`)
+
+    // 关闭后切换/状态不受影响；磁盘与版本保持
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.find.close' })
+    await waitViewState('find.md', (s) => s.find?.open === false)
+    const session = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(session.appliedEdits === 0, `查找与切换不得产生写回，实际 ${session.appliedEdits}`)
+    assert(await readDisk('find.md') === diskBefore, '查找与模式切换后磁盘字节不变')
   }],
 ]

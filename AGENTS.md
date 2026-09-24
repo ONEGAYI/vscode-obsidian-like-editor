@@ -82,6 +82,7 @@ vscode-obsidian-like-editor/
 │   │   └── protocol.ts      # 消息协议单一事实源
 │   └── webview/     # webview 端实现
 │       ├── css.d.ts              # CSS 导入类型声明
+│       ├── findSession.ts        # 编辑区查找：文本模型匹配计算与 live 查找装饰（#14）
 │       ├── liveDecorations.ts    # 语法树驱动 Live 装饰（#8）
 │       ├── main.css              # webview 全局布局样式
 │       ├── main.ts               # webview 启动入口
@@ -109,6 +110,8 @@ vscode-obsidian-like-editor/
 │       ├── compositionBuffer.test.ts  # 组合期间缓冲契约测试
 │       ├── conflictRetention.test.ts  # 冲突保留与暂停契约测试
 │       ├── documentSession.test.ts    # 文档会话契约
+│       ├── find.test.ts               # 查找会话契约测试（面板/导航/定位/只读/模式切换保活）
+│       ├── findSession.test.ts        # 查找匹配计算契约测试（码点/中文/emoji/大小写语义）
 │       ├── historyForwarding.test.ts  # 撤销重做转发契约测试
 │       ├── liveDecorations.test.ts    # Live 装饰契约测试
 │       ├── markdownDoc.test.ts        # 文档工具契约测试

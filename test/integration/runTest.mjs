@@ -93,9 +93,28 @@ const FENCE_CHUNK_DOC = (() => {
 })()
 const LARGE_LINES = 100_000
 
+// #14 查找样例：'目标词' 出现 4 次（段落 2 次、列表项 1 次、emoji 行 1 次）
+const FIND_DOC = [
+  '# 查找集成标题',
+  '',
+  '第一段：这里有一个目标词，后续还有。',
+  '',
+  '中间段落没有命中内容。',
+  '',
+  '第二段：又出现目标词了。',
+  '',
+  '- 列表项包含目标词',
+  '',
+  '包含 emoji：🎉 与目标词相邻。',
+  '',
+  '结尾段落。',
+  '',
+].join('\n')
+
 const wsDir = mkdtempSync(path.join(tmpdir(), 'oile-itest-'))
 try {
   writeFileSync(path.join(wsDir, 'lf.md'), LF_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'find.md'), FIND_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'untouched.md'), '未触碰文档\n保持原样\n', 'utf8')
   writeFileSync(path.join(wsDir, 'crlf.md'), CRLF_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'split.md'), SPLIT_DOC, 'utf8')
