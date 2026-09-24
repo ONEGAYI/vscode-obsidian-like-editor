@@ -68,6 +68,12 @@ function tabInputKindOf(input: unknown): TabInputKind {
   return 'other'
 }
 
+/** 面板状态复合键（#38）：pendingReadingRestore 的登记/消费/清理共用同一
+ *  拼接形状，集中于此避免三处漂移（`${docUri}::${sessionId}`） */
+function panelStateKey(docUri: string, sessionId: string): string {
+  return `${docUri}::${sessionId}`
+}
+
 /** 活动标签是否为指定文档的本扩展 custom editor（C-5）。
  *  webview 转发的 undo/redo 经宿主全局命令执行，而该命令作用于活动
  *  编辑器——请求前必须确认活动 tab 归属本面板文档，否则会撤销其他文档 */
@@ -276,8 +282,8 @@ export function createTextEditorProvider(
 
   /** vsidian.activeMode context（'live'|'reading'）：只反映活动 tab 的实际
    *  模式（不把最近模式误当成当前标签状态）；source 态经核心 key
-   *  （activeCustomEditorId / resourceExtname）表达，不依赖本 context。
-   *  值不变时跳过 setContext（view.state 高频回报） */
+   *  （activeCustomEditorId / activeWebviewPanelId / resourceExtname）表达，
+   *  不依赖本 context。值不变时跳过 setContext（view.state 高频回报） */
   let lastActiveModeContext: 'live' | 'reading' | undefined
   const setActiveModeContext = (mode: 'live' | 'reading'): void => {
     if (lastActiveModeContext === mode) {
@@ -324,7 +330,7 @@ export function createTextEditorProvider(
     sessionId: string,
     state: Extract<WebviewToHost, { kind: 'view.state' }>,
   ): void => {
-    const restoreKey = `${docUri}::${sessionId}`
+    const restoreKey = panelStateKey(docUri, sessionId)
     if (pendingReadingRestore.has(restoreKey)) {
       pendingReadingRestore.delete(restoreKey)
       if (decideReadingRestore(state.viewMode ?? 'live') === 'send-reading') {
@@ -635,7 +641,7 @@ export function createTextEditorProvider(
       // #38：记忆为 reading 的面板登记待恢复——就绪后首份 view.state 到达
       // 时按「面板自身状态优先」决定是否下发 view.mode.set: reading
       if (resolveBehavior === 'restore-reading') {
-        pendingReadingRestore.add(`${document.uri.toString()}::${sessionId}`)
+        pendingReadingRestore.add(panelStateKey(document.uri.toString(), sessionId))
       }
 
       const messageSub = webviewPanel.webview.onDidReceiveMessage((message) => {
@@ -657,7 +663,7 @@ export function createTextEditorProvider(
       const closeSub = webviewPanel.onDidDispose(() => {
         entry.session.detachPanel(sessionId)
         entry.panels.delete(sessionId)
-        pendingReadingRestore.delete(`${document.uri.toString()}::${sessionId}`)
+        pendingReadingRestore.delete(panelStateKey(document.uri.toString(), sessionId))
         messageSub.dispose()
         viewStateSub.dispose()
         closeSub.dispose()
@@ -717,9 +723,6 @@ export function createTextEditorProvider(
     return undefined
   }
 
-  /** 执行动作计划。记忆写入时序（viewCycle 模块约定）：open-in-vsidian
-   *  必须先写记忆再 openWith（resolve 的弹回/恢复读最新记忆，后写会被
-   *  弹回或落到错误模式）；其余动作成功后写 */
   /** 1.86 的 vscode.openWith 对「同资源不同编辑器」是新开 tab 而非原位
    *  替换（实测）：切到源码编辑器后关闭被替换的旧 Vsidian tab 完成原位
    *  切换体验。dirty 时保守保留——1.86 关闭 dirty tab 有 revert 风险
@@ -750,22 +753,31 @@ export function createTextEditorProvider(
     }
   }
 
+  /** 向该文档全部就绪面板下发 view.mode.set（open-in-vsidian 与
+   *  switch-panel-mode 共用）。openWith 对已存在的同 viewType 面板是重显
+   *  （不重置模式）：显式目标命令须把重显面板也切到目标模式（全新面板经
+   *  resolve 恢复链路落到目标模式，open-in-vsidian 分支的补发为同值幂等） */
+  const postModeToReadyPanels = (uri: vscode.Uri, mode: 'live' | 'reading'): void => {
+    const entry = getEntry(uri)
+    const panels = entry?.session.getInfo().panels.filter((p) => p.ready) ?? []
+    for (const panel of panels) {
+      entry!.session.postToPanel(panel.sessionId, {
+        kind: 'view.mode.set',
+        mode,
+      })
+    }
+  }
+
+  /** 执行动作计划。记忆写入时序（viewCycle 模块约定）：open-in-vsidian
+   *  必须先写记忆再 openWith（resolve 的弹回/恢复读最新记忆，后写会被
+   *  弹回或落到错误模式）；其余动作成功后写 */
   const applyViewSwitch = async (uri: vscode.Uri, plan: ViewSwitchPlan): Promise<boolean> => {
     switch (plan.kind) {
       case 'open-in-vsidian': {
         await writeRemembered(plan.mode)
         await vscode.commands.executeCommand('vscode.openWith', uri, VIEW_TYPE)
-        // openWith 对已存在的同 viewType 面板是重显（不重置模式）：显式
-        // 目标命令须把重显面板也切到目标模式（全新面板经 resolve 恢复
-        // 链路落到目标模式，此处的补发为同值幂等）
-        const entry = getEntry(uri)
-        const panels = entry?.session.getInfo().panels.filter((p) => p.ready) ?? []
-        for (const panel of panels) {
-          entry!.session.postToPanel(panel.sessionId, {
-            kind: 'view.mode.set',
-            mode: plan.mode,
-          })
-        }
+        // 重显面板的模式补发语义见 postModeToReadyPanels
+        postModeToReadyPanels(uri, plan.mode)
         return true
       }
       case 'open-in-source-editor': {
@@ -775,14 +787,7 @@ export function createTextEditorProvider(
         return true
       }
       case 'switch-panel-mode': {
-        const entry = getEntry(uri)
-        const panels = entry?.session.getInfo().panels.filter((p) => p.ready) ?? []
-        for (const panel of panels) {
-          entry!.session.postToPanel(panel.sessionId, {
-            kind: 'view.mode.set',
-            mode: plan.mode,
-          })
-        }
+        postModeToReadyPanels(uri, plan.mode)
         await writeRemembered(plan.mode)
         return true
       }

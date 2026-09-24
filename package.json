@@ -110,7 +110,7 @@
         },
         {
           "command": "onegayi.vsidian.mode.toLive",
-          "when": "(resourceExtname == .md || resourceExtname == .markdown) && !activeCustomEditorId && !isInDiffEditor",
+          "when": "(resourceExtname == .md || resourceExtname == .markdown) && !activeCustomEditorId && !activeWebviewPanelId && !isInDiffEditor",
           "group": "navigation"
         }
       ]

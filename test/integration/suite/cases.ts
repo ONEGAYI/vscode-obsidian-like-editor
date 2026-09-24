@@ -468,6 +468,62 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(patterns.includes('*.md'), `selector 应含 *.md，实际 ${patterns.join(',')}`)
   }],
 
+  ['标题栏三态按钮声明：三命令各一项、navigation 组、when 互斥与图标（#38）', async () => {
+    // 静态断言（contributes.menus["editor/title"] 与 commands 声明）：运行时
+    // 按钮显隐由 VSCode 按 when 求值，此处钉死声明形状。三按钮同一时刻至多
+    // 一个可见的依据是 when 条件互斥：toReading/toSource 同以
+    // activeCustomEditorId == 本编辑器 锁定 Vsidian 面板，再以 vsidian.activeMode
+    // 的 live/reading 两值区分（同一 context key 不可能同时取两值）；toLive 以
+    // !activeCustomEditorId 锁定非 custom 编辑器（.md/.markdown 源码态），与前
+    // 两者的 activeCustomEditorId 断言互斥；三条均含 !isInDiffEditor 排除对比视图
+    const ext = vscode.extensions.getExtension(EXT_ID)
+    assert(ext, `扩展 ${EXT_ID} 未找到`)
+    await ext!.activate()
+    const contributes = (ext!.packageJSON as {
+      contributes?: {
+        commands?: Array<{ command?: string; icon?: string }>
+        menus?: { 'editor/title'?: Array<{ command?: string; when?: string; group?: string }> }
+      }
+    }).contributes
+
+    const items = contributes?.menus?.['editor/title'] ?? []
+    assert(items.length === 3, `editor/title 应恰好三命令各一项，实际 ${items.length} 项`)
+    const byCommand = new Map(items.map((i) => [i.command, i]))
+    const iconByCommand = new Map((contributes?.commands ?? []).map((c) => [c.command, c.icon]))
+
+    const tri: Array<[command: string, icon: string]> = [
+      ['onegayi.vsidian.mode.toReading', '$(book)'],
+      ['onegayi.vsidian.mode.toSource', '$(code)'],
+      ['onegayi.vsidian.mode.toLive', '$(edit)'],
+    ]
+    for (const [command, icon] of tri) {
+      assert(
+        items.filter((i) => i.command === command).length === 1,
+        `${command} 在 editor/title 应恰一项`,
+      )
+      assert(byCommand.get(command)?.group === 'navigation', `${command} 应在 navigation 组，实际 ${byCommand.get(command)?.group}`)
+      assert(iconByCommand.get(command) === icon, `${command} 图标应为 ${icon}，实际 ${iconByCommand.get(command)}`)
+      assert(byCommand.get(command)?.when?.includes('!isInDiffEditor') === true, `${command} 的 when 应含 !isInDiffEditor（对比视图无按钮）`)
+    }
+
+    // 面板内两态互斥（live/reading 二值区分）
+    const readingWhen = byCommand.get('onegayi.vsidian.mode.toReading')?.when ?? ''
+    const sourceWhen = byCommand.get('onegayi.vsidian.mode.toSource')?.when ?? ''
+    assert(readingWhen.includes(`activeCustomEditorId == ${VIEW_TYPE}`), `toReading 的 when 应锁定本编辑器面板，实际 ${readingWhen}`)
+    assert(readingWhen.includes('vsidian.activeMode == live'), `toReading 的 when 应限定 live 态，实际 ${readingWhen}`)
+    assert(sourceWhen.includes(`activeCustomEditorId == ${VIEW_TYPE}`), `toSource 的 when 应锁定本编辑器面板，实际 ${sourceWhen}`)
+    assert(sourceWhen.includes('vsidian.activeMode == reading'), `toSource 的 when 应限定 reading 态，实际 ${sourceWhen}`)
+    // 源码态按钮与前两者互斥（!activeCustomEditorId + !activeWebviewPanelId 排除
+    // 一切 custom editor 与 webview panel 语境）且限定 .md/.markdown。其中
+    // !activeWebviewPanelId 排除内置 Markdown 预览（Ctrl+Shift+V 的 WebviewPanel
+    // 形态 viewType 'markdown.preview'；custom editor 形态已被 !activeCustomEditorId
+    // 排除——与 1.86 内置 markdown 扩展官方 when 子句同口径）
+    const liveWhen = byCommand.get('onegayi.vsidian.mode.toLive')?.when ?? ''
+    assert(liveWhen.includes('!activeCustomEditorId'), `toLive 的 when 应限定非 custom 编辑器（与面板内两命令互斥），实际 ${liveWhen}`)
+    assert(liveWhen.includes('!activeWebviewPanelId'), `toLive 的 when 应排除 webview panel（内置 Markdown 预览），实际 ${liveWhen}`)
+    assert(liveWhen.includes('resourceExtname == .md') && liveWhen.includes('resourceExtname == .markdown'), `toLive 的 when 应限定 .md/.markdown，实际 ${liveWhen}`)
+  }],
+
   ['默认关联打开 .md 进入 Vsidian 面板（#38 默认编辑器）', async () => {
     // vscode.open 不带 override 走默认关联解析（双击文件同路径）；
     // showTextDocument 强制 EXCLUSIVE_ONLY 原生，验证不了默认关联
