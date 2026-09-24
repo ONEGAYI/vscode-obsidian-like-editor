@@ -457,6 +457,21 @@ describe('外部变更广播与不写回保证', () => {
     s.session.detachPanel(staleOrdinary)
     expect(notices).toHaveLength(1)
   })
+
+  it('组合基线后的候选增量依次更新快照，关闭时取回最新文本', async () => {
+    const notices: SessionNotice[] = []
+    const s = setup('a\r\nb', { onNotice: (notice) => notices.push(notice) })
+    const id = s.attach()
+    await readyPanel(s, id)
+    await s.send(id, { kind: 'conflict.report', sessionId: id, docUri: DOC_URI,
+      version: 1, revision: 1, text: 'a\nb', compositionPending: true })
+    await s.send(id, { kind: 'composition.changed', sessionId: id, docUri: DOC_URI,
+      revision: 2, changes: [{ offset: 3, length: 0, text: 'n' }] })
+    await s.send(id, { kind: 'composition.changed', sessionId: id, docUri: DOC_URI,
+      revision: 3, changes: [{ offset: 3, length: 1, text: '你' }] })
+    s.session.detachPanel(id)
+    expect(notices).toMatchObject([{ type: 'panel-closed-with-input', webviewText: 'a\nb你' }])
+  })
 })
 
 describe('CRLF 文档的换行协调（CM6 端统一 LF）', () => {
