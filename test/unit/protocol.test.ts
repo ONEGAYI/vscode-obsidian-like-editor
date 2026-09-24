@@ -344,6 +344,9 @@ describe('模式切换协议（#6）', () => {
       // #12 表格探针字段
       liveTablePipeDecorationColor: 'rgb(19, 20, 21)',
       readingTableDecorationColor: null,
+      // #11 双链探针字段
+      liveWikilinkDecorationColor: 'rgb(28, 29, 30)',
+      readingWikilinkDecorationColor: null,
     }
     expect(isWebviewToHost({ ...baseViewState, cssProbe: probe })).toBe(true)
     expect(isWebviewToHost({ ...baseViewState, cssProbe: { ...probe, readingVarProbe: 42 } })).toBe(false)
@@ -351,6 +354,7 @@ describe('模式切换协议（#6）', () => {
     expect(isWebviewToHost({ ...baseViewState, cssProbe: { ...probe, liveLinkDecorationColor: 3 } })).toBe(false)
     expect(isWebviewToHost({ ...baseViewState, cssProbe: { ...probe, readingImageDecorationColor: [] } })).toBe(false)
     expect(isWebviewToHost({ ...baseViewState, cssProbe: { ...probe, liveTablePipeDecorationColor: 9 } })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, cssProbe: { ...probe, liveWikilinkDecorationColor: 9 } })).toBe(false)
     expect(isWebviewToHost({ ...baseViewState, cssProbe: { liveHeadingDecorationColor: 'x' } })).toBe(false)
     expect(isWebviewToHost({ ...baseViewState, cssProbe: null })).toBe(false)
     expect(isWebviewToHost({ ...baseViewState, cssProbe: 'x' })).toBe(false)
@@ -523,6 +527,8 @@ describe('任务勾选协议（#9）', () => {
       readingImageDecorationColor: null,
       liveTablePipeDecorationColor: null,
       readingTableDecorationColor: null,
+      liveWikilinkDecorationColor: null,
+      readingWikilinkDecorationColor: null,
     }
     expect(isWebviewToHost({ ...baseViewState, cssProbe: probe })).toBe(true)
     expect(

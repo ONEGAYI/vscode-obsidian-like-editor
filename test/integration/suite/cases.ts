@@ -173,6 +173,8 @@ interface ViewState {
     readingImageDecorationColor: string | null
     liveTablePipeDecorationColor: string | null
     readingTableDecorationColor: string | null
+    liveWikilinkDecorationColor: string | null
+    readingWikilinkDecorationColor: string | null
   }
   /** #8 双视图语法一致性观测 */
   liveSyntax?: {
@@ -209,6 +211,9 @@ interface ViewState {
   liveImageCount?: number
   readingLinkCount?: number
   readingImageCount?: number
+  /** #11 双链观测（live：widget+mark；reading：a.oile-wikilink） */
+  liveWikilinkCount?: number
+  readingWikilinkCount?: number
   imageStates?: { loading: number; loaded: number; error: number }
   /** #14 查找会话观测（首次打开后回报；匹配集来自文本模型全量计算） */
   find?: {
@@ -255,10 +260,72 @@ interface ConflictState {
   webviewVersion?: number
 }
 
-/** #10 链接跳转执行日志（_test.getLinkLog 回报） */
+/** #10 链接跳转执行日志（_test.getLinkLog 回报；#11 起含双链条目） */
 interface LinkLogData {
   found: boolean
-  log: Array<{ kind: string; href: string; reason?: string; scheme?: string; path?: string }>
+  log: Array<{
+    kind: string
+    href?: string
+    reason?: string
+    scheme?: string
+    path?: string
+    /** #11 双链条目字段 */
+    target?: string
+    heading?: string
+    candidates?: string[]
+    locate?: 'custom-panel' | 'text-editor' | 'none'
+  }>
+}
+
+// ---- #11 双链 fixture 镜像（与 runTest.mjs 逐字节一致：标题 offset 断言依据） ----
+const WIKILINKS_DOC_TEXT = [
+  '# 双链样例',
+  '',
+  '正文含 [[目标笔记]] 与 [[子 目录/目标 二|别名]] 与 [[目标笔记#深处的标题]]。',
+  '',
+  '降级形态：![[嵌入目标]] 与 [[目标笔记^块]] 与 [[坏#]]。',
+  '',
+  '`行内代码 [[不装饰]]` 之后的正文。',
+  '',
+  '```text',
+  '[[围栏内不装饰]]',
+  '```',
+  '',
+  '结尾段落。',
+  '',
+].join('\n')
+const TARGET_NOTE_TEXT = (() => {
+  const out = ['# 目标笔记标题', '', '开篇段落。', '']
+  for (let i = 1; i <= 200; i++) {
+    out.push(`填充段落 ${i}：足够多的正文让「深处的标题」位于首屏之外。`, '')
+  }
+  out.push('# 深处的标题', '', '标题下的正文。', '')
+  return out.join('\n')
+})()
+/** 屏外标题的源 offset（阅读挂载定位断言依据） */
+const DEEP_HEADING_OFFSET = TARGET_NOTE_TEXT.indexOf('# 深处的标题')
+
+/** 注入双链意图（与真实 webview 消息同一校验与处理入口；#11） */
+async function injectWikilink(uri: string, target: string): Promise<void> {
+  await vscode.commands.executeCommand(CMD.injectMessage, uri, {
+    kind: 'wikilink.activate',
+    sessionId: '',
+    docUri: uri,
+    target,
+    srcStart: 0,
+    srcEnd: 16,
+  })
+}
+
+/** 等待双链执行日志中出现匹配条目（#11） */
+async function waitWikilinkLog(
+  uri: string,
+  match: (e: LinkLogData['log'][number]) => boolean,
+): Promise<LinkLogData['log'][number]> {
+  return poll('双链执行日志', async () => {
+    const data = (await vscode.commands.executeCommand(CMD.linkLog, uri)) as LinkLogData | undefined
+    return data?.found ? data.log.find(match) : undefined
+  })
 }
 
 async function waitSessionReady(file: string): Promise<SessionState> {
@@ -1769,7 +1836,210 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.find.close' })
     await waitViewState('find.md', (s) => s.find?.open === false)
     const session = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
-    assert(session.appliedEdits === 0, `查找与切换不得产生写回，实际 ${session.appliedEdits}`)
+    assert(session.appliedEdits === 0, `查找与模式切换不得产生写回，实际 ${session.appliedEdits}`)
     assert(await readDisk('find.md') === diskBefore, '查找与模式切换后磁盘字节不变')
+  }],
+
+  // ---- 工单 #11：双链解析并跳转笔记与标题 ----
+
+  ['双链显示：live widget/mark 与阅读 a 渲染，降级形态源码保真，稳定类名可被外部片段命中（#11）', async () => {
+    await openWithEditor('wikilinks.md')
+    await waitSessionReady('wikilinks.md')
+    const uri = wsUri('wikilinks.md').toString()
+    const diskBefore = await readDisk('wikilinks.md')
+
+    // live 默认模式：视口内 3 处合法双链（按名/别名/标题）为 widget；
+    // 降级形态与代码上下文不装饰
+    const live = await waitViewState('wikilinks.md', (v) => (v.liveWikilinkCount ?? -1) === 3)
+    assert(live.liveWikilinkCount === 3, `live 双链数应为 3，实际 ${live.liveWikilinkCount}`)
+    assert(
+      live.cssProbe!.liveWikilinkDecorationColor === 'rgb(28, 29, 30)',
+      `live 双链应被测试片段命中 rgb(28, 29, 30)，实际 ${live.cssProbe!.liveWikilinkDecorationColor}`,
+    )
+    // 阅读侧：a.oile-wikilink 数量与探针 + 降级形态按原文显示
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    const reading = await poll('阅读模式双链观测', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' && v.readingWikilinkCount !== undefined ? v : undefined
+    })
+    assert(reading.readingWikilinkCount === 3, `阅读双链数应为 3，实际 ${reading.readingWikilinkCount}`)
+    assert(
+      reading.cssProbe!.readingWikilinkDecorationColor === 'rgb(31, 32, 33)',
+      `阅读双链应被测试片段命中 rgb(31, 32, 33)，实际 ${reading.cssProbe!.readingWikilinkDecorationColor}`,
+    )
+    assert(reading.text === WIKILINKS_DOC_TEXT, '显示链路不得改写文档文本')
+    assert(reading.readingLinkCount === 3, `阅读 a 元素应恰为 3 个双链（无普通链接），实际 ${reading.readingLinkCount}`)
+    // 全程零写回
+    const state = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(state.appliedEdits === 0, `显示链路不得产生 applyEdit，实际 ${state.appliedEdits}`)
+    assert(await readDisk('wikilinks.md') === diskBefore, '显示链路不得写磁盘')
+  }],
+
+  ['双链跳转：按名与显式路径解析并打开目标（文本编辑器），零写回（#11）', async () => {
+    await openWithEditor('wikilinks.md')
+    await waitSessionReady('wikilinks.md')
+    const uri = wsUri('wikilinks.md').toString()
+    const diskBefore = await readDisk('wikilinks.md')
+    const versionBefore = (await vscode.workspace.openTextDocument(wsUri('wikilinks.md'))).version
+
+    // 按名查找：工作区内唯一 basename 命中（findFiles 按需，不建索引）。
+    // 日志先于打开动作写入（文本编辑器打开会替换源面板——#10 同现象）
+    await injectWikilink(uri, '目标笔记')
+    let logData = await waitWikilinkLog(uri, (e) => e.kind === 'wikilink-doc' && e.target === '目标笔记')
+    assert(logData!.path === wsUri('目标笔记.md').fsPath, `按名目标路径不符：${logData!.path}`)
+    await poll('按名目标被打开', () =>
+      vscode.window.activeTextEditor?.document.uri.toString() === wsUri('目标笔记.md').toString()
+        ? true
+        : undefined,
+    )
+    const opened = vscode.window.activeTextEditor!.document
+    assert(opened.getText().startsWith('# 目标笔记标题'), '按名打开的目标内容不符')
+
+    // 文本编辑器打开会替换源面板：重开源面板再注入
+    await openWithEditor('wikilinks.md')
+    await waitSessionReady('wikilinks.md')
+    // 显式路径（含中文与空格目录）：文档相对 + 工作区相对双候选精确解析
+    await injectWikilink(uri, '子 目录/目标 二')
+    logData = await waitWikilinkLog(uri, (e) => e.kind === 'wikilink-doc' && e.target === '子 目录/目标 二')
+    assert(logData!.path === wsUri('子 目录/目标 二.md').fsPath, `显式路径目标不符：${logData!.path}`)
+    assert(logData!.locate === 'none', `无标题目标不应定位，实际 ${logData!.locate}`)
+    await poll('显式路径目标被打开', () =>
+      vscode.window.activeTextEditor?.document.uri.toString() === wsUri('子 目录/目标 二.md').toString()
+        ? true
+        : undefined,
+    )
+
+    // 跳转全程只读：源文档零写回、磁盘不变、版本不变
+    const state = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(state.appliedEdits === 0, `双链跳转不得产生 applyEdit，实际 ${state.appliedEdits}`)
+    assert(state.version === versionBefore, `跳转不得改变文档版本（${versionBefore} → ${state.version}）`)
+    assert(await readDisk('wikilinks.md') === diskBefore, '双链跳转不得改写源文档')
+  }],
+
+  ['双链标题跳转（文本编辑器）：selection reveal 到标题行；缺失标题仍打开并记录（#11）', async () => {
+    await openWithEditor('wikilinks.md')
+    await waitSessionReady('wikilinks.md')
+    const uri = wsUri('wikilinks.md').toString()
+    const diskBefore = await readDisk('wikilinks.md')
+
+    // 标题目标：打开后 selection 落在标题行（1.86 API 面 reveal）
+    await injectWikilink(uri, 'wikilink-target#深处小节')
+    let logData = await waitWikilinkLog(uri, (e) => e.kind === 'wikilink-doc' && e.heading === '深处小节')
+    assert(logData!.locate === 'text-editor', `文本编辑器路径应记录 locate=text-editor，实际 ${logData!.locate}`)
+    await poll('标题目标被打开', () =>
+      vscode.window.activeTextEditor?.document.uri.toString() === wsUri('wikilink-target.md').toString()
+        ? true
+        : undefined,
+    )
+    const editor = vscode.window.activeTextEditor!
+    const selLine = editor.document.lineAt(editor.selection.active).text
+    assert(selLine.trim() === '## 深处小节', `selection 应在标题行，实际「${selLine}」`)
+
+    // 缺失标题：文档照常打开（不定位），日志记录 locate=none——缺失给可见反馈
+    await openWithEditor('wikilinks.md')
+    await waitSessionReady('wikilinks.md')
+    await injectWikilink(uri, 'wikilink-target#不存在的小节')
+    logData = await waitWikilinkLog(uri, (e) => e.kind === 'wikilink-doc' && e.heading === '不存在的小节')
+    assert(logData!.locate === 'none', `缺失标题应记录 locate=none，实际 ${logData!.locate}`)
+    await poll('缺失标题目标仍被打开', () =>
+      vscode.window.activeTextEditor?.document.uri.toString() === wsUri('wikilink-target.md').toString()
+        ? true
+        : undefined,
+    )
+
+    assert(await readDisk('wikilinks.md') === diskBefore, '标题跳转不得改写源文档')
+  }],
+
+  ['双链标题跳转（本扩展面板）：屏外标题挂载定位，不重新解析全文（#11）', async () => {
+    // 源面板 + 目标面板并排（beside 保源面板存活）
+    await openWithEditor('wikilinks.md')
+    await waitSessionReady('wikilinks.md')
+    const sourceUri = wsUri('wikilinks.md').toString()
+    await openWithEditor('目标笔记.md', true)
+    const targetSession = await waitSessionReady('目标笔记.md')
+    const targetUri = wsUri('目标笔记.md').toString()
+    const diskSource = await readDisk('wikilinks.md')
+    const diskTarget = await readDisk('目标笔记.md')
+
+    // 目标面板切到阅读模式（活动 tab = 目标面板）
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    const before = await poll('目标进入阅读模式', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, targetUri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' && v.readingTotalBlocks !== undefined ? v : undefined
+    })
+    const totalBlocks = before.readingTotalBlocks!
+    const parseBefore = before.readingParseCount ?? 0
+
+    // 从源面板发起标题跳转：宿主 reveal 目标面板 + view.locate（块挂载定位）
+    await injectWikilink(sourceUri, '目标笔记#深处的标题')
+    const after = await poll('屏外标题挂载定位', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, targetUri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' && v.readingAnchorStart === DEEP_HEADING_OFFSET ? v : undefined
+    }, 30000)
+    assert(after.readingAnchorStart === DEEP_HEADING_OFFSET, `阅读锚点应为屏外标题块 start，实际 ${after.readingAnchorStart}`)
+    // 挂载定位不依赖已渲染 DOM：目标块此前在窗口外；定位后窗口覆盖目标
+    assert((after.readingMountedBlocks ?? 0) < totalBlocks, `定位后挂载块数应有界（< ${totalBlocks}），实际 ${after.readingMountedBlocks}`)
+    assert((after.readingParseCount ?? 0) === parseBefore, `定位不得触发全文重解析（${parseBefore} → ${after.readingParseCount}）`)
+    const logData = await waitWikilinkLog(sourceUri, (e) => e.kind === 'wikilink-doc' && e.heading === '深处的标题')
+    assert(logData!.locate === 'custom-panel', `本扩展面板路径应记录 locate=custom-panel，实际 ${logData!.locate}`)
+
+    // 双侧零写回
+    assert(targetSession.appliedEdits === 0, `目标面板不得产生 applyEdit，实际 ${targetSession.appliedEdits}`)
+    assert(await readDisk('wikilinks.md') === diskSource, '跳转不得改写源文档')
+    assert(await readDisk('目标笔记.md') === diskTarget, '跳转不得改写目标文档')
+  }],
+
+  ['双链歧义与缺失：重名记录候选待选择（测试钩子不弹窗）、缺失提示、不支持降级、不自动建文件（#11）', async () => {
+    await openWithEditor('wikilinks.md')
+    await waitSessionReady('wikilinks.md')
+    const uri = wsUri('wikilinks.md').toString()
+    const diskBefore = await readDisk('wikilinks.md')
+    const versionBefore = (await vscode.workspace.openTextDocument(wsUri('wikilinks.md'))).version
+
+    // 重名（dup/甲.md 与 other/甲.md）：ambiguous——候选记录，不静默任选
+    await injectWikilink(uri, '甲')
+    const ambiguous = await waitWikilinkLog(uri, (e) => e.kind === 'wikilink-ambiguous')
+    assert((ambiguous!.candidates ?? []).length === 2, `重名应给出 2 个候选，实际 ${JSON.stringify(ambiguous!.candidates)}`)
+    // 缺失目标：not-found（不自动创建文件）
+    await injectWikilink(uri, '不存在的笔记')
+    await waitWikilinkLog(uri, (e) => e.kind === 'wikilink-not-found' && e.target === '不存在的笔记')
+    // 不支持形态（块引用 ^）：宿主侧分类拒绝并反馈
+    await injectWikilink(uri, '目标笔记^块')
+    await waitWikilinkLog(uri, (e) => e.kind === 'wikilink-unsupported' && e.target === '目标笔记^块')
+    // 上述意图均不打开编辑器：日志中无 wikilink-doc（甲/不存在/^ 三者）
+    const logAll = (await vscode.commands.executeCommand(CMD.linkLog, uri)) as LinkLogData
+    assert(
+      !logAll.log.some((e) => e.kind === 'wikilink-doc'),
+      `拦截类双链意图不得打开编辑器，实际 ${JSON.stringify(logAll.log)}`,
+    )
+    // 不自动建文件
+    let created = false
+    try {
+      await readDisk('不存在的笔记.md')
+      created = true
+    } catch {
+      created = false
+    }
+    assert(!created, '缺失目标不得自动创建文件')
+
+    // 拦截链路零写回（在会退场的 casenote 打开动作之前断言：会话仍在）
+    const state = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(state.appliedEdits === 0, `歧义/缺失链路不得产生 applyEdit，实际 ${state.appliedEdits}`)
+    assert(state.version === versionBefore, `版本不得变化（${versionBefore} → ${state.version}）`)
+
+    // 大小写语义随宿主平台：Windows 本地（NTFS 语义）大小写不敏感命中
+    //（面板此前未退场——以上拦截意图不打开编辑器）
+    await injectWikilink(uri, process.platform === 'win32' ? 'casenote' : 'CaseNote')
+    if (process.platform === 'win32') {
+      await poll('大小写不敏感目标被打开', () =>
+        vscode.window.activeTextEditor?.document.uri.toString() === wsUri('CaseNote.md').toString()
+          ? true
+          : undefined,
+      )
+    } else {
+      await waitWikilinkLog(uri, (e) => e.kind === 'wikilink-not-found' && e.target === 'casenote')
+    }
+
+    assert(await readDisk('wikilinks.md') === diskBefore, '歧义/缺失链路不得改写源文档')
   }],
 ]

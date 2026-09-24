@@ -197,6 +197,14 @@ body {
   color: var(--vscode-textLink-foreground, #4fc1ff);
 }
 
+/* ---- #11：双链（live 视图）----
+   .oile-wikilink 为双链稳定类名（Obsidian 对应 .cm-hmd-internal-link）：
+   非活动行是显示文字 widget（替换整个 [[…]]），活动行是源码 mark。
+   点击语义与链接一致（Ctrl/Cmd+单击跳转），不给 pointer 光标 */
+#app .cm-editor .cm-scroller .oile-wikilink {
+  color: var(--vscode-textLink-foreground, #4fc1ff);
+}
+
 /* ---- #10：图片槽位（双视图共用 oile-image + 状态修饰类）----
    阅读视图：槽位即 <img>（块挂载时创建，卸载释放）；
    live 视图：槽位为 widget 容器 span（内部 <img> 由资源管理器装载）。
@@ -409,6 +417,12 @@ body {
 }
 
 #app .oile-view-reading .oile-reading-block a {
+  color: var(--vscode-textLink-foreground, #4fc1ff);
+}
+
+/* #11 阅读视图双链：a.oile-wikilink（Obsidian 对应 .internal-link 方向）；
+   一期不区分目标存在与否（不查询工作区），颜色与链接一致 */
+#app .oile-view-reading .oile-reading-block a.oile-wikilink {
   color: var(--vscode-textLink-foreground, #4fc1ff);
 }
 

@@ -77,11 +77,13 @@ vscode-obsidian-like-editor/
 │   ├── host/        # 宿主端实现
 │   │   ├── documentSession.ts    # 文档会话与写回同步
 │   │   ├── linkTarget.ts         # 宿主侧链接目标分类纯逻辑（#10）
-│   │   └── textEditorProvider.ts # 自定义文本编辑器提供者
+│   │   ├── textEditorProvider.ts # 自定义文本编辑器提供者
+│   │   └── wikilinkTarget.ts     # 宿主侧双链目标解析纯逻辑（#11）
 │   ├── shared/      # 两端共享纯逻辑
 │   │   ├── changeMapping.ts # 变更重定位纯函数
 │   │   ├── newline.ts       # CRLF/LF 换行协调器
-│   │   └── protocol.ts      # 消息协议单一事实源
+│   │   ├── protocol.ts      # 消息协议单一事实源
+│   │   └── wikilink.ts      # 双链形态学单一事实源（#11）
 │   └── webview/     # webview 端实现
 │       ├── css.d.ts              # CSS 导入类型声明
 │       ├── findSession.ts        # 查找匹配纯函数（#14）
@@ -113,34 +115,37 @@ vscode-obsidian-like-editor/
 │   │   ├── runPerf.mjs    # 性能测量启动器（#5）
 │   │   └── suite.ts       # 性能测量套件（#5）
 │   └── unit/        # vitest 单元契约测试
-│       ├── changeMapping.test.ts      # 变更重定位契约
-│       ├── compositionBuffer.test.ts  # 组合期间缓冲契约测试
-│       ├── conflictRetention.test.ts  # 冲突保留与暂停契约测试
-│       ├── documentSession.test.ts    # 文档会话契约
-│       ├── find.test.ts               # 查找会话契约测试（#14）
-│       ├── findSession.test.ts        # 查找匹配语义测试（#14）
-│       ├── historyForwarding.test.ts  # 撤销重做转发契约测试
-│       ├── imageResource.test.ts      # 图片资源管理器契约测试
-│       ├── linkInteraction.test.ts    # 链接交互契约测试（#10）
-│       ├── linkTarget.test.ts         # 链接目标分类契约测试
-│       ├── liveDecorations.test.ts    # Live 装饰契约测试
-│       ├── liveTable.test.ts          # live 表格装饰测试（#12）
-│       ├── markdownDoc.test.ts        # 文档工具契约测试
-│       ├── newline.test.ts            # 换行协调契约
-│       ├── perfProbe.test.ts          # 性能探针契约测试
-│       ├── protocol.test.ts           # 消息协议校验契约
-│       ├── readingBlocks.test.ts      # 阅读块切分契约测试
-│       ├── readingMarkdown.test.ts    # 渲染层契约测试
-│       ├── readingTable.test.ts       # 阅读表格契约测试（#12）
-│       ├── readingView.test.ts        # 阅读视图 DOM 契约测试
-│       ├── readingViewport.test.ts    # 视口窗口纯函数契约测试
-│       ├── readingVirtualView.test.ts # 虚拟化装配契约测试
-│       ├── suspendResume.test.ts      # 暂停恢复契约测试
-│       ├── tableCells.test.ts         # 单元格拆分契约测试（#12）
-│       ├── taskInteraction.test.ts    # 任务勾选交互契约测试（#9）
-│       ├── taskToggle.test.ts         # 任务勾选解析纯函数契约测试
-│       ├── viewMode.test.ts           # 模式切换状态机契约测试
-│       └── webviewSync.test.ts        # webview 同步契约
+│       ├── changeMapping.test.ts       # 变更重定位契约
+│       ├── compositionBuffer.test.ts   # 组合期间缓冲契约测试
+│       ├── conflictRetention.test.ts   # 冲突保留与暂停契约测试
+│       ├── documentSession.test.ts     # 文档会话契约
+│       ├── find.test.ts                # 查找会话契约测试（#14）
+│       ├── findSession.test.ts         # 查找匹配语义测试（#14）
+│       ├── historyForwarding.test.ts   # 撤销重做转发契约测试
+│       ├── imageResource.test.ts       # 图片资源管理器契约测试
+│       ├── linkInteraction.test.ts     # 链接交互契约测试（#10）
+│       ├── linkTarget.test.ts          # 链接目标分类契约测试
+│       ├── liveDecorations.test.ts     # Live 装饰契约测试
+│       ├── liveTable.test.ts           # live 表格装饰测试（#12）
+│       ├── markdownDoc.test.ts         # 文档工具契约测试
+│       ├── newline.test.ts             # 换行协调契约
+│       ├── perfProbe.test.ts           # 性能探针契约测试
+│       ├── protocol.test.ts            # 消息协议校验契约
+│       ├── readingBlocks.test.ts       # 阅读块切分契约测试
+│       ├── readingMarkdown.test.ts     # 渲染层契约测试
+│       ├── readingTable.test.ts        # 阅读表格契约测试（#12）
+│       ├── readingView.test.ts         # 阅读视图 DOM 契约测试
+│       ├── readingViewport.test.ts     # 视口窗口纯函数契约测试
+│       ├── readingVirtualView.test.ts  # 虚拟化装配契约测试
+│       ├── suspendResume.test.ts       # 暂停恢复契约测试
+│       ├── tableCells.test.ts          # 单元格拆分契约测试（#12）
+│       ├── taskInteraction.test.ts     # 任务勾选交互契约测试（#9）
+│       ├── taskToggle.test.ts          # 任务勾选解析纯函数契约测试
+│       ├── viewMode.test.ts            # 模式切换状态机契约测试
+│       ├── webviewSync.test.ts         # webview 同步契约
+│       ├── wikilinkInteraction.test.ts # 双链交互契约测试（#11）
+│       ├── wikilinkParse.test.ts       # 双链形态学契约测试（#11）
+│       └── wikilinkTarget.test.ts      # 双链目标解析契约测试（#11）
 ├── tsconfig.json     # TypeScript 类型检查配置
 └── vitest.config.ts  # vitest 单元测试配置
 <!-- file-tree:tree:end -->

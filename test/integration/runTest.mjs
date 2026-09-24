@@ -168,6 +168,43 @@ const FIND_DOC = [
   '',
 ].join('\n')
 
+// #11 双链样例：合法四形态（按名/显式路径/别名/标题）+ 降级形态
+// （嵌入/块引用/残缺）+ 代码上下文（围栏与行内代码内不解析）
+const WIKILINKS_DOC = [
+  '# 双链样例',
+  '',
+  '正文含 [[目标笔记]] 与 [[子 目录/目标 二|别名]] 与 [[目标笔记#深处的标题]]。',
+  '',
+  '降级形态：![[嵌入目标]] 与 [[目标笔记^块]] 与 [[坏#]]。',
+  '',
+  '`行内代码 [[不装饰]]` 之后的正文。',
+  '',
+  '```text',
+  '[[围栏内不装饰]]',
+  '```',
+  '',
+  '结尾段落。',
+  '',
+].join('\n')
+// #11 按名跳转目标：长文使「深处的标题」位于首屏外（阅读挂载定位的屏外目标）
+const TARGET_NOTE_DOC = (() => {
+  const out = ['# 目标笔记标题', '', '开篇段落。', '']
+  for (let i = 1; i <= 200; i++) {
+    out.push(`填充段落 ${i}：足够多的正文让「深处的标题」位于首屏之外。`, '')
+  }
+  out.push('# 深处的标题', '', '标题下的正文。', '')
+  return out.join('\n')
+})()
+// #11 文本编辑器 reveal 目标：中部小节标题
+const WIKILINK_TARGET_DOC = (() => {
+  const out = ['# 双链跳转目标', '', '顶部段落。', '']
+  for (let i = 2; i <= 30; i++) {
+    out.push(`第 ${i} 段正文。`, '')
+  }
+  out.push('## 深处小节', '', '小节内容。', '')
+  return out.join('\n')
+})()
+
 const wsDir = mkdtempSync(path.join(tmpdir(), 'oile-itest-'))
 try {
   writeFileSync(path.join(wsDir, 'lf.md'), LF_DOC, 'utf8')
@@ -213,6 +250,16 @@ try {
   writeFileSync(path.join(wsDir, 'images.md'), IMAGES_DOC, 'utf8')
   mkdirSync(path.join(wsDir, 'assets'), { recursive: true })
   writeFileSync(path.join(wsDir, 'assets', '图片 一.png'), Buffer.from(TINY_PNG_BASE64, 'base64'))
+  // #11 双链：源文档、按名/屏外标题目标、文本编辑器 reveal 目标、重名候选
+  // 与大小写目标（Windows 宿主大小写不敏感匹配的断言载体）
+  writeFileSync(path.join(wsDir, 'wikilinks.md'), WIKILINKS_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, '目标笔记.md'), TARGET_NOTE_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'wikilink-target.md'), WIKILINK_TARGET_DOC, 'utf8')
+  mkdirSync(path.join(wsDir, 'dup'), { recursive: true })
+  writeFileSync(path.join(wsDir, 'dup', '甲.md'), '# 重名甲（dup 目录）\n', 'utf8')
+  mkdirSync(path.join(wsDir, 'other'), { recursive: true })
+  writeFileSync(path.join(wsDir, 'other', '甲.md'), '# 重名甲（other 目录）\n', 'utf8')
+  writeFileSync(path.join(wsDir, 'CaseNote.md'), '# 大小写目标\n英文命名的目标笔记。\n', 'utf8')
 
   console.log(`[runTest] fixture 工作区：${wsDir}`)
   await runTests({

@@ -1,6 +1,6 @@
 # Obsidian 选择器映射表（一期稳定样式契约）
 
-状态：工单 #6 交付物，2026-09-23；#8 补 span 级映射与阅读语义标签结构（2026-09-24）；#9 补任务勾选交互类（2026-09-24）；#10 补链接/图片映射（2026-09-24）；#12 补表格映射（2026-09-24）。依据 [ADR-0004](../adr/0004-stable-styling-contract.md)。
+状态：工单 #6 交付物，2026-09-23；#8 补 span 级映射与阅读语义标签结构（2026-09-24）；#9 补任务勾选交互类（2026-09-24）；#10 补链接/图片映射（2026-09-24）；#12 补表格映射（2026-09-24）；#11 补双链映射（2026-09-24）。依据 [ADR-0004](../adr/0004-stable-styling-contract.md)。
 
 本文记录一期已建立的稳定类名/CSS 变量入口与 Obsidian 同款选择器的核对结果，供二期自定义 CSS 片段兼容使用。**边界声明**：
 
@@ -93,6 +93,22 @@
 - 图片进入视口（阅读块挂载 / live widget 创建）才发起装载；工作区图源经宿主 `image.request` → `asWebviewUri` 通道解析（本地与远程工作区同通道），`https` 图源直连（可加载性由 webview CSP 决定）。离开视口卸载并释放（`src` 清空、资源条目回收）。
 - 引用式链接/图片（`[t][ref]`）：**阅读视图**由 markdown-it 完整解析（可点击）；**live 视图**不解析引用定义、按源码呈现（Ctrl+单击不跳转）——跨视图行为差异如实记录，统一收口属后续工单。
 
+## 双链（#11）
+
+#11 起两种视图贯通双链显示与跳转（ADR-0002：按需 `workspace.findFiles` 解析，不建持久索引、不自动创建文件）。**形态声明**：支持 `[[笔记]]`、`[[目录/笔记]]`、`[[笔记|显示文字]]`、`[[笔记#标题]]` 及组合；块引用 `[[笔记^块]]`、嵌入 `![[…]]` 与残缺形态按**原文**显示（源码保真降级，源文不改写）。live 非活动行整体替换为显示文字（别名或链接名），活动行显示源码；跳转执行归宿主（webview 只上报 `wikilink.activate`：阅读单击、live Ctrl/Cmd+单击）。重名候选经 QuickPick 由用户选择；无工作区、缺失目标给可见反馈。
+
+| 本项目稳定类名 | 本项目用途 | Obsidian 对应选择器 | 核对结果 |
+| --- | --- | --- | --- |
+| `.oile-wikilink`（live） | 双链呈现：非活动行为显示文字 widget（替换整个 `[[…]]`）、活动行为源码 mark | `.cm-hmd-internal-link`（Obsidian live 内链 token 类族） | 语义等价（呈现级）。已验证：测试片段经 `.oile-wikilink` 命中（`rgb(28, 29, 30)`，真实宿主断言）。Obsidian 另有 `.cm-hmd-internal-link` 拆分形态（链接名/别名/格式化括号），本项目整体替换、无拆分类 |
+| `a.oile-wikilink`（阅读） | markdown-it 双链规则渲染的语义 `<a>`（`href` 为原文 target，显示别名或链接名） | `.markdown-preview-view a.internal-link`（Obsidian 阅读内链类） | 语义等价（标签 + 类）。已验证：探针 `rgb(31, 32, 33)`。单击经容器级委托上报 `wikilink.activate`（`preventDefault`） |
+| 无对应（`.cm-hashtag` 方向） | 标签 `#tag` | `.cm-hashtag` / `.tag` | **不支持**（一期未实现标签语法；如实列入不支持清单） |
+
+行为边界（非样式映射，随 #11 记录）：
+
+- live 双链为**间接装饰**（按 `visibleRanges` 行扫描构建，与链接同一 ViewPlugin）：视口外按源码呈现；围栏/缩进/行内代码与 frontmatter 内不装饰（语法树 + fm 边界判定，与 #8 降级边界一致）。扫描形态学与阅读渲染、宿主解析共用 `src/shared/wikilink.ts`（三处语义逐字节一致）。
+- 标题跳转定位双路径：目标已是本扩展面板时 reveal 面板后 `view.locate`（reading 经 #14 块挂载定位，屏外标题可定位；live 光标+滚动）；否则文本编辑器以标题行 selection reveal。标题匹配规则（ATX、trim + 空白折叠 + 大小写不敏感、跳过围栏内伪标题）写入单测固定。
+- 文件路径大小写语义随宿主平台：Windows 本地不敏感（NTFS）、远程 POSIX 严格（两类不混用）；显式路径双候选（文档相对/工作区相对）命中不同文件时必须用户选择，不静默任选（规则见 `src/host/wikilinkTarget.ts` 与其单测）。
+
 ## 悬浮提示等既有稳定类（沿用 #4/#5，与 Obsidian 无对应）
 
 `.oile-suspend-banner`（冲突暂停横幅）、`.oile-toolbar` 与 `.oile-mode-toggle`（模式切换工具栏）：本项目自有 UI，无 Obsidian 对应物，不参与兼容承诺。
@@ -114,8 +130,8 @@
 
 ## 内部测试 CSS 验证入口
 
-- 片段：`media/css-contract-probe.css`，随 webview HTML 加载（CSP `style-src` 允许的扩展资源）。仅用无视觉影响的属性（`text-decoration-color`，在无 `text-decoration-line` 时不呈现）与探针变量。#8 追加 span 级类与阅读语义标签的探针规则（`.oile-strong`/`.oile-inline-code`/`.oile-code-line`/`.oile-reading-block strong`）；#9 追加任务 checkbox 探针规则（`.oile-task-checkbox`/`.oile-reading-task-checkbox`）；#10 追加链接/图片探针规则（`.oile-link`/`.oile-reading-block a`/`.oile-reading-block img.oile-image`）；#12 追加表格探针规则（`.oile-table-pipe`/`.oile-reading-block table`）。
-- 观测：`view.state` 回报的 `cssProbe` 字段（`liveHeadingDecorationColor` / `readingHeadingDecorationColor` / `readingVarProbe`；#8 追加 `liveStrongDecorationColor` / `liveInlineCodeDecorationColor` / `liveCodeLineDecorationColor` / `readingStrongDecorationColor`；#9 追加 `liveTaskCheckboxDecorationColor` / `readingTaskCheckboxDecorationColor`；#10 追加 `liveLinkDecorationColor` / `readingLinkDecorationColor` / `readingImageDecorationColor`；#12 追加 `liveTablePipeDecorationColor` / `readingTableDecorationColor`），由 webview 读取目标元素 computed style 填充；目标元素不存在时为 `null`。
+- 片段：`media/css-contract-probe.css`，随 webview HTML 加载（CSP `style-src` 允许的扩展资源）。仅用无视觉影响的属性（`text-decoration-color`，在无 `text-decoration-line` 时不呈现）与探针变量。#8 追加 span 级类与阅读语义标签的探针规则（`.oile-strong`/`.oile-inline-code`/`.oile-code-line`/`.oile-reading-block strong`）；#9 追加任务 checkbox 探针规则（`.oile-task-checkbox`/`.oile-reading-task-checkbox`）；#10 追加链接/图片探针规则（`.oile-link`/`.oile-reading-block a`/`.oile-reading-block img.oile-image`）；#12 追加表格探针规则（`.oile-table-pipe`/`.oile-reading-block table`）；#11 追加双链探针规则（`.oile-wikilink`/`.oile-reading-block a.oile-wikilink`）。
+- 观测：`view.state` 回报的 `cssProbe` 字段（`liveHeadingDecorationColor` / `readingHeadingDecorationColor` / `readingVarProbe`；#8 追加 `liveStrongDecorationColor` / `liveInlineCodeDecorationColor` / `liveCodeLineDecorationColor` / `readingStrongDecorationColor`；#9 追加 `liveTaskCheckboxDecorationColor` / `readingTaskCheckboxDecorationColor`；#10 追加 `liveLinkDecorationColor` / `readingLinkDecorationColor` / `readingImageDecorationColor`；#12 追加 `liveTablePipeDecorationColor` / `readingTableDecorationColor`；#11 追加 `liveWikilinkDecorationColor` / `readingWikilinkDecorationColor`），由 webview 读取目标元素 computed style 填充；目标元素不存在时为 `null`。
 - 断言：集成用例「稳定样式契约」（`test/integration/suite/cases.ts`）在真实 VSCode 1.86.2 宿主内验证两种视图的类名命中与变量管道；#12 表格断言并入「表格装饰与单元格编辑写回」「阅读视图表格」用例。
 
 ## 已知不支持项（如实清单）
@@ -129,7 +145,7 @@
 - Callout：`.callout` 及其 data 属性（二期）
 - 任务扩展状态：`.task-list-item[data-task="x"]` 等（仅支持空格/`x`/`X` 三态，#9）
 - frontmatter：~~`.markdown-frontmatter`~~（#8 已按源码形态呈现；Obsidian 属性面板形态不在一期）
-- 标签/双链：`.cm-hashtag` / `.cm-hmd-internal-link` / `.internal-link`（#11 双链票）
+- 标签：`.cm-hashtag` / `.tag`（一期未实现标签语法；~~双链 `.cm-hmd-internal-link` / `.internal-link` 待 #11~~ #11 已建立 `.oile-wikilink` 对应类，见上文双链节。Obsidian 双链的 is-unresolved 区分——按目标存在与否变色——一期不做：显示不查询工作区，避免为样式引入索引/查找）
 - 语法高亮 token：`.token-*` / HyperMD codeblock 行内高亮 `.HyperMD-codeblock-*`（`language-x` 类已就位，高亮 token 属后续扩展）
 - 删除线：`.cm-strikethrough` / 阅读视图 `del`（解析器支持但一期未装饰——如实记录，待后续补齐）
 - 虚拟化结构差异（#7 已生效）：阅读视图视口外块不存在于 DOM——依赖"全文 DOM 常驻"的片段（全局 `:nth-child` 定位、跨屏兄弟/后代选择器、假设完整内容高度的滚动条计算）与按需挂载冲突；正文块结构见上文 #7 说明

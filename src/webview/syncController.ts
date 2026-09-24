@@ -43,7 +43,7 @@ import {
   type FindMatch,
 } from './findSession'
 import { liveDecorationsField, livePreviewDecorations, LIVE_CLASS_NAMES } from './liveDecorations'
-import { createLinkInteractions } from './liveLinks'
+import { createLinkInteractions, WIKILINK_CLASS_NAMES } from './liveLinks'
 import { ImageResourceManager } from './imageResource'
 import { runPerfProbe } from './perfProbe'
 import { runReadingPerfProbe } from './readingProbe'
@@ -424,7 +424,8 @@ export class WebviewSyncController {
       }
     })
     // 阅读链接单击 = 跳转意图上报（#10：执行归宿主；preventDefault 阻断
-    // webview 原生导航——相对路径在本 origin 下必然失败且产生控制台噪声）
+    // webview 原生导航——相对路径在本 origin 下必然失败且产生控制台噪声）。
+    // #11：a.oile-wikilink 走双链意图（按名/路径解析），其余走 URI 意图
     this.readingContainer.addEventListener('click', (event) => {
       const target = event.target as HTMLElement | null
       const anchor = target?.closest?.('a')
@@ -439,16 +440,29 @@ export class WebviewSyncController {
       const block = anchor.closest<HTMLElement>('[data-oile-src-start]')
       const srcStart = Number(block?.dataset['oileSrcStart'] ?? 0)
       const srcEnd = Number(block?.dataset['oileSrcEnd'] ?? srcStart)
-      if (this.sessionId) {
+      if (!this.sessionId) {
+        return
+      }
+      if (anchor.classList.contains(WIKILINK_CLASS_NAMES.wikilink)) {
+        // 双链：href 即 `|` 之前的原文 target（markdown-it 规则写入，未 trim）
         this.bridge.postMessage({
-          kind: 'link.activate',
+          kind: 'wikilink.activate',
           sessionId: this.sessionId,
           docUri: this.docUri,
-          href,
+          target: href,
           srcStart: Number.isInteger(srcStart) ? srcStart : 0,
           srcEnd: Number.isInteger(srcEnd) ? srcEnd : srcStart,
         })
+        return
       }
+      this.bridge.postMessage({
+        kind: 'link.activate',
+        sessionId: this.sessionId,
+        docUri: this.docUri,
+        href,
+        srcStart: Number.isInteger(srcStart) ? srcStart : 0,
+        srcEnd: Number.isInteger(srcEnd) ? srcEnd : srcStart,
+      })
     })
     parent.appendChild(this.toolbar)
     parent.appendChild(this.banner)
@@ -638,6 +652,10 @@ export class WebviewSyncController {
           const start = this.readingView.anchorStartFor(pos) ?? pos
           this.modeAnchor = start
           this.readingView.scrollToSrcStart(start)
+          // 定位意图重申（#11 起，#14 findLocate 同款机制）：屏外定位的滚动
+          // 事件在挂载窗口重算（rAF）之前同步读取视口锚点，瞬态值不得覆盖
+          // 定位目标——帧+宏任务后重申（同一窗口内的用户滚动会被覆盖）
+          this.reassertReadingAnchor(start, 2)
         } else {
           this.modeAnchor = pos
           this.view?.dispatch({
@@ -781,11 +799,18 @@ export class WebviewSyncController {
           // #10 链接/图片观测（DOM 级：live 限视口，reading 限挂载块）
           liveLinkCount: content ? content.querySelectorAll('.oile-link').length : 0,
           liveImageCount: content ? content.querySelectorAll('.oile-image').length : 0,
+          // #11 双链观测（live：非活动行 widget + 活动行 mark；reading：a）
+          liveWikilinkCount: content
+            ? content.querySelectorAll(`.${WIKILINK_CLASS_NAMES.wikilink}`).length
+            : 0,
           readingLinkCount: readingActive
             ? this.readingContainer!.querySelectorAll('a').length
             : 0,
           readingImageCount: readingActive
             ? this.readingContainer!.querySelectorAll('img').length
+            : 0,
+          readingWikilinkCount: readingActive
+            ? this.readingContainer!.querySelectorAll(`a.${WIKILINK_CLASS_NAMES.wikilink}`).length
             : 0,
           // 图片状态计数按当前视图作用域（隐藏视图的槽位不计入——同一管理器
           // 服务双视图，隐藏侧的 DOM 不代表用户可见状态）
@@ -1037,6 +1062,24 @@ export class WebviewSyncController {
     return Math.max(0, Math.min(offset, this.view?.state.doc.length ?? 0))
   }
 
+  /**
+   * 阅读定位后的锚点重申（#14 findLocate 机制的 view.locate 复用，#11）：
+   * 滚动事件突发期（含虚拟化挂载窗口重算与实测修正的异步阶段）内读到的
+   * 瞬态视口锚点不得覆盖定位目标。rounds 轮（帧+宏任务）后仍保持目标锚点。
+   */
+  private reassertReadingAnchor(start: number, rounds: number): void {
+    scheduleFrame(() => {
+      setTimeout(() => {
+        if (this.viewMode === 'reading') {
+          this.modeAnchor = start
+          if (rounds > 1) {
+            this.reassertReadingAnchor(start, rounds - 1)
+          }
+        }
+      }, 0)
+    })
+  }
+
   /** 图片槽位状态计数（#10）：按当前激活视图的作用域统计 DOM 状态标记 */
   private collectImageStates(): { loading: number; loaded: number; error: number } {
     const scope = this.viewMode === 'reading' ? this.readingContainer : this.liveWrapper
@@ -1072,6 +1115,10 @@ export class WebviewSyncController {
     const readingLink = this.readingContainer?.querySelector('.oile-reading-block a') ?? null
     const readingImage = this.readingContainer?.querySelector('.oile-reading-block img.oile-image') ?? null
     const readingTable = this.readingContainer?.querySelector('.oile-reading-block table') ?? null
+    const liveWikilink = this.liveWrapper?.querySelector(`.${WIKILINK_CLASS_NAMES.wikilink}`) ?? null
+    const readingWikilink = this.readingContainer?.querySelector(
+      `.oile-reading-block a.${WIKILINK_CLASS_NAMES.wikilink}`,
+    ) ?? null
     const read = (el: Element | null): string | null =>
       el ? getComputedStyle(el).textDecorationColor : null
     let readingVarProbe: string | null = null
@@ -1097,6 +1144,9 @@ export class WebviewSyncController {
       // #12 表格样式入口探针（live 管道符 / reading 表格标签）
       liveTablePipeDecorationColor: read(liveTablePipe),
       readingTableDecorationColor: read(readingTable),
+      // #11 双链样式入口探针（live widget/mark / reading a）
+      liveWikilinkDecorationColor: read(liveWikilink),
+      readingWikilinkDecorationColor: read(readingWikilink),
     }
   }
 
@@ -1785,7 +1835,7 @@ export class WebviewSyncController {
       // （ViewPlugin 按 visibleRanges），见 liveDecorations.ts 头注释
       livePreviewDecorations,
       // #10 链接/图片：视口间接装饰（链接 span、图片 widget）+ Ctrl/Cmd
-      // 单击跳转意图上报（执行归宿主）
+      // 单击跳转意图上报（执行归宿主）；#11 双链同通道（原始 target 上报）
       createLinkInteractions({
         postActivate: (href, srcStart, srcEnd) => {
           if (this.sessionId) {
@@ -1794,6 +1844,18 @@ export class WebviewSyncController {
               sessionId: this.sessionId,
               docUri: this.docUri,
               href,
+              srcStart,
+              srcEnd,
+            })
+          }
+        },
+        postActivateWikilink: (target, srcStart, srcEnd) => {
+          if (this.sessionId) {
+            this.bridge.postMessage({
+              kind: 'wikilink.activate',
+              sessionId: this.sessionId,
+              docUri: this.docUri,
+              target,
               srcStart,
               srcEnd,
             })

@@ -12,14 +12,26 @@
 //   （阅读视图由 markdown-it 完整解析——差异见选择器映射表已知限制）
 // - 自动链接 <https://…>：URL 即内容，标记 span + 非活动行隐藏尖括号
 //
+// #11 双链装饰（本文件扩展）：`[[…]]` 不在 lezer Markdown 语法内（CommonMark
+// 视为普通文本），装饰来源是 shared/wikilink 的行内扫描（与阅读渲染、宿主
+// 解析共用同一形态学）；代码上下文（围栏/缩进/行内代码）与 frontmatter
+// 内不装饰（语法树 + fm 边界判定，与 #8 的源码降级边界一致）。
+//
 // 点击语义：单击 = CM6 默认（光标编辑）；Ctrl/Cmd+单击 = 跳转意图上报
-// （原始 URI + 源区间），执行归宿主（URI 解析与白名单在宿主侧）。
+// （原始 URI/target + 源区间），执行归宿主（URI 解析与白名单在宿主侧；
+// 双链先于普通链接判定——两者语法不重叠）。
 import { EditorSelection, RangeSet, Text, type Extension, type Range } from '@codemirror/state'
 import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet } from '@codemirror/view'
 import type { SyntaxNode, Tree } from '@lezer/common'
-import { chainAt, visitRange } from './markdownDoc'
+import { chainAt, visitRange, type SourceRange } from './markdownDoc'
 import { liveDecorationsField, isLineActive } from './liveDecorations'
 import { IMAGE_CLASS_NAMES, type ImageResourceManager } from './imageResource'
+import {
+  WIKILINK_CLASS_NAMES,
+  parseWikilinkInner,
+  scanWikilinksInLine,
+  wikilinkAtCol,
+} from '../shared/wikilink'
 
 /** #10 链接稳定类名（图片类名复用 IMAGE_CLASS_NAMES.image） */
 export const LINK_CLASS_NAMES = {
@@ -27,8 +39,73 @@ export const LINK_CLASS_NAMES = {
   link: 'oile-link',
 } as const
 
+export { WIKILINK_CLASS_NAMES }
+
 const linkMarkDeco = Decoration.mark({ class: LINK_CLASS_NAMES.link })
 const hideDeco = Decoration.replace({})
+
+// ---- #11 双链装饰实例缓存（同 display 复用同一实例，RangeSet.eq 成立） ----
+
+const wikilinkMarkDeco = Decoration.mark({ class: WIKILINK_CLASS_NAMES.wikilink })
+const wikilinkWidgetDecos = new Map<string, ReturnType<typeof Decoration.replace>>()
+
+function wikilinkWidgetDeco(display: string): ReturnType<typeof Decoration.replace> {
+  let deco = wikilinkWidgetDecos.get(display)
+  if (!deco) {
+    deco = Decoration.replace({ widget: new LiveWikilinkWidget(display) })
+    wikilinkWidgetDecos.set(display, deco)
+  }
+  return deco
+}
+
+/**
+ * #11 live 双链 widget：非活动行把 `[[…]]` 整体替换为显示文字（别名或
+ * 链接名）。纯呈现（无加载/失败生命周期）；点击交互经编辑器级
+ * Ctrl/Cmd+mousedown 的 posAtCoords 命中（替换区间仍有文档坐标）。
+ */
+export class LiveWikilinkWidget extends WidgetType {
+  constructor(readonly displayText: string) {
+    super()
+  }
+
+  eq(other: LiveWikilinkWidget): boolean {
+    return other.displayText === this.displayText
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement('span')
+    span.className = WIKILINK_CLASS_NAMES.wikilink
+    span.textContent = this.displayText
+    return span
+  }
+
+  ignoreEvent(): boolean {
+    return true // 无内部交互（激活走编辑器级 mousedown）
+  }
+}
+
+/** 双链排除的代码上下文（lezer 节点名）：围栏/缩进代码与行内代码内按源码呈现 */
+const WIKILINK_CODE_CONTEXTS = new Set([
+  'FencedCode',
+  'CodeBlock',
+  'CodeText',
+  'CodeMark',
+  'CodeInfo',
+  'InlineCode',
+])
+
+/** occurrence 起点是否处于代码上下文或 frontmatter 内（源码降级边界） */
+function wikilinkSuppressed(tree: Tree, from: number, fm: SourceRange | null): boolean {
+  if (fm && from < fm.end) {
+    return true
+  }
+  for (const node of chainAt(tree, from)) {
+    if (WIKILINK_CODE_CONTEXTS.has(node.name)) {
+      return true
+    }
+  }
+  return false
+}
 
 /** 无管理器形态（纯构建直驱）的缓存键（模块级常量对象） */
 const NO_MANAGER = {}
@@ -164,16 +241,17 @@ function subtractIntervals(
 }
 
 /**
- * 构建视口内链接/图片间接装饰（纯数据输入，可单测直驱）。
+ * 构建视口内链接/图片间接装饰（原始区间表；#11 起与双链装饰合并为同一
+ * ViewPlugin 的输出）。纯数据输入，可单测直驱。
  * visitRange 相交访问可能重复命中跨区间边界的节点——以节点 from 去重。
  */
-export function buildLinkImageDecorations(
+export function buildLinkImageDecorationRanges(
   doc: Text,
   tree: Tree,
   selection: EditorSelection,
   visibleRanges: ReadonlyArray<{ from: number; to: number }>,
   images?: ImageResourceManager,
-): DecorationSet {
+): Array<Range<Decoration>> {
   const out: Array<Range<Decoration>> = []
   const seen = new Set<SyntaxNode>()
   const imageRangesByRange: Array<Array<{ from: number; to: number }>> = []
@@ -260,7 +338,68 @@ export function buildLinkImageDecorations(
       }
     })
   }
-  return RangeSet.of(out, true)
+  return out
+}
+
+/** 构建视口内链接/图片间接装饰（#10 契约入口；区间表版之上的包装） */
+export function buildLinkImageDecorations(
+  doc: Text,
+  tree: Tree,
+  selection: EditorSelection,
+  visibleRanges: ReadonlyArray<{ from: number; to: number }>,
+  images?: ImageResourceManager,
+): DecorationSet {
+  return RangeSet.of(
+    buildLinkImageDecorationRanges(doc, tree, selection, visibleRanges, images),
+    true,
+  )
+}
+
+/**
+ * 构建视口内双链装饰区间（#11）：逐行扫描 shared/wikilink 的出现表——
+ * - 非活动行：`[[…]]` 整体替换为显示文字 widget（别名或链接名）
+ * - 活动行：mark 标记整个出现（源码可编辑，样式语义仍生效）
+ * - 代码上下文（围栏/缩进/行内代码）与 frontmatter 内不装饰（源码降级）
+ * 纯数据输入，可单测直驱。
+ */
+export function buildWikilinkDecorationRanges(
+  doc: Text,
+  tree: Tree,
+  selection: EditorSelection,
+  visibleRanges: ReadonlyArray<{ from: number; to: number }>,
+  fm: SourceRange | null,
+): Array<Range<Decoration>> {
+  const out: Array<Range<Decoration>> = []
+  const seenLines = new Set<number>()
+  for (const range of visibleRanges) {
+    let pos = range.from
+    while (pos < range.to) {
+      const line = doc.lineAt(pos)
+      if (!seenLines.has(line.number)) {
+        seenLines.add(line.number)
+        const active = isLineActive(selection, doc, line.number)
+        for (const hit of scanWikilinksInLine(line.text, line.from)) {
+          if (wikilinkSuppressed(tree, hit.from, fm)) {
+            continue
+          }
+          const parsed = parseWikilinkInner(hit.inner)
+          if (!parsed) {
+            continue // 防御：扫描已过滤非法形态
+          }
+          out.push(
+            active
+              ? wikilinkMarkDeco.range(hit.from, hit.to)
+              : wikilinkWidgetDeco(parsed.display).range(hit.from, hit.to),
+          )
+        }
+      }
+      if (line.to >= range.to) {
+        break
+      }
+      pos = line.to + 1
+    }
+  }
+  return out
 }
 
 /** 树上查找 pos 处链接的目标 href；非链接位置返回 null */
@@ -296,10 +435,44 @@ export function activateLinkAtPos(
   return true
 }
 
-/** mousedown 语义：Ctrl/Cmd 按下且命中链接才激活（preventDefault 并吞掉
- *  CM6 默认处理）；其余交还编辑器（普通单击 = 光标编辑） */
+/** 激活指定源位置的双链：命中即上报意图（原始 target：`|` 之前原文）并
+ *  返回 true。替换区间（非活动行 widget）仍有文档坐标，命中判定与源码态
+ *  一致。#11。 */
+export function activateWikilinkAtPos(
+  view: EditorView,
+  pos: number,
+  postActivate: (target: string, srcStart: number, srcEnd: number) => void,
+): boolean {
+  const state = view.state
+  const field = state.field(liveDecorationsField, false)
+  if (!field) {
+    return false
+  }
+  const clamped = Math.max(0, Math.min(pos, state.doc.length))
+  const line = state.doc.lineAt(clamped)
+  const hit = wikilinkAtCol(line.text, clamped - line.from)
+  if (!hit) {
+    return false
+  }
+  // wikilinkAtCol 产出的是行内相对坐标：换算回全文绝对 offset（抑制检查与
+  // 上报区间都以全文坐标为契约）
+  const from = line.from + hit.from
+  const to = line.from + hit.to
+  if (parseWikilinkInner(hit.inner) === null || wikilinkSuppressed(field.tree, from, field.fm)) {
+    return false
+  }
+  const pipeAt = hit.inner.indexOf('|')
+  const target = pipeAt >= 0 ? hit.inner.slice(0, pipeAt) : hit.inner
+  postActivate(target, from, to)
+  return true
+}
+
+/** mousedown 语义：Ctrl/Cmd 按下且命中链接/双链才激活（preventDefault 并吞掉
+ *  CM6 默认处理）；其余交还编辑器（普通单击 = 光标编辑）。
+ *  #11：双链先于普通链接判定（两者语法不重叠，先后仅是判定次序） */
 export function makeLinkMouseDownHandler(
   postActivate: (href: string, srcStart: number, srcEnd: number) => void,
+  postActivateWikilink?: (target: string, srcStart: number, srcEnd: number) => void,
 ): (event: MouseEvent, view: EditorView) => boolean {
   return (event, view) => {
     if (!(event.ctrlKey || event.metaKey)) {
@@ -310,6 +483,10 @@ export function makeLinkMouseDownHandler(
     if (pos === null) {
       return false
     }
+    if (postActivateWikilink && activateWikilinkAtPos(view, pos, postActivateWikilink)) {
+      event.preventDefault()
+      return true
+    }
     if (activateLinkAtPos(view, pos, postActivate)) {
       event.preventDefault()
       return true
@@ -318,12 +495,14 @@ export function makeLinkMouseDownHandler(
   }
 }
 
-/** live 链接/图片扩展装配：视口间接装饰 + 图片资源管理器 + Ctrl/Cmd 单击 */
+/** live 链接/图片/双链扩展装配：视口间接装饰 + 图片资源管理器 + Ctrl/Cmd 单击 */
 export function createLinkInteractions(opts: {
   postActivate: (href: string, srcStart: number, srcEnd: number) => void
   images: ImageResourceManager
+  /** #11 双链激活回调（缺省不启用双链点击判定） */
+  postActivateWikilink?: (target: string, srcStart: number, srcEnd: number) => void
 }): Extension {
-  const onMouseDown = makeLinkMouseDownHandler(opts.postActivate)
+  const onMouseDown = makeLinkMouseDownHandler(opts.postActivate, opts.postActivateWikilink)
   return ViewPlugin.fromClass(
     class {
       decorations: DecorationSet
@@ -342,12 +521,26 @@ export function createLinkInteractions(opts: {
         if (!field) {
           return RangeSet.empty
         }
-        return buildLinkImageDecorations(
-          view.state.doc,
-          field.tree,
-          view.state.selection,
-          view.visibleRanges,
-          opts.images,
+        // #11：链接/图片（树驱动）与双链（行扫描）的区间合并为同一装饰集
+        // ——两类语法不重叠，RangeSet.of 排序去重即可
+        return RangeSet.of(
+          [
+            ...buildLinkImageDecorationRanges(
+              view.state.doc,
+              field.tree,
+              view.state.selection,
+              view.visibleRanges,
+              opts.images,
+            ),
+            ...buildWikilinkDecorationRanges(
+              view.state.doc,
+              field.tree,
+              view.state.selection,
+              view.visibleRanges,
+              field.fm,
+            ),
+          ],
+          true,
         )
       }
     },
