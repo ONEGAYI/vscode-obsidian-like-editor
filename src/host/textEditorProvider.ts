@@ -607,7 +607,11 @@ export function createTextEditorProvider(
       const remembered = readRemembered()
       const resolveBehavior = decideResolveBehavior(remembered, uriInDiffContext(document.uri))
       if (resolveBehavior === 'bounce-to-source') {
-        void vscode.commands.executeCommand('vscode.openWith', document.uri, 'default')
+        // 弹回同样经 openWith('default')（新开 tab）：完成后清理被弹回的
+        // 本 custom tab（dirty 保守保留，与 toSource 命令同口径）
+        void vscode.commands
+          .executeCommand('vscode.openWith', document.uri, 'default')
+          .then(() => closeStaleVsidianTabs(document.uri))
         return
       }
       const entry = openEntry(document)
@@ -716,15 +720,57 @@ export function createTextEditorProvider(
   /** 执行动作计划。记忆写入时序（viewCycle 模块约定）：open-in-vsidian
    *  必须先写记忆再 openWith（resolve 的弹回/恢复读最新记忆，后写会被
    *  弹回或落到错误模式）；其余动作成功后写 */
+  /** 1.86 的 vscode.openWith 对「同资源不同编辑器」是新开 tab 而非原位
+   *  替换（实测）：切到源码编辑器后关闭被替换的旧 Vsidian tab 完成原位
+   *  切换体验。dirty 时保守保留——1.86 关闭 dirty tab 有 revert 风险
+   *  （即使另一视图显示同一文档，见 diff 陷阱笔记陷阱 3），留给用户处理 */
+  const closeStaleVsidianTabs = async (uri: vscode.Uri): Promise<void> => {
+    const doc = vscode.workspace.textDocuments.find(
+      (d) => d.uri.toString() === uri.toString(),
+    )
+    if (doc?.isDirty) {
+      return
+    }
+    for (const group of vscode.window.tabGroups.all) {
+      for (const tab of group.tabs) {
+        const input = tab.input
+        if (
+          tab !== group.activeTab &&
+          input instanceof vscode.TabInputCustom &&
+          input.viewType === VIEW_TYPE &&
+          input.uri.toString() === uri.toString()
+        ) {
+          try {
+            await vscode.window.tabGroups.close(tab)
+          } catch {
+            // 新编辑器已就位，残留 tab 不影响切换结果
+          }
+        }
+      }
+    }
+  }
+
   const applyViewSwitch = async (uri: vscode.Uri, plan: ViewSwitchPlan): Promise<boolean> => {
     switch (plan.kind) {
       case 'open-in-vsidian': {
         await writeRemembered(plan.mode)
         await vscode.commands.executeCommand('vscode.openWith', uri, VIEW_TYPE)
+        // openWith 对已存在的同 viewType 面板是重显（不重置模式）：显式
+        // 目标命令须把重显面板也切到目标模式（全新面板经 resolve 恢复
+        // 链路落到目标模式，此处的补发为同值幂等）
+        const entry = getEntry(uri)
+        const panels = entry?.session.getInfo().panels.filter((p) => p.ready) ?? []
+        for (const panel of panels) {
+          entry!.session.postToPanel(panel.sessionId, {
+            kind: 'view.mode.set',
+            mode: plan.mode,
+          })
+        }
         return true
       }
       case 'open-in-source-editor': {
         await vscode.commands.executeCommand('vscode.openWith', uri, 'default')
+        await closeStaleVsidianTabs(uri)
         await writeRemembered('source')
         return true
       }
@@ -741,7 +787,9 @@ export function createTextEditorProvider(
         return true
       }
       case 'reject': {
-        await vscode.window.showWarningMessage(
+        // 提示不阻塞命令返回：showWarningMessage 的 Promise 在用户交互前
+        // 不 resolve，await 会让命令调用方（键绑/测试/其他扩展）挂起
+        void vscode.window.showWarningMessage(
           plan.reason === 'diff-context'
             ? '对比视图不支持视图切换'
             : plan.reason === 'panel-not-ready'
@@ -772,7 +820,8 @@ export function createTextEditorProvider(
       : false
     const active = deriveActiveTabMode()
     if (!active) {
-      await vscode.window.showWarningMessage(
+      // 同 reject 分支：提示不阻塞命令返回
+      void vscode.window.showWarningMessage(
         '请先聚焦一个 Markdown 文档（Vsidian 面板或 .md 源码编辑器）再切换视图模式',
       )
       return false
@@ -780,10 +829,7 @@ export function createTextEditorProvider(
     const target = explicitTarget ?? nextTriMode(active.mode)
     const entry = getEntry(active.uri)
     const hasReadyPanel = entry?.session.getInfo().panels.some((p) => p.ready) ?? false
-    const ok = await applyViewSwitch(
-      active.uri,
-      planViewSwitch(active.mode, target, hasReadyPanel, inDiffContext),
-    )
+    const ok = await applyViewSwitch(active.uri, planViewSwitch(active.mode, target, hasReadyPanel, inDiffContext))
     if (ok) {
       refreshActiveModeContext()
     }
@@ -1073,10 +1119,13 @@ export function createTextEditorProvider(
     ),
     vscode.commands.registerCommand(
       // #38 全局模式记忆重置（模拟无历史）：globalState 在同一集成进程内
-      // 共享，用例须自带前置重置避免跨用例状态泄漏
+      // 共享，用例须自带前置重置避免跨用例状态泄漏。写入 'live' 而非
+      // update(key, undefined)：1.86.2 的删除在 storage 层异步生效，会迟到
+      // 覆盖用例内后续写入（实测竞态）；'live' 与「无历史」的容错读取语义
+      // 等价且无竞态
       'onegayi.vsidian._test.resetLastMode',
       async () => {
-        await context.globalState.update(LAST_MODE_KEY, undefined)
+        await context.globalState.update(LAST_MODE_KEY, 'live')
         return true
       },
     ),
