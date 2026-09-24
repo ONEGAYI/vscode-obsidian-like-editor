@@ -23,6 +23,7 @@
 - **链接与图片**：live 视图已渲染的普通链接和双链单击跳转，源码显形后普通单击编辑，Ctrl/Cmd + 单击仍可跳转（reading 直接单击）；本地图片经宿主通道装载，缺失图呈现可重试错误态；`file://`、`javascript:` 等危险 scheme 被拦截。注：CSP 以 `img-src https:` 放行任意 https 图源（远程图床支持的设计代价——任意 https 图片可达，理论上可被用作跟踪像素）。
 - **双链**：`[[笔记名]]`、`[[路径/笔记|别名]]`、`[[笔记#标题]]` 四形态；重名弹出候选选择，缺失目标提示且不自动建文件。
 - **表格**：live 视图的安全普通表格以网格显示，点击单元格后可直接在格内编辑且网格保持；可从悬停入口增添行列、用点阵抓手拖排行，行列选中有边框反馈；Tab/Shift+Tab 单元格导航，行末 Tab 移到下一表格行首格（末行末格 Tab 交默认缩进）；命令面板六个「表格：…」命令增删行列；单元格内键入 `|` 自动转义。列数不一致的表格显示可编辑源码。
+- **创建表格**：命令面板执行「Vsidian: Create a Table」或中文界面的「Vsidian: 创建表格」，在光标处建立两列、空表头加一行空数据的表格。光标在行内文字之间时，左右文字分到表格上下，并各隔一空行；一次撤销可恢复原文。
 - **查找**：编辑器内 Ctrl+F（限本编辑器激活时）。
 - **外部修改安全同步**：检测到无法安全同步的外部修改时顶部出现冲突横幅——本地输入已保留，可「复制未确认输入」或「放弃本地修改并重新同步」。
 
@@ -33,7 +34,7 @@ npm install                     # 安装锁定依赖（版本全部精确锁定�
 npm run compile                 # esbuild 双产物 + tsc 类型检查
 npm run watch                   # esbuild watch
 npm run test:unit               # vitest 与启动器契约测试（无 VSCode 宿主依赖）
-npm run test:integration        # VSCode 1.86.2 真宿主集成测试（61 例）
+npm run test:integration        # VSCode 1.86.2 真宿主集成测试（63 例）
 node test/integration/runInstalled.mjs  # VSIX 安装态回归（先 package 出 VSIX）
 node test/perf/runPerf.mjs      # 性能档位测量（报告写 docs/perf/data/）
 npx @vscode/vsce package --no-dependencies  # 打包 VSIX（bundle 自包含，不带 node_modules）
@@ -65,7 +66,7 @@ Remove-Item Env:VSIDIAN_TEST_HOST_MODE
 
 ## 验证与性能
 
-- 本分支回归：713 项 Vitest 单测、6 项启动器契约测试，以及开发态与安装态各 61 项真实 VSCode 1.86.2 宿主集成用例通过；人工验收另见[验证清单](docs/specs/manual-verification.md)。
+- 本分支回归：726 项 Vitest 单测、6 项启动器契约测试，以及开发态与安装态各 63 项真实 VSCode 1.86.2 宿主集成用例通过；人工验收另见[验证清单](docs/specs/manual-verification.md)。
 - 性能实测与功能验证矩阵：[docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md)。
 - 人工验证项（IME/鼠标手感/远程环境）：[docs/specs/manual-verification.md](docs/specs/manual-verification.md)。
 

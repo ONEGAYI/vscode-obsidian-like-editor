@@ -26,6 +26,7 @@ import { liveDecorationsField } from './liveDecorations'
 import { needsPipeEscapeAt } from './tableCells'
 import { planTableEdit, planTableRowMove, tableCellNavTarget, type TableRowInfo } from './tableStructure'
 import { createTableControls } from './tableControls'
+import { planCreateTable } from './tableCreate'
 
 /** 表格行身份的解析树节点名（分隔行整体是一个 TableDelimiter 节点） */
 const TABLE_LINE_NODE_NAMES = new Set(['TableHeader', 'TableRow', 'TableDelimiter'])
@@ -198,6 +199,15 @@ export const tableTabBackward: Command = (view: EditorView): boolean => {
       view.state.selection.ranges.length - 1,
     ),
   })
+  return true
+}
+
+/** 建表命令只派发一笔 CM6 事务；宿主负责 LF/CRLF 转换与撤销历史。 */
+export function runCreateTable(view: EditorView): boolean {
+  if (view.compositionStarted) return false
+  const selection = view.state.selection.main
+  const plan = planCreateTable(view.state.doc.toString(), selection.from, selection.to)
+  view.dispatch({ changes: plan.changes, selection: { anchor: plan.selection }, scrollIntoView: true })
   return true
 }
 

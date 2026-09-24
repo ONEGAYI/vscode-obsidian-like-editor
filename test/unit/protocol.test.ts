@@ -221,6 +221,11 @@ describe('isHostToWebview', () => {
     expect(isHostToWebview({ kind: 'table.command', op: 1 })).toBe(false)
   })
 
+  it('创建空表格是宿主到 webview 的独立命令消息', () => {
+    expect(isHostToWebview({ kind: 'table.create' })).toBe(true)
+    expect(isWebviewToHost({ kind: 'table.create' })).toBe(false)
+  })
+
   it('接受合法 table.test.key，拒绝未知键名（#13 测试钩子）', () => {
     expect(isHostToWebview({ kind: 'table.test.key', key: 'tab' })).toBe(true)
     expect(isHostToWebview({ kind: 'table.test.key', key: 'shift-tab' })).toBe(true)

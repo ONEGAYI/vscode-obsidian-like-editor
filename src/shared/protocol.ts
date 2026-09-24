@@ -88,6 +88,8 @@ export type HostToWebview =
    *  模式只读忽略）。变更经 webview 的 CM6 事务走标准出站链路
    *  （edit.request 一笔 = 宿主撤销一次） */
   | { kind: 'table.command'; op: TableEditOp }
+  /** 在当前光标/选区建立两列两内容行的空表格，仍走 CM6 文本事务。 */
+  | { kind: 'table.create' }
   /** 测试钩子（#13）：向真实编辑器派发 Tab/Shift+Tab keydown（与用户按键
    *  同一 keymap 链路；纯选区导航，零写回）。宿主测试无法向 webview 派发
    *  真实键盘事件，以此通道验证导航装配 */
@@ -767,6 +769,8 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return v.direction === 'next' || v.direction === 'prev'
     case 'table.command':
       return isTableEditOp(v.op)
+    case 'table.create':
+      return true
     case 'table.test.key':
       return v.key === 'tab' || v.key === 'shift-tab'
     case 'table.test.cellClick':

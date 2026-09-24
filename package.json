@@ -41,6 +41,11 @@
         "category": "Vsidian"
       },
       {
+        "command": "onegayi.vsidian.table.create",
+        "title": "%command.table.create.title%",
+        "category": "Vsidian"
+      },
+      {
         "command": "onegayi.vsidian.table.insertRowAbove",
         "title": "表格：上方插入行",
         "category": "Vsidian"

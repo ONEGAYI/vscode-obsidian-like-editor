@@ -51,7 +51,7 @@ import { createReadingContainer, prepareReadingImages } from './readingView'
 import { READING_MARKDOWN_CLASS_NAMES } from './readingMarkdown'
 import { resolveStaleTaskToggle } from './taskToggle'
 import { VirtualReadingView } from './readingVirtualView'
-import { runTableEdit, tableEditing } from './tableEditing'
+import { runCreateTable, runTableEdit, tableEditing } from './tableEditing'
 
 /** rAF 不可用环境（旧 jsdom）退化为短超时（与 readingVirtualView 同款） */
 function scheduleFrame(fn: () => void): void {
@@ -664,6 +664,12 @@ export class WebviewSyncController {
         // 暂停态下与 live 输入同语义（本地保留、不写回）
         if (this.view && this.viewMode === 'live') {
           runTableEdit(this.view, message.op)
+        }
+        break
+      }
+      case 'table.create': {
+        if (this.view && this.viewMode === 'live') {
+          runCreateTable(this.view)
         }
         break
       }
