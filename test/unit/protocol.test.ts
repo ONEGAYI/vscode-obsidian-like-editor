@@ -331,12 +331,51 @@ describe('模式切换协议（#6）', () => {
       liveHeadingDecorationColor: 'rgb(1, 2, 3)',
       readingHeadingDecorationColor: null,
       readingVarProbe: 'contract-ok',
+      liveStrongDecorationColor: null,
+      liveInlineCodeDecorationColor: 'rgb(7, 8, 9)',
+      liveCodeLineDecorationColor: null,
+      readingStrongDecorationColor: 'rgb(10, 11, 12)',
     }
     expect(isWebviewToHost({ ...baseViewState, cssProbe: probe })).toBe(true)
     expect(isWebviewToHost({ ...baseViewState, cssProbe: { ...probe, readingVarProbe: 42 } })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, cssProbe: { ...probe, liveStrongDecorationColor: 7 } })).toBe(false)
     expect(isWebviewToHost({ ...baseViewState, cssProbe: { liveHeadingDecorationColor: 'x' } })).toBe(false)
     expect(isWebviewToHost({ ...baseViewState, cssProbe: null })).toBe(false)
     expect(isWebviewToHost({ ...baseViewState, cssProbe: 'x' })).toBe(false)
+  })
+
+  it('view.state 接受 #8 语法统计探针（liveSyntax/readingSyntax），拒绝结构错误', () => {
+    const live = {
+      headingLines: 2,
+      headerSpans: 2,
+      strongSpans: 1,
+      emphasisSpans: 1,
+      inlineCodeSpans: 1,
+      quoteLines: 2,
+      codeLines: 3,
+      listLines: 3,
+      hrLines: 1,
+      frontmatterLines: 0,
+      taskGlyphs: 2,
+      taskChecked: 1,
+    }
+    const reading = {
+      headings: 2,
+      strongCount: 1,
+      emphasisCount: 1,
+      inlineCodeCount: 1,
+      blockquoteBlocks: 1,
+      codeBlocks: 1,
+      hrCount: 1,
+      listItems: 3,
+      taskCheckboxes: 2,
+      taskChecked: 1,
+    }
+    expect(isWebviewToHost({ ...baseViewState, liveSyntax: live, readingSyntax: reading })).toBe(true)
+    expect(isWebviewToHost({ ...baseViewState, liveSyntax: { ...live, strongSpans: -1 } })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, liveSyntax: { ...live, taskGlyphs: '2' } })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, readingSyntax: { ...reading, headings: 1.5 } })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, liveSyntax: null })).toBe(false)
   })
 })
 

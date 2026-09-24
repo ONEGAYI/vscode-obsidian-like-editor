@@ -203,13 +203,30 @@ export class VirtualReadingView {
     return idx === null ? null : this.blocks[idx]!.start
   }
 
-  /** 源 offset → 锚点块 start（含屏外目标；floor 语义与 #6 一致） */
+  /** 源 offset → 锚点（含屏外目标；floor 语义与 #6 一致）。
+   *  列表块内按 li 子锚点归位到项级（光标恢复精度），挂载单位仍为整块 */
   anchorStartFor(offset: number): number | null {
     if (!this.virtualized) {
       return readingAnchorStartFor(this.container, offset)
     }
     const idx = blockIndexForOffset(this.blocks, offset)
-    return idx === null ? null : this.blocks[idx]!.start
+    if (idx === null) {
+      return null
+    }
+    const block = this.blocks[idx]!
+    const anchors = block.itemAnchors
+    if (anchors && anchors.length > 0) {
+      let prev = block.start
+      for (const a of anchors) {
+        if (a <= offset) {
+          prev = a
+        } else {
+          break
+        }
+      }
+      return prev
+    }
+    return block.start
   }
 
   /** 滚动到源 start 对应块（虚拟模式下先按高度表估计定位再实测修正） */
@@ -417,7 +434,7 @@ export class VirtualReadingView {
         this.heights[i] = h
       }
       const block = this.blocks[i]!
-      if (block.kind === 'paragraph' || block.kind === 'list-item') {
+      if (block.kind === 'paragraph') {
         let lines = 1
         for (let p = block.start; p < block.end; p++) {
           if (this.text.charCodeAt(p) === 10) {

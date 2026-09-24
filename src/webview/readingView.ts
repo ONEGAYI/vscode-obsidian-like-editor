@@ -1,24 +1,24 @@
-// 阅读视图 DOM 构建（工单 #6 基础版）：
-// 从 LF 全文构建带源位置锚点的块级 DOM，供 #7 按需挂载（以块为单位）与
-// #9 任务勾选（marker 区间）消费。
+// 阅读视图 DOM 构建（工单 #8：markdown-it 渲染的块级 DOM）：
+// 从块模型（splitReadingBlocks 产出的 html）构建带源位置锚点的块级元素，
+// 供 #7 按需挂载（以块为单位）与 #9 任务勾选（marker 区间）消费。
 //
 // 结构契约（稳定样式入口 ADR-0004 + 源锚点）：
 // <div class="oile-view-reading" data-oile-mode="reading">
 //   <div class="oile-reading-block oile-reading-heading-1"
-//        data-oile-src-start="0" data-oile-src-end="5">…</div>
-//   <div class="oile-reading-block oile-reading-paragraph" …>
-//   <div class="oile-reading-block oile-reading-list-item oile-reading-task" …>
-//     <input class="oile-reading-task-checkbox" type="checkbox" disabled
-//            data-oile-src-start="…" data-oile-src-end="…">…text…
+//        data-oile-src-start="0" data-oile-src-end="5"><h1>…</h1></div>
+//   <div class="oile-reading-block oile-reading-paragraph" …><p>…</p></div>
+//   <div class="oile-reading-block oile-reading-list" …>
+//     <ul><li data-oile-src-start…><input …>…</li></ul>
 //   </div>
 // </div>
 //
 // - data-oile-src-start/end：LF 全文 UTF-16 offset（协议 SerChange 同构）；
-//   checkbox 的锚点指向源文 `[ ]`/`[x]` 标记区间，#9 以此构造精确替换
-// - 源文本一律经 textContent 注入（不作为 HTML 解析，CSP 与注入安全边界）
-// - 本票全量渲染（#7 改为按需挂载，块结构与锚点字段不变）
+//   li 与 checkbox 另有自身锚点（#9 以此构造精确替换）
+// - 块内容来自 markdown-it 渲染（html:false）+ DOM 纵深净化 + 任务项转换
+//   （checkbox disabled，#8 只读显示；#9 实现勾选写回）
 // - 类名映射 Obsidian 同款选择器，见 docs/design/obsidian-selector-map.md
 import { splitReadingBlocks, type ReadingBlock } from './readingBlocks'
+import { convertTaskItems, sanitizeReadingDom } from './readingMarkdown'
 
 /** 稳定类名常量：一期 CSS 契约入口（ADR-0004），风格沿 `oile-` 前缀 */
 export const READING_CLASS_NAMES = {
@@ -26,10 +26,14 @@ export const READING_CLASS_NAMES = {
   block: 'oile-reading-block',
   heading: (lv: number) => `oile-reading-heading-${lv}`,
   paragraph: 'oile-reading-paragraph',
+  list: 'oile-reading-list',
+  blockquote: 'oile-reading-blockquote',
+  codeBlock: 'oile-reading-code-block',
+  hr: 'oile-reading-hr',
+  frontmatter: 'oile-reading-frontmatter',
   listItem: 'oile-reading-list-item',
   task: 'oile-reading-task',
   taskCheckbox: 'oile-reading-task-checkbox',
-  codeBlock: 'oile-reading-code-block',
   /** #7 视口占位 spacer（屏外块的高度占位，非内容节点） */
   spacer: 'oile-reading-spacer',
   spacerTop: 'oile-reading-spacer-top',
@@ -53,44 +57,39 @@ function blockClassNames(block: ReadingBlock): string[] {
     case 'paragraph':
       names.push(READING_CLASS_NAMES.paragraph)
       break
-    case 'list-item':
-      names.push(READING_CLASS_NAMES.listItem)
-      if (block.task) {
-        names.push(READING_CLASS_NAMES.task)
-      }
+    case 'list':
+      names.push(READING_CLASS_NAMES.list)
+      break
+    case 'blockquote':
+      names.push(READING_CLASS_NAMES.blockquote)
       break
     case 'code-block':
       names.push(READING_CLASS_NAMES.codeBlock)
+      break
+    case 'hr':
+      names.push(READING_CLASS_NAMES.hr)
+      break
+    case 'frontmatter':
+      names.push(READING_CLASS_NAMES.frontmatter)
       break
   }
   return names
 }
 
 /**
- * 创建单个阅读块元素（#6 结构契约：稳定类名 + data-oile-src-start/end 锚点；
- * 任务项带 marker 区间锚点的 disabled checkbox）。
- * #7 起全量渲染（renderReadingBlocks）与按需挂载（readingVirtualView）
- * 共用此构建器，保证两种路径的块结构逐字节一致。
+ * 创建单个阅读块元素（结构契约：稳定类名 + data-oile-src-start/end 锚点；
+ * 内部 HTML 为 markdown-it 产物，进 DOM 前净化并转换任务项）。
+ * #7 全量渲染与按需挂载共用此构建器，保证两种路径的块结构逐字节一致。
  */
 export function createReadingBlockElement(block: ReadingBlock, text: string): HTMLElement {
   const el = document.createElement('div')
   el.className = blockClassNames(block).join(' ')
   el.dataset['oileSrcStart'] = String(block.start)
   el.dataset['oileSrcEnd'] = String(block.end)
-  if (block.task) {
-    // #9 语义入口：disabled checkbox 携带标记区间锚点；勾选写回由 #9 实现
-    const box = document.createElement('input')
-    box.type = 'checkbox'
-    box.className = READING_CLASS_NAMES.taskCheckbox
-    box.disabled = true
-    box.checked = block.task.checked
-    box.dataset['oileSrcStart'] = String(block.task.markerStart)
-    box.dataset['oileSrcEnd'] = String(block.task.markerEnd)
-    el.appendChild(box)
-    el.appendChild(document.createTextNode(' '))
-    el.appendChild(document.createTextNode(text.slice(block.start, block.end)))
-  } else {
-    el.textContent = text.slice(block.start, block.end)
+  el.innerHTML = block.html
+  sanitizeReadingDom(el)
+  if (block.kind === 'list') {
+    convertTaskItems(el, text)
   }
   return el
 }
@@ -132,7 +131,8 @@ export function findReadingAnchor(container: HTMLElement): number | null {
 }
 
 /**
- * 源 offset → 锚点块 start：包含（或前邻）该 offset 的块。
+ * 源 offset → 锚点：包含（或前邻）该 offset 的块 start；列表块内按 li
+ * 子锚点归位到项级（与虚拟化路径的 anchorStartFor 同语义）。
  * 供 live→reading 切换时把光标 offset 映射为块身份。
  */
 export function readingAnchorStartFor(container: HTMLElement, offset: number): number | null {
@@ -147,11 +147,29 @@ export function readingAnchorStartFor(container: HTMLElement, offset: number): n
     const start = Number(el.dataset['oileSrcStart'])
     const end = Number(el.dataset['oileSrcEnd'])
     if (offset < end) {
-      return start <= offset ? start : Number(last.dataset['oileSrcStart'])
+      if (start > offset) {
+        return Number(last.dataset['oileSrcStart'])
+      }
+      return listItemAnchorFor(el, offset) ?? start
     }
     last = el
   }
-  return Number(last.dataset['oileSrcStart'])
+  return listItemAnchorFor(last, offset) ?? Number(last.dataset['oileSrcStart'])
+}
+
+/** 块内 li 子锚点：≤ offset 的最大 li start（无 li 返回 null） */
+function listItemAnchorFor(block: HTMLElement, offset: number): number | null {
+  const items = block.querySelectorAll<HTMLElement>('li[data-oile-src-start]')
+  let prev: number | null = null
+  for (const li of Array.from(items)) {
+    const start = Number(li.dataset['oileSrcStart'])
+    if (start <= offset) {
+      prev = start
+    } else {
+      break
+    }
+  }
+  return prev
 }
 
 /** 按源 offset 滚动到对应锚点块（先经 readingAnchorStartFor 映射） */

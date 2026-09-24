@@ -118,6 +118,10 @@ export type WebviewToHost =
       readingScrollHeightPx?: number
       /** 稳定样式契约探针（#6 内部测试 CSS 验证入口）：目标元素不存在时字段为 null */
       cssProbe?: CssProbeReport
+      /** live 侧语法装饰统计（#8 双视图语义一致性观测；装饰集合级计数，非 DOM） */
+      liveSyntax?: LiveSyntaxProbe
+      /** reading 侧渲染语义统计（#8 双视图语义一致性观测；小文档全量挂载时有效） */
+      readingSyntax?: ReadingSyntaxProbe
     }
   /** 阅读视图性能探针回报（#7）：滚动往返期间的挂载/回收与解析观测 */
   | {
@@ -180,6 +184,47 @@ export interface CssProbeReport {
   readingHeadingDecorationColor: string | null
   /** `.oile-view-reading` 上被外部片段覆盖的探针变量值；未覆盖为空（null） */
   readingVarProbe: string | null
+  /** #8：live 粗体 span 经 `.oile-strong` 命中的属性值；无目标为 null */
+  liveStrongDecorationColor: string | null
+  /** #8：live 行内代码 span 经 `.oile-inline-code` 命中的属性值；无目标为 null */
+  liveInlineCodeDecorationColor: string | null
+  /** #8：live 代码行经 `.oile-code-line` 命中的属性值；无目标为 null */
+  liveCodeLineDecorationColor: string | null
+  /** #8：阅读视图内语义 strong 经 `.oile-view-reading strong` 命中的属性值 */
+  readingStrongDecorationColor: string | null
+}
+
+/** live 侧语法装饰统计（#8：装饰集合计数，覆盖标题/行内/块级/任务/降级观测） */
+export interface LiveSyntaxProbe {
+  /** 标题行数（#5 类） */
+  headingLines: number
+  /** 标题内容 span 数 */
+  headerSpans: number
+  strongSpans: number
+  emphasisSpans: number
+  inlineCodeSpans: number
+  quoteLines: number
+  codeLines: number
+  listLines: number
+  hrLines: number
+  frontmatterLines: number
+  /** 任务字形数与其中勾选数 */
+  taskGlyphs: number
+  taskChecked: number
+}
+
+/** reading 侧渲染语义统计（#8：DOM 级计数，用于双视图一致性对拍） */
+export interface ReadingSyntaxProbe {
+  headings: number
+  strongCount: number
+  emphasisCount: number
+  inlineCodeCount: number
+  blockquoteBlocks: number
+  codeBlocks: number
+  hrCount: number
+  listItems: number
+  taskCheckboxes: number
+  taskChecked: number
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -235,7 +280,45 @@ function isCssProbeReport(v: unknown): v is CssProbeReport {
     isObject(v) &&
     isNullOrString(v.liveHeadingDecorationColor) &&
     isNullOrString(v.readingHeadingDecorationColor) &&
-    isNullOrString(v.readingVarProbe)
+    isNullOrString(v.readingVarProbe) &&
+    isNullOrString(v.liveStrongDecorationColor) &&
+    isNullOrString(v.liveInlineCodeDecorationColor) &&
+    isNullOrString(v.liveCodeLineDecorationColor) &&
+    isNullOrString(v.readingStrongDecorationColor)
+  )
+}
+
+function isLiveSyntaxProbe(v: unknown): v is LiveSyntaxProbe {
+  return (
+    isObject(v) &&
+    isNonNegativeInt(v.headingLines) &&
+    isNonNegativeInt(v.headerSpans) &&
+    isNonNegativeInt(v.strongSpans) &&
+    isNonNegativeInt(v.emphasisSpans) &&
+    isNonNegativeInt(v.inlineCodeSpans) &&
+    isNonNegativeInt(v.quoteLines) &&
+    isNonNegativeInt(v.codeLines) &&
+    isNonNegativeInt(v.listLines) &&
+    isNonNegativeInt(v.hrLines) &&
+    isNonNegativeInt(v.frontmatterLines) &&
+    isNonNegativeInt(v.taskGlyphs) &&
+    isNonNegativeInt(v.taskChecked)
+  )
+}
+
+function isReadingSyntaxProbe(v: unknown): v is ReadingSyntaxProbe {
+  return (
+    isObject(v) &&
+    isNonNegativeInt(v.headings) &&
+    isNonNegativeInt(v.strongCount) &&
+    isNonNegativeInt(v.emphasisCount) &&
+    isNonNegativeInt(v.inlineCodeCount) &&
+    isNonNegativeInt(v.blockquoteBlocks) &&
+    isNonNegativeInt(v.codeBlocks) &&
+    isNonNegativeInt(v.hrCount) &&
+    isNonNegativeInt(v.listItems) &&
+    isNonNegativeInt(v.taskCheckboxes) &&
+    isNonNegativeInt(v.taskChecked)
   )
 }
 
@@ -305,7 +388,9 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.readingAnchorTopPx === undefined || isNonNegativeNumber(v.readingAnchorTopPx)) &&
         (v.readingScrollTopPx === undefined || isNonNegativeNumber(v.readingScrollTopPx)) &&
         (v.readingScrollHeightPx === undefined || isNonNegativeNumber(v.readingScrollHeightPx)) &&
-        (v.cssProbe === undefined || isCssProbeReport(v.cssProbe))
+        (v.cssProbe === undefined || isCssProbeReport(v.cssProbe)) &&
+        (v.liveSyntax === undefined || isLiveSyntaxProbe(v.liveSyntax)) &&
+        (v.readingSyntax === undefined || isReadingSyntaxProbe(v.readingSyntax))
       )
     case 'reading.perf.report':
       return (

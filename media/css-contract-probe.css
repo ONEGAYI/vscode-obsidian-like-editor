@@ -24,3 +24,25 @@
 #app .oile-view-reading {
   --oile-probe-var-reading: contract-ok;
 }
+
+/* ---- #8：span 级稳定类名探针（live 行内格式与代码行） ---- */
+
+/* live 粗体内容 span（Obsidian 对应 .cm-strong） */
+#app .oile-view-live .oile-strong {
+  text-decoration-color: rgb(7, 8, 9);
+}
+
+/* live 行内代码内容 span（Obsidian 对应 .cm-inline-code） */
+#app .oile-view-live .oile-inline-code {
+  text-decoration-color: rgb(10, 11, 12);
+}
+
+/* live 围栏代码行（Obsidian 对应 .HyperMD-codeblock） */
+#app .oile-view-live .oile-code-line {
+  text-decoration-color: rgb(13, 14, 15);
+}
+
+/* reading 阅读视图：语义 strong 标签（Obsidian 对应 .markdown-preview-view strong） */
+#app .oile-view-reading .oile-reading-block strong {
+  text-decoration-color: rgb(16, 17, 18);
+}
