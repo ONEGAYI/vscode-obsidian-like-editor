@@ -15,6 +15,26 @@ const RESYNC_DOC = '重同步起始内容\n重同步第二段\n'
 const CONFLICT_DOC = '第一段原文甲\n第二段原文乙\n'
 const SPLIT_CONFLICT_DOC = '分裂测试行一\n分裂测试行二\n'
 const HEADING_DOC = '# 顶部一级标题\n普通段落第一行内容\n普通段落第二行内容\n## 中部二级标题\n另一段普通内容结尾\n'
+// #32 排版对照：标题/正文/列表/引用/表格齐全（两模式基础排版一致性断言载体）
+const TYPOGRAPHY_DOC = [
+  '# 排版对照标题',
+  '',
+  '普通段落正文，两模式基础排版对照载体。',
+  '',
+  '## 二级标题',
+  '',
+  '- 列表项甲',
+  '- 列表项乙',
+  '',
+  '> 引用块内容，用于引用排版对照。',
+  '',
+  '| 列一 | 列二 |',
+  '| --- | --- |',
+  '| 甲格 | 乙格 |',
+  '',
+  '结尾段落。',
+  '',
+].join('\n')
 // #6 模式切换：标题/段落/任务列表/代码围栏（围栏内含伪语法）
 const MODE_DOC = [
   '# 模式切换标题一',
@@ -241,6 +261,7 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   writeFileSync(path.join(wsDir, 'conflict.md'), CONFLICT_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'splitconflict.md'), SPLIT_CONFLICT_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'heading.md'), HEADING_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'typography.md'), TYPOGRAPHY_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'mode.md'), MODE_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'mode-anchor.md'), MODE_ANCHOR_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'syntax.md'), SYNTAX_DOC, 'utf8')

@@ -242,6 +242,18 @@ interface ViewState {
     currentFrom: number | null
     currentTo: number | null
   }
+  /** #32 排版一致性探针（view.state 的 webview 本地扩展字段）：
+   *  各侧样本只在对应模式激活态断言（隐藏侧几何口径无意义） */
+  typography?: {
+    live: { fontFamily: string | null; fontSizePx: number | null; lineHeightPx: number | null; textInsetPx: number | null } | null
+    reading: { fontFamily: string | null; fontSizePx: number | null; lineHeightPx: number | null; textInsetPx: number | null } | null
+    liveList: { fontFamily: string | null; fontSizePx: number | null } | null
+    readingList: { fontFamily: string | null; fontSizePx: number | null } | null
+    liveQuote: { fontFamily: string | null; fontSizePx: number | null } | null
+    readingQuote: { fontFamily: string | null; fontSizePx: number | null } | null
+    liveTable: { fontFamily: string | null; fontSizePx: number | null } | null
+    readingTable: { fontFamily: string | null; fontSizePx: number | null } | null
+  }
 }
 
 /** #7 阅读视图探针回报（reading.perf.report） */
@@ -2394,5 +2406,115 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // 切回 live 验证面板仍可用
     await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     await waitViewState('table13.md', (v) => v.viewMode === 'live')
+  }],
+
+  // ---- 工单 #32：两模式基础排版统一（共享 CSS 变量基线）----
+  // 断言口径：同一文档（typography.md）在 live / reading 两态各取一次
+  // view.state 的 typography 探针，对照激活侧样本的计算值一致；隐藏侧的
+  // 几何口径（textInsetPx）不可用，各模式态只取各自激活侧。
+
+  ['两模式正文基础排版一致：字体族/字号/行高/左留白（#32）', async () => {
+    await openWithEditor('typography.md')
+    await waitSessionReady('typography.md')
+    const uri = wsUri('typography.md').toString()
+    const live = await waitViewState('typography.md', (v) =>
+      v.viewMode === 'live' &&
+      v.typography?.live != null &&
+      v.typography.live.fontSizePx != null &&
+      v.typography.live.lineHeightPx != null &&
+      v.typography.live.textInsetPx != null)
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
+    const reading = await waitViewState('typography.md', (v) =>
+      v.viewMode === 'reading' &&
+      v.typography?.reading != null &&
+      v.typography.reading.fontSizePx != null &&
+      v.typography.reading.lineHeightPx != null &&
+      v.typography.reading.textInsetPx != null)
+    const l = live.typography!.live!
+    const r = reading.typography!.reading!
+    // 实测值输出（人工验收记录 A21 的数据来源）
+    console.log(`[#32] 正文排版 live: font=${l.fontFamily} size=${l.fontSizePx}px line=${l.lineHeightPx}px inset=${l.textInsetPx}px`)
+    console.log(`[#32] 正文排版 reading: font=${r.fontFamily} size=${r.fontSizePx}px line=${r.lineHeightPx}px inset=${r.textInsetPx}px`)
+    assert(l.fontFamily === r.fontFamily,
+      `正文字体族不一致：live=${l.fontFamily}，reading=${r.fontFamily}`)
+    assert(Math.abs(l.fontSizePx! - r.fontSizePx!) < 0.5,
+      `正文字号不一致：live=${l.fontSizePx}px，reading=${r.fontSizePx}px`)
+    assert(Math.abs(l.lineHeightPx! - r.lineHeightPx!) < 0.5,
+      `正文行高不一致：live=${l.lineHeightPx}px，reading=${r.lineHeightPx}px`)
+    assert(l.textInsetPx! > 0 && Math.abs(l.textInsetPx! - r.textInsetPx!) < 0.5,
+      `正文左留白不一致：live=${l.textInsetPx}px，reading=${r.textInsetPx}px（须为同一正留白且 >0）`)
+    // 模式切换零写回（工单验收：不修改源文、不产生保存/撤销历史）
+    const s0 = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(s0.appliedEdits === 0, `切换后不得产生写回，实际 ${s0.appliedEdits}`)
+    const doc = await vscode.workspace.openTextDocument(wsUri('typography.md'))
+    assert(!doc.isDirty, '切换不得触发保存')
+  }],
+
+  ['两模式列表/引用/表格基础排版一致（#32）', async () => {
+    await openWithEditor('typography.md')
+    await waitSessionReady('typography.md')
+    const live = await waitViewState('typography.md', (v) =>
+      v.viewMode === 'live' &&
+      v.typography?.liveList != null &&
+      v.typography?.liveQuote != null &&
+      v.typography?.liveTable != null)
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
+    const reading = await waitViewState('typography.md', (v) =>
+      v.viewMode === 'reading' &&
+      v.typography?.readingList != null &&
+      v.typography?.readingQuote != null &&
+      v.typography?.readingTable != null)
+    const lt = live.typography!
+    const rt = reading.typography!
+    console.log(`[#32] 列表 live: font=${lt.liveList!.fontFamily} size=${lt.liveList!.fontSizePx}px / reading: font=${rt.readingList!.fontFamily} size=${rt.readingList!.fontSizePx}px`)
+    console.log(`[#32] 引用 live: font=${lt.liveQuote!.fontFamily} size=${lt.liveQuote!.fontSizePx}px / reading: font=${rt.readingQuote!.fontFamily} size=${rt.readingQuote!.fontSizePx}px`)
+    console.log(`[#32] 表格 live: font=${lt.liveTable!.fontFamily} size=${lt.liveTable!.fontSizePx}px / reading: font=${rt.readingTable!.fontFamily} size=${rt.readingTable!.fontSizePx}px`)
+    for (const [name, a, b] of [
+      ['列表', lt.liveList!, rt.readingList!],
+      ['引用', lt.liveQuote!, rt.readingQuote!],
+      ['表格', lt.liveTable!, rt.readingTable!],
+    ] as const) {
+      assert(a.fontFamily === b.fontFamily,
+        `${name}字体族不一致：live=${a.fontFamily}，reading=${b.fontFamily}`)
+      assert(Math.abs(a.fontSizePx! - b.fontSizePx!) < 0.5,
+        `${name}字号不一致：live=${a.fontSizePx}px，reading=${b.fontSizePx}px`)
+    }
+  }],
+
+  ['两模式同级标题基础排版一致（#32）', async () => {
+    await openWithEditor('typography.md')
+    await waitSessionReady('typography.md')
+    const live = await waitViewState('typography.md', (v) => v.viewMode === 'live' && (v.headingFontPx ?? 0) > 0)
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
+    const reading = await waitViewState('typography.md', (v) => v.viewMode === 'reading' && (v.headingFontPx ?? 0) > 0)
+    console.log(`[#32] 一级标题字号 live=${live.headingFontPx}px，reading=${reading.headingFontPx}px（基线×同倍率）`)
+    assert(Math.abs(live.headingFontPx! - reading.headingFontPx!) < 0.5,
+      `一级标题字号不一致：live=${live.headingFontPx}px，reading=${reading.headingFontPx}px（同级标题须同基线同倍率）`)
+  }],
+
+  ['编辑器字号变更两模式按同一规则响应（#32）', async () => {
+    await openWithEditor('typography.md')
+    await waitSessionReady('typography.md')
+    const before = await waitViewState('typography.md', (v) => v.viewMode === 'live' && (v.typography?.live?.fontSizePx ?? 0) > 0)
+    const beforeSize = before.typography!.live!.fontSizePx!
+    try {
+      // 两模式基线同引 --vsidian-content-font-size → --vscode-editor-font-size：
+      // 宿主向 webview 注入的该变量随配置即时更新（真宿主实测 14px → 18px）
+      await vscode.workspace.getConfiguration('editor').update('fontSize', 18, vscode.ConfigurationTarget.Workspace)
+      await poll('live 字号随配置更新', async () => {
+        const v = (await vscode.commands.executeCommand(CMD.viewState, wsUri('typography.md').toString(), 0)) as ViewState | undefined
+        const size = v?.typography?.live?.fontSizePx
+        return typeof size === 'number' && Math.abs(size - 18) <= 0.5 ? v : undefined
+      })
+      await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
+      const reading = await poll('reading 字号随配置更新', async () => {
+        const v = (await vscode.commands.executeCommand(CMD.viewState, wsUri('typography.md').toString(), 0)) as ViewState | undefined
+        const size = v?.typography?.reading?.fontSizePx
+        return v?.viewMode === 'reading' && typeof size === 'number' && Math.abs(size - 18) <= 0.5 ? v : undefined
+      })
+      console.log(`[#32] 编辑器字号 ${beforeSize}px → 18px：live 与 reading 正文均同步为 ${reading.typography!.reading!.fontSizePx}px`)
+    } finally {
+      await vscode.workspace.getConfiguration('editor').update('fontSize', undefined, vscode.ConfigurationTarget.Workspace)
+    }
   }],
 ]
