@@ -47,11 +47,11 @@ npx @vscode/vsce package --no-dependencies  # 打包 VSIX（bundle 自包含，�
 - **宿主端**（`src/host/`）：`CustomTextEditorProvider`，`TextDocument` 为权威文本，编辑经 `WorkspaceEdit` 增量写回；保存/dirty/Hot Exit 由 VSCode 文本管线处理。
 - **webview 端**（`src/webview/`）：CM6 EditorView（live）+ markdown-it 分块虚拟化（reading）+ `acquireVsCodeApi` 消息桥。
 - **共享协议**（`src/shared/`）：两端消息协议的单一事实源，webview 全程 LF 坐标（CRLF 由宿主侧 `NewlineCoordinator` 双向转换）。
-- **构建**：esbuild 双 bundle——宿主 `out/extension.js`（cjs/external vscode）+ webview `out/webview/main.js`（iife）；CSS 随 import 产出 `main.css`。
+- **构建**：esbuild 多 bundle——宿主 `out/extension.js`（cjs/external vscode）+ webview 双入口 `out/webview/main.js` 与 `out/webview/settings.js`（iife）；CSS 随 import 产出 `main.css`/`settings.css`。
 
 ## 验证与性能
 
-- 当前开发工作树回归：763 单元测试 + 71 集成用例（真实 1.86.2 宿主）通过；安装态与人工验收另见[验证清单](docs/specs/manual-verification.md)。
+- 当前开发工作树回归：767 单元测试 + 74 集成用例（真实 1.86.2 宿主）通过；安装态与人工验收另见[验证清单](docs/specs/manual-verification.md)。
 - 性能实测与功能验证矩阵：[docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md)。
 - 人工验证项（IME/鼠标手感/远程环境）：[docs/specs/manual-verification.md](docs/specs/manual-verification.md)。
 
