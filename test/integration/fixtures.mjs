@@ -195,6 +195,29 @@ const FIND_DOC = [
   '',
 ].join('\n')
 
+// #34 行号样例：标题/软换行长段/列表/表格/代码块/空行混合——源行编号
+// 与视觉行解耦的断言载体（长段折行时 renderedLines 超过源行数）
+const LINENUMBERS_DOC = [
+  '# 行号样例',
+  '',
+  '这是一个故意写得很长的段落，用于验证软换行只是视觉折行、不新增源文件行号：当段落宽度超过编辑器视口宽度时文本发生折行，行号栏仍按源文件的物理行逐一编号，与渲染后的视觉行数解耦，阅读模式与实时预览共用同一份源文本行语义。',
+  '',
+  '- 列表项甲',
+  '- 列表项乙',
+  '',
+  '| 列一 | 列二 |',
+  '| --- | --- |',
+  '| 甲格 | 乙格 |',
+  '',
+  '```text',
+  '代码块第一行',
+  '代码块第二行',
+  '```',
+  '',
+  '结尾段落。',
+  '',
+].join('\n')
+
 // #11 双链样例：合法四形态（按名/显式路径/别名/标题）+ 降级形态
 // （嵌入/块引用/残缺）+ 代码上下文（围栏与行内代码内不解析）
 const WIKILINKS_DOC = [
@@ -286,6 +309,7 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   // 无扩展名目标与本地图片资源
   writeFileSync(path.join(wsDir, 'links.md'), LINKS_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'links2.md'), LINKS_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'linenumbers.md'), LINENUMBERS_DOC, 'utf8')
   writeFileSync(path.join(wsDir, '链接目标.md'), '# 链接目标\n中文目标文档内容。\n', 'utf8')
   writeFileSync(path.join(wsDir, '无扩展名目标.md'), '# 无扩展名目标\n省略扩展名解析目标。\n', 'utf8')
   mkdirSync(path.join(wsDir, '子 目录'), { recursive: true })

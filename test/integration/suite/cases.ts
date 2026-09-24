@@ -263,6 +263,14 @@ interface ViewState {
   }
   /** #33 设置快照缓存（宿主 snapshot/changed 下发后非空） */
   settings?: Record<string, unknown>
+  /** #34 行号栏观测（first/last 为视口内首/末行号单元格文本） */
+  lineGutter?: {
+    on: boolean
+    count: number
+    first: string | null
+    last: string | null
+    scaleX: number | null
+  }
 }
 
 /** #7 阅读视图探针回报（reading.perf.report） */
@@ -2691,5 +2699,203 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // 清理：恢复 fixture 默认值
     await vscode.commands.executeCommand(CMD.setSettings, { 'test.flag': false })
     await vscode.commands.executeCommand(CMD.closeSettingsPage)
+  }],
+
+  // ---- #34：实时预览源文件行号 ----
+
+  ['实时预览默认显示从 1 起的源文件行号（结构混合与软换行不新增行号）', async () => {
+    await openWithEditor('linenumbers.md')
+    await waitSessionReady('linenumbers.md')
+    const view = await waitViewState('linenumbers.md', (v) => (v.lineGutter?.count ?? 0) > 0)
+    const g = view.lineGutter!
+    // 首个源行行号为 1（默认开启；空行同样编号）
+    assert(g.on === true, '行号默认应开启（定义默认 true）')
+    assert(g.first === '1', `首个行号应为 1，实际 ${String(g.first)}`)
+    // 行号数与源行数一致（视口覆盖小文档全文），软换行只增加视觉行
+    assert(g.count === view.lineCount,
+      `行号数应等于源行数 ${view.lineCount}，实际 ${g.count}`)
+    assert(g.last === String(view.lineCount),
+      `末行号应为源行数 ${view.lineCount}，实际 ${String(g.last)}`)
+    // 软换行解耦观测：视觉行数 ≥ 源行数（长段折行时渲染行更多）
+    assert(view.renderedLines >= view.lineCount,
+      `视觉行 ${view.renderedLines} 不应少于源行 ${view.lineCount}`)
+    console.log(`[#34] linenumbers.md：源行 ${view.lineCount}，行号 1..${String(g.last)}，视觉行 ${view.renderedLines}`)
+  }],
+
+  ['CRLF 文档行号与源文件行一致（规范化不改行数）', async () => {
+    await openWithEditor('crlf.md')
+    await waitSessionReady('crlf.md')
+    const view = await waitViewState('crlf.md', (v) => (v.lineGutter?.count ?? 0) > 0)
+    const doc = await vscode.workspace.openTextDocument(wsUri('crlf.md'))
+    // webview LF 坐标行数 == 宿主 CRLF 文档行数（\r\n→\n 规范化不改行数）
+    assert(view.lineCount === doc.lineCount,
+      `webview 行数 ${view.lineCount} 应等于宿主 TextDocument 行数 ${doc.lineCount}`)
+    const g = view.lineGutter!
+    assert(g.first === '1', `首个行号应为 1，实际 ${String(g.first)}`)
+    assert(g.last === String(view.lineCount),
+      `末行号应为 ${view.lineCount}，实际 ${String(g.last)}`)
+    console.log(`[#34] crlf.md：宿主 lineCount=${doc.lineCount}，行号 1..${String(g.last)}`)
+  }],
+
+  ['增删行与撤销重做后行号随源文更新', async () => {
+    await openWithEditor('untouched.md')
+    await waitSessionReady('untouched.md')
+    const uri = wsUri('untouched.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('untouched.md'))
+    const original = doc.getText()
+    const before = await waitViewState('untouched.md', (v) => (v.lineGutter?.count ?? 0) > 0)
+    const beforeLines = before.lineCount
+    assert(before.lineGutter!.last === String(beforeLines), '初始行号应与源行一致')
+
+    // 行首插入两行（sync.test.edit 走与用户输入同一写回链路）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'sync.test.edit',
+      offset: 0,
+      text: '新行甲\n新行乙\n',
+    })
+    const afterInsert = await poll('插入后行号随动', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines + 2 && v.lineGutter?.last === String(beforeLines + 2)
+        ? v
+        : undefined
+    })
+    assert(afterInsert.lineGutter!.first === '1', '插入后首行行号仍为 1')
+    await poll('编辑写入权威', () => (doc.getText() === `新行甲\n新行乙\n${original}` ? true : undefined))
+
+    // 撤销：行号回落（宿主权威栈回流走 external 路径）
+    await vscode.commands.executeCommand('vscode.openWith', wsUri('untouched.md'), VIEW_TYPE)
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('撤销后行号回落', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines && v.lineGutter?.last === String(beforeLines) ? v : undefined
+    })
+    // 重做：行号恢复推进
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'redo' })
+    await poll('重做后行号恢复', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines + 2 ? v : undefined
+    })
+    // 还原文档（再 undo 一次回到 fixture 原文，避免污染后续用例的行数假设）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('还原 fixture 原文', () => (doc.getText() === original ? true : undefined))
+    if (doc.isDirty) {
+      await doc.save()
+    }
+  }],
+
+  ['设置页开关行号：已开编辑器立即生效、新面板拉取持久值、不改源文', async () => {
+    // 两个已开面板（当前 + beside）：开关变更须同时到达
+    await openWithEditor('lf.md')
+    await waitSessionReady('lf.md')
+    await openWithEditor('untouched.md', true)
+    await waitSessionReady('untouched.md')
+    const uriA = wsUri('lf.md').toString()
+    await waitViewState('lf.md', (v) => v.lineGutter?.on === true)
+    await waitViewState('untouched.md', (v) => v.lineGutter?.on === true)
+    const docA = await vscode.workspace.openTextDocument(wsUri('lf.md'))
+    const textBefore = docA.getText()
+    const sessionBefore = (await vscode.commands.executeCommand(CMD.sessionState, uriA)) as SessionState
+
+    // 关闭：经设置服务的正式保存链路（与设置页 settings.set 同一入口）
+    const off = (await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': false })) as { ok: boolean }
+    assert(off.ok === true, '关闭行号的设置保存应成功')
+    const snap = (await vscode.commands.executeCommand(CMD.getSettings)) as Record<string, unknown>
+    assert(snap['editor.lineNumbers'] === false, `保存后回读应为 false，实际 ${String(snap['editor.lineNumbers'])}`)
+    const gA = await waitViewState('lf.md', (v) => v.lineGutter?.on === false)
+    const gB = await waitViewState('untouched.md', (v) => v.lineGutter?.on === false)
+    assert(gA.lineGutter!.count === 0 && gB.lineGutter!.count === 0, '关闭后行号 DOM 应移除')
+
+    // 开关行号不改源文、不产生写回与撤销历史
+    assert(docA.getText() === textBefore, '开关行号不得修改文档内容')
+    const sessionAfter = (await vscode.commands.executeCommand(CMD.sessionState, uriA)) as SessionState
+    assert(sessionAfter.version === sessionBefore.version,
+      `开关行号不得推进文档版本（${sessionBefore.version} → ${sessionAfter.version}）`)
+    assert(sessionAfter.appliedEdits === sessionBefore.appliedEdits, '开关行号不得产生写回')
+
+    // 持久化口径：关闭全部面板后重开——新面板经 init 后 settings.get 拉到
+    // 持久值（真实重启读取的是同一 globalState 键，人工验证条目覆盖重启）
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors')
+    await openWithEditor('lf.md')
+    await waitSessionReady('lf.md')
+    const reopened = await waitViewState('lf.md', (v) => v.lineGutter?.on === false)
+    assert(reopened.lineGutter!.count === 0, '重开面板应拉取到持久化的关闭状态')
+
+    // 恢复默认开启（后续用例与人工验收的默认态）
+    const on = (await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })) as { ok: boolean }
+    assert(on.ok === true, '恢复行号的设置保存应成功')
+    const restored = await waitViewState('lf.md', (v) => v.lineGutter?.on === true && (v.lineGutter?.count ?? 0) > 0)
+    assert(restored.lineGutter!.first === '1', '恢复后行号应从 1 起')
+    console.log(`[#34] 开关链路：两面板即时生效，重开面板拉取持久值 false，恢复后 count=${restored.lineGutter!.count}`)
+  }],
+
+  ['切换阅读模式无行号、切回实时预览按设置恢复', async () => {
+    await openWithEditor('mode.md')
+    await waitSessionReady('mode.md')
+    const live = await waitViewState('mode.md', (v) => v.viewMode === 'live' && (v.lineGutter?.count ?? 0) > 0)
+    assert(live.lineGutter!.first === '1', 'live 初始行号从 1 起')
+
+    // 阅读模式：liveWrapper 整体隐藏（行号随之不可见），阅读视图是独立
+    // DOM 子树（EditorView 挂在 liveWrapper 内），天然不渲染任何行号栏
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
+    const reading = await waitViewState('mode.md', (v) => v.viewMode === 'reading')
+    assert(reading.typography?.reading != null, '阅读视图应活跃渲染（其 DOM 子树不含行号栏）')
+    assert(reading.lineGutter?.on === true, '阅读模式下设置开关态保持（切回恢复的依据）')
+    console.log(`[#34] 阅读模式：viewMode=${reading.viewMode}，reading 块活跃渲染，liveWrapper 整体隐藏（行号不可见）`)
+
+    // 阅读期间保持设置开；切回 live 后行号按设置恢复且从 1 起
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
+    const back = await waitViewState('mode.md', (v) => v.viewMode === 'live' && (v.lineGutter?.count ?? 0) > 0)
+    assert(back.lineGutter!.first === '1', `切回 live 后行号应恢复从 1 起，实际 ${String(back.lineGutter!.first)}`)
+    assert(back.lineGutter!.last === String(back.lineCount),
+      `切回后末行号应为 ${back.lineCount}，实际 ${String(back.lineGutter!.last)}`)
+  }],
+
+  ['大文档行号 DOM 有界、宽编号降级且开关行号不动正文基线', async () => {
+    await openWithEditor('large.md')
+    await waitSessionReady('large.md')
+    const uri = wsUri('large.md').toString()
+    // 初始视口在顶部：行号 DOM 有界（远小于 10 万行），短行号不压缩
+    const top = await waitViewState('large.md', (v) => (v.lineGutter?.count ?? 0) > 0)
+    const topG = top.lineGutter!
+    assert(topG.count > 0 && topG.count < 2000,
+      `行号 DOM 应有界（视口级），实际 ${topG.count}`)
+    assert(topG.first === '1', '顶部行号从 1 起')
+    assert(topG.scaleX === 1, `短行号不应压缩，实际 scaleX=${String(topG.scaleX)}`)
+    // 开关行号不动 #32 正文基线：留白带内叠加，正文左缘 textInsetPx 不变
+    const insetOn = top.typography?.live?.textInsetPx
+    assert(typeof insetOn === 'number' && Math.abs(insetOn - 24) < 1,
+      `开启行号时正文左缘应为 24px 基线，实际 ${String(insetOn)}`)
+
+    // 滚动到底部：行号达 6 位（10 万行），降级档位收紧（scale < 1）。
+    // 经正式定位消息 view.locate 驱动（scrollIntoView 官方滚动路径）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate',
+      offset: Math.max(0, top.docLength - 1),
+    })
+    const bottom = await waitViewState('large.md', (v) =>
+      (v.lineGutter?.last ?? '').length >= 6 && v.lineGutter?.on === true)
+    const bottomG = bottom.lineGutter!
+    assert(bottomG.scaleX !== null && bottomG.scaleX < 1,
+      `6 位行号应启用水平压缩（scale < 1），实际 ${String(bottomG.scaleX)}`)
+    assert(bottomG.scaleX! > 0.4, `压缩下限应保可辨认（> 0.4），实际 ${bottomG.scaleX}`)
+    const insetBottom = bottom.typography?.live?.textInsetPx
+    assert(typeof insetBottom === 'number' && Math.abs(insetBottom - insetOn!) < 1,
+      `宽编号降级不得移动正文基线（${insetOn} → ${String(insetBottom)}）`)
+
+    // 滚回顶部：档位放松回 1（视口行号位数驱动）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: 0 })
+    const backTop = await waitViewState('large.md', (v) => v.lineGutter?.scaleX === 1)
+    assert(backTop.lineGutter!.first === '1', '滚回顶部后行号从 1 起')
+
+    // 关闭行号后正文基线仍不变（负边距方案的净占位为 0）
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': false })
+    const off = await waitViewState('large.md', (v) => v.lineGutter?.on === false && v.lineGutter?.count === 0)
+    const insetOff = off.typography?.live?.textInsetPx
+    assert(typeof insetOff === 'number' && Math.abs(insetOff - insetOn!) < 1,
+      `关闭行号后正文左缘应保持 24px 基线（${insetOn} → ${String(insetOff)}）`)
+    // 恢复默认开启
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
+    await waitViewState('large.md', (v) => v.lineGutter?.on === true && (v.lineGutter?.count ?? 0) > 0)
+    console.log(`[#34] large.md：顶部 DOM=${topG.count}（有界），底部行号 ${String(bottomG.last)} scaleX=${bottomG.scaleX}，基线 ${insetOn}px 恒定`)
   }],
 ]
