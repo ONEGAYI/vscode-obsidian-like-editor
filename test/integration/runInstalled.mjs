@@ -19,6 +19,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { generatePerfSample, generateReadingSample } from '../perf/gen-sample.mjs'
 import { writeFixtures, LARGE_DOC_LINES } from './fixtures.mjs'
+import { buildTestHostArgs, resolveTestHostMode, runTestHost } from './testHost.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -90,38 +91,25 @@ try {
     throw new Error(`安装目录中未找到扩展：${extensionsDir}`)
   }
   const installedExt = path.join(extensionsDir, installedDirs[installedDirs.length - 1])
-  const args = [
-    // 与 @vscode/test-electron runTests 相同的基础参数（runTest.js 内部拼装）
-    '--no-sandbox',
-    '--disable-gpu-sandbox',
-    '--disable-updates',
-    '--skip-welcome',
-    '--skip-release-notes',
-    '--no-cached-data',
-    '--disable-workspace-trust',
-    `--extensionTestsPath=${path.join(root, 'out', 'test', 'integration', 'suite', 'index.js')}`,
-    `--extensionDevelopmentPath=${installedExt}`,
-    `--extensions-dir=${extensionsDir}`,
-    `--user-data-dir=${userDataDir}`,
-    wsDir,
-  ]
-  const code = await new Promise((resolve, reject) => {
-    const shell = process.platform === 'win32' && vscodeExecutablePath.endsWith('.cmd')
-    const exe = shell ? `"${vscodeExecutablePath}"` : vscodeExecutablePath
-    const quotedArgs = shell ? args.map((a) => `"${a}"`) : args
-    const child = spawn(exe, quotedArgs, {
-      env: {
-        ...process.env,
-        WORKSPACE_DIR: wsDir,
-        LARGE_DOC_LINES: String(LARGE_DOC_LINES),
-        VSIDIAN_TEST_HOOKS: '1',
-      },
-      shell,
-    })
-    child.stdout.on('data', (d) => process.stdout.write(d))
-    child.stderr.on('data', (d) => process.stderr.write(d))
-    child.on('error', reject)
-    child.on('close', (c) => resolve(c ?? 1))
+  const args = buildTestHostArgs({
+    workspaceDir: wsDir,
+    testsPath: path.join(root, 'out', 'test', 'integration', 'suite', 'index.js'),
+    extensionPath: installedExt,
+    extensionsDir,
+    userDataDir,
+  })
+  const mode = resolveTestHostMode()
+  console.log(`[runInstalled] 测试宿主模式：${mode}`)
+  const code = await runTestHost({
+    executable: vscodeExecutablePath,
+    args,
+    mode,
+    env: {
+      ...process.env,
+      WORKSPACE_DIR: wsDir,
+      LARGE_DOC_LINES: String(LARGE_DOC_LINES),
+      VSIDIAN_TEST_HOOKS: '1',
+    },
   })
   if (code !== 0) {
     throw new Error(`安装态集成回归退出码 ${code}`)

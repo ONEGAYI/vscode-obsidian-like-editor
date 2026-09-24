@@ -32,12 +32,27 @@
 npm install                     # 安装锁定依赖（版本全部精确锁定）
 npm run compile                 # esbuild 双产物 + tsc 类型检查
 npm run watch                   # esbuild watch
-npm run test:unit               # vitest 单元/契约测试（无宿主依赖）
-npm run test:integration        # @vscode/test-electron 1.86.2 真宿主集成测试（58 例）
+npm run test:unit               # vitest 与启动器契约测试（无 VSCode 宿主依赖）
+npm run test:integration        # VSCode 1.86.2 真宿主集成测试（58 例）
 node test/integration/runInstalled.mjs  # VSIX 安装态回归（先 package 出 VSIX）
 node test/perf/runPerf.mjs      # 性能档位测量（报告写 docs/perf/data/）
 npx @vscode/vsce package --no-dependencies  # 打包 VSIX（bundle 自包含，不带 node_modules）
 ```
+
+Windows 上两条集成测试路径默认将真实 VSCode 宿主启动在同一交互会话的独立桌面。测试窗口在该桌面创建，不遮挡当前桌面；日志继续输出到终端，宿主非零退出会使启动器失败。启动器会记录宿主 PID、独立桌面的可见窗口数，并在测试期间每半秒采样前台 PID，便于复查焦点行为。独立桌面创建失败时测试直接失败，不会悄悄改为当前桌面启动。
+
+在不支持交互式桌面的环境（例如无人登录的 CI 服务）中，可使用独立的 Windows 用户会话或虚拟机运行，并在该会话内显式选择前台模式：
+
+```powershell
+$env:VSIDIAN_TEST_HOST_MODE = 'foreground'
+npm run test:integration
+node test/integration/runInstalled.mjs
+Remove-Item Env:VSIDIAN_TEST_HOST_MODE
+```
+
+前台模式会显示测试窗口，应在专用会话中使用。单测和类型检查不启动 VSCode。
+
+若缓存里的 `.vscode-test/vscode-win32-x64-archive-1.86.2/data` 由人工便携版运行留下，VSCode 会优先使用其中的便携 profile；此时可能撞上正在运行的便携版实例。可在新的 worktree 执行 `npm ci` 和 `npm run test:integration`，让测试工具自动下载不含 `data` 的独立宿主，再打包 VSIX 运行安装态回归。不要把正在使用的便携版目录当作测试宿主缓存。
 
 调试：VSCode 以**文件夹工作区**打开本仓库根目录，按 F5 运行「Vsidian: 启动扩展开发宿主」。启动前会执行 `npm run compile`，开发宿主加载当前工作树的 `out/extension.js`。调试端口固定为 46186；端口被占用时修改 `.vscode/launch.json` 中的 `port`。在新窗口对 `.md` 文件执行「Reopen With…」选择「Vsidian」。
 
