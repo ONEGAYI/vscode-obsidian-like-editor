@@ -44,8 +44,9 @@ export type HostToWebview =
    *  探针编辑带 externalSync 注解，不产生写回（测量不污染宿主文档） */
   | { kind: 'perf.probe'; typingRounds: number; scrollRounds: number }
   /** 模式切换指令（#6）：live=实时预览，reading=阅读，toggle=翻转当前。
-   *  模式是 webview 视图状态：不写 TextDocument、不入撤销栈；宿主命令
-   *  与 webview 按钮（内部走同一状态机）共用此消息入口 */
+   *  模式是 webview 视图状态：不写 TextDocument、不入撤销栈。#38 起切换
+   *  入口迁移宿主标题栏三态命令与命令面板命令（宿主推导显式目标后经
+   *  此消息驱动）；'toggle' 保留兼容，新链路不再使用 */
   | { kind: 'view.mode.set'; mode: 'live' | 'reading' | 'toggle' }
   /** 定位请求（#6 起，为 #10 查找/跳转预留的宿主 → webview 入口）：
    *  把光标移动到源 offset 并滚动到可见（live）；reading 模式滚动到

@@ -23,9 +23,32 @@ import {
 } from './wikilinkTarget'
 import { parseWikilinkInner } from '../shared/wikilink'
 import { NewlineCoordinator } from '../shared/newline'
-import { isWebviewToHost, type HostToWebview, type SerChange, type TableEditOp } from '../shared/protocol'
+import {
+  isWebviewToHost,
+  type HostToWebview,
+  type SerChange,
+  type TableEditOp,
+  type WebviewToHost,
+} from '../shared/protocol'
+import {
+  decideReadingRestore,
+  decideResolveBehavior,
+  LAST_MODE_KEY,
+  nextTriMode,
+  planViewSwitch,
+  readRememberedMode,
+  type TriViewMode,
+  type ViewSwitchPlan,
+} from './viewCycle'
 
 export const VIEW_TYPE = 'onegayi.vsidian.editor'
+
+/** .md / .markdown 判定（#38）：与 customEditors selector 及标题栏 when 子句
+ *  的 resourceExtname 口径一致（大小写敏感，保持与 when 求值同判） */
+function isMarkdownFile(uri: vscode.Uri): boolean {
+  const ext = path.extname(uri.fsPath)
+  return ext === '.md' || ext === '.markdown'
+}
 
 /** 活动标签是否为指定文档的本扩展 custom editor（C-5）。
  *  webview 转发的 undo/redo 经宿主全局命令执行，而该命令作用于活动
@@ -220,6 +243,84 @@ export function createTextEditorProvider(
       })
   }
 
+  // ---- #38 三态视图编排：全局模式记忆 + 活动模式 context + 恢复决策 ----
+
+  /** 待初始 reading 恢复的面板（resolve 时记忆为 reading；键 `${docUri}::${sessionId}`）。
+   *  面板就绪后首份 view.state 到达即消费（见 handlePanelViewState） */
+  const pendingReadingRestore = new Set<string>()
+
+  /** 记忆读取/写入（context.globalState；只在成功切换后写入，无历史不写入） */
+  const readRemembered = (): TriViewMode =>
+    readRememberedMode(context.globalState.get.bind(context.globalState))
+  const writeRemembered = async (mode: TriViewMode): Promise<void> => {
+    await context.globalState.update(LAST_MODE_KEY, mode)
+  }
+
+  /** vsidian.activeMode context（'live'|'reading'）：只反映活动 tab 的实际
+   *  模式（不把最近模式误当成当前标签状态）；source 态经核心 key
+   *  （activeCustomEditorId / resourceExtname）表达，不依赖本 context。
+   *  值不变时跳过 setContext（view.state 高频回报） */
+  let lastActiveModeContext: 'live' | 'reading' | undefined
+  const setActiveModeContext = (mode: 'live' | 'reading'): void => {
+    if (lastActiveModeContext === mode) {
+      return
+    }
+    lastActiveModeContext = mode
+    void vscode.commands.executeCommand('setContext', 'vsidian.activeMode', mode)
+  }
+
+  /** 活动面板的实际模式：宿主缓存的 view.state（缺省 live——面板装载完成前
+   *  的安全假设，与 webview 全新面板默认一致） */
+  const activePanelMode = (uriStr: string): 'live' | 'reading' | undefined => {
+    const entry = sessions.get(uriStr)
+    if (!entry) {
+      return undefined
+    }
+    for (const [sessionId, panel] of entry.panels) {
+      if (panel.active) {
+        return entry.session.getViewState(sessionId)?.viewMode ?? 'live'
+      }
+    }
+    return undefined
+  }
+
+  /** 按当前活动 tab 刷新 vsidian.activeMode（非本扩展面板活动时不动作：
+   *  when 子句已被 activeCustomEditorId 关断，无需清值） */
+  const refreshActiveModeContext = (): void => {
+    const tab = vscode.window.tabGroups.activeTabGroup.activeTab
+    const input = tab?.input
+    if (input instanceof vscode.TabInputCustom && input.viewType === VIEW_TYPE) {
+      const mode = activePanelMode(input.uri.toString())
+      if (mode) {
+        setActiveModeContext(mode)
+      }
+    }
+  }
+
+  /** view.state 回报链路（DocumentSession onViewState）：
+   *  ① 初始 reading 恢复（#38）：记忆为 reading 的面板在首份回报后决定
+   *     是否下发 view.mode.set——面板自身实际状态优先于全局记忆；
+   *  ② 活动面板的模式回报刷新 vsidian.activeMode */
+  const handlePanelViewState = (
+    docUri: string,
+    sessionId: string,
+    state: Extract<WebviewToHost, { kind: 'view.state' }>,
+  ): void => {
+    const restoreKey = `${docUri}::${sessionId}`
+    if (pendingReadingRestore.has(restoreKey)) {
+      pendingReadingRestore.delete(restoreKey)
+      if (decideReadingRestore(state.viewMode ?? 'live') === 'send-reading') {
+        sessions.get(docUri)?.session.postToPanel(sessionId, {
+          kind: 'view.mode.set',
+          mode: 'reading',
+        })
+      }
+    }
+    if (sessions.get(docUri)?.panels.get(sessionId)?.active) {
+      setActiveModeContext(state.viewMode ?? 'live')
+    }
+  }
+
   const openEntry = (doc: vscode.TextDocument): SessionEntry => {
     const key = doc.uri.toString()
     let entry = sessions.get(key)
@@ -269,6 +370,7 @@ export function createTextEditorProvider(
     fresh.session = new DocumentSession(port, {
       docUri: key,
       onNotice: (notice) => handleNotice(key, notice),
+      onViewState: (sessionId, state) => handlePanelViewState(key, sessionId, state),
     })
     sessions.set(key, fresh)
     return fresh
@@ -454,6 +556,16 @@ export function createTextEditorProvider(
 
   const provider: vscode.CustomTextEditorProvider = {
     resolveCustomTextEditor(document, webviewPanel, _token): void {
+      // #38：全局记忆为 source 时弹回原生编辑器——priority=default 后 VSCode
+      // 默认把 .md 交给本扩展，用户上次停留在源码态则还原该选择。早退：
+      // 不建会话、不写 HTML、不 attach 面板（面板 dispose 链路自然回收）；
+      // 弹回动作不写记忆。用户显式「Reopen With → Vsidian」时同样被弹回，
+      // 属接受的代价（可点标题栏铅笔按钮一步切回，见工单 #38）
+      const remembered = readRemembered()
+      if (decideResolveBehavior(remembered) === 'bounce-to-source') {
+        void vscode.commands.executeCommand('vscode.openWith', document.uri, 'default')
+        return
+      }
       const entry = openEntry(document)
       const send = (message: HostToWebview): void => {
         void webviewPanel.webview.postMessage(message)
@@ -472,6 +584,11 @@ export function createTextEditorProvider(
       }
       const sessionId = entry.session.attachPanel({ send, openLink, openWikilink, resolveImage })
       entry.panels.set(sessionId, webviewPanel)
+      // #38：记忆为 reading 的面板登记待恢复——就绪后首份 view.state 到达
+      // 时按「面板自身状态优先」决定是否下发 view.mode.set: reading
+      if (decideResolveBehavior(remembered) === 'restore-reading') {
+        pendingReadingRestore.add(`${document.uri.toString()}::${sessionId}`)
+      }
 
       const messageSub = webviewPanel.webview.onDidReceiveMessage((message) => {
         if (process.env.VSIDIAN_TEST_HOOKS === '1' && isWebviewToHost(message) &&
@@ -482,10 +599,19 @@ export function createTextEditorProvider(
         }
         void entry.session.handleWebviewMessage(message, sessionId)
       })
+      // #38：面板激活（tab 切换/分组聚焦）时刷新活动模式 context——
+      // custom editor 不触发 onDidChangeActiveTextEditor，靠此事件覆盖
+      const viewStateSub = webviewPanel.onDidChangeViewState((e) => {
+        if (e.webviewPanel.active) {
+          refreshActiveModeContext()
+        }
+      })
       const closeSub = webviewPanel.onDidDispose(() => {
         entry.session.detachPanel(sessionId)
         entry.panels.delete(sessionId)
+        pendingReadingRestore.delete(`${document.uri.toString()}::${sessionId}`)
         messageSub.dispose()
+        viewStateSub.dispose()
         closeSub.dispose()
         releaseEntryIfIdle(document.uri)
       })
@@ -524,35 +650,95 @@ export function createTextEditorProvider(
     }),
   )
 
-  // ---- 模式切换命令（#6）：活动 tab 为本扩展 custom editor 时向其面板
-  // 发送 view.mode.set；模式是 webview 视图状态，不写 TextDocument ----
-  context.subscriptions.push(
-    vscode.commands.registerCommand('onegayi.vsidian.toggleViewMode', async () => {
-      const tab = vscode.window.tabGroups.activeTabGroup.activeTab
-      const input = tab?.input
-      // 1.86 类型契约：custom editor 的 tab input 为 TabInputCustom（uri + viewType）
-      if (
-        input instanceof vscode.TabInputCustom &&
-        input.viewType === VIEW_TYPE
-      ) {
-        const entry = getEntry(input.uri)
-        const panels = entry?.session.getInfo().panels.filter((p) => p.ready) ?? []
-        if (panels.length > 0) {
-          for (const panel of panels) {
-            entry!.session.postToPanel(panel.sessionId, {
-              kind: 'view.mode.set',
-              mode: 'toggle',
-            })
-          }
-          return true
-        }
+  // ---- 三态视图切换（#38）：标题栏三命令（toReading/toSource/toLive）与
+  //  命令面板命令共用编排；onegayi.vsidian.toggleViewMode 保留 id，语义
+  //  升级为三态循环。模式是 webview 视图状态，切换不写 TextDocument ----
+
+  /** 活动标签的模式推导：本扩展面板取活动面板缓存（缺省 live）；原生
+   *  .md/.markdown 文本编辑器为 source；其余语境不可切换 */
+  const deriveActiveTabMode = (): { mode: TriViewMode; uri: vscode.Uri } | undefined => {
+    const tab = vscode.window.tabGroups.activeTabGroup.activeTab
+    const input = tab?.input
+    if (input instanceof vscode.TabInputCustom && input.viewType === VIEW_TYPE) {
+      return { mode: activePanelMode(input.uri.toString()) ?? 'live', uri: input.uri }
+    }
+    const editor = vscode.window.activeTextEditor
+    if (editor && isMarkdownFile(editor.document.uri)) {
+      return { mode: 'source', uri: editor.document.uri }
+    }
+    return undefined
+  }
+
+  /** 执行动作计划。记忆写入时序（viewCycle 模块约定）：open-in-vsidian
+   *  必须先写记忆再 openWith（resolve 的弹回/恢复读最新记忆，后写会被
+   *  弹回或落到错误模式）；其余动作成功后写 */
+  const applyViewSwitch = async (uri: vscode.Uri, plan: ViewSwitchPlan): Promise<boolean> => {
+    switch (plan.kind) {
+      case 'open-in-vsidian': {
+        await writeRemembered(plan.mode)
+        await vscode.commands.executeCommand('vscode.openWith', uri, VIEW_TYPE)
+        return true
       }
+      case 'open-in-source-editor': {
+        await vscode.commands.executeCommand('vscode.openWith', uri, 'default')
+        await writeRemembered('source')
+        return true
+      }
+      case 'switch-panel-mode': {
+        const entry = getEntry(uri)
+        const panels = entry?.session.getInfo().panels.filter((p) => p.ready) ?? []
+        for (const panel of panels) {
+          entry!.session.postToPanel(panel.sessionId, {
+            kind: 'view.mode.set',
+            mode: plan.mode,
+          })
+        }
+        await writeRemembered(plan.mode)
+        return true
+      }
+      case 'reject': {
+        await vscode.window.showWarningMessage(
+          plan.reason === 'panel-not-ready'
+            ? 'Vsidian 面板尚未就绪，请稍后重试'
+            : '当前已在源码编辑器中',
+        )
+        return false
+      }
+    }
+  }
+
+  /** 三态切换主入口：explicitTarget 缺省时按循环推导下一模式 */
+  const runViewSwitch = async (explicitTarget?: TriViewMode): Promise<boolean> => {
+    const active = deriveActiveTabMode()
+    if (!active) {
       await vscode.window.showWarningMessage(
-        '请先聚焦一个 Vsidian 编辑器面板，再切换实时预览/阅读模式',
+        '请先聚焦一个 Markdown 文档（Vsidian 面板或 .md 源码编辑器）再切换视图模式',
       )
       return false
-    }),
+    }
+    const target = explicitTarget ?? nextTriMode(active.mode)
+    const entry = getEntry(active.uri)
+    const hasReadyPanel = entry?.session.getInfo().panels.some((p) => p.ready) ?? false
+    const ok = await applyViewSwitch(active.uri, planViewSwitch(active.mode, target, hasReadyPanel))
+    if (ok) {
+      refreshActiveModeContext()
+    }
+    return ok
+  }
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('onegayi.vsidian.toggleViewMode', () => runViewSwitch()),
+    vscode.commands.registerCommand('onegayi.vsidian.mode.toReading', () => runViewSwitch('reading')),
+    vscode.commands.registerCommand('onegayi.vsidian.mode.toSource', () => runViewSwitch('source')),
+    vscode.commands.registerCommand('onegayi.vsidian.mode.toLive', () => runViewSwitch('live')),
   )
+
+  // #38：活动编辑器切换（含切到 undefined）时刷新模式 context；面板间
+  // 切换经各面板的 onDidChangeViewState 覆盖；activate 时初始化一次
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(() => refreshActiveModeContext()),
+  )
+  refreshActiveModeContext()
 
   // ---- 查找命令（#14）：活动 tab 为本扩展 custom editor 时向其面板发送
   // view.find.open（webview 内浮动查找面板）。查找是纯只读视图操作 ----

@@ -288,7 +288,6 @@ export class WebviewSyncController {
   private readingView: VirtualReadingView | undefined
   /** 图片资源管理器（#10：双视图共用；经宿主通道解析工作区图源） */
   private images: ImageResourceManager | undefined
-  private toolbar: HTMLElement | undefined
 
   // ---- 查找会话状态（#14）----
   /** 查找是纯只读视图状态：不写 TextDocument、不入撤销栈、零出站消息。
@@ -364,7 +363,6 @@ export class WebviewSyncController {
       return
     }
     this.extraExtensions = extraExtensions
-    this.toolbar = this.buildToolbar()
     this.banner = this.buildBanner()
     this.findPanel = this.buildFindPanel()
     this.liveWrapper = document.createElement('div')
@@ -468,7 +466,6 @@ export class WebviewSyncController {
         srcEnd: Number.isInteger(srcEnd) ? srcEnd : srcStart,
       })
     })
-    parent.appendChild(this.toolbar)
     parent.appendChild(this.banner)
     parent.appendChild(this.liveWrapper)
     parent.appendChild(this.readingContainer)
@@ -517,8 +514,6 @@ export class WebviewSyncController {
     this.view = undefined
     this.banner?.remove()
     this.banner = undefined
-    this.toolbar?.remove()
-    this.toolbar = undefined
     this.findPanel?.remove()
     this.findPanel = undefined
     this.findInputEl = undefined
@@ -1026,7 +1021,8 @@ export class WebviewSyncController {
   // 不触发保存、未保存内容原地保留），只做容器显隐、锚点映射与选区恢复。
   // 宿主 TextDocument 版本因此不受切换影响。
 
-  /** 切换入口（宿主 view.mode.set 消息与工具栏按钮共用） */
+  /** 切换入口（宿主 view.mode.set 消息驱动；#38 起由宿主标题栏三态命令
+   *  与命令面板命令编排，webview 工具栏已移除） */
   private setViewMode(target: 'live' | 'reading' | 'toggle'): void {
     const next: ViewMode =
       target === 'toggle' ? (this.viewMode === 'live' ? 'reading' : 'live') : target
@@ -1081,7 +1077,7 @@ export class WebviewSyncController {
     }
   }
 
-  /** 容器显隐与按钮文案（稳定类名 vsidian-view-live / vsidian-view-reading） */
+  /** 容器显隐（稳定类名 vsidian-view-live / vsidian-view-reading） */
   private applyModeDom(mode: ViewMode): void {
     this.viewMode = mode
     if (this.liveWrapper) {
@@ -1089,10 +1085,6 @@ export class WebviewSyncController {
     }
     if (this.readingContainer) {
       this.readingContainer.style.display = mode === 'reading' ? '' : 'none'
-    }
-    const btn = this.toolbar?.querySelector<HTMLButtonElement>('button.vsidian-mode-toggle')
-    if (btn) {
-      btn.textContent = mode === 'live' ? '切换到阅读模式' : '切换到实时预览'
     }
     this.persistState()
     // 模式变化主动回报（宿主缓存常新：表格结构命令在 reading 面板上据此
@@ -1365,19 +1357,6 @@ export class WebviewSyncController {
       viewMode: this.viewMode,
       anchor: this.modeAnchor ?? undefined,
     })
-  }
-
-  /** 切换入口工具栏（#6）：按钮与宿主命令走同一状态机 */
-  private buildToolbar(): HTMLElement {
-    const bar = document.createElement('div')
-    bar.className = 'vsidian-toolbar'
-    const btn = document.createElement('button')
-    btn.type = 'button'
-    btn.className = 'vsidian-mode-toggle'
-    btn.textContent = '切换到阅读模式'
-    btn.addEventListener('click', () => this.setViewMode('toggle'))
-    bar.appendChild(btn)
-    return bar
   }
 
   // ---- 查找会话（#14）----

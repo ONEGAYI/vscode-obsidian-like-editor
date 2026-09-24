@@ -1,5 +1,7 @@
-// 扩展激活入口：注册 CustomTextEditorProvider（priority: option，经
-// "重新打开方式"启用，不接管 .md 默认打开）与文档事件监听、测试钩子。
+// 扩展激活入口：注册 CustomTextEditorProvider（#38 起 priority: default，
+// .md 默认打开即本扩展；可经「重新打开方式」或编辑器关联设置改回原生；
+// 全局模式记忆为 source 时新开 .md 自动弹回原生编辑器）与文档事件监听、
+// 三态视图命令、测试钩子。
 import * as vscode from 'vscode'
 import { createTextEditorProvider, VIEW_TYPE } from './host/textEditorProvider'
 
