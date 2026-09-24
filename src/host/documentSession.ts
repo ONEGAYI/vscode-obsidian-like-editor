@@ -94,13 +94,19 @@ interface PanelEntry {
 const ACK_CACHE_LIMIT = 64
 const VERSION_LOG_LIMIT = 256
 
+/** 变更组相等（顺序无关）：段内区间互不重叠，排序后逐段比较。
+ *  VSCode 对多段 WorkspaceEdit 的回流 contentChanges 按偏移降序到达，
+ *  而 webview 出站（CM6 iterChanges）为升序——按序比较会把自家确认
+ *  误判为外部变更（#13 表格结构操作的多段变更暴露）。 */
 function changesEqual(a: readonly SerChange[], b: readonly SerChange[]): boolean {
   if (a.length !== b.length) {
     return false
   }
-  return a.every(
+  const sortedA = [...a].sort((x, y) => x.offset - y.offset)
+  const sortedB = [...b].sort((x, y) => x.offset - y.offset)
+  return sortedA.every(
     (c, i) =>
-      c.offset === b[i].offset && c.length === b[i].length && c.text === b[i].text,
+      c.offset === sortedB[i]!.offset && c.length === sortedB[i]!.length && c.text === sortedB[i]!.text,
   )
 }
 
