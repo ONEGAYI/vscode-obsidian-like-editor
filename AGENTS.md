@@ -2,7 +2,7 @@
 
 VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 
-> 当前状态：**MVP 主要功能已实施，整体验收未结**。双视图编辑器、增量写回、任务、链接与图片、双链、表格和查找已落地；#21–#25、#28、#30 跟进规格票验收缺口，#26–#27 记录人工与跨环境结果，#29 待明确活动位置的语法呈现，#32 统一两模式基础排版基线，#33 增加独立设置页面。当前开发工作树基线为 746 单测 + 65 集成用例通过（真实 1.86.2 宿主），不代表用户人工验收。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能数据与待验项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 和 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
+> 当前状态：**MVP 主要功能已实施，整体验收未结**。双视图编辑器、增量写回、任务、链接与图片、双链、表格和查找已落地；#21–#25、#28、#30 跟进规格票验收缺口，#26–#27 记录人工与跨环境结果，#29 待明确活动位置的语法呈现，#32 统一两模式基础排版基线，#33 增加独立设置页面，#34 实时预览源文件行号（设置页可开关）。当前开发工作树基线为 763 单测 + 71 集成用例通过（真实 1.86.2 宿主），不代表用户人工验收。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能数据与待验项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 和 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
 
 ## 约定
 
@@ -144,6 +144,7 @@ vsidian/
 │       ├── findSession.test.ts         # 查找匹配语义测试（#14）
 │       ├── historyForwarding.test.ts   # 撤销重做转发契约测试
 │       ├── imageResource.test.ts       # 图片资源管理器契约测试
+│       ├── lineNumbers.test.ts         # 行号装配契约测试（#34）
 │       ├── linkInteraction.test.ts     # 链接交互契约测试（#10）
 │       ├── linkTarget.test.ts          # 链接目标分类契约测试
 │       ├── liveDecorations.test.ts     # Live 装饰契约测试
