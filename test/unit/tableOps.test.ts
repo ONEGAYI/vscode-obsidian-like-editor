@@ -17,12 +17,14 @@ import { EditorSelection, EditorState, RangeSet } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import type { DecorationSet } from '@codemirror/view'
 import { buildLivePreviewDecorations, liveDecorationsField, LIVE_CLASS_NAMES } from '../../src/webview/liveDecorations'
+import { createTableControls } from '../../src/webview/tableControls'
 import {
   tableEditing,
   tableTabForward,
   tableTabBackward,
   runTableEdit,
   runTableRowMove,
+  tableRowsAt,
 } from '../../src/webview/tableEditing'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
 import { DocumentSession, type HostDocumentPort } from '../../src/host/documentSession'
@@ -325,6 +327,10 @@ describe('表格点阵与悬停控件', () => {
     columns[0]!.click()
     expect(view.dom.querySelectorAll('.vsidian-table-column-selected')).toHaveLength(3)
     expect(view.state.doc.toString()).toBe(TABLE_DOC)
+    view.dispatch({ selection: EditorSelection.single(TABLE_DOC.indexOf('苹果') + 1) })
+    await Promise.resolve()
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(3)
+    expect(view.dom.querySelectorAll('.vsidian-table-row-handle')).toHaveLength(3)
     view.destroy()
 
     const unsafe = '| a | b |\n| --- | --- |\n| one |\n'
@@ -332,6 +338,29 @@ describe('表格点阵与悬停控件', () => {
     await Promise.resolve()
     expect(fallback.dom.querySelectorAll('.vsidian-table-row-handle')).toHaveLength(0)
     fallback.destroy()
+  })
+
+  it('长表滚动复用行结构，控件不按可见行数重复扫描整表', async () => {
+    const doc = ['| a | b |', '| --- | --- |', ...Array.from({ length: 1000 }, (_, i) => `| ${i} | x |`), ''].join('\n')
+    let scans = 0
+    const controls = createTableControls({
+      tableRowsAt: (state, pos, tree) => { scans++; return tableRowsAt(state, pos, tree) },
+      runTableEditAt: () => false,
+      runTableRowMove: () => false,
+    })
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc, extensions: [liveDecorationsField, controls], selection: EditorSelection.single(doc.length) }),
+    })
+    await Promise.resolve()
+    expect(scans).toBe(1)
+    const first = scans
+    for (let i = 0; i < 4; i++) {
+      view.scrollDOM.dispatchEvent(new Event('scroll'))
+      await Promise.resolve()
+    }
+    expect(scans - first).toBe(0)
+    view.destroy()
   })
 
   it('底部与右侧入口复用结构命令并经宿主权威文档落盘', async () => {

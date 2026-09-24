@@ -92,6 +92,9 @@ export type HostToWebview =
    *  同一 keymap 链路；纯选区导航，零写回）。宿主测试无法向 webview 派发
    *  真实键盘事件，以此通道验证导航装配 */
   | { kind: 'table.test.key'; key: 'tab' | 'shift-tab' }
+  /** 测试钩子（#42）：在真实 webview 网格单元格派发鼠标点击及当前位置输入。 */
+  | { kind: 'table.test.cellClick'; rowIndex: number; columnIndex: number; point?: 'edge' | 'middle' }
+  | { kind: 'table.test.type'; text: string }
   /** 测试钩子（#43）：真实 webview DOM 的点阵抓手拖动事件。 */
   | { kind: 'table.test.drag'; sourceIndex: number; targetSlot: number }
   /** 测试钩子（#21）：在真实 webview 的 CM6 中输入，验证暂停态即时留存。 */
@@ -171,6 +174,8 @@ export type WebviewToHost =
       cssProbe?: CssProbeReport
       /** live 侧语法装饰统计（#8 双视图语义一致性观测；装饰集合级计数，非 DOM） */
       liveSyntax?: LiveSyntaxProbe
+      /** #42：网格 DOM 与活动格、#43 抓手的真实宿主观测 */
+      tableGrid?: { visibleRows: number; selectedRowIsGrid: boolean; selectedRowCells: string[]; rowHandles: number }
       /** reading 侧渲染语义统计（#8 双视图语义一致性观测；小文档全量挂载时有效） */
       readingSyntax?: ReadingSyntaxProbe
       /** live 视口内链接 span 数（#10；间接装饰渲染结果，限于视口） */
@@ -400,6 +405,13 @@ function isFindSessionProbe(v: unknown): v is FindSessionProbe {
   )
 }
 
+function isTableGridProbe(v: unknown): boolean {
+  return isObject(v) && isNonNegativeInt(v.visibleRows) &&
+    typeof v.selectedRowIsGrid === 'boolean' &&
+    Array.isArray(v.selectedRowCells) && v.selectedRowCells.every(isString) &&
+    isNonNegativeInt(v.rowHandles)
+}
+
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
@@ -595,6 +607,7 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.readingScrollHeightPx === undefined || isNonNegativeNumber(v.readingScrollHeightPx)) &&
         (v.cssProbe === undefined || isCssProbeReport(v.cssProbe)) &&
         (v.liveSyntax === undefined || isLiveSyntaxProbe(v.liveSyntax)) &&
+        (v.tableGrid === undefined || isTableGridProbe(v.tableGrid)) &&
         (v.readingSyntax === undefined || isReadingSyntaxProbe(v.readingSyntax)) &&
         (v.liveLinkCount === undefined || isNonNegativeInt(v.liveLinkCount)) &&
         (v.liveImageCount === undefined || isNonNegativeInt(v.liveImageCount)) &&
@@ -756,6 +769,11 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return isTableEditOp(v.op)
     case 'table.test.key':
       return v.key === 'tab' || v.key === 'shift-tab'
+    case 'table.test.cellClick':
+      return isNonNegativeInt(v.rowIndex) && isNonNegativeInt(v.columnIndex) &&
+        (v.point === undefined || v.point === 'edge' || v.point === 'middle')
+    case 'table.test.type':
+      return isString(v.text)
     case 'table.test.drag':
       return isNonNegativeInt(v.sourceIndex) && isNonNegativeInt(v.targetSlot)
     case 'sync.test.edit':

@@ -19,8 +19,8 @@
 // - frontmatter：与阅读视图共用 markdownDoc.frontmatterRange（有界扫描），
 //   头块内不产生 Markdown 装饰（伪标题/伪列表按源码呈现）
 // - 未支持语法（脚注、定义列表等）：无装饰即局部源码降级，不整篇改写
-// - #42 表格：安全的非活动行以原文区间 mark + CSS grid 呈现；活动行恢复
-//   源码布局。没有独立单元格输入模型，DOM 仍由 CM6 视口渲染与回收
+// - #42 表格：安全表格始终以原文区间 mark + CSS grid 呈现，活动单元格
+//   继续在 CM6 源区间输入。没有独立单元格输入模型，DOM 由视口回收
 import {
   EditorSelection,
   RangeSet,
@@ -95,7 +95,7 @@ export const LIVE_CLASS_NAMES = {
   hrLine: 'vsidian-hr-line',
   /** frontmatter 行（`.cm-hmd-frontmatter` 方向） */
   frontmatterLine: 'vsidian-frontmatter-line',
-  /** ---- 表格：源文本为唯一编辑面，非活动安全表格呈现网格（#42）---- */
+  /** ---- 表格：源文本为唯一编辑面，安全表格保持可编辑网格（#42）---- */
   /** 表格行（表头/分隔/数据行通用；Obsidian 对应 .cm-table 方向） */
   tableLine: 'vsidian-table-line',
   /** 表头行修饰 */
@@ -108,7 +108,7 @@ export const LIVE_CLASS_NAMES = {
   tableCellHeader: 'vsidian-table-cell-header',
   /** 管道符 span（含首尾边界管道） */
   tablePipe: 'vsidian-table-pipe',
-  /** 非活动安全表格的网格行和单元格；行身份另见 data-vsidian-table-row */
+  /** 安全表格的网格行和单元格；行身份另见 data-vsidian-table-row */
   tableGridRow: 'vsidian-table-grid-row',
   tableGridCell: 'vsidian-table-grid-cell',
   tableGridDelimiter: 'vsidian-table-grid-delimiter',
@@ -246,16 +246,23 @@ interface TableGridPlan {
   delimiterLine: number
 }
 
+const tableGridStats = { planCalls: 0, rowsScanned: 0 }
+export function getTableGridStats(): Readonly<typeof tableGridStats> {
+  return { ...tableGridStats }
+}
+
 /**
  * 仅对源区间与显示格一一对应的表格启用网格。缺列/多列以及无法解析的
  * 分隔行保持源码形态，避免视觉点击落到错误列。
  */
 function tableGridPlan(doc: Text, table: SyntaxNode): TableGridPlan | null {
+  tableGridStats.planCalls += 1
   const rows = new Map<number, GridRowKind>()
   let delimiterLine = 0
   let columns = 0
   let headers = 0
   for (let c = table.firstChild; c; c = c.nextSibling) {
+    tableGridStats.rowsScanned += 1
     if (c.name !== 'TableHeader' && c.name !== 'TableDelimiter' && c.name !== 'TableRow') {
       return null
     }
@@ -277,6 +284,7 @@ function tableGridPlan(doc: Text, table: SyntaxNode): TableGridPlan | null {
     return null
   }
   for (const lineNo of rows.keys()) {
+    tableGridStats.rowsScanned += 1
     if (splitTableRowCells(doc.line(lineNo).text, 0).length !== columns) {
       return null
     }
@@ -476,11 +484,11 @@ function emitForRange(
   fm: SourceRange | null,
   fromLine: number,
   toLine: number,
+  gridPlans: Map<number, TableGridPlan | null> = new Map(),
 ): Array<Range<Decoration>> {
   const out: Array<Range<Decoration>> = []
   const lineCls: Array<Set<string> | undefined> = new Array(toLine - fromLine + 1).fill(undefined)
   const gridLines = new Map<number, { kind: GridRowKind; plan: TableGridPlan }>()
-  const gridTables = new Map<number, TableGridPlan | null>()
   const addLineCls = (lineNo: number, cls: string): void => {
     const idx = lineNo - fromLine
     let set = lineCls[idx]
@@ -547,17 +555,22 @@ function emitForRange(
       case 'HorizontalRule':
         eachNodeLine(doc, node, fromLine, toLine, (n) => addLineCls(n, LIVE_CLASS_NAMES.hrLine))
         return
-      // 表格始终保留原文；安全且非活动的行额外呈现网格。
+      // 安全表格在光标进入单元格后仍保留网格；原文编辑由 CM6 承担。
       case 'Table': {
         eachNodeLine(doc, node, fromLine, toLine, (n) => addLineCls(n, LIVE_CLASS_NAMES.tableLine))
-        const plan = tableGridPlan(doc, node)
-        gridTables.set(node.from, plan)
+        let plan = gridPlans.get(node.from)
+        if (plan === undefined && !gridPlans.has(node.from)) {
+          plan = tableGridPlan(doc, node)
+          gridPlans.set(node.from, plan)
+        }
         if (plan) {
-          for (const [lineNo, kind] of plan.rows) {
-            if (lineNo >= fromLine && lineNo <= toLine && !isLineActive(selection, doc, lineNo)) {
-              addLineCls(lineNo, LIVE_CLASS_NAMES.tableGridRow)
-              gridLines.set(lineNo, { kind, plan })
-            }
+          const first = Math.max(fromLine, doc.lineAt(node.from).number)
+          const last = Math.min(toLine, doc.lineAt(Math.min(node.to, doc.length)).number)
+          for (let lineNo = first; lineNo <= last; lineNo++) {
+            const kind = plan.rows.get(lineNo)
+            if (!kind) continue
+            addLineCls(lineNo, LIVE_CLASS_NAMES.tableGridRow)
+            gridLines.set(lineNo, { kind, plan })
           }
           if (plan.delimiterLine >= fromLine && plan.delimiterLine <= toLine &&
               !isLineActive(selection, doc, plan.delimiterLine)) {
@@ -570,7 +583,7 @@ function emitForRange(
         const lineNo = doc.lineAt(node.from).number
         if (lineNo >= fromLine && lineNo <= toLine) {
           addLineCls(lineNo, LIVE_CLASS_NAMES.tableHeaderLine)
-          const grid = gridTables.get(tableAncestor(path)?.from ?? -1)
+          const grid = gridPlans.get(tableAncestor(path)?.from ?? -1)
           emitTableRowMarks(out, doc, node, path, Boolean(grid && gridLines.has(lineNo)))
         }
         return
@@ -578,7 +591,7 @@ function emitForRange(
       case 'TableRow': {
         const lineNo = doc.lineAt(node.from).number
         if (lineNo >= fromLine && lineNo <= toLine) {
-          const grid = gridTables.get(tableAncestor(path)?.from ?? -1)
+          const grid = gridPlans.get(tableAncestor(path)?.from ?? -1)
           emitTableRowMarks(out, doc, node, path, Boolean(grid && gridLines.has(lineNo)))
         }
         return
@@ -742,6 +755,7 @@ interface LiveDecoState {
   tree: Tree
   fragments: readonly TreeFragment[]
   fm: SourceRange | null
+  gridPlans: Map<number, TableGridPlan | null>
 }
 
 function parseTree(doc: Text, fragments?: readonly TreeFragment[]): Tree {
@@ -990,11 +1004,13 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
     const tree = parseTree(state.doc)
     const fm = frontmatterOf(state.doc)
     stats.fullBuildLines = state.doc.lines
+    const gridPlans = new Map<number, TableGridPlan | null>()
     return {
-      decos: RangeSet.of(emitForRange(tree, state.doc, state.selection, fm, 1, state.doc.lines), true),
+      decos: RangeSet.of(emitForRange(tree, state.doc, state.selection, fm, 1, state.doc.lines, gridPlans), true),
       tree,
       fragments: TreeFragment.addTree(tree),
       fm,
+      gridPlans,
     }
   },
   update(value, tr) {
@@ -1013,7 +1029,7 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
           filterFrom: from,
           filterTo: to,
           filter: () => false,
-          add: emitForRange(value.tree, doc, tr.state.selection, value.fm, span.fromLine, span.toLine),
+          add: emitForRange(value.tree, doc, tr.state.selection, value.fm, span.fromLine, span.toLine, value.gridPlans),
           sort: true,
         })
         scanned += span.toLine - span.fromLine + 1
@@ -1034,6 +1050,7 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
     const fmTouched = changed.some((c) => c.fromA < FM_SCAN_LIMIT || c.fromB < FM_SCAN_LIMIT)
     const fm = fmTouched ? frontmatterOf(doc) : value.fm
     const spans = planRebuildSpans(tr, value.tree, tree, changed, value.fm, fm)
+    const gridPlans = new Map<number, TableGridPlan | null>()
     let decos = value.decos.map(tr.changes)
     let scanned = 0
     for (const span of spans) {
@@ -1043,7 +1060,7 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
         filterFrom: from,
         filterTo: to,
         filter: () => false,
-        add: emitForRange(tree, doc, tr.state.selection, fm, span.fromLine, span.toLine),
+        add: emitForRange(tree, doc, tr.state.selection, fm, span.fromLine, span.toLine, gridPlans),
         sort: true,
       })
       scanned += span.toLine - span.fromLine + 1
@@ -1054,7 +1071,7 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
     if (scanned >= doc.lines) {
       stats.fullBuildLines = doc.lines
     }
-    return { decos, tree, fragments: TreeFragment.addTree(tree), fm }
+    return { decos, tree, fragments: TreeFragment.addTree(tree), fm, gridPlans }
   },
   provide: (f) => EditorView.decorations.from(f, (s) => s.decos),
 })
@@ -1094,6 +1111,40 @@ const inviewActiveDeco = Decoration.line({
   class: `${HEADING_CLASS_NAMES.inview} ${HEADING_CLASS_NAMES.active}`,
 })
 
+/** CSS grid 的留白可能让 CM6 默认点击命中隐藏管道；把落点约束到目标格。
+ *  mouseup 再核对一次，处理浏览器默认选区定位晚于 mousedown 的情况。 */
+const gridPointerDown = new WeakMap<EditorView, { x: number; y: number }>()
+function clampGridCellPointer(event: MouseEvent, view: EditorView, useSelection: boolean): boolean {
+  if (event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return false
+  const target = event.target instanceof Element ? event.target : null
+  const cell = target?.closest<HTMLElement>('.vsidian-table-grid-row > .vsidian-table-grid-cell')
+  if (!cell) return false
+  if (useSelection) {
+    const down = gridPointerDown.get(view)
+    gridPointerDown.delete(view)
+    if (!down || event.shiftKey || event.detail > 1 ||
+        Math.hypot(event.clientX - down.x, event.clientY - down.y) > 5) return false
+  } else {
+    gridPointerDown.set(view, { x: event.clientX, y: event.clientY })
+  }
+  const row = cell.parentElement
+  if (!row) return false
+  const column = [...row.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')].indexOf(cell)
+  if (column < 0) return false
+  const line = view.state.doc.lineAt(view.posAtDOM(row, 0))
+  const range = splitTableRowCells(line.text, line.from)[column]
+  if (!range) return false
+  const from = range.contentFrom
+  const to = range.contentTo
+  const hit = useSelection
+    ? view.state.selection.main.head
+    : view.posAtCoords({ x: event.clientX, y: event.clientY })
+  if (hit !== null && hit >= from && hit <= to) return false
+  view.dispatch({ selection: EditorSelection.single(hit === null || hit < from ? from : to) })
+  event.preventDefault()
+  return true
+}
+
 /** 间接装饰 ViewPlugin：仅按 visibleRanges 更新，update 内不触发 DOM 测量 */
 const viewportLivePlugin = ViewPlugin.fromClass(
   class {
@@ -1117,7 +1168,17 @@ const viewportLivePlugin = ViewPlugin.fromClass(
       }
     }
   },
-  { decorations: (plugin) => plugin.decorations },
+  {
+    decorations: (plugin) => plugin.decorations,
+    eventHandlers: {
+      mousedown(event: MouseEvent, view: EditorView) {
+        return clampGridCellPointer(event, view, false)
+      },
+      mouseup(event: MouseEvent, view: EditorView) {
+        return clampGridCellPointer(event, view, true)
+      },
+    },
+  },
 )
 
 /** Live Preview 装饰装配：直接（StateField）+ 间接（ViewPlugin） */
