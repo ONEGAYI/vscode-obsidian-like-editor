@@ -39,6 +39,8 @@ try {
       WORKSPACE_DIR: wsDir,
       PERF_REPORT_DIR: outDir,
       PERF_SIZES: SIZES.map(([n]) => n).join(','),
+      // 测量经 _test.* 钩子命令驱动探针（与集成测试同一开关）
+      OILE_TEST_HOOKS: '1',
     },
   })
 } catch (err) {

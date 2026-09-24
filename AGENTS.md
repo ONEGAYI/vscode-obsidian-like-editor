@@ -2,7 +2,7 @@
 
 VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 
-> 当前状态：工单 #2–#8 已交付——可选自定义编辑器（Reopen With 启用）打开 `.md`，CM6 承载全文、增量写回 TextDocument；中文输入/宿主撤销、外部修改安全同步与冲突保留（#3–#4）、视口渲染实测（#5/#7）、实时预览与阅读双模式及基础 Markdown 语法显示（#6/#8）均已落地。进行中：#9 任务勾选、#10–#11 双链、#12–#13 表格、#14 查找、#15 打包验收。功能范围与规格见 [docs/specs/mvp.md](docs/specs/mvp.md)。本文件是项目级 agent 规则的**单一事实源**。
+> 当前状态：**MVP 功能全量交付（工单 #2–#15 完成）**——基于源文本的双视图编辑器（CM6 实时预览 + markdown-it 阅读虚拟化）、增量写回与外部修改安全同步（冲突保留输入）、任务勾选、链接/图片、双链四形态解析跳转、表格编辑与键盘导航、编辑区查找、VSIX 打包与安装态回归均已落地。测试基线 643 单测 + 54 集成用例全绿（真实 1.86.2 宿主）。功能范围与规格见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能实测汇总与人工验证项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 与 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
 
 ## 约定
 
@@ -14,7 +14,9 @@ VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 - **宿主端**（`src/extension.ts`、`src/host/`）：`CustomTextEditorProvider`，保存/dirty/Hot Exit 由 VSCode 文本管线自动处理；`TextDocument` 为权威文本，编辑经 `WorkspaceEdit` 写回。
 - **webview 端**（`src/webview/`）：CM6 EditorView + `acquireVsCodeApi` 消息桥；`src/shared/` 为两端共享的消息协议单一事实源（不依赖 vscode/DOM）。协议约定 webview 全程 LF 坐标（CM6 内部把 `\r\n` 规范化为 `\n`，宿主侧 `NewlineCoordinator` 负责双向坐标与文本转换）。
 - **构建**：esbuild 双产物——宿主 `out/extension.js`（node18/cjs/external vscode）、webview `out/webview/main.js`（chrome118/iife，CSS 随 import 打包为 `main.css`）；`npm run compile` 另跑 `tsc --noEmit` 做类型检查（esbuild 不查类型）。
-- **测试**：`npm run test:unit`（vitest，纯逻辑 + jsdom 的 webview 控制器）；`npm run test:integration`（@vscode/test-electron 指定 1.86.2 真宿主，fixture 由 `test/integration/runTest.mjs` 动态生成）。扩展注册 `onegayi.obsidian-like-editor._test.*` 辅助命令供集成测试观测/注入。
+- **测试**：`npm run test:unit`（vitest，纯逻辑 + jsdom 的 webview 控制器）；`npm run test:integration`（@vscode/test-electron 指定 1.86.2 真宿主，fixture 由 `test/integration/fixtures.mjs` 统一生成、`runTest.mjs` 启动）。扩展注册 `onegayi.obsidian-like-editor._test.*` 辅助命令供集成测试观测/注入（仅 `OILE_TEST_HOOKS=1` 时注册）。
+- **打包与安装态回归（#15）**：`npx @vscode/vsce package --no-dependencies` 产出 VSIX（esbuild bundle 自包含，不带 node_modules；`.vscodeignore` 排除 src/test/docs）。`node test/integration/runInstalled.mjs` 把 VSIX 经 `--install-extension` 装入隔离 profile 的 1.86.2 便携宿主（无 extensionDevelopmentPath，扩展唯一来源为安装产物）后跑同一集成套件。
+- **性能测量**：`node test/perf/runPerf.mjs`（1千/1万/10万档 + 大围栏，报告写 `docs/perf/data/perf-report.json`）；档位数据与解读汇总在 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md)。
 - **版本锁定**：依赖一律精确版本（无 `^`），提交 lockfile；`engines.vscode ^1.86.0` 与 `@types/vscode 1.86.0` 对齐。`@types/node` 锁 22.x（vitest 5 的 vite peer 要求数 >=20.19，类型不进产物，宿主代码仍按 Node 18 API 面编码）。版本依据探索笔记（orch 仓库 exploration/01）。
 
 ## Agent skills
@@ -55,6 +57,7 @@ vscode-obsidian-like-editor/
 │   │   └── obsidian-selector-map.md # Obsidian 选择器映射表
 │   ├── perf/     # 性能实测数据与测量工具说明
 │   │   ├── 2026-09-live-syntax-decorations.md   # 语法树装饰与大围栏细分实测（#8）
+│   │   ├── 2026-09-mvp-performance-summary.md   # MVP 性能档位汇总
 │   │   ├── 2026-09-reading-viewport-mount.md    # 阅读按需挂载实测数据
 │   │   ├── 2026-09-table-cell-editing.md        # 表格单元格编辑性能实测（#12）
 │   │   ├── 2026-09-title-decoration-viewport.md # 标题切片视口渲染实测数据
@@ -64,8 +67,9 @@ vscode-obsidian-like-editor/
 │   │   ├── obsidian-live-preview-editor.md # Obsidian 技术栈与选型调研
 │   │   └── obsidian-viewport-rendering.md  # 视口渲染性能补充调研
 │   └── specs/    # 产品规格
-│       ├── mvp-issues.md # MVP GitHub Issue 索引
-│       └── mvp.md        # MVP 规格主文档
+│       ├── manual-verification.md # 人工验证清单
+│       ├── mvp-issues.md          # MVP GitHub Issue 索引
+│       └── mvp.md                 # MVP 规格主文档
 ├── esbuild.mjs       # esbuild 双产物构建脚本
 ├── media/            # 随扩展打包的静态资源
 │   └── css-contract-probe.css # 样式契约内部测试片段
@@ -107,8 +111,10 @@ vscode-obsidian-like-editor/
 │       └── taskToggle.ts         # 任务勾选解析纯函数（#9）
 ├── test/             # 测试根
 │   ├── integration/ # 真宿主集成测试
-│   │   ├── runTest.mjs # 集成测试启动器
-│   │   └── suite/      # 集成测试套件
+│   │   ├── fixtures.mjs     # 集成测试 fixture 单一事实源
+│   │   ├── runInstalled.mjs # VSIX 安装态集成回归启动器
+│   │   ├── runTest.mjs      # 集成测试启动器
+│   │   └── suite/           # 集成测试套件
 │   │       ├── cases.ts # 集成测试用例
 │   │       └── index.ts # 集成测试入口 runner
 │   ├── perf/        # 性能测量脚本与套件（#5）

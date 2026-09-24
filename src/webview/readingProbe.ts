@@ -9,6 +9,7 @@
 // 探针只改 scrollTop（纯视图滚动，不产生 edit.request 写回）；与 #5 的
 // perfProbe（CM6 路径）相互独立，共用「宿主命令 → 消息 → 轮询报告」通道。
 import type { ReadingPerfSnapshot } from '../shared/protocol'
+import { readUsedJsHeapBytes } from './perfProbe'
 import type { VirtualReadingView } from './readingVirtualView'
 
 export interface ReadingPerfOptions {
@@ -44,6 +45,7 @@ function snapshot(view: VirtualReadingView, container: HTMLElement): ReadingPerf
     contentDomCount: stats.contentDomCount,
     scrollTopPx: Math.round(container.scrollTop),
     scrollHeightPx: Math.round(container.scrollHeight),
+    jsHeapBytes: readUsedJsHeapBytes(),
   }
 }
 
@@ -54,6 +56,7 @@ function failureReport(scrollRounds: number): ReadingPerfReport {
     contentDomCount: 0,
     scrollTopPx: 0,
     scrollHeightPx: 0,
+    jsHeapBytes: null,
   }
   return {
     kind: 'reading.perf.report',
