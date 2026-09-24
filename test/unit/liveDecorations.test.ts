@@ -74,10 +74,10 @@ function hiddenRanges(set: DecorationSet): Array<[number, number]> {
     .map((i) => [i.from, i.to] as [number, number])
 }
 
-/** 任务字形 widget（replace 带 widget）区间与勾选态 */
+/** 任务 checkbox widget（replace 带 widget）区间与勾选态 */
 function taskGlyphs(set: DecorationSet): Array<{ from: number; to: number; checked: boolean }> {
   return collect(set)
-    .filter((i) => i.widget !== undefined && i.widget.startsWith('TaskGlyphWidget:'))
+    .filter((i) => i.widget !== undefined && i.widget.startsWith('TaskCheckboxWidget:'))
     .map((i) => ({ from: i.from, to: i.to, checked: i.widget!.endsWith('true') }))
 }
 
@@ -475,7 +475,8 @@ describe('稳定类名常量（#8 样式契约入口）', () => {
     expect(LIVE_CLASS_NAMES.quoteLine).toBe('oile-quote-line')
     expect(LIVE_CLASS_NAMES.codeLine).toBe('oile-code-line')
     expect(LIVE_CLASS_NAMES.listLine).toBe('oile-list-line')
-    expect(LIVE_CLASS_NAMES.taskGlyph).toBe('oile-task-glyph')
+    expect(LIVE_CLASS_NAMES.taskCheckbox).toBe('oile-task-checkbox')
+    expect(LIVE_CLASS_NAMES.taskChecked).toBe('oile-task-checked')
     expect(LIVE_CLASS_NAMES.hrLine).toBe('oile-hr-line')
     expect(LIVE_CLASS_NAMES.frontmatterLine).toBe('oile-frontmatter-line')
   })

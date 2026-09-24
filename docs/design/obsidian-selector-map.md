@@ -1,6 +1,6 @@
 # Obsidian 选择器映射表（一期稳定样式契约）
 
-状态：工单 #6 交付物，2026-09-23；#8 补 span 级映射与阅读语义标签结构（2026-09-24）。依据 [ADR-0004](../adr/0004-stable-styling-contract.md)。
+状态：工单 #6 交付物，2026-09-23；#8 补 span 级映射与阅读语义标签结构（2026-09-24）；#9 补任务勾选交互类（2026-09-24）。依据 [ADR-0004](../adr/0004-stable-styling-contract.md)。
 
 本文记录一期已建立的稳定类名/CSS 变量入口与 Obsidian 同款选择器的核对结果，供二期自定义 CSS 片段兼容使用。**边界声明**：
 
@@ -36,7 +36,7 @@
 | `.oile-quote-line` | 引用行 | `.HyperMD-quote`（Obsidian 引用行类）/ `.cm-quote` | 语义等价（行级；本项目无 span 级引用 token 类——引用内容不额外 span 化） |
 | `.oile-list-line`（+ `-d{1..8}` 嵌套深度修饰） | 列表项行 | `.HyperMD-list-line`（Obsidian 列表行类族）/ `.cm-list-number` 等修饰 | 行级语义对应；深度修饰为本项目自有形态（Obsidian 按行 class 组合表达缩进，结构不同但等价定位） |
 | `.oile-list-bullet` / `.oile-list-ordered` | 无序/有序列表行修饰（无序标记隐藏后以 `::before` 圆点呈现；有序编号保留可见） | 无直接对应（Obsidian 圆点由 `.cm-formatting-list` 隐藏 + 原生列表样式承担） | 本项目自有呈现形态 |
-| `.oile-task-glyph`（+ `.oile-task-checked`） | 任务标记替换字形（`[ ]`/`[x]` → 空框/勾选框，#9 将换交互 checkbox） | `.cm-task-*` 方向（Obsidian 任务标记由 HMR widget 承担） | 本项目自有 widget；勾选态经 `.oile-task-checked` 区分 |
+| `.oile-task-checkbox`（+ `.oile-task-checked` 修饰；`input[type=checkbox]`） | 任务 checkbox（#9：替换 #8 的只读字形，可交互——点击/Enter/空格切换勾选态并写回 Markdown） | `.cm-task-*` 方向（Obsidian 任务标记由 HMR widget 承担） | 本项目自有 widget；勾选态双入口（`:checked` 伪类与 `.oile-task-checked` 类）。已验证：测试片段经 `.oile-task-checkbox` 命中（真实宿主断言） |
 | `.oile-hr-line` | 水平线行 | `.cm-hr`（Obsidian 水平线 token 类） | 语义等价（行级呈现，`---` 源文保留可见） |
 | `.oile-frontmatter-line` | frontmatter 行（头块按源码呈现、语法不解析） | `.cm-hmd-frontmatter`（Obsidian frontmatter 类） | 语义对应（类名不同）；frontmatter 边界由 `markdownDoc.frontmatterRange` 两视图共用判定 |
 
@@ -55,7 +55,7 @@
 | `.oile-reading-blockquote` | 引用块（内含 `blockquote`） | `.markdown-preview-view blockquote` | 类等价 + 标签等价（#8 新增） |
 | `.oile-reading-list` | 列表块（内含 `ul`/`ol`/`li` 嵌套，`li` 带源锚点） | `.markdown-preview-view ul` / `ol` / `li` | 类等价 + 结构等价（#8 起还原嵌套；#6 时为逐行平铺） |
 | `li.oile-reading-task`（li 级） | 任务列表项 | `.markdown-preview-view .task-list-item` | 类等价（#8 起挂在语义 `li` 上）；`data-task` 扩展勾选状态（`[/]`、`[!]` 等）不支持 |
-| `.oile-reading-task-checkbox` | 任务复选框（`input[type=checkbox]`，disabled） | `.markdown-preview-view .task-list-item input[type="checkbox"]` | 结构等价；#9 实现勾选写回后启用 |
+| `.oile-reading-task-checkbox` | 任务复选框（`input[type=checkbox]`，#9 起启用：点击/键盘切换并写回） | `.markdown-preview-view .task-list-item input[type="checkbox"]` | 结构等价。已验证：测试片段经 `.oile-reading-task-checkbox` 命中（真实宿主断言） |
 | `.oile-reading-code-block` | 围栏/缩进代码块（内含 `pre > code`；大围栏按行细分为多块） | `.markdown-preview-view pre` | 类等价 + 标签等价（#8 起内容不含围栏标记文本；`code` 带语言类 `language-x` 供后续高亮） |
 | `.oile-reading-hr` | 水平线块（内含 `hr`） | `.markdown-preview-view hr` | 类等价 + 标签等价（#8 新增） |
 | `.oile-reading-frontmatter` | frontmatter 头块（源码呈现，内部 `pre.oile-reading-frontmatter-text`） | `.markdown-preview-view .markdown-frontmatter` | 语义对应（类名不同）；头块内语法不解析（两视图共用边界判定） |
@@ -83,8 +83,8 @@
 
 ## 内部测试 CSS 验证入口
 
-- 片段：`media/css-contract-probe.css`，随 webview HTML 加载（CSP `style-src` 允许的扩展资源）。仅用无视觉影响的属性（`text-decoration-color`，在无 `text-decoration-line` 时不呈现）与探针变量。#8 追加 span 级类与阅读语义标签的探针规则（`.oile-strong`/`.oile-inline-code`/`.oile-code-line`/`.oile-reading-block strong`）。
-- 观测：`view.state` 回报的 `cssProbe` 字段（`liveHeadingDecorationColor` / `readingHeadingDecorationColor` / `readingVarProbe`；#8 追加 `liveStrongDecorationColor` / `liveInlineCodeDecorationColor` / `liveCodeLineDecorationColor` / `readingStrongDecorationColor`），由 webview 读取目标元素 computed style 填充；目标元素不存在时为 `null`。
+- 片段：`media/css-contract-probe.css`，随 webview HTML 加载（CSP `style-src` 允许的扩展资源）。仅用无视觉影响的属性（`text-decoration-color`，在无 `text-decoration-line` 时不呈现）与探针变量。#8 追加 span 级类与阅读语义标签的探针规则（`.oile-strong`/`.oile-inline-code`/`.oile-code-line`/`.oile-reading-block strong`）；#9 追加任务 checkbox 探针规则（`.oile-task-checkbox`/`.oile-reading-task-checkbox`）。
+- 观测：`view.state` 回报的 `cssProbe` 字段（`liveHeadingDecorationColor` / `readingHeadingDecorationColor` / `readingVarProbe`；#8 追加 `liveStrongDecorationColor` / `liveInlineCodeDecorationColor` / `liveCodeLineDecorationColor` / `readingStrongDecorationColor`；#9 追加 `liveTaskCheckboxDecorationColor` / `readingTaskCheckboxDecorationColor`），由 webview 读取目标元素 computed style 填充；目标元素不存在时为 `null`。
 - 断言：集成用例「稳定样式契约」（`test/integration/suite/cases.ts`）在真实 VSCode 1.86.2 宿主内验证两种视图的类名命中与变量管道。
 
 ## 已知不支持项（如实清单）

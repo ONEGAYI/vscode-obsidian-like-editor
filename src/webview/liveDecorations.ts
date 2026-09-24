@@ -46,6 +46,7 @@ import {
   visitRange,
   type SourceRange,
 } from './markdownDoc'
+import { resolveTaskToggleAtMarker } from './taskToggle'
 
 /** 标题类名（#5 契约保持不变） */
 export const HEADING_CLASS_NAMES = {
@@ -75,8 +76,9 @@ export const LIVE_CLASS_NAMES = {
   listBullet: 'oile-list-bullet',
   /** 有序列表行修饰（编号保留可见） */
   listOrdered: 'oile-list-ordered',
-  /** 任务标记字形（Obsidian `.cm-task-*` 方向；#9 换交互 checkbox） */
-  taskGlyph: 'oile-task-glyph',
+  /** 任务 checkbox（input，#9 可交互：点击/Enter 切换勾选态） */
+  taskCheckbox: 'oile-task-checkbox',
+  /** 已勾选修饰类（配合 :checked 伪类的稳定类入口） */
   taskChecked: 'oile-task-checked',
   /** 水平线行（`.cm-hr`） */
   hrLine: 'oile-hr-line',
@@ -105,28 +107,66 @@ const strongDeco = Decoration.mark({ class: LIVE_CLASS_NAMES.strong })
 const emphasisDeco = Decoration.mark({ class: LIVE_CLASS_NAMES.emphasis })
 const inlineCodeDeco = Decoration.mark({ class: LIVE_CLASS_NAMES.inlineCode })
 
-/** 任务字形 widget：#8 只读呈现（CSS 绘制勾选态），#9 换交互元素 */
-class TaskGlyphWidget extends WidgetType {
+/**
+ * 任务 checkbox widget（#9）：input[type=checkbox] 替换任务标记 [ ]/[x]。
+ * 点击/Enter 经 posAtDOM 定位当前文档坐标（装饰随文档同步，位置无过期），
+ * 经 taskToggle 校验后派发替换事务——事务走编辑器标准出站链路
+ * （syncController updateListener → edit.request），不旁路直改。
+ * 空格键依赖浏览器原生激活（checkbox 上按 Space 触发 click），不另行
+ * 拦截，避免与原生行为双重切换。
+ */
+class TaskCheckboxWidget extends WidgetType {
   constructor(readonly checked: boolean) {
     super()
   }
-  eq(other: TaskGlyphWidget): boolean {
+  eq(other: TaskCheckboxWidget): boolean {
     return other.checked === this.checked
   }
   toDOM(): HTMLElement {
-    const el = document.createElement('span')
-    el.className = this.checked
-      ? `${LIVE_CLASS_NAMES.taskGlyph} ${LIVE_CLASS_NAMES.taskChecked}`
-      : LIVE_CLASS_NAMES.taskGlyph
-    return el
+    const box = document.createElement('input')
+    box.type = 'checkbox'
+    box.checked = this.checked
+    box.className = this.checked
+      ? `${LIVE_CLASS_NAMES.taskCheckbox} ${LIVE_CLASS_NAMES.taskChecked}`
+      : LIVE_CLASS_NAMES.taskCheckbox
+    box.setAttribute('aria-label', this.checked ? '取消任务勾选' : '勾选任务')
+    const toggle = (): void => {
+      const view = EditorView.findFromDOM(box)
+      if (!view) {
+        return
+      }
+      const doc = view.state.doc.toString()
+      const pos = view.posAtDOM(box)
+      const target = resolveTaskToggleAtMarker(doc, pos, pos + 3, this.checked)
+      if (target) {
+        view.dispatch({
+          changes: { from: target.from, to: target.to, insert: target.nextText },
+        })
+      }
+    }
+    box.addEventListener('click', (event) => {
+      // 取消原生翻转：勾选态始终由文档驱动重绘（校验失败时不改显示）
+      event.preventDefault()
+      toggle()
+    })
+    box.addEventListener('keydown', (event) => {
+      // Enter 在 checkbox 上无原生激活：手动触发切换；阻断冒泡避免编辑器
+      // 把 Enter 解释为插入换行
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        event.stopPropagation()
+        toggle()
+      }
+    })
+    return box
   }
   ignoreEvent(): boolean {
     return false
   }
 }
-const taskGlyphDecos = [
-  Decoration.replace({ widget: new TaskGlyphWidget(false) }),
-  Decoration.replace({ widget: new TaskGlyphWidget(true) }),
+const taskCheckboxDecos = [
+  Decoration.replace({ widget: new TaskCheckboxWidget(false) }),
+  Decoration.replace({ widget: new TaskCheckboxWidget(true) }),
 ]
 
 /** 行是否被选区覆盖（任一 range 的行区间覆盖该行即视为活动，显示源码） */
@@ -337,7 +377,7 @@ function emitForRange(
         const lineNo = doc.lineAt(node.from).number
         if (!active(lineNo)) {
           const checked = doc.sliceString(node.from + 1, Math.min(node.from + 2, node.to)) !== ' '
-          out.push(taskGlyphDecos[checked ? 1 : 0]!.range(node.from, node.to))
+          out.push(taskCheckboxDecos[checked ? 1 : 0]!.range(node.from, node.to))
         }
         return
       }

@@ -20,8 +20,9 @@ export interface ReadingRenderEnv {
   baseLine?: number
 }
 
-/** 任务标记行：缩进 + 列表标记 + 空白 + [xX ] + 空白 */
-const TASK_ITEM_RE = /^(\s*)(?:[-*+]|\d{1,9}[.)])\s+\[([ xX])\]\s/
+/** 任务标记行：缩进 + 列表标记 + 空白 + [xX ] + 空白。
+ *  导出供 taskToggle 的点击严格再校验共用（同一任务行判定口径） */
+export const TASK_ITEM_RE = /^(\s*)(?:[-*+]|\d{1,9}[.)])\s+\[([ xX])\]\s/
 
 /** 阅读视图稳定类名（阅读侧 #8 新增；与 readingView 常量保持一致的方向） */
 export const READING_MARKDOWN_CLASS_NAMES = {
@@ -99,9 +100,11 @@ function isDangerousUrl(value: string): boolean {
 }
 
 /**
- * 任务项转换：li 首文本以 `[ ] `/`[x] `/`[X] ` 开头时，替换为 disabled
- * checkbox（携带 marker 区间锚点）并给 li 加 oile-reading-task 类。
- * marker 锚点 = li 首行内 `[` 字符起的三字符区间（#9 写回的精确定位依据）。
+ * 任务项转换：li 首文本以 `[ ] `/`[x] `/`[X] ` 开头时，替换为启用
+ * checkbox（携带 marker 区间锚点与渲染态）并给 li 加 oile-reading-task 类。
+ * marker 锚点 = li 首行内 `[` 字符起的三字符区间；data-oile-checked 记录
+ * 渲染时勾选态（#9 点击意图的确定性来源——不受浏览器原生 checkbox
+ * 激活时序影响）。点击交互由阅读容器的事件委托处理（syncController）。
  */
 export function convertTaskItems(root: HTMLElement, text: string): void {
   for (const li of Array.from(root.querySelectorAll('li'))) {
@@ -120,11 +123,12 @@ export function convertTaskItems(root: HTMLElement, text: string): void {
       continue
     }
     const markerStart = anchorStart + m[0].indexOf('[')
+    const checked = m[2] !== ' '
     const box = document.createElement('input')
     box.type = 'checkbox'
-    box.disabled = true
-    box.checked = m[2] !== ' '
     box.className = READING_MARKDOWN_CLASS_NAMES.taskCheckbox
+    box.checked = checked
+    box.dataset['oileChecked'] = String(checked)
     box.dataset['oileSrcStart'] = String(markerStart)
     box.dataset['oileSrcEnd'] = String(markerStart + 3)
     firstText.parentNode!.insertBefore(box, firstText)

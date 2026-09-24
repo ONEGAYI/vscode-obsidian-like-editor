@@ -92,16 +92,18 @@ describe('sanitizeReadingDom：DOM 纵深净化', () => {
   })
 })
 
-describe('convertTaskItems：任务项 checkbox 显示（#9 预留锚点）', () => {
-  it('li 首文本 [ ]/[x]/[X] → disabled checkbox，锚点恰为标记三字符区间', () => {
+describe('convertTaskItems：任务项 checkbox（#9：启用可交互）', () => {
+  it('li 首文本 [ ]/[x]/[X] → 启用的 checkbox，锚点恰为标记三字符区间', () => {
     const md = createMarkdownRenderer()
     const src = '- [ ] 未完成\n- [x] 已完成\n- [X] 大写完成\n- 普通项\n'
     const host = renderToDom(md, src)
     convertTaskItems(host, src)
     const boxes = Array.from(host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'))
     expect(boxes).toHaveLength(3)
-    expect(boxes.every((b) => b.disabled)).toBe(true)
+    expect(boxes.every((b) => !b.disabled)).toBe(true) // #9：启用（点击写回）
     expect(boxes.map((b) => b.checked)).toEqual([false, true, true])
+    // 渲染态锚点（data-oile-checked）：点击意图的确定性来源
+    expect(boxes.map((b) => b.dataset['oileChecked'])).toEqual(['false', 'true', 'true'])
     // 锚点：源文 [ ]/[x]/[X] 区间
     expect(src.slice(Number(boxes[0]!.dataset['oileSrcStart']), Number(boxes[0]!.dataset['oileSrcEnd']))).toBe('[ ]')
     expect(src.slice(Number(boxes[1]!.dataset['oileSrcStart']), Number(boxes[1]!.dataset['oileSrcEnd']))).toBe('[x]')

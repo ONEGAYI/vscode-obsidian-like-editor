@@ -123,6 +123,8 @@ interface ViewState {
     liveInlineCodeDecorationColor: string | null
     liveCodeLineDecorationColor: string | null
     readingStrongDecorationColor: string | null
+    liveTaskCheckboxDecorationColor: string | null
+    readingTaskCheckboxDecorationColor: string | null
   }
   /** #8 双视图语法一致性观测 */
   liveSyntax?: {
@@ -209,6 +211,29 @@ async function waitViewState(
     return undefined
   })
 }
+
+/** #9 任务勾选 fixture（与 runTest.mjs 的 TASK_DOC 一致） */
+const TASK_DOC_TEXT = [
+  '# 任务清单标题',
+  '',
+  '- [ ] 未完成任务甲',
+  '- [ ] 未完成任务甲',
+  '- [x] 已完成任务',
+  '',
+  '结尾段落。',
+  '',
+].join('\n')
+/** 点击第二个重复任务后的期望全文 */
+const TASK_DOC_SECOND_TOGGLED = [
+  '# 任务清单标题',
+  '',
+  '- [ ] 未完成任务甲',
+  '- [x] 未完成任务甲',
+  '- [x] 已完成任务',
+  '',
+  '结尾段落。',
+  '',
+].join('\n')
 
 /** 用例表：名称 -> 执行函数 */
 export const cases: Array<[string, () => Promise<void>]> = [
@@ -1118,6 +1143,100 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(st.appliedEdits === 0, '大围栏细分链路零写回')
   }],
 
+  // ---- 工单 #9：两种模式的任务勾选 ----
+
+  ['任务勾选（live）：点击 checkbox 精确写回重复任务之一并可撤销（#9）', async () => {
+    await openWithEditor('task.md')
+    await waitSessionReady('task.md')
+    const uri = wsUri('task.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('task.md'))
+
+    // live 侧初始：3 个任务 checkbox（2 未勾选 + 1 已勾选）
+    const live = await waitViewState('task.md', (v) => (v.liveSyntax?.taskGlyphs ?? 0) === 3)
+    assert(live.liveSyntax!.taskChecked === 1, `初始勾选数应为 1，实际 ${live.liveSyntax!.taskChecked}`)
+
+    // 点击第二个重复任务（task.test.click 驱动真实 webview 内同一点击处理器）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'task.test.click', view: 'live', index: 1 })
+    await poll('live 勾选写回权威文档', () => (doc.getText() === TASK_DOC_SECOND_TOGGLED ? true : undefined))
+    // 重复任务行：只有第二个被改写，第一个保持原样
+    assert(doc.getText().split('\n')[2] === '- [ ] 未完成任务甲', '第一个重复任务不得被误改')
+    // live 装饰统计跟随：2 勾选
+    const afterToggle = await waitViewState('task.md', (v) => (v.liveSyntax?.taskChecked ?? 0) === 2)
+    assert(afterToggle.liveSyntax!.taskGlyphs === 3, '任务数不变')
+    assert(afterToggle.text === TASK_DOC_SECOND_TOGGLED, 'webview 文本与权威一致')
+
+    // 撤销在两种视图一致：undo 回退唯一一笔勾选编辑
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('undo 回退勾选', () => (doc.getText() === TASK_DOC_TEXT ? true : undefined))
+    const afterUndo = await waitViewState('task.md', (v) => v.text === TASK_DOC_TEXT)
+    assert(afterUndo.liveSyntax!.taskChecked === 1, `undo 后勾选数应回到 1，实际 ${afterUndo.liveSyntax!.taskChecked}`)
+
+    // 无内容变化的重渲染不新增历史：同文 resync 后写回计数不再增长
+    const st = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(st.appliedEdits === 1, `勾选写回应恰好 1 笔，实际 ${st.appliedEdits}`)
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'sync.request' })
+    await waitViewState('task.md', (v) => v.text === TASK_DOC_TEXT)
+    const stAfter = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(stAfter.appliedEdits === st.appliedEdits, `同文重渲染不得新增写回（${st.appliedEdits} → ${stAfter.appliedEdits}）`)
+  }],
+
+  ['任务勾选（reading）：阅读模式点击 checkbox 写回并撤销，其余内容只读（#9）', async () => {
+    await openWithEditor('task.md')
+    await waitSessionReady('task.md')
+    const uri = wsUri('task.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('task.md'))
+
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    const reading = await poll('进入阅读模式并读取任务语义', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' && (v.readingSyntax?.taskCheckboxes ?? 0) === 3 ? v : undefined
+    })
+    assert(reading.readingSyntax!.taskChecked === 1, `阅读初始勾选数应为 1，实际 ${reading.readingSyntax!.taskChecked}`)
+
+    // 点击第一个任务（未勾选 → 勾选）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'task.test.click', view: 'reading', index: 0 })
+    const firstToggled = TASK_DOC_TEXT.replace('- [ ] 未完成任务甲', '- [x] 未完成任务甲')
+    await poll('reading 勾选写回权威文档', () => (doc.getText() === firstToggled ? true : undefined))
+    const afterToggle = await waitViewState('task.md', (v) => (v.readingSyntax?.taskChecked ?? 0) === 2)
+    assert(afterToggle.text === firstToggled, '阅读视图文本与权威一致')
+    assert(afterToggle.readingSyntax!.taskCheckboxes === 3, '任务数不变')
+
+    // 撤销：阅读模式发起的勾选同样在权威历史中回退，视图跟随
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('undo 回退勾选', () => (doc.getText() === TASK_DOC_TEXT ? true : undefined))
+    const afterUndo = await waitViewState('task.md', (v) => (v.readingSyntax?.taskChecked ?? 0) === 1)
+    assert(afterUndo.readingSyntax!.taskChecked === 1, 'undo 后阅读勾选数回到 1')
+
+    const st = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(st.appliedEdits === 1, `阅读勾选写回应恰好 1 笔，实际 ${st.appliedEdits}`)
+  }],
+
+  ['任务样式契约：两种视图的 checkbox 稳定类名经测试片段命中（#9）', async () => {
+    await openWithEditor('task.md')
+    await waitSessionReady('task.md')
+    const uri = wsUri('task.md').toString()
+
+    // live：任务行在首屏且非活动（光标在标题行）→ checkbox 已渲染
+    const live = await waitViewState('task.md', (v) => v.cssProbe?.liveTaskCheckboxDecorationColor !== undefined && v.viewMode === 'live')
+    assert(
+      live.cssProbe!.liveTaskCheckboxDecorationColor === 'rgb(19, 20, 21)',
+      `live 任务 checkbox 应被测试片段命中 rgb(19, 20, 21)，实际 ${live.cssProbe!.liveTaskCheckboxDecorationColor}`,
+    )
+
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    const reading = await poll('阅读模式任务样式探针', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' && v.cssProbe?.readingTaskCheckboxDecorationColor !== undefined ? v : undefined
+    })
+    assert(
+      reading.cssProbe!.readingTaskCheckboxDecorationColor === 'rgb(22, 23, 24)',
+      `阅读任务 checkbox 应被测试片段命中 rgb(22, 23, 24)，实际 ${reading.cssProbe!.readingTaskCheckboxDecorationColor}`,
+    )
+    // 样式链路零写回
+    const st = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(st.appliedEdits === 0, `样式探针链路不应产生写回，实际 ${st.appliedEdits}`)
+  }],
+
   ['C-5：活动 tab 非本面板文档时 webview 的 undo 请求被忽略', async () => {
     await openWithEditor('undo3.md')
     const session = await waitSessionReady('undo3.md')
@@ -1126,7 +1245,6 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const original = '撤销守卫甲行\n撤销守卫乙行\n'
     const edited = '撤销守卫甲行【写入】\n撤销守卫乙行\n'
     assert(doc.getText() === original, `初始文本不符：${JSON.stringify(doc.getText())}`)
-
     // 面板注入编辑：'撤销守卫甲行' 为 6 字符，行末插入点 LF offset 6
     await vscode.commands.executeCommand(CMD.injectMessage, uri, {
       kind: 'edit.request',

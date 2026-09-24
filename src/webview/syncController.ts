@@ -33,10 +33,12 @@ import {
   type ReadingSyntaxProbe,
   type SerChange,
 } from '../shared/protocol'
-import { liveDecorationsField, livePreviewDecorations } from './liveDecorations'
+import { liveDecorationsField, livePreviewDecorations, LIVE_CLASS_NAMES } from './liveDecorations'
 import { runPerfProbe } from './perfProbe'
 import { runReadingPerfProbe } from './readingProbe'
 import { createReadingContainer } from './readingView'
+import { READING_MARKDOWN_CLASS_NAMES } from './readingMarkdown'
+import { resolveStaleTaskToggle } from './taskToggle'
 import { VirtualReadingView } from './readingVirtualView'
 
 /** webview 与宿主的通信通道（由 acquireVsCodeApi 适配） */
@@ -329,6 +331,25 @@ export class WebviewSyncController {
       }
       view?.handleScroll()
     })
+    // 任务勾选（#9）：阅读模式除任务勾选外只读——checkbox 点击经容器事件
+    // 委托处理（虚拟化下元素按需创建/回收，不做逐元素监听）。
+    // 点击意图取渲染态锚点（data-oile-checked），不受浏览器原生 checkbox
+    // 激活时序影响；校验失败（过期锚点）即放弃，保持视图一致
+    this.readingContainer.addEventListener('click', (event) => {
+      const target = event.target
+      if (this.isTaskCheckbox(target)) {
+        event.preventDefault() // 取消原生翻转：勾选态由文档驱动重渲染
+        this.toggleReadingTask(target)
+      }
+    })
+    this.readingContainer.addEventListener('keydown', (event) => {
+      // Enter 在 checkbox 上无原生激活，手动触发；空格依赖原生 click
+      const target = event.target
+      if (event.key === 'Enter' && this.isTaskCheckbox(target)) {
+        event.preventDefault()
+        this.toggleReadingTask(target)
+      }
+    })
     parent.appendChild(this.toolbar)
     parent.appendChild(this.banner)
     parent.appendChild(this.liveWrapper)
@@ -518,6 +539,21 @@ export class WebviewSyncController {
           )
         }
         break
+      case 'task.test.click': {
+        // 测试钩子（#9）：按视图与序号点击真实任务 checkbox（宿主测试无法
+        // 向 webview 派发真实鼠标事件；此通道驱动与用户点击同一处理器）
+        const root =
+          message.view === 'reading'
+            ? this.readingContainer ?? undefined
+            : this.view?.dom
+        const cls =
+          message.view === 'reading'
+            ? READING_MARKDOWN_CLASS_NAMES.taskCheckbox
+            : LIVE_CLASS_NAMES.taskCheckbox
+        const boxes = root?.querySelectorAll<HTMLInputElement>(`input.${cls}`)
+        boxes?.[message.index]?.click()
+        break
+      }
       case 'view.state.request': {
         const doc = this.view?.state.doc
         const content = this.view?.dom.querySelector('.cm-content')
@@ -776,6 +812,45 @@ export class WebviewSyncController {
     }
   }
 
+  // ---- 任务勾选（#9）：阅读视图的 checkbox 交互 ----
+
+  private isTaskCheckbox(node: EventTarget | null): node is HTMLInputElement {
+    return (
+      node instanceof HTMLInputElement &&
+      node.type === 'checkbox' &&
+      node.classList.contains(READING_MARKDOWN_CLASS_NAMES.taskCheckbox)
+    )
+  }
+
+  /**
+   * 阅读视图任务勾选：checkbox 源锚点严格再校验后，在（隐藏的）CM6 编辑器
+   * 上派发替换事务——与手工编辑同一事务管线，出站走标准链路
+   * （updateListener → edit.request：seq/baseVersion/未确认参考系/暂缓
+   * 语义全部继承）。校验失败（过期锚点/已是目标态）即放弃：零写回、
+   * 零历史。派发后乐观重建阅读视图（勾选态源自本地文档；冲突暂停期间
+   * 与 live 输入同语义：本地保留、不写回）。
+   */
+  private toggleReadingTask(box: HTMLInputElement): void {
+    const view = this.view
+    if (!view) {
+      return
+    }
+    const start = Number(box.dataset['oileSrcStart'])
+    const end = Number(box.dataset['oileSrcEnd'])
+    const displayedChecked = box.dataset['oileChecked'] === 'true'
+    if (!Number.isInteger(start) || !Number.isInteger(end)) {
+      return
+    }
+    const target = resolveStaleTaskToggle(view.state.doc.toString(), start, end, displayedChecked)
+    if (!target) {
+      return
+    }
+    view.dispatch({
+      changes: { from: target.from, to: target.to, insert: target.nextText },
+    })
+    this.refreshReading()
+  }
+
   private clampToDoc(offset: number): number {
     return Math.max(0, Math.min(offset, this.view?.state.doc.length ?? 0))
   }
@@ -790,6 +865,10 @@ export class WebviewSyncController {
     const liveInlineCode = this.liveWrapper?.querySelector('.oile-inline-code') ?? null
     const liveCodeLine = this.liveWrapper?.querySelector('.oile-code-line') ?? null
     const readingStrong = this.readingContainer?.querySelector('.oile-reading-block strong') ?? null
+    const liveTaskBox = this.liveWrapper?.querySelector(`.${LIVE_CLASS_NAMES.taskCheckbox}`) ?? null
+    const readingTaskBox = this.readingContainer?.querySelector(
+      `.${READING_MARKDOWN_CLASS_NAMES.taskCheckbox}`,
+    ) ?? null
     const read = (el: Element | null): string | null =>
       el ? getComputedStyle(el).textDecorationColor : null
     let readingVarProbe: string | null = null
@@ -807,6 +886,8 @@ export class WebviewSyncController {
       liveInlineCodeDecorationColor: read(liveInlineCode),
       liveCodeLineDecorationColor: read(liveCodeLine),
       readingStrongDecorationColor: read(readingStrong),
+      liveTaskCheckboxDecorationColor: read(liveTaskBox),
+      readingTaskCheckboxDecorationColor: read(readingTaskBox),
     }
   }
 
