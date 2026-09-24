@@ -2,7 +2,7 @@
 
 VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 
-> 当前状态：**MVP 功能全量交付（工单 #2–#15 完成）**——基于源文本的双视图编辑器（CM6 实时预览 + markdown-it 阅读虚拟化）、增量写回与外部修改安全同步（冲突保留输入）、任务勾选、链接/图片、双链四形态解析跳转、表格编辑与键盘导航、编辑区查找、VSIX 打包与安装态回归均已落地。测试基线 643 单测 + 54 集成用例全绿（真实 1.86.2 宿主）。功能范围与规格见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能实测汇总与人工验证项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 与 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
+> 当前状态：**MVP 功能全量交付（工单 #2–#15 完成）**——基于源文本的双视图编辑器（CM6 实时预览 + markdown-it 阅读虚拟化）、增量写回与外部修改安全同步（冲突保留输入）、任务勾选、链接/图片、双链四形态解析跳转、表格编辑与键盘导航、编辑区查找、VSIX 打包与安装态回归均已落地。测试基线 661 单测 + 55 集成用例全绿（真实 1.86.2 宿主）。功能范围与规格见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能实测汇总与人工验证项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 与 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
 
 ## 约定
 
@@ -15,7 +15,7 @@ VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 - **webview 端**（`src/webview/`）：CM6 EditorView + `acquireVsCodeApi` 消息桥；`src/shared/` 为两端共享的消息协议单一事实源（不依赖 vscode/DOM）。协议约定 webview 全程 LF 坐标（CM6 内部把 `\r\n` 规范化为 `\n`，宿主侧 `NewlineCoordinator` 负责双向坐标与文本转换）。
 - **构建**：esbuild 双产物——宿主 `out/extension.js`（node18/cjs/external vscode）、webview `out/webview/main.js`（chrome118/iife，CSS 随 import 打包为 `main.css`）；`npm run compile` 另跑 `tsc --noEmit` 做类型检查（esbuild 不查类型）。
 - **测试**：`npm run test:unit`（vitest，纯逻辑 + jsdom 的 webview 控制器）；`npm run test:integration`（@vscode/test-electron 指定 1.86.2 真宿主，fixture 由 `test/integration/fixtures.mjs` 统一生成、`runTest.mjs` 启动）。扩展注册 `onegayi.obsidian-like-editor._test.*` 辅助命令供集成测试观测/注入（仅 `OILE_TEST_HOOKS=1` 时注册）。
-- **打包与安装态回归（#15）**：`npx @vscode/vsce package --no-dependencies` 产出 VSIX（esbuild bundle 自包含，不带 node_modules；`.vscodeignore` 排除 src/test/docs）。`node test/integration/runInstalled.mjs` 把 VSIX 经 `--install-extension` 装入隔离 profile 的 1.86.2 便携宿主（无 extensionDevelopmentPath，扩展唯一来源为安装产物）后跑同一集成套件。
+- **打包与安装态回归（#15）**：`npx @vscode/vsce package --no-dependencies` 产出 VSIX（esbuild bundle 自包含，不带 node_modules；`.vscodeignore` 排除 src/test/docs）。`node test/integration/runInstalled.mjs` 把 VSIX 经 `--install-extension` 装入隔离 profile 的 1.86.2 便携宿主（安装注册链路真实走通；1.86 测试模式要求 `--extensionTestsPath` 依赖 `--extensionDevelopmentPath` 同时存在，故 dev path 指向安装解压目录——加载代码仍是 VSIX 产物而非仓库源码树）后跑同一集成套件。
 - **性能测量**：`node test/perf/runPerf.mjs`（1千/1万/10万档 + 大围栏，报告写 `docs/perf/data/perf-report.json`）；档位数据与解读汇总在 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md)。
 - **版本锁定**：依赖一律精确版本（无 `^`），提交 lockfile；`engines.vscode ^1.86.0` 与 `@types/vscode 1.86.0` 对齐。`@types/node` 锁 22.x（vitest 5 的 vite peer 要求数 >=20.19，类型不进产物，宿主代码仍按 Node 18 API 面编码）。版本依据探索笔记（orch 仓库 exploration/01）。
 

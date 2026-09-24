@@ -1,6 +1,6 @@
 # MVP GitHub Issue 索引
 
-已根据用户批准的 MVP 与后续性能要求开票，2026-09-23。当前仅完成规划与发布，未实现。
+已根据用户批准的 MVP 与后续性能要求开票，2026-09-23。2026-09-24 更新：#2–#15 均已实现并通过验收（工单流见各 Issue；性能与人工验证记录见 docs/perf/ 与 docs/specs/manual-verification.md）。
 
 - [MVP 规格与总览 #1](https://github.com/ONEGAYI/vscode-obsidian-like-editor/issues/1)
 - [本地规格](mvp.md)

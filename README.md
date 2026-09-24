@@ -20,9 +20,9 @@
 - **实时预览**（live）：CodeMirror 6 全文承载，视口外不创建 DOM；标题/粗斜体/列表/引用/代码等非活动行渲染为格式化形态，光标行显示源码。
 - **阅读模式**（reading）：markdown-it 渲染的分块按需挂载，10 万块级文档挂载量与体量无关。
 - **任务勾选**：两种视图点击 checkbox 写回源文本，支持撤销。
-- **链接与图片**：live 视图 **Ctrl/Cmd + 单击**链接跳转（reading 直接单击）；本地图片经宿主通道装载，缺失图呈现可重试错误态；`file://`、`javascript:` 等危险 scheme 被拦截。
+- **链接与图片**：live 视图 **Ctrl/Cmd + 单击**链接跳转（reading 直接单击）；本地图片经宿主通道装载，缺失图呈现可重试错误态；`file://`、`javascript:` 等危险 scheme 被拦截。注：CSP 以 `img-src https:` 放行任意 https 图源（远程图床支持的设计代价——任意 https 图片可达，理论上可被用作跟踪像素）。
 - **双链**：`[[笔记名]]`、`[[路径/笔记|别名]]`、`[[笔记#标题]]` 四形态；重名弹出候选选择，缺失目标提示且不自动建文件。
-- **表格**：live 视图内 Tab/Shift+Tab 单元格导航、行末 Tab 增行；命令面板六个「表格：…」命令增删行列；单元格内键入 `|` 自动转义。
+- **表格**：live 视图内 Tab/Shift+Tab 单元格导航、行末 Tab 移到下一表格行首格（末行末格 Tab 交默认缩进）；命令面板六个「表格：…」命令增删行列；单元格内键入 `|` 自动转义。
 - **查找**：编辑器内 Ctrl+F（限本编辑器激活时）。
 - **外部修改安全同步**：检测到无法安全同步的外部修改时顶部出现冲突横幅——本地输入已保留，可「复制未确认输入」或「放弃本地修改并重新同步」。
 
@@ -33,7 +33,7 @@ npm install                     # 安装锁定依赖（版本全部精确锁定�
 npm run compile                 # esbuild 双产物 + tsc 类型检查
 npm run watch                   # esbuild watch
 npm run test:unit               # vitest 单元/契约测试（无宿主依赖）
-npm run test:integration        # @vscode/test-electron 1.86.2 真宿主集成测试（54 例）
+npm run test:integration        # @vscode/test-electron 1.86.2 真宿主集成测试（55 例）
 node test/integration/runInstalled.mjs  # VSIX 安装态回归（先 package 出 VSIX）
 node test/perf/runPerf.mjs      # 性能档位测量（报告写 docs/perf/data/）
 npx @vscode/vsce package --no-dependencies  # 打包 VSIX（bundle 自包含，不带 node_modules）
@@ -50,7 +50,7 @@ npx @vscode/vsce package --no-dependencies  # 打包 VSIX（bundle 自包含，�
 
 ## 验证与性能
 
-- 测试基线：643 单元测试 + 54 集成用例（真实 1.86.2 宿主）全绿。
+- 测试基线：661 单元测试 + 55 集成用例（真实 1.86.2 宿主）全绿。
 - 性能实测与功能验证矩阵：[docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md)。
 - 人工验证项（IME/鼠标手感/远程环境）：[docs/specs/manual-verification.md](docs/specs/manual-verification.md)。
 
