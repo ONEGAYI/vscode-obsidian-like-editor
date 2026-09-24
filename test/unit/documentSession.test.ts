@@ -511,6 +511,49 @@ describe('外部变更广播与不写回保证', () => {
     expect(confirmed.doc.getText()).toBe(final)
     expect(confirmedNotices).toHaveLength(0)
   })
+
+  it('已确认 seq 在另一面板阻塞队列时重传，立即关闭不误报未确认输入', async () => {
+    const notices: SessionNotice[] = []
+    const s = setup('abc', { onNotice: (notice) => notices.push(notice) })
+    const editing = s.attach()
+    const blocker = s.attach()
+    await readyPanel(s, editing)
+    await readyPanel(s, blocker)
+    const savedRequest = { kind: 'edit.request' as const, sessionId: editing, docUri: DOC_URI,
+      seq: 1, baseVersion: 1, changes: [{ offset: 3, length: 0, text: '已保存' }] }
+    await s.send(editing, savedRequest)
+    expect(s.doc.getText()).toBe('abc已保存')
+    expect(s.sent.get(editing)?.at(-1)).toMatchObject({ kind: 'edit.ack', seq: 1, ok: true })
+
+    const gate = s.doc.holdNextApply()
+    void s.send(blocker, { kind: 'edit.request', sessionId: blocker, docUri: DOC_URI,
+      seq: 1, baseVersion: s.doc.ver, changes: [{ offset: 0, length: 0, text: 'X' }] })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    void s.send(editing, savedRequest) // 已保存请求重传，不应重新登记为未确认输入
+    s.session.detachPanel(editing)
+    expect(notices).toHaveLength(0)
+    gate.release()
+  })
+
+  it('未确认 seq 在另一面板阻塞队列时重复到达，关闭仍可取回输入', async () => {
+    const notices: SessionNotice[] = []
+    const s = setup('abc', { onNotice: (notice) => notices.push(notice) })
+    const blocker = s.attach()
+    const editing = s.attach()
+    await readyPanel(s, blocker)
+    await readyPanel(s, editing)
+    const gate = s.doc.holdNextApply()
+    void s.send(blocker, { kind: 'edit.request', sessionId: blocker, docUri: DOC_URI,
+      seq: 1, baseVersion: 1, changes: [{ offset: 0, length: 0, text: 'X' }] })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const unsavedRequest = { kind: 'edit.request' as const, sessionId: editing, docUri: DOC_URI,
+      seq: 1, baseVersion: 1, changes: [{ offset: 3, length: 0, text: '待取回' }] }
+    void s.send(editing, unsavedRequest)
+    void s.send(editing, unsavedRequest)
+    s.session.detachPanel(editing)
+    expect(notices).toMatchObject([{ type: 'panel-closed-with-input', fragments: ['待取回'] }])
+    gate.release()
+  })
 })
 
 describe('CRLF 文档的换行协调（CM6 端统一 LF）', () => {

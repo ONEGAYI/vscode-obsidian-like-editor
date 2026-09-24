@@ -291,6 +291,13 @@ export class DocumentSession {
         if (!panel.ready || message.docUri !== this.docUri) {
           return Promise.resolve()
         }
+        // 已确认 seq 的重传直接回复原 ack；其他面板可能占住全局队列，
+        // 若先登记 queued，关闭本面板时会把已经保存的输入误报为未确认。
+        const cached = panel.ackCache.get(message.seq)
+        if (cached) {
+          panel.port.send(cached)
+          return Promise.resolve()
+        }
         if (!panel.queued.has(message.seq)) panel.queued.set(message.seq, message.changes)
         const task = this.queue.then(() => {
           // 同一个微任务中从 queued 移入 processEditRequest 的 pending；
