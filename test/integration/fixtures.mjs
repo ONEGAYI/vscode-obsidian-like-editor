@@ -102,6 +102,7 @@ const TABLE13_DOC = [
   '结尾段落乙。',
   '',
 ].join('\n')
+const TABLE43_CRLF_DOC = TABLE13_DOC.replace(/\n/g, '\r\n')
 // #8 大围栏细分样例：120 行围栏（超过 FENCE_CHUNK_LINES=60，切为 3 片）
 const FENCE_CHUNK_DOC = (() => {
   const out = ['# 大围栏样例', '', '```text']
@@ -251,6 +252,7 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   writeFileSync(path.join(wsDir, 'table.md'), TABLE_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'table42.md'), TABLE_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'table13.md'), TABLE13_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'table43-crlf.md'), TABLE43_CRLF_DOC, 'utf8')
   const largeLines = Array.from({ length: LARGE_DOC_LINES }, (_, i) => `第 ${i + 1} 行 ——固定宽度填充文本，用于长文档视口渲染验证——`)
   writeFileSync(path.join(wsDir, 'large.md'), largeLines.join('\n') + '\n', 'utf8')
   // 性能体量对比样例（#5）：同构普通段落 + 每 50 行一个二级标题

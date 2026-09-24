@@ -682,6 +682,35 @@ export class WebviewSyncController {
         }
         break
       }
+      case 'table.test.drag': {
+        // 测试钩子（#43）：在真实宿主 webview 中向点阵抓手派发鼠标指针序列。
+        // 仍经控件的 pointerdown/move/up 与 CM6 标准写回链路。
+        const view = this.view
+        if (view && this.viewMode === 'live') queueMicrotask(() => {
+          if (this.view !== view) return
+          const grips = [...view.dom.querySelectorAll<HTMLElement>('.vsidian-table-row-handle')]
+          const rows = [...view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')]
+          const source = grips[message.sourceIndex]
+          const target = rows[Math.min(message.targetSlot, rows.length - 1)]
+          if (!source || !target || message.targetSlot > rows.length) return
+          const sourceRect = source.getBoundingClientRect()
+          const targetRect = target.getBoundingClientRect()
+          const x = targetRect.left + Math.max(1, targetRect.width / 2)
+          const startY = sourceRect.top + sourceRect.height / 2
+          const endY = message.targetSlot === rows.length
+            ? targetRect.bottom - 2 : targetRect.top + 2
+          source.dispatchEvent(new PointerEvent('pointerdown', {
+            bubbles: true, cancelable: true, clientX: x, clientY: startY,
+          }))
+          target.dispatchEvent(new PointerEvent('pointermove', {
+            bubbles: true, clientX: x, clientY: endY,
+          }))
+          document.dispatchEvent(new PointerEvent('pointerup', {
+            bubbles: true, clientX: x, clientY: endY,
+          }))
+        })
+        break
+      }
       case 'sync.test.edit': {
         if (this.view && this.viewMode === 'live') {
           const at = this.clampToDoc(message.offset)

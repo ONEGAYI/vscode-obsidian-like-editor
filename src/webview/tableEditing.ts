@@ -1,4 +1,4 @@
-// 表格单元格输入钩子与键盘导航/结构命令（工单 #12 + #13）：live 视图中
+// 表格单元格输入钩子与键盘导航/结构命令（工单 #12 + #13 + #43）：live 视图中
 // 表格编辑面的 CM6 扩展。
 //
 // 形态（架构约定：单元格编辑完全跑在既有出站同步链路上）：
@@ -14,6 +14,8 @@
 //   组合中不劫持（view.compositionStarted）；非表格上下文返回 false 交默认行为
 // - #13 结构命令（宿主 table.command → syncController 调 runTableEdit）：
 //   增删行列以单笔 CM6 事务派发 = 单笔 edit.request = 宿主撤销一次
+// - #43 悬停控件由 tableControls.ts 只按可见 DOM 行构建；拖排行的纯规划
+//   在 tableStructure.ts，松手时仍经本模块单笔 CM6 事务写回
 import { EditorSelection } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import type { Command } from '@codemirror/view'
@@ -22,7 +24,8 @@ import type { SyntaxNode, Tree } from '@lezer/common'
 import type { TableEditOp } from '../shared/protocol'
 import { liveDecorationsField } from './liveDecorations'
 import { needsPipeEscapeAt } from './tableCells'
-import { planTableEdit, tableCellNavTarget, type TableRowInfo } from './tableStructure'
+import { planTableEdit, planTableRowMove, tableCellNavTarget, type TableRowInfo } from './tableStructure'
+import { createTableControls } from './tableControls'
 
 /** 表格行身份的解析树节点名（分隔行整体是一个 TableDelimiter 节点） */
 const TABLE_LINE_NODE_NAMES = new Set(['TableHeader', 'TableRow', 'TableDelimiter'])
@@ -205,20 +208,25 @@ export const tableTabBackward: Command = (view: EditorView): boolean => {
  * 上下文不符（表格外、删分隔行、最小表格删表头、选区中）返回 false 零变更。
  */
 export function runTableEdit(view: EditorView, op: TableEditOp): boolean {
+  const sel = view.state.selection.main
+  return sel.empty && runTableEditAt(view, sel.from, op)
+}
+
+/** 悬停控件的定位入口：不先移动 CM6 光标，结构变更仍只派发一次事务。 */
+export function runTableEditAt(view: EditorView, pos: number, op: TableEditOp): boolean {
+  if (view.compositionStarted) {
+    return false
+  }
   const state = view.state
   const field = state.field(liveDecorationsField, false)
   if (!field) {
     return false
   }
-  const sel = state.selection.main
-  if (!sel.empty) {
-    return false
-  }
-  const rows = tableRowsAt(state, sel.from, field.tree)
+  const rows = tableRowsAt(state, pos, field.tree)
   if (!rows) {
     return false
   }
-  const plan = planTableEdit(state.doc.toString(), rows, sel.from, op)
+  const plan = planTableEdit(state.doc.toString(), rows, pos, op)
   if (!plan) {
     return false
   }
@@ -230,8 +238,35 @@ export function runTableEdit(view: EditorView, op: TableEditOp): boolean {
   return true
 }
 
-/** 装配扩展：绑定 | 键（优先于默认字符插入）与 Tab/Shift+Tab 单元格导航 */
+/** 行位置属于表头或数据行；目标 slot 不计分隔行。 */
+export function runTableRowMove(view: EditorView, sourcePos: number, slot: number): boolean {
+  if (view.compositionStarted) {
+    return false
+  }
+  const state = view.state
+  const field = state.field(liveDecorationsField, false)
+  if (!field || sourcePos < 0 || sourcePos > state.doc.length) {
+    return false
+  }
+  const rows = tableRowsAt(state, sourcePos, field.tree)
+  if (!rows) {
+    return false
+  }
+  const sourceLine = state.doc.lineAt(sourcePos).from
+  const source = [rows[0]!, ...rows.slice(2)].findIndex((r) => r.lineFrom === sourceLine)
+  const plan = planTableRowMove(state.doc.toString(), rows, source, slot)
+  if (!plan) {
+    return false
+  }
+  view.dispatch({ changes: plan.changes })
+  return true
+}
+
+const tableControls = createTableControls({ tableRowsAt, runTableEditAt, runTableRowMove })
+
+/** 装配扩展：键盘编辑、导航及可见表格控件共用 CM6 文本事务 */
 export const tableEditing = [
   keymap.of([{ key: '|', run: tablePipeKeyHandler }]),
   keymap.of([{ key: 'Tab', run: tableTabForward, shift: tableTabBackward }]),
+  tableControls,
 ]

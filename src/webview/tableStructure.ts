@@ -1,4 +1,4 @@
-// 表格键盘导航与增删行列的纯函数层（工单 #13）。
+// 表格键盘导航、增删行列与拖排行的纯函数层（工单 #13 + #43）。
 //
 // 职责分工：行身份（哪些行构成表格）由解析树判定（tableEditing 从
 // liveDecorationsField 的树提取 TableRowInfo 后传入）；本模块只做字符串
@@ -36,6 +36,47 @@ export interface TableRowInfo {
 export interface PlannedTableEdit {
   changes: Array<{ from: number; to: number; insert: string }>
   selection: number
+}
+
+/**
+ * 把一个内容行插入到目标槽位之前。索引只数表头与数据行，不数分隔行；
+ * slot 可为内容行数，表示插到末尾。只替换内容行字符，不触碰分隔行或换行符。
+ * 返回的全部 changes 供 CM6 以一笔事务派发。
+ */
+export function planTableRowMove(
+  doc: string,
+  rows: TableRowInfo[],
+  source: number,
+  slot: number,
+): Pick<PlannedTableEdit, 'changes'> | null {
+  if (rows.length < 3 || rows[0]?.kind !== 'header' || rows[1]?.kind !== 'delimiter' ||
+      rows.slice(2).some((r) => r.kind !== 'row')) {
+    return null
+  }
+  const content = [rows[0]!, ...rows.slice(2)]
+  if (!Number.isInteger(source) || !Number.isInteger(slot) || source < 0 ||
+      source >= content.length || slot < 0 || slot > content.length ||
+      slot === source || slot === source + 1) {
+    return null
+  }
+  if (rows.some((r) => r.lineFrom < 0 || r.lineTo < r.lineFrom || r.lineTo > doc.length)) {
+    return null
+  }
+  const texts = content.map((r) => doc.slice(r.lineFrom, r.lineTo))
+  const reordered = [...texts]
+  const [moved] = reordered.splice(source, 1)
+  reordered.splice(slot > source ? slot - 1 : slot, 0, moved!)
+  const changes: PlannedTableEdit['changes'] = []
+  for (let i = 0; i < content.length; i++) {
+    if (texts[i] !== reordered[i]) {
+      changes.push({
+        from: content[i]!.lineFrom,
+        to: content[i]!.lineTo,
+        insert: reordered[i]!,
+      })
+    }
+  }
+  return changes.length > 0 ? { changes } : null
 }
 
 /** pos 所在行（区间含端点）；未命中返回 -1 */

@@ -92,6 +92,8 @@ export type HostToWebview =
    *  同一 keymap 链路；纯选区导航，零写回）。宿主测试无法向 webview 派发
    *  真实键盘事件，以此通道验证导航装配 */
   | { kind: 'table.test.key'; key: 'tab' | 'shift-tab' }
+  /** 测试钩子（#43）：真实 webview DOM 的点阵抓手拖动事件。 */
+  | { kind: 'table.test.drag'; sourceIndex: number; targetSlot: number }
   /** 测试钩子（#21）：在真实 webview 的 CM6 中输入，验证暂停态即时留存。 */
   | { kind: 'sync.test.edit'; offset: number; text: string; closeAfter?: boolean }
   /** 测试钩子：真实 webview DOM 的渲染链接 mousedown。 */
@@ -754,6 +756,8 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return isTableEditOp(v.op)
     case 'table.test.key':
       return v.key === 'tab' || v.key === 'shift-tab'
+    case 'table.test.drag':
+      return isNonNegativeInt(v.sourceIndex) && isNonNegativeInt(v.targetSlot)
     case 'sync.test.edit':
       return isNonNegativeInt(v.offset) && isString(v.text) &&
         (v.closeAfter === undefined || typeof v.closeAfter === 'boolean')

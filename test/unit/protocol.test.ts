@@ -227,6 +227,13 @@ describe('isHostToWebview', () => {
     expect(isHostToWebview({ kind: 'table.test.key', key: 'enter' })).toBe(false)
     expect(isHostToWebview({ kind: 'table.test.key' })).toBe(false)
   })
+
+  it('table.test.drag 只接受非负整数行索引与有效目标槽位（#43）', () => {
+    expect(isHostToWebview({ kind: 'table.test.drag', sourceIndex: 2, targetSlot: 0 })).toBe(true)
+    expect(isHostToWebview({ kind: 'table.test.drag', sourceIndex: -1, targetSlot: 0 })).toBe(false)
+    expect(isHostToWebview({ kind: 'table.test.drag', sourceIndex: 2.5, targetSlot: 0 })).toBe(false)
+    expect(isHostToWebview({ kind: 'table.test.drag', sourceIndex: 2, targetSlot: -1 })).toBe(false)
+  })
 })
 
 
