@@ -224,6 +224,25 @@ describe('isWebviewToHost', () => {
     expect(isWebviewToHost(base)).toBe(true)
   })
 
+  it('表格绘制样本校验：可见性和边框计算值类型必须可信', () => {
+    const base = { kind: 'view.state', text: '| A |', docLength: 5, lineCount: 1, renderedLines: 1 }
+    const table = {
+      cellVisible: true, gridDisplay: 'grid', cellBorderWidth: '1px',
+      rowOutlineColor: null, rowOutlineWidth: null, rowBackgroundColor: null,
+      columnBorderColor: null, columnBorderWidth: null, columnRightBorderWidth: null,
+      columnTopBorderWidth: null, columnBottomBorderWidth: null, columnBackgroundColor: null,
+    }
+    const paint = {
+      textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none',
+      darkTheme: false, caretColor: 'rgb(0, 0, 0)', table,
+    }
+    expect(isWebviewToHost({ ...base, paint })).toBe(true)
+    expect(isWebviewToHost({ ...base, paint: { ...paint, table: { ...table, cellVisible: 'yes' } } })).toBe(false)
+    expect(isWebviewToHost({ ...base, paint: { ...paint, table: { ...table, rowOutlineWidth: 2 } } })).toBe(false)
+    expect(isWebviewToHost({ ...base, paint: { ...paint, table: { ...table, columnBorderColor: [] } } })).toBe(false)
+    expect(isWebviewToHost({ ...base, paint: { ...paint, table: { ...table, columnRightBorderWidth: 2 } } })).toBe(false)
+  })
+
   it('拒绝 null、非对象与数组', () => {
     expect(isWebviewToHost(null)).toBe(false)
     expect(isWebviewToHost(undefined)).toBe(false)
@@ -273,6 +292,13 @@ describe('isWebviewToHost', () => {
 })
 
 describe('isHostToWebview', () => {
+  it('表格选中测试钩子只接受行或列的非负索引', () => {
+    expect(isHostToWebview({ kind: 'table.test.select', axis: 'row', index: 1 })).toBe(true)
+    expect(isHostToWebview({ kind: 'table.test.select', axis: 'column', index: 0 })).toBe(true)
+    expect(isHostToWebview({ kind: 'table.test.select', axis: 'cell', index: 0 })).toBe(false)
+    expect(isHostToWebview({ kind: 'table.test.select', axis: 'row', index: -1 })).toBe(false)
+  })
+
   it('接受合法 init', () => {
     expect(
       isHostToWebview({ kind: 'init', sessionId: 's1', docUri: 'file:///a.md', version: 2, text: '# 中文' }),

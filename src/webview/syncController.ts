@@ -771,6 +771,16 @@ export class WebviewSyncController {
         }
         break
       }
+      case 'table.test.select': {
+        const view = this.view
+        if (view && this.viewMode === 'live') queueMicrotask(() => {
+          if (this.view !== view) return
+          const selector = message.axis === 'row'
+            ? '.vsidian-table-row-handle' : '.vsidian-table-column-handle'
+          view.dom.querySelectorAll<HTMLButtonElement>(selector)[message.index]?.click()
+        })
+        break
+      }
       case 'table.test.drag': {
         // 测试钩子（#43）：在真实宿主 webview 中向点阵抓手派发鼠标指针序列。
         // 仍经控件的 pointerdown/move/up 与 CM6 标准写回链路。
@@ -2201,6 +2211,55 @@ export class WebviewSyncController {
       textVisible = false
     }
     const guttersEl = view.dom.querySelector<HTMLElement>('.cm-gutters')
+    const gridRow = view.contentDOM.querySelector<HTMLElement>('.vsidian-table-grid-row')
+    const firstCell = gridRow?.querySelector<HTMLElement>(':scope > .vsidian-table-grid-cell') ?? null
+    const selectedRow = view.contentDOM.querySelector<HTMLElement>(
+      '.vsidian-table-grid-row.vsidian-table-row-selected',
+    )
+    const selectedRowCell = selectedRow?.querySelector<HTMLElement>(':scope > .vsidian-table-grid-cell') ?? null
+    const selectedColumnCell = view.contentDOM.querySelector<HTMLElement>(
+      '.vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-selected',
+    )
+    const columnFirst = view.contentDOM.querySelector<HTMLElement>(
+      '.vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-first',
+    )
+    const columnLast = view.contentDOM.querySelector<HTMLElement>(
+      '.vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-last',
+    )
+    let cellVisible = false
+    try {
+      const cells = view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-cell')
+      // 只取少量已挂载格做绘制命中；长表格的 view.state 不逐格测量。
+      for (let index = 0; index < Math.min(cells.length, 12); index++) {
+        const cell = cells[index]!
+        const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT)
+        let node: Node | null
+        while ((node = walker.nextNode())) {
+          const text = node.nodeValue ?? ''
+          const at = text.search(/\S/)
+          if (at < 0) continue
+          const range = document.createRange()
+          range.setStart(node, at)
+          range.setEnd(node, at + 1)
+          const rect = range.getBoundingClientRect()
+          if (rect.width <= 0 || rect.height <= 0) continue
+          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+          if (hit && cell.contains(hit)) {
+            cellVisible = true
+            break
+          }
+        }
+        if (cellVisible) break
+      }
+    } catch {
+      // jsdom 无布局和 elementFromPoint；真宿主才能证明实际可见。
+    }
+    const cellStyle = firstCell ? getComputedStyle(firstCell) : null
+    const rowStyle = selectedRow ? getComputedStyle(selectedRow) : null
+    const rowCellStyle = selectedRowCell ? getComputedStyle(selectedRowCell) : null
+    const columnStyle = selectedColumnCell ? getComputedStyle(selectedColumnCell) : null
+    const columnFirstStyle = columnFirst ? getComputedStyle(columnFirst) : null
+    const columnLastStyle = columnLast ? getComputedStyle(columnLast) : null
     // 光标取证：本扩展未启用 drawSelection，CM6 光标即原生 caret，颜色
     // 由 baseTheme 明暗变体决定（light=black / dark=white）。darkTheme 取
     // facet 实值（jsdom 可读），caretColor 取计算值（jsdom 无 CSS 引擎为 null）
@@ -2216,6 +2275,20 @@ export class WebviewSyncController {
       gutterUserSelect: guttersEl ? getComputedStyle(guttersEl).userSelect : null,
       darkTheme: view.state.facet(EditorView.darkTheme),
       caretColor,
+      table: {
+        cellVisible,
+        gridDisplay: gridRow ? getComputedStyle(gridRow).display : null,
+        cellBorderWidth: cellStyle?.borderLeftWidth ?? null,
+        rowOutlineColor: rowStyle?.outlineColor ?? null,
+        rowOutlineWidth: rowStyle?.outlineWidth ?? null,
+        rowBackgroundColor: rowCellStyle?.backgroundColor ?? null,
+        columnBorderColor: columnStyle?.borderLeftColor ?? null,
+        columnBorderWidth: columnStyle?.borderLeftWidth ?? null,
+        columnRightBorderWidth: columnStyle?.borderRightWidth ?? null,
+        columnTopBorderWidth: columnFirstStyle?.borderTopWidth ?? null,
+        columnBottomBorderWidth: columnLastStyle?.borderBottomWidth ?? null,
+        columnBackgroundColor: columnStyle?.backgroundColor ?? null,
+      },
     }
   }
 

@@ -180,6 +180,7 @@ vsidian/
 │       ├── tableCells.test.ts              # 单元格拆分契约测试（#12）
 │       ├── tableCreate.test.ts             # 建表与本地化契约测试
 │       ├── tableOps.test.ts                # 表格导航与结构命令链路契约（#13）
+│       ├── tablePaintCssContract.test.ts   # 表格绘制样式契约测试
 │       ├── tableStructure.test.ts          # 表格结构操作纯函数契约（#13）
 │       ├── taskInteraction.test.ts         # 任务勾选交互契约测试（#9）
 │       ├── taskToggle.test.ts              # 任务勾选解析纯函数契约测试
