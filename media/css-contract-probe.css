@@ -76,3 +76,14 @@
 #app .oile-view-reading .oile-reading-block img.oile-image {
   text-decoration-color: rgb(25, 26, 27);
 }
+/* ---- #12：表格稳定类名探针（live 管道符 / reading 表格标签） ---- */
+
+/* live 表格管道符（Obsidian 对应 .HyperMD-table-line 方向） */
+#app .oile-view-live .oile-table-pipe {
+  text-decoration-color: rgb(19, 20, 21);
+}
+
+/* reading 阅读视图：表格（Obsidian 对应 .markdown-preview-view table） */
+#app .oile-view-reading .oile-reading-block table {
+  text-decoration-color: rgb(22, 23, 24);
+}

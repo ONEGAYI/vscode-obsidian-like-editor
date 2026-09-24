@@ -82,6 +82,18 @@ const SYNTAX_DOC = [
   '结尾段落。',
   '',
 ].join('\n')
+// #12 表格单元格编辑：转义管道、代码内管道、GFM 对齐全样例
+const TABLE_DOC = [
+  '# 表格样例',
+  '',
+  '| 名字 | 数量 | 备注 |',
+  '| --- | :---: | ---: |',
+  '| 苹果 | 3 | 甲 |',
+  '| `x|y` | 4 | 乙\\|丙 |',
+  '',
+  '结尾段落。',
+  '',
+].join('\n')
 // #8 大围栏细分样例：120 行围栏（超过 FENCE_CHUNK_LINES=60，切为 3 片）
 const FENCE_CHUNK_DOC = (() => {
   const out = ['# 大围栏样例', '', '```text']
@@ -157,6 +169,7 @@ try {
   writeFileSync(path.join(wsDir, 'syntax.md'), SYNTAX_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'fence-chunk.md'), FENCE_CHUNK_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'task.md'), TASK_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'table.md'), TABLE_DOC, 'utf8')
   const largeLines = Array.from({ length: LARGE_LINES }, (_, i) => `第 ${i + 1} 行 ——固定宽度填充文本，用于长文档视口渲染验证——`)
   writeFileSync(path.join(wsDir, 'large.md'), largeLines.join('\n') + '\n', 'utf8')
   // 性能体量对比样例（#5）：同构普通段落 + 每 50 行一个二级标题

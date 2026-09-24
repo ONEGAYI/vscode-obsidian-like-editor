@@ -1,6 +1,6 @@
 # Obsidian 选择器映射表（一期稳定样式契约）
 
-状态：工单 #6 交付物，2026-09-23；#8 补 span 级映射与阅读语义标签结构（2026-09-24）；#9 补任务勾选交互类（2026-09-24）；#10 补链接/图片映射（2026-09-24）。依据 [ADR-0004](../adr/0004-stable-styling-contract.md)。
+状态：工单 #6 交付物，2026-09-23；#8 补 span 级映射与阅读语义标签结构（2026-09-24）；#9 补任务勾选交互类（2026-09-24）；#10 补链接/图片映射（2026-09-24）；#12 补表格映射（2026-09-24）。依据 [ADR-0004](../adr/0004-stable-styling-contract.md)。
 
 本文记录一期已建立的稳定类名/CSS 变量入口与 Obsidian 同款选择器的核对结果，供二期自定义 CSS 片段兼容使用。**边界声明**：
 
@@ -40,6 +40,18 @@
 | `.oile-hr-line` | 水平线行 | `.cm-hr`（Obsidian 水平线 token 类） | 语义等价（行级呈现，`---` 源文保留可见） |
 | `.oile-frontmatter-line` | frontmatter 行（头块按源码呈现、语法不解析） | `.cm-hmd-frontmatter`（Obsidian frontmatter 类） | 语义对应（类名不同）；frontmatter 边界由 `markdownDoc.frontmatterRange` 两视图共用判定 |
 
+## 表格（#12 新增）
+
+#12 起 live 视图对表格行建立装饰。**形态声明**：编辑面即 CM6 源文本行——管道符**保持可见**（点击定位与光标编辑直接落在源区间，无覆盖层/整表控件），装饰只做样式标记；单元格边界按 GFM 语义自研拆分（`\|` 与行内代码内的 `|` 不切分，见 `src/webview/tableCells.ts`），lezer 的 TableCell 节点不作定位依据。单元格内键入 `|` 自动写为 `\|`（输入钩子，经 CM6 事务走标准出站链路）。
+
+| 本项目稳定类名 | 本项目用途 | Obsidian 对应选择器 | 核对结果 |
+| --- | --- | --- | --- |
+| `.oile-table-line` | 表格行（表头/分隔/数据行通用） | `.HyperMD-table-line` 方向（Obsidian live 表格行类族；其 1.5 前源码形态同源文） | 语义对应（行级）；本项目管道符可见的源码形态为自有取舍 |
+| `.oile-table-header-line` / `.oile-table-delimiter-line` | 表头行 / 分隔行修饰 | 无直接对应（Obsidian 以 thead 样式承担） | 本项目自有修饰形态 |
+| `.oile-table-cell`（+ `-header` 修饰） | 单元格内容 span（trim 后区间） | `.cm-table-cell` 方向（社区主题常用） | 语义等价（span 级）；GFM 拆分语义自研 |
+| `.oile-table-pipe` | 管道符 span（含首尾边界管道） | 无对应（Obsidian 隐藏或原样呈现管道） | 本项目自有形态；保持占位不隐藏 |
+| `.oile-table-align-{left/center/right}` | 分隔行声明的列对齐修饰 | 无对应（对齐由渲染布局承担） | 本项目自有：live 源码形态不重排（类为样式入口），对齐视觉语义由阅读视图承担 |
+
 ## 阅读视图块级结构（#6 结构 + #8 markdown-it 语义内容）
 
 阅读容器内每个内容块为 `div.oile-reading-block` + 细分类，并携带源位置锚点属性 `data-oile-src-start` / `data-oile-src-end`（LF 全文 UTF-16 offset，与消息协议坐标同构；#7 按需挂载与 #9 任务定位依赖）。
@@ -58,6 +70,7 @@
 | `.oile-reading-task-checkbox` | 任务复选框（`input[type=checkbox]`，#9 起启用：点击/键盘切换并写回） | `.markdown-preview-view .task-list-item input[type="checkbox"]` | 结构等价。已验证：测试片段经 `.oile-reading-task-checkbox` 命中（真实宿主断言） |
 | `.oile-reading-code-block` | 围栏/缩进代码块（内含 `pre > code`；大围栏按行细分为多块） | `.markdown-preview-view pre` | 类等价 + 标签等价（#8 起内容不含围栏标记文本；`code` 带语言类 `language-x` 供后续高亮） |
 | `.oile-reading-hr` | 水平线块（内含 `hr`） | `.markdown-preview-view hr` | 类等价 + 标签等价（#8 新增） |
+| `.oile-reading-table` | 表格块（#12：内含 markdown-it 渲染的真实 `table`/`thead`/`tbody`，GFM 列对齐保留在 `th`/`td` 内联 style；只读呈现） | `.markdown-preview-view table` | 类等价 + 标签等价（#12 起独立成块；此前 #8 已按 paragraph 块渲染 table 标签） |
 | `.oile-reading-frontmatter` | frontmatter 头块（源码呈现，内部 `pre.oile-reading-frontmatter-text`） | `.markdown-preview-view .markdown-frontmatter` | 语义对应（类名不同）；头块内语法不解析（两视图共用边界判定） |
 | `.oile-reading-spacer`（`-top` / `-bottom`） | #7 视口占位：屏外块的高度占位（非内容节点，高度为块高度表前后缀和） | 无对应（Obsidian 虚拟化由内部机制承担） | 本项目自有结构，不参与兼容承诺；出现在片段中不影响内容块定位 |
 
@@ -95,21 +108,23 @@
 | `--oile-reading-max-width` | `760px` | 阅读块最大宽度 | `--file-line-width`（语义对应，名称不同） |
 | `--oile-reading-line-height` | `1.6` | 阅读正文行高 | `--line-height-normal`（语义对应，名称不同） |
 | `--oile-reading-code-background` | `var(--vscode-textCodeBlock-background, …)` | 代码块背景 | `--code-background`（语义对应，名称不同） |
+| `--oile-table-background` | `rgba(128, 128, 128, 0.05)` | live 表格行背景 / 阅读表头背景（#12） | `--table-background`（语义对应，名称不同） |
 
 变量名**不与 Obsidian 原名对齐**（加 `oile-` 前缀避免与宿主 VSCode 变量冲突）；二期若需要按 Obsidian 变量名片段兼容，经映射垫片（alias）实现，不在一期承诺内。
 
 ## 内部测试 CSS 验证入口
 
-- 片段：`media/css-contract-probe.css`，随 webview HTML 加载（CSP `style-src` 允许的扩展资源）。仅用无视觉影响的属性（`text-decoration-color`，在无 `text-decoration-line` 时不呈现）与探针变量。#8 追加 span 级类与阅读语义标签的探针规则（`.oile-strong`/`.oile-inline-code`/`.oile-code-line`/`.oile-reading-block strong`）；#9 追加任务 checkbox 探针规则（`.oile-task-checkbox`/`.oile-reading-task-checkbox`）；#10 追加链接/图片探针规则（`.oile-link`/`.oile-reading-block a`/`.oile-reading-block img.oile-image`）。
-- 观测：`view.state` 回报的 `cssProbe` 字段（`liveHeadingDecorationColor` / `readingHeadingDecorationColor` / `readingVarProbe`；#8 追加 `liveStrongDecorationColor` / `liveInlineCodeDecorationColor` / `liveCodeLineDecorationColor` / `readingStrongDecorationColor`；#9 追加 `liveTaskCheckboxDecorationColor` / `readingTaskCheckboxDecorationColor`；#10 追加 `liveLinkDecorationColor` / `readingLinkDecorationColor` / `readingImageDecorationColor`），由 webview 读取目标元素 computed style 填充；目标元素不存在时为 `null`。
-- 断言：集成用例「稳定样式契约」（`test/integration/suite/cases.ts`）在真实 VSCode 1.86.2 宿主内验证两种视图的类名命中与变量管道。
+- 片段：`media/css-contract-probe.css`，随 webview HTML 加载（CSP `style-src` 允许的扩展资源）。仅用无视觉影响的属性（`text-decoration-color`，在无 `text-decoration-line` 时不呈现）与探针变量。#8 追加 span 级类与阅读语义标签的探针规则（`.oile-strong`/`.oile-inline-code`/`.oile-code-line`/`.oile-reading-block strong`）；#9 追加任务 checkbox 探针规则（`.oile-task-checkbox`/`.oile-reading-task-checkbox`）；#10 追加链接/图片探针规则（`.oile-link`/`.oile-reading-block a`/`.oile-reading-block img.oile-image`）；#12 追加表格探针规则（`.oile-table-pipe`/`.oile-reading-block table`）。
+- 观测：`view.state` 回报的 `cssProbe` 字段（`liveHeadingDecorationColor` / `readingHeadingDecorationColor` / `readingVarProbe`；#8 追加 `liveStrongDecorationColor` / `liveInlineCodeDecorationColor` / `liveCodeLineDecorationColor` / `readingStrongDecorationColor`；#9 追加 `liveTaskCheckboxDecorationColor` / `readingTaskCheckboxDecorationColor`；#10 追加 `liveLinkDecorationColor` / `readingLinkDecorationColor` / `readingImageDecorationColor`；#12 追加 `liveTablePipeDecorationColor` / `readingTableDecorationColor`），由 webview 读取目标元素 computed style 填充；目标元素不存在时为 `null`。
+- 断言：集成用例「稳定样式契约」（`test/integration/suite/cases.ts`）在真实 VSCode 1.86.2 宿主内验证两种视图的类名命中与变量管道；#12 表格断言并入「表格装饰与单元格编辑写回」「阅读视图表格」用例。
 
 ## 已知不支持项（如实清单）
 
 以下 Obsidian 常用选择器/结构**一期不提供**，出现在用户片段中不会命中（不会报错，也不会生效）：
 
 - ~~行内格式 token：`.cm-strong` / `.cm-emphasis` / `.cm-inline-code`~~（#8 已建立 `oile-` 对应类，见上文 live 表；~~`.cm-link` 待 #10 链接票~~ 已建立 `.oile-link`；`.cm-highlight` 高亮 `==文字==` 仍不支持）
-- 表格：`.markdown-preview-view table` 及其子结构（#12 表格票）。如实记录跨视图差异：**阅读视图已按 markdown-it 默认 GFM 渲染真实 `<table>`**，live 视图无表格装饰（源文呈现）——表格的显示一致性与单元格交互由 #12 收口
+- ~~表格：`.markdown-preview-view table` 及其子结构~~（#12 已建立：阅读侧 `.oile-reading-table` + 真实 `table` 标签，live 侧 `.oile-table-line`/`.oile-table-cell` 族，见上文两节。**跨视图差异如实记录**：markdown-it 不识别行内代码内的 `|`，含该形态的表格在阅读视图错切或降级为段落，live 侧按 GFM 规范正确拆分——偏差与修复成本见 docs/perf/2026-09-table-cell-editing.md「已知限制」）
+- ~~键盘导航/增删行列的表格交互结构~~（#13 范围，一期未提供；单元格编辑语义为「光标落源区间直编」）
 - 引用块：~~`.markdown-embed` / `blockquote` 结构~~（#8 已提供 blockquote；`.markdown-embed` 嵌入结构仍属二期）
 - Callout：`.callout` 及其 data 属性（二期）
 - 任务扩展状态：`.task-list-item[data-task="x"]` 等（仅支持空格/`x`/`X` 三态，#9）

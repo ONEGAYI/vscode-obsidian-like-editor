@@ -42,6 +42,7 @@ import { createReadingContainer, prepareReadingImages } from './readingView'
 import { READING_MARKDOWN_CLASS_NAMES } from './readingMarkdown'
 import { resolveStaleTaskToggle } from './taskToggle'
 import { VirtualReadingView } from './readingVirtualView'
+import { tableEditing } from './tableEditing'
 
 /** webview 与宿主的通信通道（由 acquireVsCodeApi 适配） */
 export interface VsCodeBridge {
@@ -237,7 +238,14 @@ function conflictsWithLocal(
 
 interface BufferedIncremental {
   version: number
+  /** 原始增量（权威变更前系；入队时点的参考系） */
   changes: SerChange[]
+  /** 入队时逆穿当时已确认链得到的 baseVersion 系增量；null = 与当时已确认
+   *  编辑二义，无法安全逆映射（flush 时按冲突暂停处理）。
+   *  为何入队即逆穿：组合编辑的 ack 可能在 flush 之前到达并复合进已确认链，
+   *  届时缓冲增量的参考系（不含组合编辑）与已确认链（含）不再一致，迟到
+   *  的逆穿会多平移组合编辑部分（#12 表格 IME 场景实测暴露） */
+  baseChanges: SerChange[] | null
 }
 
 export class WebviewSyncController {
@@ -508,8 +516,15 @@ export class WebviewSyncController {
           break
         }
         if (this.composing || this.hasBufferedSync()) {
-          // 组合中不打断输入；缓冲挂起期间到达的增量一并对齐到 flush
-          this.pendingExternal.push({ version: message.version, changes: message.changes })
+          // 组合中不打断输入；缓冲挂起期间到达的增量一并对齐到 flush。
+          // 入队即逆穿到 base 系（参考系一致性见 BufferedIncremental 注释）
+          this.pendingExternal.push({
+            version: message.version,
+            changes: message.changes,
+            baseChanges: this.ackedChain
+              ? unmapSerGroupThroughAcked(message.changes, this.ackedChain)
+              : message.changes,
+          })
         } else if (this.unconfirmed || this.ackedChain) {
           // 在途未确认编辑：外部增量（权威系）先逆穿已确认链回 base 系再
           // 穿未确认集（C-2），真重叠则冲突暂停
@@ -949,6 +964,7 @@ export class WebviewSyncController {
     const liveStrong = this.liveWrapper?.querySelector('.oile-strong') ?? null
     const liveInlineCode = this.liveWrapper?.querySelector('.oile-inline-code') ?? null
     const liveCodeLine = this.liveWrapper?.querySelector('.oile-code-line') ?? null
+    const liveTablePipe = this.liveWrapper?.querySelector('.oile-table-pipe') ?? null
     const readingStrong = this.readingContainer?.querySelector('.oile-reading-block strong') ?? null
     const liveTaskBox = this.liveWrapper?.querySelector(`.${LIVE_CLASS_NAMES.taskCheckbox}`) ?? null
     const readingTaskBox = this.readingContainer?.querySelector(
@@ -957,6 +973,7 @@ export class WebviewSyncController {
     const liveLink = this.liveWrapper?.querySelector('.oile-link') ?? null
     const readingLink = this.readingContainer?.querySelector('.oile-reading-block a') ?? null
     const readingImage = this.readingContainer?.querySelector('.oile-reading-block img.oile-image') ?? null
+    const readingTable = this.readingContainer?.querySelector('.oile-reading-block table') ?? null
     const read = (el: Element | null): string | null =>
       el ? getComputedStyle(el).textDecorationColor : null
     let readingVarProbe: string | null = null
@@ -979,6 +996,9 @@ export class WebviewSyncController {
       liveLinkDecorationColor: read(liveLink),
       readingLinkDecorationColor: read(readingLink),
       readingImageDecorationColor: read(readingImage),
+      // #12 表格样式入口探针（live 管道符 / reading 表格标签）
+      liveTablePipeDecorationColor: read(liveTablePipe),
+      readingTableDecorationColor: read(readingTable),
     }
   }
 
@@ -997,6 +1017,8 @@ export class WebviewSyncController {
       frontmatterLines: 0,
       taskGlyphs: 0,
       taskChecked: 0,
+      tableLines: 0,
+      tableCells: 0,
     }
     const view = this.view
     if (view) {
@@ -1026,6 +1048,12 @@ export class WebviewSyncController {
               counts.hrLines += 1
             } else if (cls.includes('oile-frontmatter-line')) {
               counts.frontmatterLines += 1
+            } else if (cls.includes('oile-table-cell')) {
+              // #12：单元格内容 mark（cellHeader/align 修饰并入计数，不重复）
+              counts.tableCells += 1
+            } else if (cls.includes('oile-table-line')) {
+              // 行级类包含全部表格行；cellHeader/align 修饰行已在前序命中
+              counts.tableLines += 1
             }
           } else if (spec.widget !== undefined) {
             counts.taskGlyphs += 1
@@ -1054,6 +1082,7 @@ export class WebviewSyncController {
         listItems: 0,
         taskCheckboxes: 0,
         taskChecked: 0,
+        tables: 0,
       }
     }
     const count = (selector: string): number => container.querySelectorAll(selector).length
@@ -1072,6 +1101,8 @@ export class WebviewSyncController {
       taskChecked: Array.from(
         container.querySelectorAll<HTMLInputElement>('.oile-reading-task-checkbox'),
       ).filter((b) => b.checked).length,
+      // #12：表格语义计数（块级 table 元素；只读呈现）
+      tables: count('.oile-reading-block table'),
     }
   }
 
@@ -1124,12 +1155,15 @@ export class WebviewSyncController {
   }
 
   /**
-   * 外部增量组（坐标 = 权威当前系）应用的统一入口（直发与组合 flush 共用）：
+   * 外部增量组（坐标 = 权威当前系，直发路径）应用的统一入口：
    * 1. 有已确认事务时先逆穿已确认链，平移回 unconfirmed 定义域（baseVersion
    *    系）——外部坐标已含已确认编辑，直接穿未确认集会多平移已确认部分（C-2）
    * 2. 再穿未确认集映射到本地系；两阶段任一二义（真重叠）返回 null（冲突暂停）
    * 3. 应用成功后，未确认集与已确认链都以 base 系增量 rebase（定义域推进，
    *    CM6 mapDesc 精确保持段语义），baseVersion 由调用方推进
+   *
+   * 组合缓冲 flush 路径不经过此入口的逆穿阶段（缓冲增量已在入队时逆穿，
+   * 见 BufferedIncremental.baseChanges），直接调 applyBaseChanges。
    */
   private applyExternalGroup(changes: readonly SerChange[]): SerChange[] | null {
     let baseChanges: readonly (SerChange & Partial<UnmappedChange>)[] = changes
@@ -1140,11 +1174,21 @@ export class WebviewSyncController {
       }
       baseChanges = rev
     }
+    return this.applyBaseChanges(baseChanges)
+  }
+
+  /**
+   * baseVersion 系增量穿未确认集映射到本地系并 rebase 参考系
+   * （直发与组合 flush 共用的后半段；返回本地系增量，二义返回 null）。
+   */
+  private applyBaseChanges(
+    baseChanges: readonly (SerChange & Partial<UnmappedChange>)[],
+  ): SerChange[] | null {
     if (!this.unconfirmed) {
       // 已确认链非空时未确认集必非空（同源清空）；异常态自愈
       this.ackedChain = null
       this.sentTxns = []
-      return [...changes]
+      return [...baseChanges]
     }
     const mapped = mapSerGroupThroughCm(baseChanges, this.unconfirmed)
     if (!mapped) {
@@ -1323,9 +1367,11 @@ export class WebviewSyncController {
         this.enterSuspended()
         return
       }
-      // 外部增量（权威系）先逆穿已确认链再穿未确认集（C-2 参考系统一，
-      // 组合缓冲 flush 路径与直发路径同一入口）
-      const mapped = this.applyExternalGroup(group.changes)
+      // 外部增量已在入队时逆穿到 base 系（迟到逆穿会多平移组合编辑，见
+      // BufferedIncremental 注释）；base 系增量直接穿未确认集应用（C-2 后半段）
+      const mapped = group.baseChanges
+        ? this.applyBaseChanges(group.baseChanges)
+        : null // 入队时即与已确认编辑二义：无法安全映射
       if (!mapped) {
         // 外部区间与本地未确认编辑真重叠：无法安全映射。保留本地输入、
         // 暂停写回并上报冲突（#4；不再 sync.request 全文覆盖丢组合输入）
@@ -1435,6 +1481,9 @@ export class WebviewSyncController {
         },
         images: this.images!,
       }),
+      // 表格单元格输入钩子（#12）：表格行内键入 | 转义写回 \|；
+      // 编辑面即 CM6 源文本行，同步链路复用本控制器的标准出站路径
+      tableEditing,
       ...this.extraExtensions,
       EditorView.updateListener.of((update) => {
         if (!update.docChanged) {

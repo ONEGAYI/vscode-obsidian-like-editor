@@ -47,6 +47,12 @@ import {
   type SourceRange,
 } from './markdownDoc'
 import { resolveTaskToggleAtMarker } from './taskToggle'
+import {
+  barePipeAt,
+  parseTableDelimiter,
+  splitTableRowCells,
+  type TableAlign,
+} from './tableCells'
 
 /** 标题类名（#5 契约保持不变） */
 export const HEADING_CLASS_NAMES = {
@@ -84,6 +90,21 @@ export const LIVE_CLASS_NAMES = {
   hrLine: 'oile-hr-line',
   /** frontmatter 行（`.cm-hmd-frontmatter` 方向） */
   frontmatterLine: 'oile-frontmatter-line',
+  /** ---- 表格（#12）：编辑面即源文本行，装饰只做样式标记（不隐藏源文）---- */
+  /** 表格行（表头/分隔/数据行通用；Obsidian 对应 .cm-table 方向） */
+  tableLine: 'oile-table-line',
+  /** 表头行修饰 */
+  tableHeaderLine: 'oile-table-header-line',
+  /** 分隔行修饰 */
+  tableDelimiterLine: 'oile-table-delimiter-line',
+  /** 单元格内容 span（trim 后区间） */
+  tableCell: 'oile-table-cell',
+  /** 表头单元格修饰 */
+  tableCellHeader: 'oile-table-cell-header',
+  /** 管道符 span（含首尾边界管道） */
+  tablePipe: 'oile-table-pipe',
+  /** 列对齐修饰（分隔行声明的对齐落到各单元格） */
+  tableAlign: (a: TableAlign) => `oile-table-align-${a}`,
 } as const
 
 // ---- 装饰实例缓存：增量与全量构建产出相同实例，使 RangeSet.eq 成立 ----
@@ -168,6 +189,92 @@ const taskCheckboxDecos = [
   Decoration.replace({ widget: new TaskCheckboxWidget(false) }),
   Decoration.replace({ widget: new TaskCheckboxWidget(true) }),
 ]
+
+// ---- 表格装饰（#12）：单元格边界来自 tableCells 的 GFM 语义拆分 ----
+// （lezer 的 TableCell 节点不识别 \| 与行内代码内管道，不作定位依据）
+
+const tablePipeDeco = Decoration.mark({ class: LIVE_CLASS_NAMES.tablePipe })
+
+/** 单元格 mark 实例缓存：header × 对齐的有限组合，增量与全量产出相同实例 */
+const tableCellDecos = new Map<string, ReturnType<typeof Decoration.mark>>()
+
+function tableCellDeco(header: boolean, align: TableAlign | null): ReturnType<typeof Decoration.mark> {
+  const cls = [
+    LIVE_CLASS_NAMES.tableCell,
+    header ? LIVE_CLASS_NAMES.tableCellHeader : '',
+    align ? LIVE_CLASS_NAMES.tableAlign(align) : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+  let deco = tableCellDecos.get(cls)
+  if (!deco) {
+    deco = Decoration.mark({ class: cls })
+    tableCellDecos.set(cls, deco)
+  }
+  return deco
+}
+
+/** 表格祖先（path 反向查找；Table 不可嵌套，命中即唯一） */
+function tableAncestor(path: SyntaxNode[]): SyntaxNode | null {
+  for (let i = path.length - 1; i >= 0; i--) {
+    if (path[i]!.name === 'Table') {
+      return path[i]!
+    }
+  }
+  return null
+}
+
+/** 表格的列对齐：解析 Table 直接子 TableDelimiter 中覆盖整行的那一个（分隔行） */
+function tableAlignsOf(doc: Text, table: SyntaxNode | null): Array<TableAlign | null> | null {
+  if (!table) {
+    return null
+  }
+  for (let c = table.firstChild; c; c = c.nextSibling) {
+    if (c.name !== 'TableDelimiter') {
+      continue
+    }
+    const line = doc.lineAt(c.from)
+    if (c.to > line.from && c.to <= line.to) {
+      const aligns = parseTableDelimiter(line.text)
+      if (aligns) {
+        return aligns
+      }
+    }
+  }
+  return null
+}
+
+/** 一行表格行的管道符 mark（全部裸管道：含首尾边界） */
+function emitTablePipeMarks(out: Array<Range<Decoration>>, doc: Text, lineFrom: number): void {
+  const line = doc.lineAt(lineFrom)
+  for (let i = 0; i < line.text.length; i++) {
+    // 转义/代码内管道不切分单元格，同样不作为分隔管道呈现
+    if (barePipeAt(line.text, i)) {
+      out.push(tablePipeDeco.range(lineFrom + i, lineFrom + i + 1))
+    }
+  }
+}
+
+/** 表头/数据行的单元格 mark + 管道 mark（GFM 语义拆分） */
+function emitTableRowMarks(
+  out: Array<Range<Decoration>>,
+  doc: Text,
+  node: SyntaxNode,
+  path: SyntaxNode[],
+): void {
+  const line = doc.lineAt(node.from)
+  const header = node.name === 'TableHeader'
+  const aligns = tableAlignsOf(doc, tableAncestor(path))
+  const cells = splitTableRowCells(line.text, line.from)
+  for (let col = 0; col < cells.length; col++) {
+    const cell = cells[col]!
+    if (cell.contentTo > cell.contentFrom) {
+      const deco = tableCellDeco(header, aligns && col < aligns.length ? aligns[col]! : null)
+      out.push(deco.range(cell.contentFrom, cell.contentTo))
+    }
+  }
+  emitTablePipeMarks(out, doc, line.from)
+}
 
 /** 行是否被选区覆盖（任一 range 的行区间覆盖该行即视为活动，显示源码）。
  *  #10 起 liveLinks 的链接/图片装饰复用同一活动语义 */
@@ -309,6 +416,42 @@ function emitForRange(
         return
       case 'HorizontalRule':
         eachNodeLine(doc, node, fromLine, toLine, (n) => addLineCls(n, LIVE_CLASS_NAMES.hrLine))
+        return
+      // ---- 表格（#12）：行级类 + GFM 语义单元格 mark；管道符保持可见 ----
+      case 'Table':
+        eachNodeLine(doc, node, fromLine, toLine, (n) => addLineCls(n, LIVE_CLASS_NAMES.tableLine))
+        return
+      case 'TableHeader': {
+        const lineNo = doc.lineAt(node.from).number
+        if (lineNo >= fromLine && lineNo <= toLine) {
+          addLineCls(lineNo, LIVE_CLASS_NAMES.tableHeaderLine)
+          emitTableRowMarks(out, doc, node, path)
+        }
+        return
+      }
+      case 'TableRow': {
+        const lineNo = doc.lineAt(node.from).number
+        if (lineNo >= fromLine && lineNo <= toLine) {
+          emitTableRowMarks(out, doc, node, path)
+        }
+        return
+      }
+      case 'TableDelimiter': {
+        // 分隔行是覆盖整行的 TableDelimiter 节点；表头/数据行内的单字符
+        // 管道节点同名，按区间是否独占整行区分
+        const line = doc.lineAt(node.from)
+        if (node.from === line.from && node.to === line.to) {
+          const lineNo = line.number
+          if (lineNo >= fromLine && lineNo <= toLine) {
+            addLineCls(lineNo, LIVE_CLASS_NAMES.tableDelimiterLine)
+            emitTablePipeMarks(out, doc, line.from)
+          }
+        }
+        return
+      }
+      case 'TableCell':
+        // lezer 的 cell 切分不识别 \| 与代码内管道，装饰用 emitTableRowMarks
+        // 的自研拆分；此处跳过（cell 内行内节点经 visitRange 递归照常发射）
         return
       case 'ListItem': {
         const depth = 1 + path.filter((p) => p.name === 'ListItem').length
@@ -504,10 +647,11 @@ const SEED_NODE_NAMES = new Set([
   'SetextHeading1', 'SetextHeading2',
   'HeaderMark', 'EmphasisMark', 'QuoteMark', 'ListMark', 'TaskMarker',
   'Emphasis', 'StrongEmphasis', 'InlineCode', 'HorizontalRule', 'ListItem',
+  'Table', 'TableHeader', 'TableRow', 'TableCell', 'TableDelimiter',
 ])
 
 /** 分类容器（尾部差异探测用） */
-const CONTAINER_NAMES = new Set(['FencedCode', 'CodeBlock', 'Blockquote', 'ListItem'])
+const CONTAINER_NAMES = new Set(['FencedCode', 'CodeBlock', 'Blockquote', 'ListItem', 'Table'])
 
 /**
  * 一次 docChanged 事务的重建行区间计算：
