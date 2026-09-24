@@ -24,8 +24,20 @@ import {
 import { parseWikilinkInner } from '../shared/wikilink'
 import { NewlineCoordinator } from '../shared/newline'
 import { isWebviewToHost, type HostToWebview, type SerChange, type TableEditOp } from '../shared/protocol'
+import type { SettingsService } from './settingsService'
 
 export const VIEW_TYPE = 'onegayi.vsidian.editor'
+
+/** #33 设置链路的 provider 接线（extension.ts 注入）：编辑器面板的设置
+ *  消息拦截（settings.open/get）、宿主保存后的变更广播（settings.changed
+ *  到全部已打开编辑器面板）与设置页测试钩子的观测/注入通道 */
+export interface SettingsWiring {
+  service: SettingsService
+  openPage(): void
+  closePage(): void
+  getPageInfo(): { open: boolean; ready: boolean; title: string }
+  injectPageMessage(message: unknown): void
+}
 
 /** 活动标签是否为指定文档的本扩展 custom editor（C-5）。
  *  webview 转发的 undo/redo 经宿主全局命令执行，而该命令作用于活动
@@ -112,6 +124,7 @@ function linkContextOf(document: vscode.TextDocument): LinkContext {
 
 export function createTextEditorProvider(
   context: vscode.ExtensionContext,
+  settings?: SettingsWiring,
 ): vscode.CustomTextEditorProvider {
   const sessions = new Map<string, SessionEntry>()
   let lastClosedInput: { docUri: string; webviewText?: string; fragments: string[] } | undefined
@@ -470,7 +483,17 @@ export function createTextEditorProvider(
       const resolveImage = async (src: string): Promise<ImageResolution> => {
         return resolveWorkspaceImage(src, linkCtx, webviewPanel.webview)
       }
-      const sessionId = entry.session.attachPanel({ send, openLink, openWikilink, resolveImage })
+      const sessionId = entry.session.attachPanel({
+        send,
+        openLink,
+        openWikilink,
+        resolveImage,
+        // #33 设置端口：工具栏 settings.open 与 init 后 settings.get 的
+        // 面板级处理（与 link.activate 同模式；settings.set 只存在于
+        // 设置页 webview 链路，不经文档会话）
+        openSettings: () => settings?.openPage(),
+        requestSettings: () => settings?.service.getSnapshot() ?? {},
+      })
       entry.panels.set(sessionId, webviewPanel)
 
       const messageSub = webviewPanel.webview.onDidReceiveMessage((message) => {
@@ -523,6 +546,22 @@ export function createTextEditorProvider(
       )
     }),
   )
+
+  // ---- 设置变更广播（#33）：宿主保存成功后把新快照推给全部已打开
+  // Vsidian 编辑器面板（复用 toggleViewMode 的全 session 遍历样板）。
+  // #34 起消费方按需读取关心的键（如 editor.lineNumbers 热重配 CM6）----
+  if (settings) {
+    const offSettings = settings.service.onChange((values) => {
+      for (const entry of sessions.values()) {
+        for (const panel of entry.session.getInfo().panels) {
+          if (panel.ready) {
+            entry.session.postToPanel(panel.sessionId, { kind: 'settings.changed', values })
+          }
+        }
+      }
+    })
+    context.subscriptions.push({ dispose: () => offSettings() })
+  }
 
   // ---- 模式切换命令（#6）：活动 tab 为本扩展 custom editor 时向其面板
   // 发送 view.mode.set；模式是 webview 视图状态，不写 TextDocument ----
@@ -803,6 +842,41 @@ export function createTextEditorProvider(
       (uriStr: string) => {
         const entry = getEntry(vscode.Uri.parse(uriStr))
         return { found: !!entry, log: entry ? [...entry.linkLog] : [] }
+      },
+    ),
+    // ---- #33 设置链路测试钩子：fixture 定义注入、快照读写、设置页
+    // 观测/关闭/消息注入（生产注册表为空——契约经 fixture 定义覆盖）----
+    vscode.commands.registerCommand(
+      'onegayi.vsidian._test.installSettingsFixture',
+      () =>
+        settings
+          ? settings.service.addDefinitions([
+              { key: 'test.flag', type: 'boolean', default: false, title: '测试开关' },
+            ])
+          : { ok: false, error: '设置链路未接线' },
+    ),
+    vscode.commands.registerCommand('onegayi.vsidian._test.getSettings', () =>
+      settings ? settings.service.getSnapshot() : {},
+    ),
+    vscode.commands.registerCommand(
+      'onegayi.vsidian._test.setSettings',
+      async (values: unknown) =>
+        settings ? settings.service.apply(values) : { ok: false, rejected: [], reason: 'invalid' as const },
+    ),
+    vscode.commands.registerCommand('onegayi.vsidian._test.settingsPageInfo', () =>
+      settings
+        ? settings.getPageInfo()
+        : { open: false, ready: false, title: '' },
+    ),
+    vscode.commands.registerCommand('onegayi.vsidian._test.closeSettingsPage', () => {
+      settings?.closePage()
+      return true
+    }),
+    vscode.commands.registerCommand(
+      'onegayi.vsidian._test.injectSettingsPageMessage',
+      (message: unknown) => {
+        settings?.injectPageMessage(message)
+        return true
       },
     ),
     )

@@ -68,6 +68,11 @@
         "command": "onegayi.vsidian.table.deleteColumn",
         "title": "表格：删除列",
         "category": "Vsidian"
+      },
+      {
+        "command": "onegayi.vsidian.openSettings",
+        "title": "打开设置",
+        "category": "Vsidian"
       }
     ],
     "keybindings": [

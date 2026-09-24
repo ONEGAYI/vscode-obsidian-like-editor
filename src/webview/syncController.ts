@@ -34,6 +34,7 @@ import {
   type ReadingSyntaxProbe,
   type SerChange,
 } from '../shared/protocol'
+import type { SettingsPayload } from '../shared/settings'
 import {
   FIND_CLASS_NAMES,
   computeFindMatches,
@@ -310,6 +311,11 @@ export class WebviewSyncController {
   /** document 级键盘拦截（Mod-F 打开 / Esc 关闭），dispose 时移除 */
   private docKeydown: ((e: KeyboardEvent) => void) | undefined
 
+  // ---- 设置状态（#33）----
+  /** 宿主下发的当前设置快照缓存（#34 行号等设置的消费源）；webview 不
+   *  持久化设置——每次装载（init）后经 settings.get 向宿主拉取 */
+  private settings: SettingsPayload | undefined
+
   // ---- 冲突暂停状态（#4）----
   /** 暂停写回：保留本地文本、忽略外部增量、不再发送 edit.request */
   private suspended = false
@@ -549,6 +555,18 @@ export class WebviewSyncController {
         // init 后主动回报一次视图状态（含持久化恢复的模式）：宿主的模式
         // 缓存尽早建立，重载场景（retainContextWhenHidden 关闭）不留窗口
         this.reportViewState()
+        // 拉取当前设置快照（#33）：权威在宿主，webview 不持久化——每次
+        // 装载（含重载）都拉取；宿主以 settings.snapshot 响应
+        this.bridge.postMessage({ kind: 'settings.get' })
+        break
+      case 'settings.snapshot':
+        // 设置快照缓存（#33）：设置页请求-响应与编辑器拉取共用同一形态
+        this.settings = message.values
+        break
+      case 'settings.changed':
+        // 设置变更广播（#33）：缓存后由 #34 等消费方按需读取关心的键
+        // （如 editor.lineNumbers 触发 CM6 扩展热重配）
+        this.settings = message.values
         break
       case 'edit.ack': {
         if (this.suspended) {
@@ -910,6 +928,8 @@ export class WebviewSyncController {
       // 服务双视图，隐藏侧的 DOM 不代表用户可见状态）
       imageStates: this.collectImageStates(),
       find: this.collectFindProbe(),
+      // #33 设置快照缓存（宿主下发过才有值；缺省向后兼容）
+      settings: this.settings,
     })
   }
 
@@ -1367,7 +1387,9 @@ export class WebviewSyncController {
     })
   }
 
-  /** 切换入口工具栏（#6）：按钮与宿主命令走同一状态机 */
+  /** 切换入口工具栏（#6）：按钮与宿主命令走同一状态机。
+   *  #33 增设「设置」按钮：打开宿主级 Vsidian 设置页面板（webview 无权
+   *  自建面板，必须经 settings.open 出站） */
   private buildToolbar(): HTMLElement {
     const bar = document.createElement('div')
     bar.className = 'vsidian-toolbar'
@@ -1377,6 +1399,13 @@ export class WebviewSyncController {
     btn.textContent = '切换到阅读模式'
     btn.addEventListener('click', () => this.setViewMode('toggle'))
     bar.appendChild(btn)
+    const settingsBtn = document.createElement('button')
+    settingsBtn.type = 'button'
+    settingsBtn.className = 'vsidian-settings-toggle'
+    settingsBtn.textContent = '设置'
+    settingsBtn.setAttribute('aria-label', '打开 Vsidian 设置')
+    settingsBtn.addEventListener('click', () => this.bridge.postMessage({ kind: 'settings.open' }))
+    bar.appendChild(settingsBtn)
     return bar
   }
 

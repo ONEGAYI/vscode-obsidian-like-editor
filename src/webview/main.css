@@ -90,6 +90,17 @@ body {
   border: none;
 }
 
+/* #33 设置入口按钮：与模式按钮同一视觉规格（仅新增规则，不动既有排版） */
+.vsidian-toolbar .vsidian-settings-toggle {
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size, 13px);
+  padding: 1px 10px;
+  cursor: pointer;
+  color: var(--vscode-button-secondaryForeground);
+  background-color: var(--vscode-button-secondaryBackground);
+  border: none;
+}
+
 /* ---- Live Preview 语法装饰（#8：标题之外的覆盖语法）----
    行级类（vsidian-code/quote/list/hr/frontmatter-line）只做背景/边框等着色，
    不改变行高（行高估算不因装饰失真；标题字号仍由 #5 的标题行类承担）。

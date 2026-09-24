@@ -5,6 +5,11 @@
 //
 // 设计依据：探索笔记 02 §5（协议设计建议）、§6（陷阱清单）。
 
+import type { SettingsPayload } from './settings'
+
+/** 设置快照类型随协议消息透出（载荷单一事实源仍在 shared/settings） */
+export type { SettingsPayload }
+
 /** 一次变更：把全文 [offset, offset+length) 替换为 text（与 contentChanges 同构） */
 export interface SerChange {
   offset: number
@@ -96,6 +101,14 @@ export type HostToWebview =
   | { kind: 'sync.test.edit'; offset: number; text: string; closeAfter?: boolean }
   /** 测试钩子：真实 webview DOM 的渲染链接 mousedown。 */
   | { kind: 'link.test.mousedown'; target: 'wikilink' | 'link'; index: number; ctrlKey?: boolean }
+  /** 设置快照（#33）：当前生效设置的全量键值对。两个消费方向——设置页
+   *  ready 后请求-响应回填（settings.get）；编辑器面板 init 后主动拉取。
+   *  values 整体下发而非逐项布尔：#34 起新增设置项不需要改协议形态 */
+  | { kind: 'settings.snapshot'; values: SettingsPayload }
+  /** 设置变更通知（#33）：任一设置项保存成功后广播到全部已打开 Vsidian
+   *  编辑器面板与设置页（含变更发起页面）。values 仍为全量快照；消费方按
+   *  需读取关心的键（#34 场景：editor.lineNumbers 触发 CM6 扩展热重配） */
+  | { kind: 'settings.changed'; values: SettingsPayload }
 
 /** webview → 宿主消息 */
 export type WebviewToHost =
@@ -187,6 +200,8 @@ export type WebviewToHost =
       imageStates?: ImageStateCounts
       /** 查找会话观测（#14）：首次打开后回报（未打开过时缺省） */
       find?: FindSessionProbe
+      /** 当前生效设置快照（#33 起缓存宿主下发的值；#34 行号等设置的观测面） */
+      settings?: SettingsPayload
     }
       /** 阅读视图性能探针回报（#7）：滚动往返期间的挂载/回收与解析观测 */
   | {
@@ -230,6 +245,17 @@ export type WebviewToHost =
   /** 图片资源解析请求（#10）：非 http(s) 直连的工作区图源经宿主解析为
    *  webview 可加载地址（reqId 会话面板内自增，对应 image.result） */
   | { kind: 'image.request'; sessionId: string; docUri: string; reqId: number; src: string }
+  /** 打开 Vsidian 设置页（#33）：编辑器工具栏「设置」按钮 → 宿主
+   *  createWebviewPanel。无 sessionId/docUri——打开设置页不依赖任何文档
+   *  会话（无文档打开时同样可用） */
+  | { kind: 'settings.open' }
+  /** 请求设置快照（#33）：设置页 ready 后与编辑器面板 init 后拉取当前值，
+   *  宿主以 settings.snapshot 响应（webview 不持久化设置，权威在宿主） */
+  | { kind: 'settings.get' }
+  /** 保存设置（#33）：设置页上送变更键值对（批，原子生效）。宿主按定义
+   *  校验：通过才持久化并广播 settings.changed；拒绝时向来源设置页回
+   *  settings.snapshot 以权威值恢复显示 */
+  | { kind: 'settings.set'; values: SettingsPayload }
   /** 性能探针回报（#5）：快照为 DOM 计数，输入延迟含 rAF 稳定等待 */
   | {
       kind: 'perf.report'
@@ -402,6 +428,22 @@ function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
+/** #33 设置载荷校验：键 → 标量值（boolean/number/string）。协议层只约束
+ *  形态（键值对可序列化）；键是否已定义、值是否符合类型语义由
+ *  shared/settings 的定义校验判定——两层职责分离 */
+function isSettingsPayload(v: unknown): v is SettingsPayload {
+  if (!isObject(v)) {
+    return false
+  }
+  for (const key of Object.keys(v)) {
+    const value = v[key]
+    if (typeof value !== 'boolean' && typeof value !== 'number' && typeof value !== 'string') {
+      return false
+    }
+  }
+  return true
+}
+
 function isNonNegativeInt(v: unknown): boolean {
   return typeof v === 'number' && Number.isInteger(v) && v >= 0
 }
@@ -561,6 +603,12 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
       )
     case 'sync.test.close':
       return isString(v.sessionId) && isString(v.docUri)
+    case 'settings.open':
+      return true
+    case 'settings.get':
+      return true
+    case 'settings.set':
+      return isSettingsPayload(v.values)
     case 'conflict.action':
       return (
         isString(v.sessionId) &&
@@ -601,7 +649,8 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.readingImageCount === undefined || isNonNegativeInt(v.readingImageCount)) &&
         (v.readingWikilinkCount === undefined || isNonNegativeInt(v.readingWikilinkCount)) &&
         (v.imageStates === undefined || isImageStateCounts(v.imageStates)) &&
-        (v.find === undefined || isFindSessionProbe(v.find))
+        (v.find === undefined || isFindSessionProbe(v.find)) &&
+        (v.settings === undefined || isSettingsPayload(v.settings))
       )
     case 'reading.perf.report':
       return (
@@ -760,6 +809,10 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
     case 'link.test.mousedown':
       return (v.target === 'wikilink' || v.target === 'link') && isNonNegativeInt(v.index) &&
         (v.ctrlKey === undefined || typeof v.ctrlKey === 'boolean')
+    case 'settings.snapshot':
+      return isSettingsPayload(v.values)
+    case 'settings.changed':
+      return isSettingsPayload(v.values)
     default:
       return false
   }
