@@ -225,6 +225,19 @@ describe('live 表格装饰', () => {
       .toHaveLength(2)
   })
 
+  it('两列合法表格的纯空白数据行仍呈现两格网格', () => {
+    const doc = 'a|b\n---|---\n | \n'
+    const set = build(doc, { anchor: doc.length })
+    expect(textsFor(set, LIVE_CLASS_NAMES.tableGridRow, doc)).toHaveLength(2)
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc, extensions: [livePreviewDecorations], selection: EditorSelection.single(doc.length) }),
+    })
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]
+      ?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(2)
+    view.destroy()
+  })
+
   it('增量维护：单元格编辑后装饰与全量重建对拍一致', () => {
     const state0 = EditorState.create({
       doc: TABLE_DOC,

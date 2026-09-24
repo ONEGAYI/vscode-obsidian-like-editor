@@ -146,11 +146,19 @@ export function splitTableRowCells(lineText: string, lineStart: number): TableCe
     }
   }
   segs.push({ from: segStart, to: lineText.length })
-  if (segs.length > 0 && lineText.slice(segs[0]!.from, segs[0]!.to).trim() === '') {
-    segs.shift()
-  }
-  if (segs.length > 0 && lineText.slice(segs[segs.length - 1]!.from, segs[segs.length - 1]!.to).trim() === '') {
-    segs.pop()
+  // 单个管道两侧都是实际空白（` | `）表示两个空单元格；没有足够的分隔符
+  // 可以同时把它解释成首尾边界。`|` 本身没有单元格，仍走下方边界裁剪。
+  const twoBlankCells = segs.length === 2 &&
+    segs[0]!.to > segs[0]!.from && segs[1]!.to > segs[1]!.from &&
+    lineText.slice(segs[0]!.from, segs[0]!.to).trim() === '' &&
+    lineText.slice(segs[1]!.from, segs[1]!.to).trim() === ''
+  if (!twoBlankCells) {
+    if (segs.length > 0 && lineText.slice(segs[0]!.from, segs[0]!.to).trim() === '') {
+      segs.shift()
+    }
+    if (segs.length > 0 && lineText.slice(segs[segs.length - 1]!.from, segs[segs.length - 1]!.to).trim() === '') {
+      segs.pop()
+    }
   }
   return segs.map((seg) => {
     const raw = lineText.slice(seg.from, seg.to)

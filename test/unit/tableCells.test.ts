@@ -64,6 +64,13 @@ describe('splitTableRowCells：GFM 单元格切分', () => {
     expect(splitTableRowCells('  | c | d |\t', 0)).toHaveLength(2)
   })
 
+  it('单个管道两侧都是空白时保留两个空单元格', () => {
+    const cells = splitTableRowCells(' | ', 20)
+    expect(cells).toHaveLength(2)
+    expect(cells[0]).toMatchObject({ from: 20, to: 21, contentFrom: 21, contentTo: 21 })
+    expect(cells[1]).toMatchObject({ from: 22, to: 23, contentFrom: 23, contentTo: 23 })
+  })
+
   it('空单元格：| a || b | 的中间空段是空格零内容单元格', () => {
     const cells = splitTableRowCells('| a || b |', 0)
     expect(cells).toHaveLength(3)
