@@ -78,8 +78,8 @@ function chainSections(cs: ChangeSet): ChainSection[] {
 
 /**
  * 本地系坐标逆穿段表回定义域（baseVersion）系（C-2 出站方向）。
- * 插入/替换内容内部塌缩到段起点——协议 offset 粒度无法表达「插入内容
- * 内部」的回溯位置，属已知限制（同点顺序可能颠倒，内容不丢失）。
+ * 插入/替换内容内部塌缩到段起点。调用方须先暂缓与插入内容相交的
+ * 出站编辑；协议 offset/length 无法表达其内部位置或同点关联侧。
  */
 function localPosToBase(p: number, sections: readonly ChainSection[]): number {
   let delta = 0
@@ -96,6 +96,27 @@ function localPosToBase(p: number, sections: readonly ChainSection[]): number {
     return s.fromA
   }
   return p - delta
+}
+
+/** 插入点落在未确认内容的闭区间，或替换/删除范围与内容真正相交。 */
+function touchesUnconfirmedInsertion(
+  changes: readonly SerChange[],
+  sections: readonly ChainSection[],
+): boolean {
+  let delta = 0
+  for (const s of sections) {
+    const afterStart = s.fromA + delta
+    const afterEnd = afterStart + s.insLen
+    if (s.insLen > 0 && changes.some((c) => (
+      c.length === 0
+        ? c.offset >= afterStart && c.offset <= afterEnd
+        : c.offset < afterEnd && c.offset + c.length > afterStart
+    ))) {
+      return true
+    }
+    delta += s.insLen - (s.toA - s.fromA)
+  }
+  return false
 }
 
 /** 逆穿已确认链后的变更：端点携带关联语义（正穿未确认集时保持前后次序） */
@@ -247,6 +268,9 @@ export class WebviewSyncController {
   /** 已发出未确认事务（FIFO）：坐标为发出时逆穿未确认集的 baseVersion 系
    *  投影（C-2），ack ok 后按序剥离复合进已确认链 */
   private sentTxns: { seq: number; changes: SerChange[] }[] = []
+  /** 首笔无法安全逆投影的事务起，后续本地事务合并在同一待发 ChangeSet。
+   *  定义域是所有已发送事务之后的本地文档，全部 ack 后可直接作为新请求。 */
+  private deferredLocal: ChangeSet | null = null
   /** 已确认事务复合（定义域 = unconfirmed 定义域 = baseVersion 系）：
    *  外部增量（权威系坐标）先逆穿它平移回 base 系再穿未确认集（C-2），
    *  避免把「已含已确认编辑」的坐标当 base 系多平移 */
@@ -366,7 +390,7 @@ export class WebviewSyncController {
           this.confirmSentTxn(message.seq)
           // 未确认集的清空延后到缓冲 flush（组合输入映射仍需它）；
           // 全部确认且无缓冲挂起时本地与权威一致
-          if (this.inFlight.size === 0 && !this.hasBufferedSync()) {
+          if (this.inFlight.size === 0 && !this.hasBufferedSync() && !this.deferredLocal) {
             this.unconfirmed = null
             this.ackedChain = null
             this.sentTxns = []
@@ -377,6 +401,9 @@ export class WebviewSyncController {
             // 全部确认：基线推进到最新确认版本（C-2：部分确认时保持
             // unconfirmed 定义域版本，出站坐标经逆穿统一参考系）
             this.baseVersion = Math.max(this.baseVersion, message.version)
+          }
+          if (this.inFlight.size === 0 && !this.hasBufferedSync()) {
+            this.sendDeferredLocal()
           }
           break
         }
@@ -398,6 +425,12 @@ export class WebviewSyncController {
         this.lastDocChangedVersion = message.version
         if (this.suspended) {
           // 暂停：外部增量不应用（保留本地输入，恢复时以全文对齐）
+          break
+        }
+        if (this.deferredLocal && !this.composing && !this.hasBufferedSync()) {
+          // 待发集定义域未随外部增量重定位；保守暂停并保留本地全文，
+          // 避免确认后用旧坐标覆盖权威文本。
+          this.enterSuspended()
           break
         }
         if (this.composing || this.hasBufferedSync()) {
@@ -578,7 +611,7 @@ export class WebviewSyncController {
       return
     }
     const hasUnconfirmed =
-      this.unconfirmed !== null || this.inFlight.size > 0 || this.composing
+      this.unconfirmed !== null || this.inFlight.size > 0 || this.deferredLocal !== null || this.composing
     this.suspended = true
     this.setBannerVisible(true)
     if (hasUnconfirmed && this.sessionId) {
@@ -595,6 +628,7 @@ export class WebviewSyncController {
     this.unconfirmed = null
     this.ackedChain = null
     this.sentTxns = []
+    this.deferredLocal = null
     this.inFlight.clear()
     this.pendingExternal = []
   }
@@ -609,9 +643,16 @@ export class WebviewSyncController {
     text: string,
     opts: { restoreAnchor?: boolean; source?: 'resync' | 'init' | 'ack-fail' } = {},
   ): void {
+    if (opts.source === 'resync' && this.deferredLocal && !this.suspended) {
+      // 主动全文与尚未发送的本地输入无法自动合并；保留本地快照供恢复。
+      this.enterSuspended()
+      return
+    }
     if (this.composing || this.hasBufferedSync()) {
-      this.pendingFull = { version, text, source: opts.source ?? 'init' }
-      this.pendingExternal = []
+      if (!this.pendingFull || version >= this.pendingFull.version) {
+        this.pendingFull = { version, text, source: opts.source ?? 'init' }
+      }
+      this.pendingExternal = this.pendingExternal.filter((group) => group.version > version)
       return
     }
     this.baseVersion = version
@@ -643,6 +684,7 @@ export class WebviewSyncController {
     this.unconfirmed = null
     this.ackedChain = null
     this.sentTxns = []
+    this.deferredLocal = null
     this.pendingExternal = []
     this.pendingFull = undefined
     this.pendingVersionAck = undefined
@@ -942,6 +984,23 @@ export class WebviewSyncController {
         .map((c) => ({ from: c.offset, to: c.offset + c.length, insert: c.text })),
       this.unconfirmed.length,
     )
+    // 待确认事务与 unconfirmed/ackedChain 共用定义域；外部增量推进定义域时
+    // 也要同步平移其坐标，否则稍后 ack 会把旧位置复合进 ackedChain。
+    this.sentTxns = this.sentTxns.map((txn) => {
+      const cs = ChangeSet.of(
+        txn.changes.map((c) => ({ from: c.offset, to: c.offset + c.length, insert: c.text })),
+        this.unconfirmed!.length,
+      ).mapDesc(gCs, false) as ChangeSet
+      const rebased: SerChange[] = []
+      cs.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+        rebased.push({
+          offset: fromA,
+          length: toA - fromA,
+          text: inserted.sliceString(0, inserted.length),
+        })
+      })
+      return { seq: txn.seq, changes: rebased }
+    })
     this.unconfirmed = this.unconfirmed.mapDesc(gCs, false) as ChangeSet
     if (this.ackedChain) {
       this.ackedChain = this.ackedChain.mapDesc(gCs, false) as ChangeSet
@@ -974,6 +1033,42 @@ export class WebviewSyncController {
     this.ackedChain = this.ackedChain
       ? (this.ackedChain.compose(cs.mapDesc(this.ackedChain, false) as ChangeSet))
       : cs
+  }
+
+  /** 已发请求全部确认后，以确认后的权威版本发送待发本地净变更。 */
+  private sendDeferredLocal(): void {
+    const deferred = this.deferredLocal
+    if (!deferred || this.suspended || this.inFlight.size > 0 || this.hasBufferedSync()) {
+      return
+    }
+    this.deferredLocal = null
+    this.ackedChain = null
+    this.sentTxns = []
+    const changes: SerChange[] = []
+    deferred.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+      changes.push({
+        offset: fromA,
+        length: toA - fromA,
+        text: inserted.sliceString(0, inserted.length),
+      })
+    })
+    if (changes.length === 0) {
+      this.unconfirmed = null
+      return
+    }
+    this.unconfirmed = deferred
+    this.seq += 1
+    this.persistState()
+    this.inFlight.add(this.seq)
+    this.sentTxns.push({ seq: this.seq, changes })
+    this.bridge.postMessage({
+      kind: 'edit.request',
+      sessionId: this.sessionId,
+      docUri: this.docUri,
+      seq: this.seq,
+      baseVersion: this.baseVersion,
+      changes,
+    })
   }
 
   /**
@@ -1012,16 +1107,24 @@ export class WebviewSyncController {
       // 暂停前缓冲的全文重置仍应用（保留恢复内容，不静默丢弃）
       const suspendedAckVersion = this.pendingVersionAck
       this.pendingVersionAck = undefined
+      const groups = this.pendingExternal
       this.pendingExternal = []
       if (this.pendingFull) {
         const { version, text, source } = this.pendingFull
         this.pendingFull = undefined
         this.replaceDoc(text)
         this.baseVersion = Math.max(version, suspendedAckVersion ?? version)
+        this.lastDocChangedVersion = Math.max(this.lastDocChangedVersion, version)
         if (source === 'resync') {
           // 协议明文 doc.resync 对暂停面板兼作恢复信号（B-1）：组合中的
           // 恢复延后到这里生效——全文装载并解除暂停
           this.exitSuspended()
+          for (const group of groups) {
+            if (group.version > version) {
+              this.dispatchExternal(group.changes)
+              this.baseVersion = Math.max(this.baseVersion, group.version)
+            }
+          }
           this.refreshReading()
         }
       }
@@ -1032,19 +1135,22 @@ export class WebviewSyncController {
     if (this.pendingFull) {
       const { version, text } = this.pendingFull
       this.pendingFull = undefined
-      this.pendingExternal = []
       this.unconfirmed = null
       this.ackedChain = null
       this.sentTxns = []
+      this.deferredLocal = null
       this.replaceDoc(text)
-      this.refreshReading()
       this.baseVersion = Math.max(version, ackVersion ?? version)
-      return
+      this.lastDocChangedVersion = Math.max(this.lastDocChangedVersion, version)
     }
     const groups = this.pendingExternal
     this.pendingExternal = []
     let lastVersion = this.baseVersion
     for (const group of groups) {
+      if (this.deferredLocal) {
+        this.enterSuspended()
+        return
+      }
       // 外部增量（权威系）先逆穿已确认链再穿未确认集（C-2 参考系统一，
       // 组合缓冲 flush 路径与直发路径同一入口）
       const mapped = this.applyExternalGroup(group.changes)
@@ -1065,6 +1171,7 @@ export class WebviewSyncController {
     }
     this.refreshReading()
     this.baseVersion = Math.max(lastVersion, ackVersion ?? lastVersion)
+    this.sendDeferredLocal()
   }
 
   private scheduleFlush(): void {
@@ -1162,6 +1269,16 @@ export class WebviewSyncController {
           })
           if (changes.length === 0 || !this.sessionId) {
             // 无文本变更的事务不进入写回，但仍是本地状态的一部分
+            this.unconfirmed = this.unconfirmed ? this.unconfirmed.compose(tr.changes) : tr.changes
+            continue
+          }
+          if (this.deferredLocal || (
+            this.unconfirmed && touchesUnconfirmedInsertion(changes, chainSections(this.unconfirmed))
+          )) {
+            // 继续乐观回显；待已有请求全部确认后一次性发送净变更。
+            this.deferredLocal = this.deferredLocal
+              ? this.deferredLocal.compose(tr.changes)
+              : tr.changes
             this.unconfirmed = this.unconfirmed ? this.unconfirmed.compose(tr.changes) : tr.changes
             continue
           }

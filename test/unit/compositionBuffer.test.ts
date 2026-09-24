@@ -218,6 +218,56 @@ describe('组合期间外部增量缓冲', () => {
     expect(c.getView()!.state.doc.toString()).toBe('宿主最新全文')
   })
 
+  it('组合中全文之后的较新增量在 flush 时仍应用', async () => {
+    const { bridge } = makeBridge()
+    const c = mount(bridge)
+    init(c, 'abc', 1)
+    startComposition(c)
+    c.handleHostMessage({ kind: 'doc.resync', version: 2, text: 'Xabc' })
+    c.handleHostMessage({
+      kind: 'doc.changed', version: 3, origin: 'external',
+      changes: [{ offset: 4, length: 0, text: 'Y' }],
+    })
+    endComposition(c)
+    await waitFlush()
+    expect(c.getView()!.state.doc.toString()).toBe('XabcY')
+  })
+
+  it('组合缓冲全文落地后丢弃低版本迟到增量', async () => {
+    const { bridge } = makeBridge()
+    const c = mount(bridge)
+    init(c, 'abc', 1)
+    startComposition(c)
+    c.handleHostMessage({ kind: 'doc.resync', version: 5, text: 'Xabc' })
+    endComposition(c)
+    await waitFlush()
+    c.handleHostMessage({
+      kind: 'doc.changed', version: 4, origin: 'external',
+      changes: [{ offset: 0, length: 0, text: '旧' }],
+    })
+    expect(c.getView()!.state.doc.toString()).toBe('Xabc')
+  })
+
+  it('待发本地编辑与组合中外部增量并存时保留输入并暂停', async () => {
+    const { bridge, sent } = makeBridge()
+    const c = mount(bridge)
+    init(c, 'abcdef', 1)
+    const view = c.getView()!
+    view.dispatch({ changes: { from: 0, insert: 'ZZ' } })
+    view.dispatch({ changes: { from: 2, insert: 'X' } })
+    startComposition(c)
+    c.handleHostMessage({
+      kind: 'doc.changed', version: 2, origin: 'external',
+      changes: [{ offset: 6, length: 0, text: 'Y' }],
+    })
+    c.handleHostMessage({ kind: 'edit.ack', seq: 1, ok: true, version: 3 })
+    endComposition(c)
+    await waitFlush()
+    expect(view.state.doc.toString()).toBe('ZZXabcdef')
+    expect(sent.find((m) => m.kind === 'conflict.report')).toMatchObject({ text: 'ZZXabcdef' })
+    expect(sent.filter((m) => m.kind === 'edit.request')).toHaveLength(1)
+  })
+
   it('组合中 ack 失败附全文时不打断组合，结束后重置', async () => {
     const { bridge } = makeBridge()
     const c = mount(bridge)
@@ -332,6 +382,11 @@ describe('B-1：暂停 + 组合中收到 doc.resync 的恢复', () => {
     c.handleHostMessage({ kind: 'doc.resync', version: 5, text: '恢复全文' })
     endComposition(c)
     await waitFlush()
+    expect(c.getView()!.state.doc.toString()).toBe('恢复全文')
+    c.handleHostMessage({
+      kind: 'doc.changed', version: 4, origin: 'external',
+      changes: [{ offset: 0, length: 0, text: '旧' }],
+    })
     expect(c.getView()!.state.doc.toString()).toBe('恢复全文')
     // 暂停解除：后续输入恢复发送（baseVersion 已推进）
     c.getView()!.dispatch({ changes: { from: 0, insert: '新' } })

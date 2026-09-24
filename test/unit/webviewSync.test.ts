@@ -247,6 +247,25 @@ describe('view.state 诊断', () => {
 })
 
 describe('出站与入站的未确认参考系（C-2）', () => {
+  it('确认前的外部增量平移待确认事务，随后相邻替换仍落在正确位置', () => {
+    const { bridge } = makeBridge()
+    const c = mount(bridge)
+    init(c, 'abcdef', 1)
+    const view = c.getView()!
+    view.dispatch({ changes: { from: 1, insert: 'X' } })
+    view.dispatch({ changes: { from: 5, insert: 'Z' } })
+    c.handleHostMessage({
+      kind: 'doc.changed', version: 2, origin: 'external',
+      changes: [{ offset: 0, length: 0, text: 'Y' }],
+    })
+    c.handleHostMessage({ kind: 'edit.ack', seq: 1, ok: true, version: 3 })
+    c.handleHostMessage({
+      kind: 'doc.changed', version: 4, origin: 'external',
+      changes: [{ offset: 1, length: 1, text: 'Q' }],
+    })
+    expect(view.state.doc.toString()).toBe('YQXbcdZef')
+  })
+
   it('未确认期间连续输入：出站坐标逆穿未确认集回到 baseVersion 参考系', () => {
     const { bridge, sent } = makeBridge()
     const c = mount(bridge)
@@ -356,7 +375,17 @@ describe('C-2 端到端：未确认期间连续输入经宿主重定位后与本
     controller.mount(document.createElement('div'))
     session.handleWebviewMessage({ kind: 'ready' }, sessionId)
     controller.handleHostMessage(toWebview.at(-1)!)
-    return { doc, controller }
+    toWebview.length = 0
+    const settle = async () => {
+      let idle = 0
+      for (let i = 0; i < 20 && idle < 2; i++) {
+        await new Promise((r) => setTimeout(r, 0))
+        const messages = toWebview.splice(0)
+        for (const message of messages) controller.handleHostMessage(message)
+        idle = messages.length === 0 ? idle + 1 : 0
+      }
+    }
+    return { doc, controller, settle }
   }
 
   it('两笔不等 ack 的连续输入：宿主权威文本与本地视图最终一致', async () => {
@@ -369,6 +398,53 @@ describe('C-2 端到端：未确认期间连续输入经宿主重定位后与本
     // 出站坐标回 base 系 + 宿主重定位：两笔都落在 'd' 前，权威与本地一致
     expect(doc.content).toBe('ZZabcXdef')
     expect(view.state.doc.toString()).toBe('ZZabcXdef')
+  })
+
+  it.each([
+    ['连续输入末尾', [{ from: 0, insert: 'ZZ' }, { from: 2, insert: 'X' }], 'ZZXabcdef'],
+    ['插入内容内部', [{ from: 0, insert: 'ZZ' }, { from: 1, insert: 'X' }], 'ZXZabcdef'],
+    ['插入内容内退格', [{ from: 0, insert: 'ZZ' }, { from: 1, to: 2, insert: '' }], 'Zabcdef'],
+    ['插入内容内替换', [{ from: 0, insert: 'ZZ' }, { from: 1, to: 2, insert: 'X' }], 'ZXabcdef'],
+    ['三笔连续输入', [{ from: 0, insert: 'h' }, { from: 1, insert: 'e' }, { from: 2, insert: 'l' }], 'helabcdef'],
+    ['两笔已发送后暂缓第三笔', [
+      { from: 0, insert: 'ZZ' }, { from: 5, insert: 'Q' }, { from: 2, insert: 'X' },
+    ], 'ZZXabcQdef'],
+  ] as const)('%s：全部确认后权威文本与本地一致', async (_name, edits, expected) => {
+    const { doc, controller, settle } = setupPair('abcdef')
+    const view = controller.getView()!
+    for (const edit of edits) view.dispatch({ changes: edit })
+    expect(view.state.doc.toString()).toBe(expected)
+    await settle()
+    expect(doc.content).toBe(expected)
+    expect(view.state.doc.toString()).toBe(doc.content)
+  })
+})
+
+describe('待发编辑与冲突恢复', () => {
+  it('前笔请求失败时保留待发输入并暂停，不发送队列内容', () => {
+    const { bridge, sent } = makeBridge()
+    const c = mount(bridge)
+    init(c, 'abcdef', 1)
+    const view = c.getView()!
+    view.dispatch({ changes: { from: 0, insert: 'ZZ' } })
+    view.dispatch({ changes: { from: 2, insert: 'X' } })
+    expect(sent.filter((m) => m.kind === 'edit.request')).toHaveLength(1)
+    c.handleHostMessage({ kind: 'edit.ack', seq: 1, ok: false, reason: 'conflict', version: 2, text: 'abcdef' })
+    expect(view.state.doc.toString()).toBe('ZZXabcdef')
+    expect(sent.find((m) => m.kind === 'conflict.report')).toMatchObject({ text: 'ZZXabcdef' })
+    expect(sent.filter((m) => m.kind === 'edit.request')).toHaveLength(1)
+  })
+
+  it('待发编辑遇到主动全文重同步时保留本地输入并暂停', () => {
+    const { bridge, sent } = makeBridge()
+    const c = mount(bridge)
+    init(c, 'abcdef', 1)
+    const view = c.getView()!
+    view.dispatch({ changes: { from: 0, insert: 'ZZ' } })
+    view.dispatch({ changes: { from: 2, insert: 'X' } })
+    c.handleHostMessage({ kind: 'doc.resync', version: 2, text: '权威全文' })
+    expect(view.state.doc.toString()).toBe('ZZXabcdef')
+    expect(sent.find((m) => m.kind === 'conflict.report')).toMatchObject({ text: 'ZZXabcdef' })
   })
 })
 
