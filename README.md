@@ -1,21 +1,58 @@
 # vscode-obsidian-like-editor
 
-在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验的扩展。
+在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验的扩展：基于源文本的**实时预览 + 阅读**双视图编辑器，MVP 功能已全量交付（工单 #2–#15）。
 
-> 当前进展：#2–#8 已交付——通过"重新打开方式（Reopen With）"以本编辑器打开 `.md`（不接管默认打开），CodeMirror 6 承载全文并按增量写回 VSCode 文本模型；中文输入、宿主撤销/重做、外部修改安全同步（冲突时保留输入并暂停写回）、基础 Markdown 双模式显示（实时预览 + 阅读视图，含任务列表、引用、代码块等语法与源码降级）均已落地。双链、表格编辑与查找定位、MVP 打包验收按 [MVP 规格](docs/specs/mvp.md) 进行中。
->
-> 使用提示：命令面板执行 **切换实时预览与阅读模式**（或编辑器工具栏按钮）切换双视图；检测到无法安全同步的外部修改时，编辑器顶部会出现冲突横幅——本地输入已保留，可"复制未确认输入"或"放弃本地修改并重新同步"。
+> 项目定位与功能边界见 [CONTEXT.md](CONTEXT.md)，MVP 规格见 [docs/specs/mvp.md](docs/specs/mvp.md)，架构决策见 [docs/adr/](docs/adr/)。
+
+## 安装与使用
+
+### 安装
+
+1. 构建产物：`npx @vscode/vsce package --no-dependencies` 生成 `vscode-obsidian-like-editor-0.1.0.vsix`（或使用已有 VSIX）。
+2. VSCode（1.86+）命令面板 →「Extensions: Install from VSIX…」选择该文件，重启。
+
+> 未发布到市场；Remote SSH 场景在远端扩展目录安装同一 VSIX（兼容性依据 [ADR-0001](docs/adr/0001-vscode-186-remote-support.md)）。
+
+### 基本用法
+
+- **打开文档**：对 `.md` 文件右键 →「打开方式…」→「Obsidian-like Markdown Editor」（默认打开仍是原生文本编辑器，不自动接管）。
+- **双视图切换**：命令面板 →「切换实时预览与阅读模式」，或编辑器工具栏按钮；源码位置锚点保持（不按滚动百分比跳变）。
+- **实时预览**（live）：CodeMirror 6 全文承载，视口外不创建 DOM；标题/粗斜体/列表/引用/代码等非活动行渲染为格式化形态，光标行显示源码。
+- **阅读模式**（reading）：markdown-it 渲染的分块按需挂载，10 万块级文档挂载量与体量无关。
+- **任务勾选**：两种视图点击 checkbox 写回源文本，支持撤销。
+- **链接与图片**：live 视图 **Ctrl/Cmd + 单击**链接跳转（reading 直接单击）；本地图片经宿主通道装载，缺失图呈现可重试错误态；`file://`、`javascript:` 等危险 scheme 被拦截。
+- **双链**：`[[笔记名]]`、`[[路径/笔记|别名]]`、`[[笔记#标题]]` 四形态；重名弹出候选选择，缺失目标提示且不自动建文件。
+- **表格**：live 视图内 Tab/Shift+Tab 单元格导航、行末 Tab 增行；命令面板六个「表格：…」命令增删行列；单元格内键入 `|` 自动转义。
+- **查找**：编辑器内 Ctrl+F（限本编辑器激活时）。
+- **外部修改安全同步**：检测到无法安全同步的外部修改时顶部出现冲突横幅——本地输入已保留，可「复制未确认输入」或「放弃本地修改并重新同步」。
 
 ## 开发
 
 ```bash
-npm install        # 安装锁定依赖
-npm run compile    # esbuild 双产物 + tsc 类型检查
-npm run test:unit  # vitest 单元/契约测试
-npm run test:integration  # @vscode/test-electron 1.86.2 真宿主集成测试（需联网下载宿主）
+npm install                     # 安装锁定依赖（版本全部精确锁定）
+npm run compile                 # esbuild 双产物 + tsc 类型检查
+npm run watch                   # esbuild watch
+npm run test:unit               # vitest 单元/契约测试（无宿主依赖）
+npm run test:integration        # @vscode/test-electron 1.86.2 真宿主集成测试（54 例）
+node test/integration/runInstalled.mjs  # VSIX 安装态回归（先 package 出 VSIX）
+node test/perf/runPerf.mjs      # 性能档位测量（报告写 docs/perf/data/）
+npx @vscode/vsce package --no-dependencies  # 打包 VSIX（bundle 自包含，不带 node_modules）
 ```
 
-调试：VSCode 打开本仓库后 F5（Extension Development Host），对 `.md` 文件执行 "Reopen With..." 选择 "Obsidian-like Markdown Editor"。
+调试：VSCode 打开本仓库后按 F5（Extension Development Host），对 `.md` 文件执行「Reopen With…」选择「Obsidian-like Markdown Editor」。
+
+### 架构速览
+
+- **宿主端**（`src/host/`）：`CustomTextEditorProvider`，`TextDocument` 为权威文本，编辑经 `WorkspaceEdit` 增量写回；保存/dirty/Hot Exit 由 VSCode 文本管线处理。
+- **webview 端**（`src/webview/`）：CM6 EditorView（live）+ markdown-it 分块虚拟化（reading）+ `acquireVsCodeApi` 消息桥。
+- **共享协议**（`src/shared/`）：两端消息协议的单一事实源，webview 全程 LF 坐标（CRLF 由宿主侧 `NewlineCoordinator` 双向转换）。
+- **构建**：esbuild 双 bundle——宿主 `out/extension.js`（cjs/external vscode）+ webview `out/webview/main.js`（iife）；CSS 随 import 产出 `main.css`。
+
+## 验证与性能
+
+- 测试基线：643 单元测试 + 54 集成用例（真实 1.86.2 宿主）全绿。
+- 性能实测与功能验证矩阵：[docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md)。
+- 人工验证项（IME/鼠标手感/远程环境）：[docs/specs/manual-verification.md](docs/specs/manual-verification.md)。
 
 ## 路线
 
