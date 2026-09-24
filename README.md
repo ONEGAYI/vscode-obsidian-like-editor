@@ -51,7 +51,7 @@ npx @vscode/vsce package --no-dependencies  # 打包 VSIX（bundle 自包含，�
 
 ## 验证与性能
 
-- 当前开发工作树回归：767 单元测试 + 75 集成用例（真实 1.86.2 宿主）通过；安装态与人工验收另见[验证清单](docs/specs/manual-verification.md)。
+- 当前开发工作树回归：769 单元测试 + 75 集成用例（真实 1.86.2 宿主）通过；安装态与人工验收另见[验证清单](docs/specs/manual-verification.md)。
 - 性能实测与功能验证矩阵：[docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md)。
 - 人工验证项（IME/鼠标手感/远程环境）：[docs/specs/manual-verification.md](docs/specs/manual-verification.md)。
 

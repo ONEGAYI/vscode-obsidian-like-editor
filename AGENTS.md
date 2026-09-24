@@ -2,7 +2,7 @@
 
 VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 
-> 当前状态：**MVP 主要功能已实施，整体验收未结**。双视图编辑器、增量写回、任务、链接与图片、双链、表格和查找已落地；#21–#25、#28、#30 跟进规格票验收缺口，#26–#27 记录人工与跨环境结果，#29 待明确活动位置的语法呈现，#32 统一两模式基础排版基线，#33 增加独立设置页面，#34 实时预览源文件行号（设置页可开关）。当前开发工作树基线为 767 单测 + 75 集成用例通过（真实 1.86.2 宿主），不代表用户人工验收。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能数据与待验项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 和 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
+> 当前状态：**MVP 主要功能已实施，整体验收未结**。双视图编辑器、增量写回、任务、链接与图片、双链、表格和查找已落地；#21–#25、#28、#30 跟进规格票验收缺口，#26–#27 记录人工与跨环境结果，#29 待明确活动位置的语法呈现，#32 统一两模式基础排版基线，#33 增加独立设置页面，#34 实时预览源文件行号（设置页可开关）。当前开发工作树基线为 769 单测 + 75 集成用例通过（真实 1.86.2 宿主），不代表用户人工验收。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能数据与待验项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 和 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
 
 ## 约定
 
@@ -137,45 +137,46 @@ vsidian/
 │   │   ├── runPerf.mjs    # 性能测量启动器（#5）
 │   │   └── suite.ts       # 性能测量套件（#5）
 │   └── unit/        # vitest 单元契约测试
-│       ├── changeMapping.test.ts         # 变更重定位契约
-│       ├── compositionBuffer.test.ts     # 组合期间缓冲契约测试
-│       ├── conflictRetention.test.ts     # 冲突保留与暂停契约测试
-│       ├── documentSession.test.ts       # 文档会话契约
-│       ├── find.test.ts                  # 查找会话契约测试（#14）
-│       ├── findSession.test.ts           # 查找匹配语义测试（#14）
-│       ├── historyForwarding.test.ts     # 撤销重做转发契约测试
-│       ├── imageResource.test.ts         # 图片资源管理器契约测试
-│       ├── lineNumberCssContract.test.ts # 行号公式与 CSS 双写钉子测试
-│       ├── lineNumbers.test.ts           # 行号装配契约测试（#34）
-│       ├── linkInteraction.test.ts       # 链接交互契约测试（#10）
-│       ├── linkTarget.test.ts            # 链接目标分类契约测试
-│       ├── liveDecorations.test.ts       # Live 装饰契约测试
-│       ├── liveTable.test.ts             # live 表格装饰测试（#12）
-│       ├── markdownDoc.test.ts           # 文档工具契约测试
-│       ├── newline.test.ts               # 换行协调契约
-│       ├── perfProbe.test.ts             # 性能探针契约测试
-│       ├── protocol.test.ts              # 消息协议校验契约
-│       ├── readingBlocks.test.ts         # 阅读块切分契约测试
-│       ├── readingMarkdown.test.ts       # 渲染层契约测试
-│       ├── readingTable.test.ts          # 阅读表格契约测试（#12）
-│       ├── readingView.test.ts           # 阅读视图 DOM 契约测试
-│       ├── readingViewport.test.ts       # 视口窗口纯函数契约测试
-│       ├── readingVirtualView.test.ts    # 虚拟化装配契约测试
-│       ├── settings.test.ts              # 设置纯逻辑契约测试
-│       ├── settingsInteraction.test.ts   # 设置交互契约测试
-│       ├── settingsPage.test.ts          # 设置页 UI 契约测试
-│       ├── settingsService.test.ts       # 设置服务契约测试
-│       ├── suspendResume.test.ts         # 暂停恢复契约测试
-│       ├── tableCells.test.ts            # 单元格拆分契约测试（#12）
-│       ├── tableOps.test.ts              # 表格导航与结构命令链路契约（#13）
-│       ├── tableStructure.test.ts        # 表格结构操作纯函数契约（#13）
-│       ├── taskInteraction.test.ts       # 任务勾选交互契约测试（#9）
-│       ├── taskToggle.test.ts            # 任务勾选解析纯函数契约测试
-│       ├── viewMode.test.ts              # 模式切换状态机契约测试
-│       ├── webviewSync.test.ts           # webview 同步契约
-│       ├── wikilinkInteraction.test.ts   # 双链交互契约测试（#11）
-│       ├── wikilinkParse.test.ts         # 双链形态学契约测试（#11）
-│       └── wikilinkTarget.test.ts        # 双链目标解析契约测试（#11）
+│       ├── changeMapping.test.ts           # 变更重定位契约
+│       ├── compositionBuffer.test.ts       # 组合期间缓冲契约测试
+│       ├── conflictRetention.test.ts       # 冲突保留与暂停契约测试
+│       ├── documentSession.test.ts         # 文档会话契约
+│       ├── editorChromeCssContract.test.ts # 编辑器铬件主题适配契约测试
+│       ├── find.test.ts                    # 查找会话契约测试（#14）
+│       ├── findSession.test.ts             # 查找匹配语义测试（#14）
+│       ├── historyForwarding.test.ts       # 撤销重做转发契约测试
+│       ├── imageResource.test.ts           # 图片资源管理器契约测试
+│       ├── lineNumberCssContract.test.ts   # 行号公式与 CSS 双写钉子测试
+│       ├── lineNumbers.test.ts             # 行号装配契约测试（#34）
+│       ├── linkInteraction.test.ts         # 链接交互契约测试（#10）
+│       ├── linkTarget.test.ts              # 链接目标分类契约测试
+│       ├── liveDecorations.test.ts         # Live 装饰契约测试
+│       ├── liveTable.test.ts               # live 表格装饰测试（#12）
+│       ├── markdownDoc.test.ts             # 文档工具契约测试
+│       ├── newline.test.ts                 # 换行协调契约
+│       ├── perfProbe.test.ts               # 性能探针契约测试
+│       ├── protocol.test.ts                # 消息协议校验契约
+│       ├── readingBlocks.test.ts           # 阅读块切分契约测试
+│       ├── readingMarkdown.test.ts         # 渲染层契约测试
+│       ├── readingTable.test.ts            # 阅读表格契约测试（#12）
+│       ├── readingView.test.ts             # 阅读视图 DOM 契约测试
+│       ├── readingViewport.test.ts         # 视口窗口纯函数契约测试
+│       ├── readingVirtualView.test.ts      # 虚拟化装配契约测试
+│       ├── settings.test.ts                # 设置纯逻辑契约测试
+│       ├── settingsInteraction.test.ts     # 设置交互契约测试
+│       ├── settingsPage.test.ts            # 设置页 UI 契约测试
+│       ├── settingsService.test.ts         # 设置服务契约测试
+│       ├── suspendResume.test.ts           # 暂停恢复契约测试
+│       ├── tableCells.test.ts              # 单元格拆分契约测试（#12）
+│       ├── tableOps.test.ts                # 表格导航与结构命令链路契约（#13）
+│       ├── tableStructure.test.ts          # 表格结构操作纯函数契约（#13）
+│       ├── taskInteraction.test.ts         # 任务勾选交互契约测试（#9）
+│       ├── taskToggle.test.ts              # 任务勾选解析纯函数契约测试
+│       ├── viewMode.test.ts                # 模式切换状态机契约测试
+│       ├── webviewSync.test.ts             # webview 同步契约
+│       ├── wikilinkInteraction.test.ts     # 双链交互契约测试（#11）
+│       ├── wikilinkParse.test.ts           # 双链形态学契约测试（#11）
+│       └── wikilinkTarget.test.ts          # 双链目标解析契约测试（#11）
 ├── tsconfig.json     # TypeScript 类型检查配置
 └── vitest.config.ts  # vitest 单元测试配置
 <!-- file-tree:tree:end -->
