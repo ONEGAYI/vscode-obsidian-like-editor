@@ -45,8 +45,25 @@ describe('行号降级公式与 main.css 的双写一致（#34）', () => {
   })
 
   it('行号与正文间隙：LN_GAP_PX 与 .cm-gutterElement 右 padding 相等', () => {
-    const gap = extractOne('行号单元格右 padding', /padding:\s*0\s+([\d.]+)px\s+0\s+0/g)
+    const gap = extractOne('行号单元格右 padding', /padding-right:\s*([\d.]+)px/g)
     expect(px(gap[1])).toBe(LN_GAP_PX)
+  })
+
+  it('行号垂直锚定首个视觉行：禁用折行块居中，顶部补偿公式在场', () => {
+    // .cm-gutterElement 规则块内不得再出现 align-items: center——单元格
+    // 高度与源码行块同步（软换行为多视觉行总高），垂直居中会把数字放到
+    // 折行块中心（折 2 行低半行、折 3 行低整行，用户验收实测）
+    const rule = css.match(/\.cm-gutterElement\s*\{[^}]*\}/g)
+    expect(rule, '.cm-gutterElement 规则应存在').toBeTruthy()
+    const block = rule![0]!
+    expect(block, '行号单元格不得垂直居中于整块（应锚定首个视觉行）').not.toMatch(
+      /align-items:\s*center/,
+    )
+    // 顶部锚定的半差补偿：(正文行高 − 行号行高) / 2，行高比两侧同为 1.5
+    expect(
+      block,
+      '行号单元格应有首视觉行居中的 padding-top 补偿公式',
+    ).toMatch(/padding-top:\s*calc\(\s*\(1\.5 \* var\(--vsidian-content-font-size\)/)
   })
 
   it('行号字号公式：回退基准/比例/上限与 .cm-lineNumbers 字号规则一致', () => {

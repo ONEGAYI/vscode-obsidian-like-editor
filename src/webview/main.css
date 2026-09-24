@@ -90,12 +90,19 @@ body {
    syncController.syncLineNumberScale 的 JS 复刻是同一知识两处落点
    （CSS 管呈现、JS 管降级档位计算），由 test/unit/lineNumberCssContract.test.ts
    逐值钉住一致；右缘 2px 间隙含在带宽内（正文自留白带右缘起，行号不侵入）。
-   flex 右对齐 + 垂直居中：小字号行号在行高单元格内与正文行对齐 */
+   垂直锚定首个视觉行（CM6 原生行为）：单元格高度与源码行块同步（软换行
+   时为多视觉行总高），垂直居中（flex + align-items: center）会把数字放到
+   折行块中心——折 2 行低半行、折 3 行低整行。改为顶部锚定 + 半差补偿
+   （数字行框与正文同用 1.5 行高比，补偿量 = (正文行高 − 行号行高) / 2）
+   使数字与首视觉行文字垂直居中；标题等高行会偏高数像素（补偿按常规行
+   计算），与 CM6 原生行号行为一致，取舍见 A23。 */
 #app .cm-editor .cm-scroller .cm-lineNumbers .cm-gutterElement {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  padding: 0 2px 0 0;
+  padding-top: calc(
+    (1.5 * var(--vsidian-content-font-size) - 1.5 * min(0.75 * var(--vsidian-content-font-size), 12px)) / 2
+  );
+  padding-right: 2px;
+  text-align: right;
+  white-space: nowrap;
   font-size: min(calc(var(--vsidian-content-font-size, 14px) * 0.75), 12px);
   transform: scaleX(var(--vsidian-ln-scale, 1));
   transform-origin: right center;
