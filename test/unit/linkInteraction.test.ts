@@ -285,6 +285,83 @@ describe('实时预览：渲染态单击跳转，源码态普通单击编辑', (
     })
     expect(imageWidgets).toBe(0)
   })
+
+  it('同一行多个链接只在光标进入对应链接的左端、中间或右端时显形源码', () => {
+    const text = '前 [甲](one.md) 中 [乙](two.md) 后'
+    const first = text.indexOf('[甲]')
+    const second = text.indexOf('[乙]')
+    const firstEnd = text.indexOf(')', first) + 1
+    const hidden = (anchor: number) => {
+      const state = EditorState.create({ doc: text, selection: { anchor }, extensions: [liveDecorationsField] })
+      const set = buildLinkImageDecorations(state.doc, state.field(liveDecorationsField).tree, state.selection, [
+        { from: 0, to: state.doc.length },
+      ])
+      const ranges: Array<[number, number]> = []
+      set.between(0, state.doc.length, (from, to, value) => {
+        if (value.spec['class'] === undefined && value.spec.widget === undefined) ranges.push([from, to])
+      })
+      return ranges
+    }
+    for (const pos of [first, text.indexOf('甲'), text.indexOf('one.md'), firstEnd]) {
+      expect(hidden(pos)).not.toContainEqual([first, first + 1])
+      expect(hidden(pos)).toContainEqual([second, second + 1])
+    }
+    expect(hidden(text.indexOf('中'))).toContainEqual([first, first + 1])
+    expect(hidden(text.indexOf('中'))).toContainEqual([second, second + 1])
+  })
+
+  it('同一行图片只在光标进入图片源码时撤销 widget', () => {
+    const text = '前 ![甲](one.png) 中 ![乙](two.png) 后'
+    const imageWidgets = (anchor: number) => {
+      const state = EditorState.create({ doc: text, selection: { anchor }, extensions: [liveDecorationsField] })
+      const set = buildLinkImageDecorations(state.doc, state.field(liveDecorationsField).tree, state.selection, [
+        { from: 0, to: state.doc.length },
+      ])
+      const ranges: number[] = []
+      set.between(0, state.doc.length, (from, _to, value) => {
+        if (value.spec.widget instanceof LiveImageWidget) ranges.push(from)
+      })
+      return ranges
+    }
+    const first = text.indexOf('![甲]')
+    const second = text.indexOf('![乙]')
+    expect(imageWidgets(text.indexOf('中'))).toEqual([first, second])
+    expect(imageWidgets(text.indexOf('甲'))).toEqual([second])
+  })
+
+  it('光标进入列表项中的链接时，列表 marker 仍保持隐藏', () => {
+    const text = '- 正文 [链接](a.md)'
+    const state = EditorState.create({
+      doc: text,
+      selection: { anchor: text.indexOf('链接') },
+      extensions: [liveDecorationsField],
+    })
+    const hidden: Array<[number, number]> = []
+    state.field(liveDecorationsField).decos.between(0, text.length, (from, to, value) => {
+      if (value.spec['class'] === undefined && value.spec.widget === undefined) hidden.push([from, to])
+    })
+    expect(hidden).toContainEqual([0, 2])
+  })
+
+  it('自动链接的尖括号也按自身范围显形', () => {
+    const text = '前 <https://one.example> 中 <https://two.example> 后'
+    const first = text.indexOf('<')
+    const second = text.indexOf('<', first + 1)
+    const hidden = (anchor: number) => {
+      const state = EditorState.create({ doc: text, selection: { anchor }, extensions: [liveDecorationsField] })
+      const set = buildLinkImageDecorations(state.doc, state.field(liveDecorationsField).tree, state.selection, [
+        { from: 0, to: text.length },
+      ])
+      const ranges: Array<[number, number]> = []
+      set.between(0, text.length, (from, to, value) => {
+        if (value.spec['class'] === undefined && value.spec.widget === undefined) ranges.push([from, to])
+      })
+      return ranges
+    }
+    expect(hidden(text.indexOf('one.example'))).not.toContainEqual([first, first + 1])
+    expect(hidden(text.indexOf('one.example'))).toContainEqual([second, second + 1])
+    expect(hidden(text.indexOf('中'))).toContainEqual([first, first + 1])
+  })
 })
 
 describe('图片生命周期（阅读视图，块挂载即装载）', () => {

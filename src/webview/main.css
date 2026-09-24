@@ -48,7 +48,7 @@ body {
 #app .cm-editor .cm-scroller .vsidian-heading-line-5 { font-size: 1em; }
 #app .cm-editor .cm-scroller .vsidian-heading-line-6 { font-size: 1em; }
 
-/* 间接装饰（视口内纯样式，不改变高度）：标题行左缘强调与活动行源码态提示。
+/* 间接装饰（视口内纯样式，不改变高度）：标题行左缘强调与光标所在标题行的强调提示。
    --vsidian-heading-accent 为稳定 CSS 变量入口（ADR-0004），外部片段可覆盖 */
 #app .cm-editor .cm-scroller .vsidian-heading-inview {
   box-shadow: inset 3px 0 0 var(--vsidian-heading-accent, var(--vscode-textLink-foreground, #4fc1ff));
@@ -108,8 +108,8 @@ body {
   padding-left: 0;
 }
 
-/* 无序列表：标记隐藏后以圆点呈现（嵌套深度 d1..d8 提供缩进） */
-#app .cm-editor .cm-scroller .vsidian-list-line.vsidian-list-bullet::before {
+/* 无序列表：标记隐藏后以圆点呈现；源码显形时抑制伪圆点 */
+#app .cm-editor .cm-scroller .vsidian-list-line.vsidian-list-bullet:not(.vsidian-list-marker-visible)::before {
   content: '•';
   margin-right: 7px;
   color: var(--vscode-editorLineNumber-foreground, rgba(128, 128, 128, 0.8));
@@ -132,7 +132,7 @@ body {
   opacity: 0.75;
 }
 
-/* 行内格式 span（非活动行呈现格式；类名为稳定样式入口，Obsidian 对应
+/* 行内格式 span（mark 按各自范围显形；类名为稳定样式入口，Obsidian 对应
    .cm-header-N/.cm-strong/.cm-emphasis/.cm-inline-code，见映射表） */
 #app .cm-editor .cm-scroller .vsidian-strong {
   font-weight: 700;
@@ -191,8 +191,8 @@ body {
 
 /* ---- #10：链接（live 视图）----
    .vsidian-link 为链接内容 span 稳定类名（Obsidian 对应 .cm-link）；
-   非活动行隐藏 ](url) 尾部，活动行显示源码（编辑语义）。
-   渲染态单击跳转，源码态普通单击编辑、Ctrl/Cmd+单击跳转 */
+   光标进入链接范围才显示 ](url) 尾部源码（编辑语义）。
+   渲染态单击跳转，源码态普通单击编辑；Ctrl/Cmd+单击始终可跳转 */
 #app .cm-editor .cm-scroller .vsidian-link {
   color: var(--vscode-textLink-foreground, #4fc1ff);
 }
@@ -202,7 +202,7 @@ body {
 
 /* ---- #11：双链（live 视图）----
    .vsidian-wikilink 为双链稳定类名（Obsidian 对应 .cm-hmd-internal-link）：
-   非活动行是显示文字 widget（替换整个 [[…]]），活动行是源码 mark。
+   光标在双链范围外是显示文字 widget，进入范围后是源码 mark。
    点击语义与链接一致 */
 #app .cm-editor .cm-scroller .vsidian-wikilink {
   color: var(--vscode-textLink-foreground, #4fc1ff);

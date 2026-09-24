@@ -2,22 +2,21 @@
 // 渲染态单击及 Ctrl/Cmd+单击上报跳转意图。
 //
 // 装饰语义（与既有间接装饰同类，ADR-0005 / #8 分工沿用）：
-// - 链接内容 span：vsidian-link 稳定类名（Obsidian .cm-link 方向）——活动与
-//   非活动行都标记（样式语义）；仅非活动行隐藏首尾标记与 URL 尾部
-//   （源码可编辑语义：光标所在行显示原文）
-// - 图片：非活动行整体替换为 LiveImageWidget（进入视口才创建 DOM，
-//   离开视口由 CM6 移除、经 ImageResourceManager.sweep 释放）；活动行
-//   保持源码
+// - 链接内容 span：vsidian-link 稳定类名（Obsidian .cm-link 方向）；
+//   光标或选区进入该链接范围才显示首尾标记与 URL，其余链接仍隐藏源码
+// - 图片：光标在该图片范围外时替换为 LiveImageWidget（进入视口才创建
+//   DOM，离开视口由 CM6 移除、经 ImageResourceManager.sweep 释放）；
+//   进入图片范围才显示源码
 // - 引用式链接/图片（[t][ref]）：本票不解析引用定义，保持源码降级
 //   （阅读视图由 markdown-it 完整解析——差异见选择器映射表已知限制）
-// - 自动链接 <https://…>：URL 即内容，标记 span + 非活动行隐藏尖括号
+// - 自动链接 <https://…>：URL 即内容，标记 span + 范围外隐藏尖括号
 //
 // #11 双链装饰（本文件扩展）：`[[…]]` 不在 lezer Markdown 语法内（CommonMark
 // 视为普通文本），装饰来源是 shared/wikilink 的行内扫描（与阅读渲染、宿主
 // 解析共用同一形态学）；代码上下文（围栏/缩进/行内代码）与 frontmatter
 // 内不装饰（语法树 + fm 边界判定，与 #8 的源码降级边界一致）。
 //
-// 点击语义：已渲染的链接单击跳转；活动行源码普通单击仍由 CM6 编辑；
+// 点击语义：已渲染的链接单击跳转；光标进入该链接范围后的普通单击仍由 CM6 编辑；
 // Ctrl/Cmd+单击在两种形态下都跳转
 // （原始 URI/target + 源区间），执行归宿主（URI 解析与白名单在宿主侧；
 // 双链先于普通链接判定——两者语法不重叠）。
@@ -25,7 +24,7 @@ import { EditorSelection, RangeSet, Text, type Extension, type Range } from '@co
 import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet } from '@codemirror/view'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import { chainAt, visitRange, type SourceRange } from './markdownDoc'
-import { liveDecorationsField, isLineActive } from './liveDecorations'
+import { liveDecorationsField, selectionTouchesRange } from './liveDecorations'
 import { IMAGE_CLASS_NAMES, type ImageResourceManager } from './imageResource'
 import {
   WIKILINK_CLASS_NAMES,
@@ -92,7 +91,7 @@ export function wikilinkWidgetDeco(display: string): ReturnType<typeof Decoratio
 }
 
 /**
- * #11 live 双链 widget：非活动行把 `[[…]]` 整体替换为显示文字（别名或
+ * #11 live 双链 widget：光标在范围外时把 `[[…]]` 整体替换为显示文字（别名或
  * 链接名）。纯呈现（无加载/失败生命周期）；点击交互经编辑器级
  * 编辑器级 mousedown 的 posAtCoords 命中（替换区间仍有文档坐标）。
  */
@@ -308,8 +307,7 @@ export function buildLinkImageDecorationRanges(
       if (seen.has(node)) {
         return
       }
-      const lineNo = doc.lineAt(Math.min(node.from, doc.length)).number
-      const active = isLineActive(selection, doc, lineNo)
+      const active = selectionTouchesRange(selection, node.from, node.to)
       switch (node.name) {
         case 'Autolink': {
           seen.add(node)
@@ -355,7 +353,7 @@ export function buildLinkImageDecorationRanges(
             return // 引用式：源码降级
           }
           if (active) {
-            return // 活动行显示源码（可编辑）
+            return // 光标进入该图片范围，显示源码供编辑
           }
           seen.add(node)
           const marks = linkMarks(node)
@@ -393,8 +391,8 @@ export function buildLinkImageDecorations(
 
 /**
  * 构建视口内双链装饰区间（#11）：逐行扫描 shared/wikilink 的出现表——
- * - 非活动行：`[[…]]` 整体替换为显示文字 widget（别名或链接名）
- * - 活动行：mark 标记整个出现（源码可编辑，样式语义仍生效）
+ * - 光标在该双链范围外：`[[…]]` 整体替换为显示文字 widget
+ * - 光标进入该双链范围：mark 标记整个出现（源码可编辑）
  * - 代码上下文（围栏/缩进/行内代码）与 frontmatter 内不装饰（源码降级）
  * 纯数据输入，可单测直驱。
  */
@@ -413,7 +411,6 @@ export function buildWikilinkDecorationRanges(
       const line = doc.lineAt(pos)
       if (!seenLines.has(line.number)) {
         seenLines.add(line.number)
-        const active = isLineActive(selection, doc, line.number)
         for (const hit of scanWikilinksInLine(line.text, line.from)) {
           if (wikilinkSuppressed(tree, hit.from, fm)) {
             continue
@@ -423,7 +420,7 @@ export function buildWikilinkDecorationRanges(
             continue // 防御：扫描已过滤非法形态
           }
           out.push(
-            active
+            selectionTouchesRange(selection, hit.from, hit.to)
               ? wikilinkMarkDeco.range(hit.from, hit.to)
               : wikilinkWidgetDeco(parsed.display).range(hit.from, hit.to),
           )
@@ -472,7 +469,7 @@ export function activateLinkAtPos(
 }
 
 /** 激活指定源位置的双链：命中即上报意图（原始 target：`|` 之前原文）并
- *  返回 true。替换区间（非活动行 widget）仍有文档坐标，命中判定与源码态
+ *  返回 true。替换区间（光标在范围外时的 widget）仍有文档坐标，命中判定与源码态
  *  一致。#11。 */
 export function activateWikilinkAtPos(
   view: EditorView,
