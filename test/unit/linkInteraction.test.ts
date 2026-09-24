@@ -2,12 +2,11 @@
 // 链接点击与图片显示的 webview 契约（工单 #10）：
 // - 阅读视图单击链接 = 跳转意图上报（preventDefault，不打断为导航）；
 //   file://、javascript: 等危险目标在渲染层已无 href，单击不产生意图
-// - 实时预览单击 = CM6 默认编辑（不产生跳转意图）；Ctrl/Cmd+单击 =
-//   跳转意图上报（原始 URI + 源位置）
+// - 实时预览渲染态单击或 Ctrl/Cmd+单击 = 跳转意图上报；源码态普通单击编辑
 // - 图片：进入视口（块挂载/widget 创建）才经宿主通道解析并加载；
 //   占位/加载/失败可重试；全程零写回（点击与图片不得改文档）
 // - 新增协议消息的结构校验
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { EditorView } from '@codemirror/view'
 import { EditorState } from '@codemirror/state'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
@@ -146,7 +145,33 @@ describe('阅读视图：单击链接 = 跳转意图上报', () => {
   })
 })
 
-describe('实时预览：Ctrl/Cmd+单击 = 跳转意图上报，普通单击不产生', () => {
+describe('实时预览：渲染态单击跳转，源码态普通单击编辑', () => {
+  it('非活动行已渲染的普通链接单击上报跳转，活动行源码态普通单击可编辑', () => {
+    const h = makeBridge()
+    const text = '普通行\n\n[目标](./目标.md)\n'
+    const c = mount(h, text)
+    const view = c.getView()!
+    const pos = text.indexOf('目标')
+    const hit = vi.spyOn(view, 'posAtCoords').mockReturnValue(pos)
+    try {
+      const rendered = host.querySelector<HTMLElement>('.vsidian-link')!
+      expect(rendered).not.toBeNull()
+      const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 })
+      rendered.dispatchEvent(event)
+      expect(sentOf(h, 'link.activate')).toHaveLength(0)
+      view.contentDOM.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }))
+      expect(sentOf(h, 'link.activate')).toHaveLength(1)
+      h.sent.length = 0
+      view.dispatch({ selection: { anchor: pos } })
+      const source = host.querySelector<HTMLElement>('.vsidian-link')!
+      source.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+      expect(sentOf(h, 'link.activate')).toHaveLength(0)
+    } finally {
+      hit.mockRestore()
+      c.dispose()
+    }
+  })
+
   function liveWithDoc(): { view: EditorView; parent: HTMLElement } {
     const state = EditorState.create({ doc: LINK_DOC, extensions: [liveDecorationsField] })
     const parent = document.createElement('div')

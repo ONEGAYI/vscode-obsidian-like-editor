@@ -666,6 +666,7 @@ describe('sync.request（webview 发起的全文重同步）', () => {
 describe('perf.report 缓存（#5 性能测量通道）', () => {
   const report: Extract<WebviewToHost, { kind: 'perf.report' }> = {
     kind: 'perf.report',
+    firstInputSettledEpochMs: 1760000000000,
     typingRounds: 2,
     scrollRounds: 1,
     docLines: 10,
@@ -745,7 +746,7 @@ describe('P3 修复批：B-4 / B-6 / C-6', () => {
     const id = s.attach()
     await readyPanel(s, id)
     await s.send(id, {
-      kind: 'conflict.report', sessionId: id, docUri: 'file:///other.md', version: 1, text: '他人快照',
+      kind: 'conflict.report', sessionId: id, docUri: 'file:///other.md', version: 1, revision: 1, text: '他人快照',
     })
     expect(s.session.getConflictState(id)?.webviewText).toBeUndefined()
   })

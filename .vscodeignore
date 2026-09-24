@@ -1,5 +1,7 @@
 # bundle 后产物自包含，源码与测试不进入 VSIX
 .vscode/**
+.vscode-test/**
+.vitest/**
 .agents/**
 .scratch/**
 node_modules/**

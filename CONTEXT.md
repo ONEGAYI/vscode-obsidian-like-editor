@@ -65,7 +65,7 @@
 
 ## 决策状态
 
-用户已确认完整 MVP 基线并授权通过 GitHub Issues 开票，尚未进入实现。[调研报告](docs/research/obsidian-live-preview-editor.md) 保留历史调研内容；范围和模式行为以本文件及已接受的 ADR 为准。
+用户已确认完整 MVP 基线；工单 #2–#15 的功能实现和自动化回归已完成，#1 的人工验收仍按[人工验证清单](docs/specs/manual-verification.md)逐项记录。验收复核问题见工单 #21–#27。[调研报告](docs/research/obsidian-live-preview-editor.md)保留历史调研内容；范围和模式行为以本文件及已接受的 ADR 为准。
 
 已确认的兼容性约束见 [ADR-0001](docs/adr/0001-vscode-186-remote-support.md)。
 首版双链解析边界见 [ADR-0002](docs/adr/0002-wikilink-on-demand-resolution.md)。

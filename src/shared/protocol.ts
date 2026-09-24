@@ -92,6 +92,10 @@ export type HostToWebview =
    *  同一 keymap 链路；纯选区导航，零写回）。宿主测试无法向 webview 派发
    *  真实键盘事件，以此通道验证导航装配 */
   | { kind: 'table.test.key'; key: 'tab' | 'shift-tab' }
+  /** 测试钩子（#21）：在真实 webview 的 CM6 中输入，验证暂停态即时留存。 */
+  | { kind: 'sync.test.edit'; offset: number; text: string; closeAfter?: boolean }
+  /** 测试钩子：真实 webview DOM 的渲染链接 mousedown。 */
+  | { kind: 'link.test.mousedown'; target: 'wikilink' | 'link'; index: number; ctrlKey?: boolean }
 
 /** webview → 宿主消息 */
 export type WebviewToHost =
@@ -114,7 +118,9 @@ export type WebviewToHost =
   /** 请求宿主回发全文重同步（外部变更与本地状态无法安全对齐时） */
   | { kind: 'sync.request' }
   /** 冲突/暂停时的本地全文快照上报：宿主保存供用户取回未确认输入 */
-  | { kind: 'conflict.report'; sessionId: string; docUri: string; version: number; text: string }
+  | { kind: 'conflict.report'; sessionId: string; docUri: string; version: number; revision: number; text: string }
+  /** 测试钩子（#21）：编辑事务结束后立即关闭面板，检验快照与关闭竞争。 */
+  | { kind: 'sync.test.close'; sessionId: string; docUri: string }
   /** 暂停横幅按钮动作：copy = 请求宿主复制未确认输入；resume = 请求恢复（重新同步） */
   | { kind: 'conflict.action'; sessionId: string; docUri: string; action: 'copy' | 'resume' }
   /** 视图诊断回报 */
@@ -134,6 +140,8 @@ export type WebviewToHost =
       headingActiveText?: string
       /** 第一个隐藏标记态（非活动）标题行的 DOM 文本 */
       headingHiddenText?: string
+      /** 当前视图首个一级标题的实际字号（px；真实宿主样式回归观测） */
+      headingFontPx?: number
       /** 当前视图模式（#6；缺省 live，向后兼容） */
       viewMode?: 'live' | 'reading'
       /** live 光标主位置（UTF-16 offset；#6 锚点恢复观测） */
@@ -228,6 +236,8 @@ export type WebviewToHost =
       typingRounds: number
       scrollRounds: number
       docLines: number
+      /** 首次探针输入 dispatch 且完成两个 rAF 后的 wall clock 时间 */
+      firstInputSettledEpochMs: number
       baseline: PerfSnapshot
       afterTyping: PerfSnapshot
       afterScroll: PerfSnapshot
@@ -546,8 +556,11 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         isString(v.sessionId) &&
         isString(v.docUri) &&
         isNonNegativeInt(v.version) &&
+        isPositiveInt(v.revision) &&
         isString(v.text)
       )
+    case 'sync.test.close':
+      return isString(v.sessionId) && isString(v.docUri)
     case 'conflict.action':
       return (
         isString(v.sessionId) &&
@@ -565,6 +578,7 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.headingLineCount === undefined || isNonNegativeInt(v.headingLineCount)) &&
         (v.headingActiveText === undefined || isString(v.headingActiveText)) &&
         (v.headingHiddenText === undefined || isString(v.headingHiddenText)) &&
+        (v.headingFontPx === undefined || isNonNegativeNumber(v.headingFontPx)) &&
         (v.viewMode === undefined || v.viewMode === 'live' || v.viewMode === 'reading') &&
         (v.selectionOffset === undefined || isNonNegativeInt(v.selectionOffset)) &&
         (v.readingBlockCount === undefined || isNonNegativeInt(v.readingBlockCount)) &&
@@ -627,6 +641,7 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         isNonNegativeInt(v.typingRounds) &&
         isNonNegativeInt(v.scrollRounds) &&
         isNonNegativeInt(v.docLines) &&
+        isPositiveInt(v.firstInputSettledEpochMs) &&
         isPerfSnapshot(v.baseline) &&
         isPerfSnapshot(v.afterTyping) &&
         isPerfSnapshot(v.afterScroll) &&
@@ -739,6 +754,12 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return isTableEditOp(v.op)
     case 'table.test.key':
       return v.key === 'tab' || v.key === 'shift-tab'
+    case 'sync.test.edit':
+      return isNonNegativeInt(v.offset) && isString(v.text) &&
+        (v.closeAfter === undefined || typeof v.closeAfter === 'boolean')
+    case 'link.test.mousedown':
+      return (v.target === 'wikilink' || v.target === 'link') && isNonNegativeInt(v.index) &&
+        (v.ctrlKey === undefined || typeof v.ctrlKey === 'boolean')
     default:
       return false
   }

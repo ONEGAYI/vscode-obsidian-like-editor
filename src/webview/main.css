@@ -192,17 +192,23 @@ body {
 /* ---- #10：链接（live 视图）----
    .vsidian-link 为链接内容 span 稳定类名（Obsidian 对应 .cm-link）；
    光标进入链接范围才显示 ](url) 尾部源码（编辑语义）。
-   单击 = 光标编辑；Ctrl/Cmd+单击 = 跳转（宿主执行），故不给 pointer 光标 */
+   渲染态单击跳转，源码态普通单击编辑；Ctrl/Cmd+单击始终可跳转 */
 #app .cm-editor .cm-scroller .vsidian-link {
   color: var(--vscode-textLink-foreground, #4fc1ff);
+}
+#app .cm-editor .cm-scroller [data-vsidian-rendered-link="true"] {
+  cursor: pointer;
 }
 
 /* ---- #11：双链（live 视图）----
    .vsidian-wikilink 为双链稳定类名（Obsidian 对应 .cm-hmd-internal-link）：
    光标在双链范围外是显示文字 widget，进入范围后是源码 mark。
-   点击语义与链接一致（Ctrl/Cmd+单击跳转），不给 pointer 光标 */
+   点击语义与链接一致 */
 #app .cm-editor .cm-scroller .vsidian-wikilink {
   color: var(--vscode-textLink-foreground, #4fc1ff);
+}
+#app .cm-editor .cm-scroller [data-vsidian-rendered-wikilink="true"] {
+  cursor: pointer;
 }
 
 /* ---- #10：图片槽位（双视图共用 vsidian-image + 状态修饰类）----
@@ -309,12 +315,21 @@ body {
   max-width: var(--vsidian-reading-max-width);
 }
 
-#app .vsidian-view-reading .vsidian-reading-heading-1 { font-size: 1.6em; font-weight: 600; margin: 0.6em 0 0.4em; }
-#app .vsidian-view-reading .vsidian-reading-heading-2 { font-size: 1.38em; font-weight: 600; margin: 0.6em 0 0.4em; }
+#app .vsidian-view-reading .vsidian-reading-heading-1 { font-size: 1.55em; font-weight: 600; margin: 0.6em 0 0.4em; }
+#app .vsidian-view-reading .vsidian-reading-heading-2 { font-size: 1.35em; font-weight: 600; margin: 0.6em 0 0.4em; }
 #app .vsidian-view-reading .vsidian-reading-heading-3 { font-size: 1.2em; font-weight: 600; margin: 0.6em 0 0.4em; }
 #app .vsidian-view-reading .vsidian-reading-heading-4 { font-size: 1.1em; font-weight: 600; margin: 0.6em 0 0.4em; }
 #app .vsidian-view-reading .vsidian-reading-heading-5 { font-size: 1em; font-weight: 600; margin: 0.6em 0 0.4em; }
 #app .vsidian-view-reading .vsidian-reading-heading-6 { font-size: 1em; font-weight: 600; margin: 0.6em 0 0.4em; }
+
+/* markdown-it 的语义标题保留在块内；字号与间距由阅读块统一控制，
+   避免浏览器 h1..h6 默认样式再次放大字号和上下留白。 */
+#app .vsidian-view-reading .vsidian-reading-block > :is(h1, h2, h3, h4, h5, h6) {
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  margin: 0;
+}
 
 #app .vsidian-view-reading .vsidian-reading-list-item {
   padding-left: 0.5em;

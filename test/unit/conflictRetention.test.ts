@@ -221,6 +221,7 @@ describe('conflict.report 与快照取回', () => {
       sessionId: id,
       docUri: DOC_URI,
       version: 1,
+      revision: 1,
       text: '# 标题\n正文内容 + A',
     })
     const state = s.session.getConflictState(id)
@@ -366,10 +367,10 @@ describe('第二视图（split）：冲突暂停只影响冲突面板', () => {
   })
 })
 
-describe('R-1：暂停/暂缓输入经 conflict.report 刷新后的关闭取回', () => {
+describe('#21：暂停/暂缓输入经 conflict.report 刷新后的关闭取回', () => {
   // 场景：暂停后继续输入只存在于 webview 本地（不发 edit.request），
   // 面板关闭后 fetchPanelText 超时、fragments 只含暂停时刻片段——完整
-  // 取回依赖 webview 防抖重报的 conflict.report 全文快照随通知带走。
+  // 取回依赖 webview 即时上报的 conflict.report 全文快照随通知带走。
   it('暂停面板关闭：通知携带最新快照全文（含暂停后新输入）', async () => {
     const s = setup()
     const id = s.attach()
@@ -377,13 +378,31 @@ describe('R-1：暂停/暂缓输入经 conflict.report 刷新后的关闭取回'
     // 制造暂停（不可安全应用路径）
     await s.send(id, editRequest(id, 1, 1, [{ offset: 0, length: 3, text: '整段替换' }]))
     await s.send(id, editRequest(id, 2, 1, [{ offset: 1, length: 1, text: 'A' }]))
-    // webview 防抖重报：全文含暂停后新输入
+    // webview 即时重报：全文含暂停后新输入
     await s.send(id, {
       kind: 'conflict.report',
       sessionId: id,
       docUri: DOC_URI,
       version: 1,
+      revision: 1,
+      text: '较早的暂停快照',
+    })
+    await s.send(id, {
+      kind: 'conflict.report',
+      sessionId: id,
+      docUri: DOC_URI,
+      version: 1,
+      revision: 2,
       text: '暂停后新输入+整段替换内容',
+    })
+    // 迟到的旧报告不得覆盖新快照。
+    await s.send(id, {
+      kind: 'conflict.report',
+      sessionId: id,
+      docUri: DOC_URI,
+      version: 1,
+      revision: 1,
+      text: '较早的暂停快照',
     })
     s.session.detachPanel(id)
     const notice = s.notices.find((n) => n.type === 'panel-closed-with-input')
@@ -410,6 +429,7 @@ describe('R-1：暂停/暂缓输入经 conflict.report 刷新后的关闭取回'
       sessionId: id,
       docUri: DOC_URI,
       version: 1,
+      revision: 1,
       text: 'abc在途A暂缓B',
     })
     s.session.detachPanel(id)

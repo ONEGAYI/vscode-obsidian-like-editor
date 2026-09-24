@@ -33,6 +33,45 @@ export function generateReadingSample(blocks) {
   return out.join('\n') + '\n'
 }
 
+/** 为 10 KB / 100 KB / 1 MB 档选取最接近目标字节数的同构样例。 */
+export function generateSampleNearBytes(targetBytes, makeSample) {
+  if (!Number.isSafeInteger(targetBytes) || targetBytes <= 0) {
+    throw new RangeError('目标字节数必须是正整数')
+  }
+  let low = 1
+  let high = 1
+  while (Buffer.byteLength(makeSample(high), 'utf8') < targetBytes) {
+    high *= 2
+  }
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2)
+    if (Buffer.byteLength(makeSample(mid), 'utf8') < targetBytes) {
+      low = mid + 1
+    } else {
+      high = mid
+    }
+  }
+  const upper = makeSample(low)
+  const lower = low > 1 ? makeSample(low - 1) : upper
+  return Math.abs(Buffer.byteLength(lower, 'utf8') - targetBytes) <=
+    Math.abs(Buffer.byteLength(upper, 'utf8') - targetBytes) ? lower : upper
+}
+
+/** 单行 12 万字，加短段落作为滚动回收的目标区。 */
+export function generateLongLineSample(chars = 120_000) {
+  return ['# 超长行性能样例', '', '长行：' + '字'.repeat(chars), '',
+    ...Array.from({ length: 120 }, (_, i) => [`滚动目标段落 ${i + 1}`, '']).flat()].join('\n')
+}
+
+/** 多个独立图片块，进入阅读视口时才挂载图片节点。 */
+export function generateImageDenseSample(count = 240) {
+  const out = ['# 图片密集性能样例', '']
+  for (let i = 1; i <= count; i++) {
+    out.push(`![图片 ${i}](./probe-${(i - 1) % 24}.svg)`, '')
+  }
+  return out.join('\n')
+}
+
 // 超大单块样例（工单 #7 限制记录）：一个 2 万行的未拆分代码围栏块，
 // 用于实测"窗口无法在块内拆分"时的行为与成本。
 export function generateGiantBlockSample(lines) {

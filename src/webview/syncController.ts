@@ -69,11 +69,6 @@ export interface VsCodeBridge {
   setState(state: unknown): void
 }
 
-/** 暂停/暂缓态本地输入的快照刷新防抖窗口（R-1）：宿主的全文留存只在
- *  enterSuspended 时刻上报一次，此后暂停态继续输入与暂缓集累积都到不了
- *  宿主——面板关闭/断连后取回缺这部分。输入变化后按此窗口合并重发。 */
-const CONFLICT_REPORT_DEBOUNCE_MS = 500
-
 /** 视图模式（#6）：live=实时预览（CM6 编辑），reading=阅读（只读渲染） */
 export type ViewMode = 'live' | 'reading'
 
@@ -83,6 +78,7 @@ interface PersistedState {
   viewMode?: ViewMode
   /** 最近一次模式锚点（UTF-16 offset）：live=光标主位，reading=锚点块 start */
   anchor?: number
+  conflictRevision?: number
 }
 
 /** 外部同步事务标记：updateListener 见到它即跳过（不回发）。
@@ -317,6 +313,7 @@ export class WebviewSyncController {
   // ---- 冲突暂停状态（#4）----
   /** 暂停写回：保留本地文本、忽略外部增量、不再发送 edit.request */
   private suspended = false
+  private conflictRevision = 0
   /** 发出后未收 ok ack 的请求 seq 集合（全部确认后未确认集清空） */
   private inFlight = new Set<number>()
   /** 未确认变更集：本地文档相对 baseVersion 权威文本的累积变更；
@@ -351,12 +348,12 @@ export class WebviewSyncController {
   /** 最近一次接受的 doc.changed 版本（C-4 单调防线：重复/迟到广播直接
    *  丢弃，覆盖直发与组合排队两条路径，防止同版本增量重复应用） */
   private lastDocChangedVersion = 0
-  /** 暂停/暂缓态快照刷新防抖句柄（R-1） */
-  private conflictReportTimer: ReturnType<typeof setTimeout> | undefined
 
   constructor(private readonly bridge: VsCodeBridge) {
     const saved = bridge.getState<PersistedState>()
     this.seq = typeof saved?.seq === 'number' && saved.seq >= 0 ? Math.floor(saved.seq) : 0
+    this.conflictRevision = typeof saved?.conflictRevision === 'number' && saved.conflictRevision >= 0
+      ? Math.floor(saved.conflictRevision) : 0
     this.viewMode = saved?.viewMode === 'reading' ? 'reading' : 'live'
     this.modeAnchor = typeof saved?.anchor === 'number' && saved.anchor >= 0 ? Math.floor(saved.anchor) : null
   }
@@ -511,10 +508,6 @@ export class WebviewSyncController {
     if (this.flushTimer !== undefined) {
       clearTimeout(this.flushTimer)
       this.flushTimer = undefined
-    }
-    if (this.conflictReportTimer !== undefined) {
-      clearTimeout(this.conflictReportTimer)
-      this.conflictReportTimer = undefined
     }
     if (this.docKeydown) {
       document.removeEventListener('keydown', this.docKeydown, true)
@@ -682,6 +675,38 @@ export class WebviewSyncController {
         }
         break
       }
+      case 'sync.test.edit': {
+        if (this.view && this.viewMode === 'live') {
+          const at = this.clampToDoc(message.offset)
+          this.view.dispatch({ changes: { from: at, insert: message.text } })
+          if (message.closeAfter && this.sessionId) {
+            this.bridge.postMessage({ kind: 'sync.test.close', sessionId: this.sessionId, docUri: this.docUri })
+          }
+        }
+        break
+      }
+      case 'link.test.mousedown': {
+        if (this.view && this.viewMode === 'live') {
+          const selector = message.target === 'wikilink'
+            ? '[data-vsidian-rendered-wikilink="true"]'
+            : '[data-vsidian-rendered-link="true"]'
+          const target = this.view.dom.querySelectorAll<HTMLElement>(selector)[message.index]
+          if (target) {
+            const rect = target.getBoundingClientRect()
+            const mouse = {
+              bubbles: true,
+              cancelable: true,
+              button: 0,
+              ctrlKey: message.ctrlKey === true,
+              clientX: rect.left + rect.width / 2,
+              clientY: rect.top + rect.height / 2,
+            }
+            target.dispatchEvent(new MouseEvent('mousedown', mouse))
+            this.view.contentDOM.dispatchEvent(new MouseEvent('mouseup', mouse))
+          }
+        }
+        break
+      }
       case 'view.locate': {
         // 定位（#10 查找/跳转入口）：光标移到源 offset；reading 滚动到块。
         // 纯视图操作——事务不带 changes，不产生编辑历史
@@ -811,6 +836,12 @@ export class WebviewSyncController {
         }
       }
     }
+    const headingElement = this.viewMode === 'reading'
+      ? this.readingContainer?.querySelector<HTMLElement>('.vsidian-reading-heading-1 h1')
+      : content?.querySelector<HTMLElement>('.vsidian-heading-line-1')
+    const headingFontPx = headingElement
+      ? Number.parseFloat(window.getComputedStyle(headingElement).fontSize)
+      : undefined
     const readingActive = this.viewMode === 'reading' && this.readingView
     const rStats = readingActive ? this.readingView!.getStats() : undefined
     const rScroll = readingActive ? this.readingView!.getScrollObservation() : undefined
@@ -842,6 +873,7 @@ export class WebviewSyncController {
       headingLineCount: content ? content.querySelectorAll('.vsidian-heading-line').length : 0,
       headingActiveText,
       headingHiddenText,
+      headingFontPx,
       viewMode: this.viewMode,
       selectionOffset: this.view?.state.selection.main.from ?? 0,
       readingBlockCount: rStats?.mountedBlocks ?? 0,
@@ -893,14 +925,8 @@ export class WebviewSyncController {
       this.unconfirmed !== null || this.inFlight.size > 0 || this.deferredLocal !== null || this.composing
     this.suspended = true
     this.setBannerVisible(true)
-    if (hasUnconfirmed && this.sessionId) {
-      this.bridge.postMessage({
-        kind: 'conflict.report',
-        sessionId: this.sessionId,
-        docUri: this.docUri,
-        version: this.baseVersion,
-        text: this.view?.state.doc.toString() ?? '',
-      })
+    if (hasUnconfirmed) {
+      this.reportConflictSnapshot()
     }
     // 暂停后这些状态不再参与同步；恢复时由 doc.resync 全量对齐。
     // pendingFull 保留：暂停前的全文重置（恢复内容）在 flush 时仍应用
@@ -913,28 +939,24 @@ export class WebviewSyncController {
   }
 
   /**
-   * 暂停/暂缓态本地输入的快照刷新（R-1）：输入变化后 500ms 防抖重发
-   * conflict.report，刷新宿主留存的全文快照——暂停态输入不发 edit.request、
-   * 暂缓集（deferredLocal）内容同样不在宿主 pending 里，缺此刷新则面板
-   * 关闭/断连后「复制未确认输入」取不到这部分内容。到期时已恢复（非
-   * 暂停且暂缓集已清空）则不发送。
+   * 暂停/暂缓态每笔输入立即刷新宿主快照。两种状态的输入不在宿主 pending
+   * 内，延后发送会在快速关闭或断连时留下无法取回的窗口。正常输入仍走
+   * 增量 edit.request，不发送全文。
    */
-  private scheduleConflictReport(): void {
-    if (this.conflictReportTimer !== undefined) {
+  private reportConflictSnapshot(): void {
+    if (!this.sessionId || (!this.suspended && !this.deferredLocal)) {
       return
     }
-    this.conflictReportTimer = setTimeout(() => {
-      this.conflictReportTimer = undefined
-      if (this.sessionId && (this.suspended || this.deferredLocal)) {
-        this.bridge.postMessage({
-          kind: 'conflict.report',
-          sessionId: this.sessionId,
-          docUri: this.docUri,
-          version: this.baseVersion,
-          text: this.view?.state.doc.toString() ?? '',
-        })
-      }
-    }, CONFLICT_REPORT_DEBOUNCE_MS)
+    this.conflictRevision += 1
+    this.persistState()
+    this.bridge.postMessage({
+      kind: 'conflict.report',
+      sessionId: this.sessionId,
+      docUri: this.docUri,
+      version: this.baseVersion,
+      revision: this.conflictRevision,
+      text: this.view?.state.doc.toString() ?? '',
+    })
   }
 
   /** 全文同步（init / doc.resync）：组合中缓冲，否则立即重置。
@@ -1339,6 +1361,7 @@ export class WebviewSyncController {
     this.bridge.setState({
       ...saved,
       seq: this.seq,
+      conflictRevision: this.conflictRevision,
       viewMode: this.viewMode,
       anchor: this.modeAnchor ?? undefined,
     })
@@ -1970,8 +1993,8 @@ export class WebviewSyncController {
           }
           if (this.suspended) {
             // 暂停写回：本地文本继续保留累积，但不回传、不追踪同步状态；
-            // 防抖重报刷新宿主全文快照（R-1：关闭/断连后取回不缺新输入）
-            this.scheduleConflictReport()
+            // 立即刷新宿主全文快照，快速关闭时也能取回这笔输入。
+            this.reportConflictSnapshot()
             continue
           }
           const changes: SerChange[] = []
@@ -1995,9 +2018,9 @@ export class WebviewSyncController {
               ? this.deferredLocal.compose(tr.changes)
               : tr.changes
             this.unconfirmed = this.unconfirmed ? this.unconfirmed.compose(tr.changes) : tr.changes
-            // 暂缓集内容不在宿主 pending 里：防抖上报全文快照（R-1），面板
+            // 暂缓集内容不在宿主 pending 里：立即上报全文快照，面板
             // 关闭/断连后取回不缺这部分输入
-            this.scheduleConflictReport()
+            this.reportConflictSnapshot()
             continue
           }
           // 出站坐标先逆穿本事务前的未确认集，回到 baseVersion 参考系（C-2）
