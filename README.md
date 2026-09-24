@@ -24,6 +24,7 @@
 - **双链**：`[[笔记名]]`、`[[路径/笔记|别名]]`、`[[笔记#标题]]` 四形态；重名弹出候选选择，缺失目标提示且不自动建文件。
 - **表格**：live 视图内 Tab/Shift+Tab 单元格导航、行末 Tab 移到下一表格行首格（末行末格 Tab 交默认缩进）；命令面板六个「表格：…」命令增删行列；单元格内键入 `|` 自动转义。
 - **查找**：编辑器内 Ctrl+F（限本编辑器激活时）。
+- **设置**：命令面板 →「Vsidian: 打开设置」，或编辑器工具栏「设置」按钮——Vsidian 的插件设置在独立设置页管理（不进入 VSCode 统一设置中心）；设置按用户级保存，重开页面与重启后保持，变更即时同步到已打开的 Vsidian 编辑器。
 - **外部修改安全同步**：检测到无法安全同步的外部修改时顶部出现冲突横幅——本地输入已保留，可「复制未确认输入」或「放弃本地修改并重新同步」。
 
 ## 开发
@@ -33,7 +34,7 @@ npm install                     # 安装锁定依赖（版本全部精确锁定�
 npm run compile                 # esbuild 双产物 + tsc 类型检查
 npm run watch                   # esbuild watch
 npm run test:unit               # vitest 单元/契约测试（无宿主依赖）
-npm run test:integration        # @vscode/test-electron 1.86.2 真宿主集成测试（58 例）
+npm run test:integration        # @vscode/test-electron 1.86.2 真宿主集成测试（61 例）
 node test/integration/runInstalled.mjs  # VSIX 安装态回归（先 package 出 VSIX）
 node test/perf/runPerf.mjs      # 性能档位测量（报告写 docs/perf/data/）
 npx @vscode/vsce package --no-dependencies  # 打包 VSIX（bundle 自包含，不带 node_modules）
@@ -50,7 +51,7 @@ npx @vscode/vsce package --no-dependencies  # 打包 VSIX（bundle 自包含，�
 
 ## 验证与性能
 
-- 当前开发工作树回归：676 单元测试 + 58 集成用例（真实 1.86.2 宿主）通过；安装态与人工验收另见[验证清单](docs/specs/manual-verification.md)。
+- 当前开发工作树回归：743 单元测试 + 61 集成用例（真实 1.86.2 宿主）通过；安装态与人工验收另见[验证清单](docs/specs/manual-verification.md)。
 - 性能实测与功能验证矩阵：[docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md)。
 - 人工验证项（IME/鼠标手感/远程环境）：[docs/specs/manual-verification.md](docs/specs/manual-verification.md)。
 
