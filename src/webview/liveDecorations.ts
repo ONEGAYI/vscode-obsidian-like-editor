@@ -1028,6 +1028,48 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
       return value
     }
     if (!tr.docChanged) {
+      if (tr.annotation(tableCompositionSettled)) {
+        const doc = tr.state.doc
+        const lineNo = doc.lineAt(tr.state.selection.main.head).number
+        let oldKey: number | undefined
+        let oldPlan: TableGridPlan | null | undefined
+        for (const [key, plan] of value.gridPlans) {
+          if (plan?.rows.has(lineNo)) { oldKey = key; oldPlan = plan; break }
+        }
+        if (oldPlan && oldKey !== undefined) {
+          const currentLine = doc.line(lineNo)
+          const pipe = currentLine.text.indexOf('|')
+          const stillRow = pipe >= 0 &&
+            chainAt(value.tree, currentLine.from + pipe + 1).some((node) => node.name === 'TableRow')
+          if (stillRow && tableRowCellsForColumns(currentLine.text, currentLine.from, oldPlan.columns)) {
+            // 取消等仍符合列数的净结果，只需恢复当前行的普通装饰。
+            const decos = value.decos.update({
+              filterFrom: currentLine.from,
+              filterTo: currentLine.to,
+              filter: () => false,
+              add: emitForRange(value.tree, doc, tr.state.selection, value.fm, lineNo, lineNo, value.gridPlans),
+              sort: true,
+            })
+            return { ...value, decos, compositionPreview: false }
+          }
+          let first = oldPlan.delimiterLine
+          let last = oldPlan.delimiterLine
+          for (const rowNo of oldPlan.rows.keys()) {
+            first = Math.min(first, rowNo)
+            last = Math.max(last, rowNo)
+          }
+          const gridPlans = new Map(value.gridPlans)
+          gridPlans.delete(oldKey)
+          const decos = value.decos.update({
+            filterFrom: doc.line(first).from,
+            filterTo: doc.line(last).to,
+            filter: () => false,
+            add: emitForRange(value.tree, doc, tr.state.selection, value.fm, first, last, gridPlans),
+            sort: true,
+          })
+          return { ...value, decos, gridPlans, compositionPreview: false }
+        }
+      }
       if (value.compositionPreview && !tr.annotation(tableCompositionSettled)) return value
       // 纯选区移动：树不变，仅重建旧/新选区所在行的 mark 显形
       const doc = tr.state.doc

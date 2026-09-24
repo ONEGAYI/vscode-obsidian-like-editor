@@ -498,6 +498,85 @@ const settle = async (): Promise<void> => {
 }
 
 describe('单元格编辑权威链路', () => {
+  it('特殊空白格组合提交遇全文重同步时保留本地净输入并暂停，不能静默覆盖', async () => {
+    const source = 'a|b|c\n---|---|---\n | | \n'
+    const linked = await setupLinked(source)
+    const view = linked.controller.getView()!
+    const pos = source.indexOf(' | | ') + 5
+    view.dispatch({ selection: EditorSelection.single(pos) })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.dispatch({ changes: { from: pos, insert: '你' }, userEvent: 'input.type.compose' })
+    linked.controller.handleHostMessage({ kind: 'doc.resync', version: 2, text: '远端全文\n' })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    expect(view.state.doc.toString()).toContain('| | | 你|')
+    expect(view.state.doc.toString()).not.toBe('远端全文\n')
+    expect(linked.hostSent.some((msg) => msg.kind === 'conflict.report')).toBe(true)
+    expect((view.dom.parentElement?.parentElement?.querySelector('.vsidian-suspend-banner') as HTMLElement)?.style.display)
+      .toBe('flex')
+    expect(linked.session.getConflictState(linked.sessionId)?.webviewText).toBe(view.state.doc.toString())
+    linked.session.detachPanel(linked.sessionId)
+    expect(linked.notices).toMatchObject([{ type: 'panel-closed-with-input', webviewText: view.state.doc.toString() }])
+  })
+
+  it('特殊空白格组合净结果替换了原空白时重建装饰，不保留预编辑旧格位', async () => {
+    const source = 'a|b|c\n---|---|---\n | | \n'
+    const linked = await setupLinked(source)
+    const view = linked.controller.getView()!
+    const pos = source.indexOf(' | | ') + 5
+    view.dispatch({ selection: EditorSelection.single(pos) })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.dispatch({ changes: { from: pos - 1, to: pos, insert: '你' }, userEvent: 'input.type.compose' })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    const actual = view.state.field(liveDecorationsField).decos
+    const rebuilt = buildLivePreviewDecorations(view.state.doc, view.state.selection)
+    expect(collect(actual)).toEqual(collect(rebuilt))
+    expect(RangeSet.eq([actual], [rebuilt])).toBe(true)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(0)
+    expect(linked.doc.getText()).toBe(view.state.doc.toString())
+  })
+
+  it('千行安全表格的组合取消仅重建当前行，不再全表扫描', async () => {
+    const source = 'a|b|c\n---|---|---\n' +
+      Array.from({ length: 1000 }, (_, i) => `a${i}|b${i}|c${i}\n`).join('') + ' | | \n'
+    const linked = await setupLinked(source)
+    const view = linked.controller.getView()!
+    const pos = source.lastIndexOf(' | | ') + 5
+    view.dispatch({ selection: EditorSelection.single(pos) })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.dispatch({ changes: { from: pos, insert: 'n' }, userEvent: 'input.type.compose' })
+    view.dispatch({ changes: { from: pos, to: pos + 1, insert: '' }, userEvent: 'input.type.compose' })
+    const before = getTableGridStats().rowsScanned
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    expect(getTableGridStats().rowsScanned - before).toBeLessThan(20)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row').length).toBeGreaterThan(0)
+  })
+
+  it('长文档连续候选只发一次全文基线，后续候选桥消息随编辑量增长', async () => {
+    const prefix = '```\n' + ('x'.repeat(1000) + '\n').repeat(1000) + '```\n\n'
+    const source = prefix + 'a|b|c\n---|---|---\n | | \n'
+    const linked = await setupLinked(source)
+    const view = linked.controller.getView()!
+    const pos = source.indexOf(' | | ') + 5
+    view.dispatch({ selection: EditorSelection.single(pos) })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    let length = 0
+    for (let i = 1; i <= 12; i++) {
+      view.dispatch({ changes: { from: pos, to: pos + length, insert: 'n'.repeat(i) }, userEvent: 'input.type.compose' })
+      length = i
+    }
+    const full = linked.hostSent.filter((msg) => msg.kind === 'conflict.report' && msg.compositionPending)
+    const patches = linked.hostSent.filter((msg) => msg.kind === 'composition.changed')
+    expect(full).toHaveLength(1)
+    expect(patches).toHaveLength(12)
+    expect(JSON.stringify(patches).length).toBeLessThan(12000)
+    expect(linked.hostSent.filter((msg) => msg.kind === 'edit.request')).toHaveLength(0)
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    expect(linked.doc.getText()).toBe(view.state.doc.toString())
+  })
   it('纯空白格 IME 组合预编辑与取消不规范化源行，也不向宿主写回', async () => {
     const source = 'a|b|c\n---|---|---\n | | \n'
     const linked = await setupLinked(source)

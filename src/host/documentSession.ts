@@ -15,6 +15,7 @@
 //   版本重定位，消除并发窗口
 // - 面板关闭/断连（onDidDispose → detachPanel）时存在未确认输入必须通知，
 //   不得静默丢弃（SSH 断开不得误报已保存）
+import { Text } from '@codemirror/state'
 import {
   isWebviewToHost,
   type HostToWebview,
@@ -102,6 +103,8 @@ interface PanelEntry {
   conflictWebviewVersion?: number
   /** 特殊空白格 IME 在写回前的候选快照；普通冲突快照不参与此判定。 */
   compositionPending?: boolean
+  /** 候选快照用 CM6 Text 增量维护；全文只在关闭/复制时生成。 */
+  compositionSnapshot?: Text
   /** 单调快照序号：迟到的旧报告不得覆盖更新的全文。 */
   lastConflictRevision: number
   /** 最近一次性能探针回报（#5：测试钩子 perfProbe 轮询读取） */
@@ -199,8 +202,9 @@ export class DocumentSession {
           this.collectFragments(fragments, p.changes)
         }
       }
-      const pendingComposition = panel.compositionPending && panel.conflictWebviewText !== undefined &&
-        panel.conflictWebviewText !== this.newline.toLfText(this.doc.getText())
+      const snapshotText = panel.compositionSnapshot?.toString() ?? panel.conflictWebviewText
+      const pendingComposition = panel.compositionPending && snapshotText !== undefined &&
+        snapshotText !== this.newline.toLfText(this.doc.getText())
       if (panel.suspended || fragments.length > 0 || pendingComposition) {
         this.notify({
           type: 'panel-closed-with-input',
@@ -209,7 +213,7 @@ export class DocumentSession {
           fragments,
           // 快照随通知带走（面板即将注销，事后无从查询）；暂停后新输入
           // 与暂缓集内容只在快照里（R-1）
-          webviewText: panel.conflictWebviewText,
+          webviewText: snapshotText,
         })
       }
     }
@@ -293,8 +297,28 @@ export class DocumentSession {
           panel.conflictWebviewVersion = message.version
           if (message.compositionPending !== undefined) {
             panel.compositionPending = message.compositionPending
+            panel.compositionSnapshot = message.compositionPending
+              ? Text.of(message.text.split('\n'))
+              : undefined
           }
         }
+        return Promise.resolve()
+      }
+      case 'composition.changed': {
+        if (message.docUri !== this.docUri || !panel.compositionPending ||
+            !panel.compositionSnapshot || message.revision <= panel.lastConflictRevision) {
+          return Promise.resolve()
+        }
+        let snapshot = panel.compositionSnapshot
+        let nextStart = snapshot.length
+        for (const change of [...message.changes].sort((a, b) => b.offset - a.offset)) {
+          if (change.offset + change.length > nextStart) return Promise.resolve()
+          snapshot = snapshot.replace(change.offset, change.offset + change.length,
+            Text.of(change.text.split('\n')))
+          nextStart = change.offset
+        }
+        panel.compositionSnapshot = snapshot
+        panel.lastConflictRevision = message.revision
         return Promise.resolve()
       }
       case 'conflict.action': {
@@ -664,6 +688,8 @@ export class DocumentSession {
     panel.conflictFragments = []
     panel.conflictWebviewText = undefined
     panel.conflictWebviewVersion = undefined
+    panel.compositionPending = false
+    panel.compositionSnapshot = undefined
     panel.conflictNotified = false
     panel.reloaded = false
     panel.pending.length = 0
@@ -696,7 +722,7 @@ export class DocumentSession {
     return {
       suspended: panel.suspended,
       fragments: [...panel.conflictFragments],
-      webviewText: panel.conflictWebviewText,
+      webviewText: panel.compositionSnapshot?.toString() ?? panel.conflictWebviewText,
       webviewVersion: panel.conflictWebviewVersion,
       reloaded: panel.reloaded,
     }

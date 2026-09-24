@@ -143,6 +143,8 @@ export type WebviewToHost =
   | { kind: 'conflict.report'; sessionId: string; docUri: string; version: number; revision: number; text: string;
       /** 仅空白表格格 IME 暂缓：快照仍含未提交候选文本；结束时显式清除。 */
       compositionPending?: boolean }
+  /** 空白格组合候选的 LF 增量：首笔 conflict.report 已提供全文基线。 */
+  | { kind: 'composition.changed'; sessionId: string; docUri: string; revision: number; changes: SerChange[] }
   /** 测试钩子（#21）：编辑事务结束后立即关闭面板，检验快照与关闭竞争。 */
   | { kind: 'sync.test.close'; sessionId: string; docUri: string }
   /** 暂停横幅按钮动作：copy = 请求宿主复制未确认输入；resume = 请求恢复（重新同步） */
@@ -792,6 +794,9 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         isString(v.text) &&
         (v.compositionPending === undefined || typeof v.compositionPending === 'boolean')
       )
+    case 'composition.changed':
+      return isString(v.sessionId) && isString(v.docUri) &&
+        isPositiveInt(v.revision) && isSerChangeArray(v.changes)
     case 'sync.test.close':
       return isString(v.sessionId) && isString(v.docUri)
     case 'settings.open':

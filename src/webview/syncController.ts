@@ -1990,6 +1990,22 @@ export class WebviewSyncController {
     })
   }
 
+  /** 候选期间只跨桥传变更片段；宿主以组合开始时的全文快照为基线增量应用。 */
+  private reportBlankCompositionChanges(changeSet: ChangeSet): void {
+    if (!this.sessionId) return
+    const changes: SerChange[] = []
+    changeSet.iterChanges((from, to, _fromB, _toB, inserted) => {
+      changes.push({ offset: from, length: to - from, text: inserted.sliceString(0, inserted.length) })
+    })
+    if (changes.length === 0) return
+    this.conflictRevision += 1
+    this.persistState()
+    this.bridge.postMessage({
+      kind: 'composition.changed', sessionId: this.sessionId, docUri: this.docUri,
+      revision: this.conflictRevision, changes,
+    })
+  }
+
   /** 已发请求全部确认后，以确认后的权威版本发送待发本地净变更。 */
   private sendDeferredLocal(): void {
     const deferred = this.deferredLocal
@@ -2052,24 +2068,26 @@ export class WebviewSyncController {
     const selection = state.selection.main
     if (!selection.empty || !blankRowInputPlan(state, selection.from, selection.to, 'x')) return
     this.blankComposition = { startState: state, changes: null }
+    this.reportBlankCompositionSnapshot(true)
   }
 
   /** 仅空白网格组合：结束后取净输入，一笔规范化并沿既有出站链提交。 */
-  private finishBlankComposition(): void {
+  private finishBlankComposition(): boolean {
     const pending = this.blankComposition
     const view = this.view
-    if (!pending || !view) return
+    if (!pending || !view) return false
     let net = pending.changes
     if (!net) {
       this.blankComposition = null
       view.dispatch({ selection: view.state.selection, annotations: tableCompositionSettled.of(true) })
       this.reportBlankCompositionSnapshot(false)
-      return
+      return false
     }
     const initial: SerChange[] = []
     net.iterChanges((from, to, _fromB, _toB, inserted) => {
       initial.push({ offset: from, length: to - from, text: inserted.sliceString(0, inserted.length) })
     })
+    let normalized = false
     if (initial.length === 1 && initial[0]!.length === 0 && initial[0]!.text) {
       const edit = initial[0]!
       const plan = blankRowInputPlan(pending.startState, edit.offset, edit.offset, edit.text)
@@ -2080,6 +2098,7 @@ export class WebviewSyncController {
           selection: { anchor: plan.selection },
         })
         net = pending.changes
+        normalized = true
       }
     }
     this.blankComposition = null
@@ -2093,15 +2112,24 @@ export class WebviewSyncController {
     if (!effective) {
       view.dispatch({ selection: view.state.selection, annotations: tableCompositionSettled.of(true) })
       this.reportBlankCompositionSnapshot(false)
-      return
+      return false
+    }
+    if (!normalized) {
+      view.dispatch({ selection: view.state.selection, annotations: tableCompositionSettled.of(true) })
+    }
+    // 并发全文没有可证明的局部重定位，留给暂停态取回，不能覆盖候选。
+    if (this.pendingFull) {
+      this.reportBlankCompositionSnapshot(true)
+      return true
     }
     if (this.suspended) {
       this.reportConflictSnapshot()
-      this.reportBlankCompositionSnapshot(false)
-      return
+      this.reportBlankCompositionSnapshot(true)
+      return true
     }
     this.recordLocalChangeSet(net!, changes)
     this.reportBlankCompositionSnapshot(false)
+    return true
   }
 
   /**
@@ -2114,7 +2142,15 @@ export class WebviewSyncController {
       // 新一轮组合进行中：缓冲保持，待下一轮 compositionend 重新调度
       return
     }
-    this.finishBlankComposition()
+    const blankInput = this.finishBlankComposition()
+    if (blankInput && this.pendingFull) {
+      this.pendingFull = undefined
+      this.pendingExternal = []
+      this.pendingVersionAck = undefined
+      this.enterSuspended()
+      this.reportConflictSnapshot()
+      return
+    }
     if (this.suspended) {
       // 暂停期间外部增量作废（保留本地输入，恢复时以全文对齐）；
       // 暂停前缓冲的全文重置仍应用（保留恢复内容，不静默丢弃）
@@ -2512,7 +2548,7 @@ export class WebviewSyncController {
           if (this.blankComposition) {
             const buffered = this.blankComposition
             buffered.changes = buffered.changes ? buffered.changes.compose(tr.changes) : tr.changes
-            this.reportBlankCompositionSnapshot(true)
+            this.reportBlankCompositionChanges(tr.changes)
             continue
           }
           if (this.suspended) {

@@ -140,6 +140,14 @@ describe('isWebviewToHost', () => {
     expect(isWebviewToHost({ kind: 'conflict.report', sessionId: 's1', docUri: 'u', version: 1 })).toBe(false)
   })
 
+  it('组合候选增量须含合法序号和源坐标变更', () => {
+    const base = { kind: 'composition.changed', sessionId: 's1', docUri: 'file:///a.md',
+      revision: 2, changes: [{ offset: 3, length: 1, text: '你' }] }
+    expect(isWebviewToHost(base)).toBe(true)
+    expect(isWebviewToHost({ ...base, revision: 0 })).toBe(false)
+    expect(isWebviewToHost({ ...base, changes: [{ offset: -1, length: 0, text: '你' }] })).toBe(false)
+  })
+
   it('接受合法 conflict.action，拒绝非法 action 或缺字段', () => {
     const base = { kind: 'conflict.action', sessionId: 's1', docUri: 'file:///a.md', action: 'copy' as const }
     expect(isWebviewToHost(base)).toBe(true)
