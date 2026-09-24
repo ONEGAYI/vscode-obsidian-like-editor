@@ -22,6 +22,7 @@
 // - #42 表格：安全表格始终以原文区间 mark + CSS grid 呈现，活动单元格
 //   继续在 CM6 源区间输入。没有独立单元格输入模型，DOM 由视口回收
 import {
+  Annotation,
   EditorSelection,
   RangeSet,
   StateField,
@@ -206,6 +207,9 @@ const taskCheckboxDecos = [
 
 const tablePipeDeco = Decoration.mark({ class: LIVE_CLASS_NAMES.tablePipe })
 const tableEscapedPipeDeco = Decoration.mark({ class: LIVE_CLASS_NAMES.tableEscapedPipe })
+/** 仅无边界空白格的 IME 候选事务：源文暂变但沿用原网格装饰。 */
+export const tableCompositionPreview = Annotation.define<boolean>()
+export const tableCompositionSettled = Annotation.define<boolean>()
 const tableGridCellDecos = new Map<string, ReturnType<typeof Decoration.mark>>()
 function tableGridCellDeco(align: TableAlign | null): ReturnType<typeof Decoration.mark> {
   const cls = align
@@ -213,7 +217,7 @@ function tableGridCellDeco(align: TableAlign | null): ReturnType<typeof Decorati
     : LIVE_CLASS_NAMES.tableGridCell
   let deco = tableGridCellDecos.get(cls)
   if (!deco) {
-    deco = Decoration.mark({ class: cls })
+    deco = Decoration.mark({ class: cls, inclusiveEnd: true })
     tableGridCellDecos.set(cls, deco)
   }
   return deco
@@ -760,6 +764,7 @@ interface LiveDecoState {
   fragments: readonly TreeFragment[]
   fm: SourceRange | null
   gridPlans: Map<number, TableGridPlan | null>
+  compositionPreview: boolean
 }
 
 function parseTree(doc: Text, fragments?: readonly TreeFragment[]): Tree {
@@ -1015,6 +1020,7 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
       fragments: TreeFragment.addTree(tree),
       fm,
       gridPlans,
+      compositionPreview: false,
     }
   },
   update(value, tr) {
@@ -1022,6 +1028,7 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
       return value
     }
     if (!tr.docChanged) {
+      if (value.compositionPreview && !tr.annotation(tableCompositionSettled)) return value
       // 纯选区移动：树不变，仅重建旧/新选区所在行的 mark 显形
       const doc = tr.state.doc
       let decos = value.decos
@@ -1041,7 +1048,7 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
       stats.totalUpdates += 1
       stats.lastUpdateScannedLines = scanned
       stats.totalScannedLines += scanned
-      return { ...value, decos }
+      return { ...value, decos, compositionPreview: false }
     }
 
     const doc = tr.state.doc
@@ -1053,6 +1060,18 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
     const tree = parseTree(doc, fragments)
     const fmTouched = changed.some((c) => c.fromA < FM_SCAN_LIMIT || c.fromB < FM_SCAN_LIMIT)
     const fm = fmTouched ? frontmatterOf(doc) : value.fm
+    if (tr.annotation(tableCompositionPreview)) {
+      // 候选文字由 CM6 原生 DOM 管理；只平移网格装饰，避免解析暂态列数
+      // 导致整表闪退源码。结束后正常事务或 settled 选区事务重新计算。
+      return {
+        ...value,
+        decos: value.decos.map(tr.changes),
+        tree,
+        fragments: TreeFragment.addTree(tree),
+        fm,
+        compositionPreview: true,
+      }
+    }
     const spans = planRebuildSpans(tr, value.tree, tree, changed, value.fm, fm)
     const gridPlans = new Map<number, TableGridPlan | null>()
     let decos = value.decos.map(tr.changes)
@@ -1075,7 +1094,7 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
     if (scanned >= doc.lines) {
       stats.fullBuildLines = doc.lines
     }
-    return { decos, tree, fragments: TreeFragment.addTree(tree), fm, gridPlans }
+    return { decos, tree, fragments: TreeFragment.addTree(tree), fm, gridPlans, compositionPreview: false }
   },
   provide: (f) => EditorView.decorations.from(f, (s) => s.decos),
 })

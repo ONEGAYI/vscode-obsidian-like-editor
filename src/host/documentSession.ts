@@ -100,6 +100,8 @@ interface PanelEntry {
   /** webview 冲突上报的本地全文快照（conflict.report） */
   conflictWebviewText?: string
   conflictWebviewVersion?: number
+  /** 特殊空白格 IME 在写回前的候选快照；普通冲突快照不参与此判定。 */
+  compositionPending?: boolean
   /** 单调快照序号：迟到的旧报告不得覆盖更新的全文。 */
   lastConflictRevision: number
   /** 最近一次性能探针回报（#5：测试钩子 perfProbe 轮询读取） */
@@ -176,6 +178,7 @@ export class DocumentSession {
       suspended: false,
       suspendedReason: 'conflict',
       conflictFragments: [],
+      compositionPending: false,
       lastConflictRevision: 0,
       conflictNotified: false,
       reloaded: false,
@@ -196,7 +199,9 @@ export class DocumentSession {
           this.collectFragments(fragments, p.changes)
         }
       }
-      if (panel.suspended || fragments.length > 0) {
+      const pendingComposition = panel.compositionPending && panel.conflictWebviewText !== undefined &&
+        panel.conflictWebviewText !== this.newline.toLfText(this.doc.getText())
+      if (panel.suspended || fragments.length > 0 || pendingComposition) {
         this.notify({
           type: 'panel-closed-with-input',
           sessionId,
@@ -286,6 +291,9 @@ export class DocumentSession {
           panel.lastConflictRevision = message.revision
           panel.conflictWebviewText = message.text
           panel.conflictWebviewVersion = message.version
+          if (message.compositionPending !== undefined) {
+            panel.compositionPending = message.compositionPending
+          }
         }
         return Promise.resolve()
       }

@@ -140,7 +140,9 @@ export type WebviewToHost =
   /** 请求宿主回发全文重同步（外部变更与本地状态无法安全对齐时） */
   | { kind: 'sync.request' }
   /** 冲突/暂停时的本地全文快照上报：宿主保存供用户取回未确认输入 */
-  | { kind: 'conflict.report'; sessionId: string; docUri: string; version: number; revision: number; text: string }
+  | { kind: 'conflict.report'; sessionId: string; docUri: string; version: number; revision: number; text: string;
+      /** 仅空白表格格 IME 暂缓：快照仍含未提交候选文本；结束时显式清除。 */
+      compositionPending?: boolean }
   /** 测试钩子（#21）：编辑事务结束后立即关闭面板，检验快照与关闭竞争。 */
   | { kind: 'sync.test.close'; sessionId: string; docUri: string }
   /** 暂停横幅按钮动作：copy = 请求宿主复制未确认输入；resume = 请求恢复（重新同步） */
@@ -787,7 +789,8 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         isString(v.docUri) &&
         isNonNegativeInt(v.version) &&
         isPositiveInt(v.revision) &&
-        isString(v.text)
+        isString(v.text) &&
+        (v.compositionPending === undefined || typeof v.compositionPending === 'boolean')
       )
     case 'sync.test.close':
       return isString(v.sessionId) && isString(v.docUri)

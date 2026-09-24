@@ -129,6 +129,9 @@ describe('isWebviewToHost', () => {
   it('接受合法 conflict.report，拒绝缺字段或类型错误', () => {
     const base = { kind: 'conflict.report', sessionId: 's1', docUri: 'file:///a.md', version: 3, revision: 1, text: '本地全文' }
     expect(isWebviewToHost(base)).toBe(true)
+    expect(isWebviewToHost({ ...base, compositionPending: true })).toBe(true)
+    expect(isWebviewToHost({ ...base, compositionPending: false })).toBe(true)
+    expect(isWebviewToHost({ ...base, compositionPending: 'yes' })).toBe(false)
     expect(isWebviewToHost({ ...base, sessionId: 1 })).toBe(false)
     expect(isWebviewToHost({ ...base, docUri: null })).toBe(false)
     expect(isWebviewToHost({ ...base, version: -1 })).toBe(false)

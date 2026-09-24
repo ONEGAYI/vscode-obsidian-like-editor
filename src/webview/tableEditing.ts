@@ -16,13 +16,14 @@
 //   增删行列以单笔 CM6 事务派发 = 单笔 edit.request = 宿主撤销一次
 // - #43 悬停控件由 tableControls.ts 只按可见 DOM 行构建；拖排行的纯规划
 //   在 tableStructure.ts，松手时仍经本模块单笔 CM6 事务写回
-import { EditorSelection, EditorState, Transaction } from '@codemirror/state'
-import { EditorView, keymap } from '@codemirror/view'
+import { EditorSelection, EditorState, StateEffect, StateField, Transaction } from '@codemirror/state'
+import { EditorView, ViewPlugin, keymap } from '@codemirror/view'
 import type { Command } from '@codemirror/view'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import type { TableEditOp } from '../shared/protocol'
-import { liveDecorationsField } from './liveDecorations'
-import { needsPipeEscapeAt, parseTableDelimiter, planBlankRowCellInput, tableRowCellsForColumns } from './tableCells'
+import { liveDecorationsField, LIVE_CLASS_NAMES, tableCompositionPreview } from './liveDecorations'
+import { chainAt } from './markdownDoc'
+import { needsPipeEscapeAt, parseTableDelimiter, planBlankRowCellInput } from './tableCells'
 import { planTableEdit, planTableRowMove, tableCellNavTarget, type TableRowInfo } from './tableStructure'
 import { createTableControls } from './tableControls'
 import { planCreateTable } from './tableCreate'
@@ -62,6 +63,7 @@ function isTableRowLine(state: EditorState, pos: number, tree: Tree): boolean {
  * 任一 range 无需转义即整体返回 false（交默认行为，避免多光标语义分裂）。
  */
 export const tablePipeKeyHandler: Command = (view: EditorView): boolean => {
+  if (view.compositionStarted) return false
   const state = view.state
   const field = state.field(liveDecorationsField, false)
   if (!field) {
@@ -151,23 +153,60 @@ export function tableRowsAt(state: EditorState, pos: number, tree: Tree): TableR
   return rows.length >= 2 ? rows.sort((a, b) => a.lineFrom - b.lineFrom) : null
 }
 
-function blankRowInputPlan(state: EditorState, from: number, to: number, text: string) {
+export function blankRowInputPlan(state: EditorState, from: number, to: number, text: string) {
   const line = state.doc.lineAt(from)
   if (!line.text.includes('|') || !/^[\s|]+$/.test(line.text)) return null
   const field = state.field(liveDecorationsField, false)
   if (!field) return null
-  const rows = tableRowsAt(state, from, field.tree)
-  const delimiter = rows?.find((row) => row.kind === 'delimiter')
-  if (!delimiter || !rows?.some((row) => row.kind === 'row' && row.lineFrom === line.from)) return null
-  const columns = parseTableDelimiter(state.doc.sliceString(delimiter.lineFrom, delimiter.lineTo))?.length
-  if (!columns || rows.some((row) => row.kind !== 'delimiter' &&
-      !tableRowCellsForColumns(state.doc.sliceString(row.lineFrom, row.lineTo), row.lineFrom, columns))) return null
+  const path = chainAt(field.tree, line.from + line.text.indexOf('|') + 1)
+  const table = path.find((node) => node.name === 'Table')
+  if (!table || !path.some((node) => node.name === 'TableRow')) return null
+  let inGrid = false
+  field.decos.between(line.from, line.from + 1, (start, end, value) => {
+    const cls = (value.spec as { class?: string }).class
+    if (start === line.from && end === line.from && cls?.split(' ').includes(LIVE_CLASS_NAMES.tableGridRow)) {
+      inGrid = true
+    }
+  })
+  if (!inGrid) return null
+  const cached = field.gridPlans.get(table.from)
+  let columns = cached?.columns
+  if (!columns) {
+    const delimiter = table.firstChild?.nextSibling
+    if (delimiter?.name !== 'TableDelimiter') return null
+    const declaration = state.doc.lineAt(delimiter.from)
+    columns = parseTableDelimiter(declaration.text)?.length
+  }
+  if (!columns) return null
   return planBlankRowCellInput(line.text, line.from, columns, from, to, text)
 }
 
-/** 普通键入、粘贴与 IME 首次写入空白行时，一笔事务补齐边界并写入目标格。 */
+const setTableComposition = StateEffect.define<boolean>()
+const tableComposition = StateField.define<boolean>({
+  create: () => false,
+  update(value, tr) {
+    for (const effect of tr.effects) if (effect.is(setTableComposition)) value = effect.value
+    return value
+  },
+})
+const tableCompositionTimers = new WeakMap<EditorView, ReturnType<typeof setTimeout>>()
+const tableCompositionCleanup = ViewPlugin.fromClass(class {
+  constructor(private readonly view: EditorView) {}
+  destroy() {
+    const timer = tableCompositionTimers.get(this.view)
+    if (timer !== undefined) clearTimeout(timer)
+    tableCompositionTimers.delete(this.view)
+  }
+})
+
+const markTableCompositionInput = EditorState.transactionExtender.of((tr) =>
+  tr.docChanged && tr.startState.field(tableComposition) && tr.isUserEvent('input')
+    ? { annotations: tableCompositionPreview.of(true) }
+    : null)
+
+/** 普通键入、粘贴在空白行首笔规范化；IME 的中间事务交宿主组合缓冲处理。 */
 const normalizeBlankRowInput = EditorState.transactionFilter.of((tr) => {
-  if (!tr.isUserEvent('input') || tr.changes.empty) return tr
+  if (!tr.isUserEvent('input') || tr.changes.empty || tr.startState.field(tableComposition)) return tr
   let change: { from: number; to: number; text: string } | null = null
   let multiple = false
   tr.changes.iterChanges((from, to, _fromB, _toB, insert) => {
@@ -318,6 +357,36 @@ const tableControls = createTableControls({ tableRowsAt, runTableEditAt, runTabl
 
 /** 装配扩展：键盘编辑、导航及可见表格控件共用 CM6 文本事务 */
 export const tableEditing = [
+  tableComposition,
+  tableCompositionCleanup,
+  EditorView.domEventHandlers({
+    compositionstart: (_event, view) => {
+      const timer = tableCompositionTimers.get(view)
+      if (timer !== undefined) clearTimeout(timer)
+      tableCompositionTimers.delete(view)
+      const selection = view.state.selection.main
+      if (!view.state.field(tableComposition) && selection.empty &&
+          blankRowInputPlan(view.state, selection.from, selection.to, 'x')) {
+        view.dispatch({ effects: setTableComposition.of(true) })
+      }
+    },
+    compositionupdate: (_event, view) => {
+      const selection = view.state.selection.main
+      if (!view.state.field(tableComposition) && selection.empty &&
+          blankRowInputPlan(view.state, selection.from, selection.to, 'x')) {
+        view.dispatch({ effects: setTableComposition.of(true) })
+      }
+    },
+    compositionend: (_event, view) => {
+      if (view.state.field(tableComposition)) {
+        tableCompositionTimers.set(view, setTimeout(() => {
+          tableCompositionTimers.delete(view)
+          if (view.state.field(tableComposition)) view.dispatch({ effects: setTableComposition.of(false) })
+        }, 0))
+      }
+    },
+  }),
+  markTableCompositionInput,
   normalizeBlankRowInput,
   keymap.of([{ key: '|', run: tablePipeKeyHandler }]),
   keymap.of([{ key: 'Tab', run: tableTabForward, shift: tableTabBackward }]),

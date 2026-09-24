@@ -423,6 +423,40 @@ describe('外部变更广播与不写回保证', () => {
     await s.send(id, { kind: 'ready' }).catch(() => undefined)
     expect(s.sent.get(id)!.length).toBe(after)
   })
+
+  it('仅有未提交组合快照时关闭可取回；快照等于权威 LF 文本时正常关闭不误报', async () => {
+    const notices: SessionNotice[] = []
+    const s = setup('a\r\nb', { onNotice: (notice) => notices.push(notice) })
+    const first = s.attach()
+    await readyPanel(s, first)
+    await s.send(first, { kind: 'conflict.report', sessionId: first, docUri: DOC_URI,
+      version: 1, revision: 1, text: 'a\nb候选', compositionPending: true })
+    s.session.detachPanel(first)
+    expect(notices).toMatchObject([{ type: 'panel-closed-with-input', webviewText: 'a\nb候选' }])
+
+    const second = s.attach()
+    await readyPanel(s, second)
+    await s.send(second, { kind: 'conflict.report', sessionId: second, docUri: DOC_URI,
+      version: 1, revision: 1, text: 'a\nb候选', compositionPending: true })
+    await s.send(second, { kind: 'conflict.report', sessionId: second, docUri: DOC_URI,
+      version: 1, revision: 2, text: 'a\nb', compositionPending: false })
+    s.session.detachPanel(second)
+    expect(notices).toHaveLength(1)
+
+    const equalLf = s.attach()
+    await readyPanel(s, equalLf)
+    await s.send(equalLf, { kind: 'conflict.report', sessionId: equalLf, docUri: DOC_URI,
+      version: 1, revision: 1, text: 'a\nb', compositionPending: true })
+    s.session.detachPanel(equalLf)
+    expect(notices).toHaveLength(1)
+
+    const staleOrdinary = s.attach()
+    await readyPanel(s, staleOrdinary)
+    await s.send(staleOrdinary, { kind: 'conflict.report', sessionId: staleOrdinary, docUri: DOC_URI,
+      version: 1, revision: 1, text: '旧快照' })
+    s.session.detachPanel(staleOrdinary)
+    expect(notices).toHaveLength(1)
+  })
 })
 
 describe('CRLF 文档的换行协调（CM6 端统一 LF）', () => {

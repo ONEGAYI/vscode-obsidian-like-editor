@@ -53,7 +53,7 @@ import {
   setFindMatches,
   type FindMatch,
 } from './findSession'
-import { liveDecorationsField, livePreviewDecorations, LIVE_CLASS_NAMES } from './liveDecorations'
+import { liveDecorationsField, livePreviewDecorations, LIVE_CLASS_NAMES, tableCompositionSettled } from './liveDecorations'
 import { createLinkInteractions, WIKILINK_CLASS_NAMES } from './liveLinks'
 import { ImageResourceManager } from './imageResource'
 import { runPerfProbe } from './perfProbe'
@@ -62,7 +62,7 @@ import { createReadingContainer, prepareReadingImages } from './readingView'
 import { READING_MARKDOWN_CLASS_NAMES } from './readingMarkdown'
 import { resolveStaleTaskToggle } from './taskToggle'
 import { VirtualReadingView } from './readingVirtualView'
-import { runCreateTable, runTableEdit, tableEditing } from './tableEditing'
+import { blankRowInputPlan, runCreateTable, runTableEdit, tableEditing } from './tableEditing'
 
 /** rAF 不可用环境（旧 jsdom）退化为短超时（与 readingVirtualView 同款） */
 function scheduleFrame(fn: () => void): void {
@@ -375,6 +375,8 @@ export class WebviewSyncController {
   // ---- IME 组合缓冲状态 ----
   /** 组合进行中（DOM compositionstart..compositionend） */
   private composing = false
+  /** 仅空白网格格子的组合暂缓：CM6 可更新候选，宿主只接收结束后的净变更。 */
+  private blankComposition: { startState: EditorState; changes: ChangeSet | null } | null = null
   /** 组合期间到达、待 flush 的外部增量（按到达序） */
   private pendingExternal: BufferedIncremental[] = []
   /** 组合期间到达、待 flush 的全文消息（覆盖增量形态）。source 记录来源
@@ -658,13 +660,13 @@ export class WebviewSyncController {
           // 暂停：外部增量不应用（保留本地输入，恢复时以全文对齐）
           break
         }
-        if (this.deferredLocal && !this.composing && !this.hasBufferedSync()) {
+        if (this.deferredLocal && !this.composing && !this.blankComposition && !this.hasBufferedSync()) {
           // 待发集定义域未随外部增量重定位；保守暂停并保留本地全文，
           // 避免确认后用旧坐标覆盖权威文本。
           this.enterSuspended()
           break
         }
-        if (this.composing || this.hasBufferedSync()) {
+        if (this.composing || this.blankComposition || this.hasBufferedSync()) {
           // 组合中不打断输入；缓冲挂起期间到达的增量一并对齐到 flush。
           // 入队即逆穿到 base 系（参考系一致性见 BufferedIncremental 注释）
           this.pendingExternal.push({
@@ -1138,7 +1140,7 @@ export class WebviewSyncController {
       this.enterSuspended()
       return
     }
-    if (this.composing || this.hasBufferedSync()) {
+    if (this.composing || this.blankComposition || this.hasBufferedSync()) {
       if (!this.pendingFull || version >= this.pendingFull.version) {
         this.pendingFull = { version, text, source: opts.source ?? 'init' }
       }
@@ -1949,10 +1951,50 @@ export class WebviewSyncController {
       : cs
   }
 
+  /** 普通事务与空白格组合净变更共用同一出站/未确认坐标链。 */
+  private recordLocalChangeSet(changeSet: ChangeSet, changes: SerChange[]): void {
+    if (changes.length === 0 || !this.sessionId) {
+      this.unconfirmed = this.unconfirmed ? this.unconfirmed.compose(changeSet) : changeSet
+      return
+    }
+    if (this.deferredLocal || (
+      this.unconfirmed && touchesUnconfirmedChange(changes, chainSections(this.unconfirmed))
+    )) {
+      this.deferredLocal = this.deferredLocal
+        ? this.deferredLocal.compose(changeSet)
+        : changeSet
+      this.unconfirmed = this.unconfirmed ? this.unconfirmed.compose(changeSet) : changeSet
+      this.reportConflictSnapshot()
+      return
+    }
+    const baseChanges = this.toBaseChanges(changes)
+    this.unconfirmed = this.unconfirmed ? this.unconfirmed.compose(changeSet) : changeSet
+    this.seq += 1
+    this.persistState()
+    this.inFlight.add(this.seq)
+    this.sentTxns.push({ seq: this.seq, changes: baseChanges })
+    this.bridge.postMessage({
+      kind: 'edit.request', sessionId: this.sessionId, docUri: this.docUri,
+      seq: this.seq, baseVersion: this.baseVersion, changes: baseChanges,
+    })
+  }
+
+  private reportBlankCompositionSnapshot(pending: boolean): void {
+    if (!this.sessionId) return
+    this.conflictRevision += 1
+    this.persistState()
+    this.bridge.postMessage({
+      kind: 'conflict.report', sessionId: this.sessionId, docUri: this.docUri,
+      version: this.baseVersion, revision: this.conflictRevision,
+      text: this.view?.state.doc.toString() ?? '', compositionPending: pending,
+    })
+  }
+
   /** 已发请求全部确认后，以确认后的权威版本发送待发本地净变更。 */
   private sendDeferredLocal(): void {
     const deferred = this.deferredLocal
-    if (!deferred || this.suspended || this.inFlight.size > 0 || this.hasBufferedSync()) {
+    if (!deferred || this.suspended || this.blankComposition ||
+        this.inFlight.size > 0 || this.hasBufferedSync()) {
       return
     }
     this.deferredLocal = null
@@ -2004,11 +2046,67 @@ export class WebviewSyncController {
     })
   }
 
+  private beginBlankComposition(): void {
+    if (this.blankComposition || this.viewMode !== 'live' || !this.view) return
+    const state = this.view.state
+    const selection = state.selection.main
+    if (!selection.empty || !blankRowInputPlan(state, selection.from, selection.to, 'x')) return
+    this.blankComposition = { startState: state, changes: null }
+  }
+
+  /** 仅空白网格组合：结束后取净输入，一笔规范化并沿既有出站链提交。 */
+  private finishBlankComposition(): void {
+    const pending = this.blankComposition
+    const view = this.view
+    if (!pending || !view) return
+    let net = pending.changes
+    if (!net) {
+      this.blankComposition = null
+      view.dispatch({ selection: view.state.selection, annotations: tableCompositionSettled.of(true) })
+      this.reportBlankCompositionSnapshot(false)
+      return
+    }
+    const initial: SerChange[] = []
+    net.iterChanges((from, to, _fromB, _toB, inserted) => {
+      initial.push({ offset: from, length: to - from, text: inserted.sliceString(0, inserted.length) })
+    })
+    if (initial.length === 1 && initial[0]!.length === 0 && initial[0]!.text) {
+      const edit = initial[0]!
+      const plan = blankRowInputPlan(pending.startState, edit.offset, edit.offset, edit.text)
+      if (plan) {
+        const line = view.state.doc.lineAt(plan.from)
+        view.dispatch({
+          changes: { from: line.from, to: line.to, insert: plan.insert },
+          selection: { anchor: plan.selection },
+        })
+        net = pending.changes
+      }
+    }
+    this.blankComposition = null
+    const changes: SerChange[] = []
+    net!.iterChanges((from, to, _fromB, _toB, inserted) => {
+      changes.push({ offset: from, length: to - from, text: inserted.sliceString(0, inserted.length) })
+    })
+    // 组合取消可能先插后删；ChangeSet 仍可包含文本相同的替换。
+    const effective = changes.some((change) =>
+      pending.startState.doc.sliceString(change.offset, change.offset + change.length) !== change.text)
+    if (!effective) {
+      view.dispatch({ selection: view.state.selection, annotations: tableCompositionSettled.of(true) })
+      this.reportBlankCompositionSnapshot(false)
+      return
+    }
+    if (this.suspended) {
+      this.reportConflictSnapshot()
+      this.reportBlankCompositionSnapshot(false)
+      return
+    }
+    this.recordLocalChangeSet(net!, changes)
+    this.reportBlankCompositionSnapshot(false)
+  }
+
   /**
-   * 应用缓冲的外部同步。调用时机：compositionend 后的宏任务（setTimeout 0），
-   * 晚于 CM6 在 microtask 中生成的组合上屏事务（@codemirror/view 6.43 的
-   * observers.compositionend 用 Promise.resolve().then(flush)），因此
-   * unconfirmed 此时已含组合编辑、组合文本的 edit.request 也已发出。
+   * 应用缓冲的外部同步。compositionend 后宏任务晚于 CM6 最终上屏微任务；
+   * 空白网格组合先提交净本地变更，再将外部变更穿过它做重定位。
    */
   private flushBufferedExternal(): void {
     this.flushTimer = undefined
@@ -2016,6 +2114,7 @@ export class WebviewSyncController {
       // 新一轮组合进行中：缓冲保持，待下一轮 compositionend 重新调度
       return
     }
+    this.finishBlankComposition()
     if (this.suspended) {
       // 暂停期间外部增量作废（保留本地输入，恢复时以全文对齐）；
       // 暂停前缓冲的全文重置仍应用（保留恢复内容，不静默丢弃）
@@ -2091,7 +2190,7 @@ export class WebviewSyncController {
   }
 
   private scheduleFlush(): void {
-    if (this.flushTimer === undefined && this.hasBufferedSync()) {
+    if (this.flushTimer === undefined && (this.hasBufferedSync() || this.blankComposition)) {
       this.flushTimer = setTimeout(() => this.flushBufferedExternal(), 0)
     }
   }
@@ -2410,6 +2509,12 @@ export class WebviewSyncController {
           if (!tr.docChanged || tr.annotation(externalSync)) {
             continue
           }
+          if (this.blankComposition) {
+            const buffered = this.blankComposition
+            buffered.changes = buffered.changes ? buffered.changes.compose(tr.changes) : tr.changes
+            this.reportBlankCompositionSnapshot(true)
+            continue
+          }
           if (this.suspended) {
             // 暂停写回：本地文本继续保留累积，但不回传、不追踪同步状态；
             // 立即刷新宿主全文快照，快速关闭时也能取回这笔输入。
@@ -2424,40 +2529,7 @@ export class WebviewSyncController {
               text: inserted.sliceString(0, inserted.length),
             })
           })
-          if (changes.length === 0 || !this.sessionId) {
-            // 无文本变更的事务不进入写回，但仍是本地状态的一部分
-            this.unconfirmed = this.unconfirmed ? this.unconfirmed.compose(tr.changes) : tr.changes
-            continue
-          }
-          if (this.deferredLocal || (
-            this.unconfirmed && touchesUnconfirmedChange(changes, chainSections(this.unconfirmed))
-          )) {
-            // 继续乐观回显；待已有请求全部确认后一次性发送净变更。
-            this.deferredLocal = this.deferredLocal
-              ? this.deferredLocal.compose(tr.changes)
-              : tr.changes
-            this.unconfirmed = this.unconfirmed ? this.unconfirmed.compose(tr.changes) : tr.changes
-            // 暂缓集内容不在宿主 pending 里：立即上报全文快照，面板
-            // 关闭/断连后取回不缺这部分输入
-            this.reportConflictSnapshot()
-            continue
-          }
-          // 出站坐标先逆穿本事务前的未确认集，回到 baseVersion 参考系（C-2）
-          const baseChanges = this.toBaseChanges(changes)
-          // 未确认变更集累积：外部增量到达时须平移穿过（防静默错位）
-          this.unconfirmed = this.unconfirmed ? this.unconfirmed.compose(tr.changes) : tr.changes
-          this.seq += 1
-          this.persistState() // 合并写入：保留 viewMode/anchor（#6）
-          this.inFlight.add(this.seq)
-          this.sentTxns.push({ seq: this.seq, changes: baseChanges })
-          this.bridge.postMessage({
-            kind: 'edit.request',
-            sessionId: this.sessionId,
-            docUri: this.docUri,
-            seq: this.seq,
-            baseVersion: this.baseVersion,
-            changes: baseChanges,
-          })
+          this.recordLocalChangeSet(tr.changes, changes)
         }
       }),
       // 撤销/重做转发 keymap：置于数组末尾（CM6 扩展数组靠后者优先级高），
@@ -2472,9 +2544,11 @@ export class WebviewSyncController {
       EditorView.domEventHandlers({
         compositionstart: () => {
           this.composing = true
+          this.beginBlankComposition()
         },
         compositionupdate: () => {
           this.composing = true
+          this.beginBlankComposition()
         },
         compositionend: () => {
           this.composing = false
