@@ -43,6 +43,9 @@ export interface PanelPort {
   /** #10 链接跳转执行（vscode 层注入：URI 解析白名单 + openExternal/
    *  showTextDocument/用户反馈）；只读交互，暂停态同样放行 */
   openLink?(intent: { href: string; srcStart: number; srcEnd: number }): void
+  /** #11 双链跳转执行（vscode 层注入：wikilinkTarget 按需解析 + 打开/
+   *  定位/用户反馈）；只读交互，暂停态同样放行 */
+  openWikilink?(intent: { target: string; srcStart: number; srcEnd: number }): void
   /** #10 图片资源解析（vscode 层注入：classifyImageTarget + asWebviewUri） */
   resolveImage?(src: string): Promise<ImageResolution>
 }
@@ -277,6 +280,19 @@ export class DocumentSession {
         }
         panel.port.openLink?.({
           href: message.href,
+          srcStart: message.srcStart,
+          srcEnd: message.srcEnd,
+        })
+        return Promise.resolve()
+      }
+      case 'wikilink.activate': {
+        // #11 双链跳转意图：与 link.activate 同校验口径（归属 + ready），
+        // 执行（按名/路径解析、打开与定位）归宿主 vscode 层
+        if (!panel.ready || message.docUri !== this.docUri) {
+          return Promise.resolve()
+        }
+        panel.port.openWikilink?.({
+          target: message.target,
           srcStart: message.srcStart,
           srcEnd: message.srcEnd,
         })

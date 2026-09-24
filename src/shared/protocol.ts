@@ -150,10 +150,14 @@ export type WebviewToHost =
       liveLinkCount?: number
       /** live 视口内图片 widget 数（#10） */
       liveImageCount?: number
+      /** live 视口内双链数（#11；非活动行 widget 与活动行 mark 共用类名） */
+      liveWikilinkCount?: number
       /** 阅读挂载块内链接数（#10；屏外块不创建，无 DOM） */
       readingLinkCount?: number
       /** 阅读挂载块内图片数（#10） */
       readingImageCount?: number
+      /** 阅读挂载块内双链数（#11；markdown-it 渲染的 a.oile-wikilink） */
+      readingWikilinkCount?: number
       /** 图片槽位状态计数（#10：当前视图内 loading/loaded/error） */
       imageStates?: ImageStateCounts
       /** 查找会话观测（#14）：首次打开后回报（未打开过时缺省） */
@@ -181,6 +185,20 @@ export type WebviewToHost =
       sessionId: string
       docUri: string
       href: string
+      srcStart: number
+      srcEnd: number
+    }
+  /** 双链跳转意图（#11）：与 link.activate 同通道语义，但目标是 Obsidian
+   *  双链（按名/按路径在工作区内解析，非 URI）——分类走 wikilinkTarget
+   *  而非 #10 的 URI 白名单。target 为 `[[` 与 `]]` 之间、`|` 之前的原文
+   *  （未 trim；宿主解析自带规范化）。阅读视图单击、实时预览
+   *  Ctrl/Cmd+单击产生；srcStart/srcEnd 覆盖整个 `[[…]]` 出现（阅读视图
+   *  为所在块源锚点） */
+  | {
+      kind: 'wikilink.activate'
+      sessionId: string
+      docUri: string
+      target: string
       srcStart: number
       srcEnd: number
     }
@@ -263,6 +281,10 @@ export interface CssProbeReport {
   liveTablePipeDecorationColor: string | null
   /** #12：阅读表格经 `.oile-reading-block table` 命中的属性值；无目标为 null */
   readingTableDecorationColor: string | null
+  /** #11：live 双链经 `.oile-wikilink` 命中的属性值；无目标为 null */
+  liveWikilinkDecorationColor: string | null
+  /** #11：阅读双链经 `.oile-reading-block a.oile-wikilink` 命中的属性值 */
+  readingWikilinkDecorationColor: string | null
 }
 
 /** live 侧语法装饰统计（#8：装饰集合计数，覆盖标题/行内/块级/任务/降级观测） */
@@ -397,7 +419,9 @@ function isCssProbeReport(v: unknown): v is CssProbeReport {
     isNullOrString(v.readingLinkDecorationColor) &&
     isNullOrString(v.readingImageDecorationColor) &&
     isNullOrString(v.liveTablePipeDecorationColor) &&
-    isNullOrString(v.readingTableDecorationColor)
+    isNullOrString(v.readingTableDecorationColor) &&
+    isNullOrString(v.liveWikilinkDecorationColor) &&
+    isNullOrString(v.readingWikilinkDecorationColor)
   )
 }
 
@@ -518,8 +542,10 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.readingSyntax === undefined || isReadingSyntaxProbe(v.readingSyntax)) &&
         (v.liveLinkCount === undefined || isNonNegativeInt(v.liveLinkCount)) &&
         (v.liveImageCount === undefined || isNonNegativeInt(v.liveImageCount)) &&
+        (v.liveWikilinkCount === undefined || isNonNegativeInt(v.liveWikilinkCount)) &&
         (v.readingLinkCount === undefined || isNonNegativeInt(v.readingLinkCount)) &&
         (v.readingImageCount === undefined || isNonNegativeInt(v.readingImageCount)) &&
+        (v.readingWikilinkCount === undefined || isNonNegativeInt(v.readingWikilinkCount)) &&
         (v.imageStates === undefined || isImageStateCounts(v.imageStates)) &&
         (v.find === undefined || isFindSessionProbe(v.find))
       )
@@ -538,6 +564,14 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         isString(v.sessionId) &&
         isString(v.docUri) &&
         isString(v.href) &&
+        isNonNegativeInt(v.srcStart) &&
+        isNonNegativeInt(v.srcEnd)
+      )
+    case 'wikilink.activate':
+      return (
+        isString(v.sessionId) &&
+        isString(v.docUri) &&
+        isString(v.target) &&
         isNonNegativeInt(v.srcStart) &&
         isNonNegativeInt(v.srcEnd)
       )

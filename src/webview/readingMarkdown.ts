@@ -10,7 +10,8 @@
 // 源锚点：list_item_open 渲染规则把 token.map 行区间换算为全文 UTF-16
 // offset 写入 data-oile-src-start/end（与协议坐标同构）；任务项标记的更细
 // 锚点在 convertTaskItems 中按 li 首行源文计算（#9 勾选写回的定位依据）。
-import MarkdownIt, { type Env, type Token } from 'markdown-it'
+import MarkdownIt, { type Env, type StateInline, type Token } from 'markdown-it'
+import { WIKILINK_CLASS_NAMES, parseWikilinkInner } from '../shared/wikilink'
 
 /** 渲染环境：行首/行尾 offset 表（lineStarts[i]/lineEnds[i] 为第 i 行界） */
 export interface ReadingRenderEnv {
@@ -30,6 +31,53 @@ export const READING_MARKDOWN_CLASS_NAMES = {
   taskCheckbox: 'oile-reading-task-checkbox',
 } as const
 
+/**
+ * 双链 inline 规则（#11）：合法 `[[…]]` 渲染为 `<a class="oile-wikilink"
+ * href="原文target">显示文字</a>`。与 live 装饰、宿主解析共用
+ * shared/wikilink 形态学（三处语义逐字节一致）；嵌入 `![[…]]`、块引用 `^`、
+ * 残缺形态返回 false——markdown-it 按普通文本渲染，源码保真降级。
+ * href 为 `|` 之前的原文（未 trim）：单击经 syncController 的事件委托上报
+ * wikilink.activate，规范化在宿主侧。
+ */
+function oileWikilinkInlineRule(state: StateInline, silent: boolean): boolean {
+  const src = state.src
+  const start = state.pos
+  if (start + 1 >= state.posMax || src.charCodeAt(start) !== 0x5b || src.charCodeAt(start + 1) !== 0x5b) {
+    return false
+  }
+  // 前置 !（嵌入）与前置 [（三连括号）不匹配：二期形态按原文降级
+  const prev = start > 0 ? src.charCodeAt(start - 1) : -1
+  if (prev === 0x21 /* ! */ || prev === 0x5b /* [ */) {
+    return false
+  }
+  const close = src.indexOf(']]', start + 2)
+  if (close < 0 || close + 2 > state.posMax) {
+    return false
+  }
+  const inner = src.slice(start + 2, close)
+  if (/[\[\]\n]/.test(inner)) {
+    return false
+  }
+  const parsed = parseWikilinkInner(inner)
+  if (!parsed) {
+    return false
+  }
+  if (!silent) {
+    const pipeAt = inner.indexOf('|')
+    const target = pipeAt >= 0 ? inner.slice(0, pipeAt) : inner
+    const open = state.push('link_open', 'a', 1)
+    open.attrs = [
+      ['href', target],
+      ['class', WIKILINK_CLASS_NAMES.wikilink],
+    ]
+    const text = state.push('text', '', 0)
+    text.content = parsed.display
+    state.push('link_close', 'a', -1)
+  }
+  state.pos = close + 2
+  return true
+}
+
 /** 创建阅读渲染器（安全配置锁定；渲染规则一次性装配，实例应复用） */
 export function createMarkdownRenderer(): InstanceType<typeof MarkdownIt> {
   const md = new MarkdownIt({
@@ -38,6 +86,9 @@ export function createMarkdownRenderer(): InstanceType<typeof MarkdownIt> {
     typographer: false,
     breaks: false,
   })
+  // #11 双链规则先于 link（[t](u)）：`[[…]]` 在 CommonMark 中只是普通文本，
+  // 必须在文本规则消费前拦截
+  md.inline.ruler.before('link', 'oile_wikilink', oileWikilinkInlineRule)
   md.renderer.rules['list_item_open'] = (tokens, idx, _options, env) => {
     const map = (tokens[idx] as Token).map
     const bounds = env as unknown as ReadingRenderEnv | undefined

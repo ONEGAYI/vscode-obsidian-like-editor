@@ -16,6 +16,12 @@ import {
   type ImageResolution,
   type LinkContext,
 } from './linkTarget'
+import {
+  findHeadingOffset,
+  resolveWikilinkFile,
+  type WikilinkResolveContext,
+} from './wikilinkTarget'
+import { parseWikilinkInner } from '../shared/wikilink'
 import type { HostToWebview, SerChange } from '../shared/protocol'
 
 export const VIEW_TYPE = 'onegayi.obsidian-like-markdown-editor'
@@ -49,14 +55,36 @@ export interface LinkLogEntry {
   path?: string
 }
 
+/** 双链跳转执行日志（#11；与 LinkLogEntry 共用 linkLog 通道） */
+export interface WikilinkLogEntry {
+  kind:
+    | 'wikilink-doc'
+    | 'wikilink-ambiguous'
+    | 'wikilink-not-found'
+    | 'wikilink-no-workspace'
+    | 'wikilink-unsupported'
+    | 'wikilink-cancelled'
+  /** 上报的原始 target（| 之前） */
+  target: string
+  /** wikilink-doc 的目标绝对路径 */
+  path?: string
+  /** 请求的标题目标（trim 后） */
+  heading?: string
+  /** ambiguous 的候选绝对路径 */
+  candidates?: string[]
+  /** wikilink-doc 的定位方式：custom-panel=本扩展面板挂载定位；
+   *  text-editor=文本编辑器 selection reveal；none=无标题定位 */
+  locate?: 'custom-panel' | 'text-editor' | 'none'
+}
+
 interface SessionEntry {
   session: DocumentSession
   doc: vscode.TextDocument
   /** 面板发送通道（测试钩子 requestViewState 复用） */
   sends: Map<string, (message: HostToWebview) => void>
   appliedEdits: number
-  /** #10 链接跳转执行日志（容量有界） */
-  linkLog: LinkLogEntry[]
+  /** #10/#11 链接跳转执行日志（容量有界） */
+  linkLog: Array<LinkLogEntry | WikilinkLogEntry>
 }
 
 /** 文档的资源根（#10）：图片 webview 资源许可面 = 工作区文件夹根
@@ -248,6 +276,165 @@ export function createTextEditorProvider(
     }
   }
 
+  // ---- #11 双链跳转执行（ADR-0002：按需 findFiles 解析，不建持久索引） ----
+
+  /** 目标已是本扩展面板时等待其就绪（隐藏面板重载场景），返回可投递面板 */
+  const waitForReadyPanel = async (
+    entry: SessionEntry,
+    timeoutMs = 5000,
+  ): Promise<string | undefined> => {
+    const deadline = Date.now() + timeoutMs
+    for (;;) {
+      const panel = entry.session.getInfo().panels.find((p) => p.ready)
+      if (panel) {
+        return panel.sessionId
+      }
+      if (Date.now() > deadline) {
+        return undefined
+      }
+      await new Promise((r) => setTimeout(r, 100))
+    }
+  }
+
+  /** 当前工作区内（限定当前文档所属文件夹）的全部 .md 绝对路径，按需现查 */
+  const findWorkspaceMdFiles = async (folder: vscode.Uri): Promise<string[]> => {
+    const uris = await vscode.workspace.findFiles('**/*.md')
+    const rootFsPath = folder.fsPath
+    const out: string[] = []
+    for (const uri of uris) {
+      const rel = path.relative(rootFsPath, uri.fsPath)
+      if (rel !== '' && (rel.startsWith('..') || path.isAbsolute(rel))) {
+        continue // 多根工作区：只取当前文档所属文件夹内的文件
+      }
+      out.push(uri.fsPath)
+    }
+    return out
+  }
+
+  /**
+   * 双链跳转执行（#11）：解析（按需 findFiles + 纯分类器）→ 重名 QuickPick
+   * 选择 → 打开目标并定位标题。定位双路径：
+   * - 目标已是本扩展面板：reveal 该面板（vscode.openWith 对已开面板是重显）
+   *   后发 view.locate——reading 模式经 #14 的块挂载定位（屏外目标可定位），
+   *   live 模式光标+滚动
+   * - 其余：文本编辑器打开；有标题时以标题行 selection reveal（1.86 API 面）
+   * 全程只读：不触碰 TextDocument、不建索引、不自动创建文件。
+   * 测试钩子模式（OILE_TEST_HOOKS）下歧义只记录不弹 QuickPick（与 #10 外链
+   * 不真开浏览器同口径）。
+   */
+  const executeWikilinkIntent = async (
+    document: vscode.TextDocument,
+    intent: { target: string; srcStart: number; srcEnd: number },
+    log: Array<LinkLogEntry | WikilinkLogEntry>,
+  ): Promise<void> => {
+    const pushLog = (entry: WikilinkLogEntry): void => {
+      log.push(entry)
+      while (log.length > 64) {
+        log.shift()
+      }
+    }
+    const parsed = parseWikilinkInner(intent.target.trim())
+    if (!parsed) {
+      pushLog({ kind: 'wikilink-unsupported', target: intent.target })
+      void vscode.window.showWarningMessage(
+        `不支持的双链形态「[[${intent.target}]]」（块引用 ^、嵌入 ![[…]] 等属二期）：已按原文保留`,
+      )
+      return
+    }
+    const folder = vscode.workspace.getWorkspaceFolder(document.uri)
+    const ctx: WikilinkResolveContext = {
+      docDir: path.dirname(document.uri.fsPath),
+      rootDir: (folder ? folder.uri : vscode.Uri.joinPath(document.uri, '..')).fsPath,
+      isWindowsHost: process.platform === 'win32',
+      hasWorkspace: folder !== undefined,
+    }
+    const mdFiles = ctx.hasWorkspace ? await findWorkspaceMdFiles(folder!.uri) : []
+    const resolution = resolveWikilinkFile({ path: parsed.path }, ctx, mdFiles)
+    if (resolution.kind === 'no-workspace') {
+      pushLog({ kind: 'wikilink-no-workspace', target: parsed.path })
+      void vscode.window.showWarningMessage(
+        '当前文档不在任何工作区文件夹内：双链目标需要按工作区查找，未打开文件夹时无法跳转（链接文本保留）',
+      )
+      return
+    }
+    if (resolution.kind === 'not-found') {
+      pushLog({ kind: 'wikilink-not-found', target: parsed.path, heading: parsed.heading ?? undefined })
+      void vscode.window.showWarningMessage(
+        `双链目标不存在：[[${parsed.path}]]（已按当前工作区按需查找；不会自动创建文件）`,
+      )
+      return
+    }
+    let targetPath: string
+    if (resolution.kind === 'ambiguous') {
+      const candidates = [...resolution.fsPaths]
+      pushLog({ kind: 'wikilink-ambiguous', target: parsed.path, candidates })
+      if (process.env.OILE_TEST_HOOKS === '1') {
+        return // 集成测试环境无法驱动 QuickPick：只记录候选（手感留 #15 人工验证）
+      }
+      const items = candidates.map((p) => ({
+        label: vscode.workspace.asRelativePath(vscode.Uri.file(p), false),
+        description: p,
+        fsPath: p,
+      }))
+      const pick = await vscode.window.showQuickPick(items, {
+        placeHolder: `找到多个双链目标「${parsed.path}」，请选择要打开的笔记`,
+      })
+      if (!pick) {
+        pushLog({ kind: 'wikilink-cancelled', target: parsed.path, candidates })
+        return
+      }
+      targetPath = pick.fsPath
+    } else {
+      targetPath = resolution.fsPath
+    }
+
+    const targetUri = vscode.Uri.file(targetPath)
+    const display = `[[${parsed.path}${parsed.heading !== null ? `#${parsed.heading}` : ''}]]`
+    // 标题定位：先读目标内容算 offset（openTextDocument 只装载不显示）
+    let headingOffset: { offset: number; end: number } | null = null
+    let headingMissing = false
+    if (parsed.heading !== null) {
+      const targetDoc = await vscode.workspace.openTextDocument(targetUri)
+      headingOffset = findHeadingOffset(targetDoc.getText(), parsed.heading)
+      headingMissing = headingOffset === null
+    }
+
+    const targetEntry = sessions.get(targetUri.toString())
+    // 日志先于打开动作（与 #10 executeLinkIntent 同口径）：文本编辑器打开会
+    // 替换源面板（会话退场），事后无从观测
+    pushLog({
+      kind: 'wikilink-doc',
+      target: parsed.path,
+      path: targetPath,
+      heading: parsed.heading ?? undefined,
+      locate: headingOffset ? (targetEntry ? 'custom-panel' : 'text-editor') : 'none',
+    })
+    if (targetEntry) {
+      // 目标已是本扩展面板：reveal 面板后 view.locate（reading 挂载定位路径）
+      await vscode.commands.executeCommand('vscode.openWith', targetUri, VIEW_TYPE)
+      const sessionId = await waitForReadyPanel(targetEntry)
+      if (headingOffset && sessionId) {
+        targetEntry.session.postToPanel(sessionId, { kind: 'view.locate', offset: headingOffset.offset })
+      }
+    } else {
+      const targetDoc = await vscode.workspace.openTextDocument(targetUri)
+      if (headingOffset) {
+        const selection = new vscode.Range(
+          targetDoc.positionAt(headingOffset.offset),
+          targetDoc.positionAt(headingOffset.end),
+        )
+        await vscode.window.showTextDocument(targetDoc, { selection })
+      } else {
+        await vscode.window.showTextDocument(targetDoc)
+      }
+    }
+    if (headingMissing) {
+      void vscode.window.showWarningMessage(
+        `已在目标文档中打开${display}，但未找到标题「${parsed.heading}」（标题匹配：trim + 空白折叠 + 大小写不敏感的 ATX 标题）`,
+      )
+    }
+  }
+
   const provider: vscode.CustomTextEditorProvider = {
     resolveCustomTextEditor(document, webviewPanel, _token): void {
       const entry = openEntry(document)
@@ -259,10 +446,14 @@ export function createTextEditorProvider(
       const openLink = (intent: { href: string; srcStart: number; srcEnd: number }): void => {
         void executeLinkIntent(document, linkCtx, intent, entry.linkLog)
       }
+      // #11 双链跳转执行端口（按需 findFiles 解析 + 打开/定位/反馈）
+      const openWikilink = (intent: { target: string; srcStart: number; srcEnd: number }): void => {
+        void executeWikilinkIntent(document, intent, entry.linkLog)
+      }
       const resolveImage = async (src: string): Promise<ImageResolution> => {
         return resolveWorkspaceImage(src, linkCtx, webviewPanel.webview)
       }
-      const sessionId = entry.session.attachPanel({ send, openLink, resolveImage })
+      const sessionId = entry.session.attachPanel({ send, openLink, openWikilink, resolveImage })
       entry.sends.set(sessionId, send)
 
       const messageSub = webviewPanel.webview.onDidReceiveMessage((message) => {
@@ -554,7 +745,7 @@ async function executeLinkIntent(
   document: vscode.TextDocument,
   ctx: LinkContext,
   intent: { href: string; srcStart: number; srcEnd: number },
-  log: LinkLogEntry[],
+  log: Array<LinkLogEntry | WikilinkLogEntry>,
 ): Promise<void> {
   const pushLog = (entry: LinkLogEntry): void => {
     log.push(entry)

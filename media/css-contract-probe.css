@@ -87,3 +87,16 @@
 #app .oile-view-reading .oile-reading-block table {
   text-decoration-color: rgb(22, 23, 24);
 }
+
+/* ---- #11：双链稳定类名探针 ---- */
+
+/* live 双链（非活动行 widget 与活动行 mark 共用类名；Obsidian 对应
+   .cm-hmd-internal-link） */
+#app .oile-view-live .oile-wikilink {
+  text-decoration-color: rgb(28, 29, 30);
+}
+
+/* reading 双链（markdown-it 规则渲染的 a；Obsidian 对应 .internal-link） */
+#app .oile-view-reading .oile-reading-block a.oile-wikilink {
+  text-decoration-color: rgb(31, 32, 33);
+}
