@@ -34,24 +34,44 @@ export function resolveTestHostMode(platform = process.platform, env = process.e
   return requested ?? (platform === 'win32' ? 'desktop' : 'foreground')
 }
 
-export function runTestHost({ executable, args, env, mode = resolveTestHostMode(), stdout = process.stdout, stderr = process.stderr }) {
+export function runTestHost({ executable, args, env, mode = resolveTestHostMode(), timeoutMs = 15 * 60_000, stdout = process.stdout, stderr = process.stderr }) {
   if (mode === 'desktop' && process.platform !== 'win32') {
     throw new Error('独立桌面仅支持 Windows')
   }
   if (mode !== 'desktop' && mode !== 'foreground') {
     throw new Error(`未知测试宿主模式：${mode}`)
   }
-  const shell = mode === 'foreground' && process.platform === 'win32' && executable.endsWith('.cmd')
-  const command = mode === 'desktop' ? 'powershell.exe' : shell ? `"${executable}"` : executable
-  const commandArgs = mode === 'desktop'
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error(`测试宿主超时必须为正数：${timeoutMs}`)
+  }
+  const windowsWrapper = process.platform === 'win32'
+  const command = windowsWrapper ? 'powershell.exe' : executable
+  const commandArgs = windowsWrapper
     ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', hiddenDesktopScript,
-      Buffer.from(JSON.stringify({ executable, args, cwd: process.cwd() }), 'utf8').toString('base64')]
-    : shell ? args.map((arg) => `"${arg}"`) : args
+      Buffer.from(JSON.stringify({ executable, args, cwd: process.cwd(), mode, parentPid: process.pid }), 'utf8').toString('base64')]
+    : args
   return new Promise((resolve, reject) => {
-    const child = spawn(command, commandArgs, { env, shell, windowsHide: true })
+    const child = spawn(command, commandArgs, { env, windowsHide: windowsWrapper })
+    let stopCode = 0
+    const stop = (code, reason) => {
+      if (stopCode) return
+      stopCode = code
+      stderr.write(`[testHost] ${reason}，结束本次测试宿主进程树\n`)
+      child.kill()
+    }
+    const onSigint = () => stop(130, '收到 SIGINT')
+    const onSigterm = () => stop(143, '收到 SIGTERM')
+    const timeout = setTimeout(() => stop(124, `超过 ${timeoutMs} ms`), timeoutMs)
+    process.on('SIGINT', onSigint)
+    process.on('SIGTERM', onSigterm)
+    const cleanup = () => {
+      clearTimeout(timeout)
+      process.off('SIGINT', onSigint)
+      process.off('SIGTERM', onSigterm)
+    }
     child.stdout.on('data', (chunk) => stdout.write(chunk))
     child.stderr.on('data', (chunk) => stderr.write(chunk))
-    child.on('error', reject)
-    child.on('close', (code) => resolve(code ?? 1))
+    child.on('error', (error) => { cleanup(); reject(error) })
+    child.on('close', (code) => { cleanup(); resolve(stopCode || (code ?? 1)) })
   })
 }
