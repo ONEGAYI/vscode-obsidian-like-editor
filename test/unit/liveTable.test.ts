@@ -639,6 +639,29 @@ describe('单元格编辑权威链路', () => {
     expect(linked.notices).toMatchObject([{ type: 'panel-closed-with-input', webviewText: view.state.doc.toString() }])
   })
 
+  it('另一面板占住宿主队列时，空白格组合提交后立即关闭仍取回完整候选', async () => {
+    const source = 'a|b|c\n---|---|---\n | | \n'
+    const linked = await setupLinked(source)
+    const blocker = linked.session.attachPanel({ send: () => undefined })
+    await linked.session.handleWebviewMessage({ kind: 'ready' }, blocker)
+    linked.doc.holdApply = true
+    void linked.session.handleWebviewMessage({ kind: 'edit.request', sessionId: blocker, docUri: DOC_URI,
+      seq: 1, baseVersion: 1, changes: [{ offset: 0, length: 0, text: 'X' }] }, blocker)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const view = linked.controller.getView()!
+    const pos = source.indexOf(' | | ') + 5
+    view.dispatch({ selection: EditorSelection.single(pos) })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.dispatch({ changes: { from: pos, insert: '你' }, userEvent: 'input.type.compose' })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    expect(linked.hostSent.filter((msg) => msg.kind === 'edit.request')).toHaveLength(1)
+    expect(linked.hostSent.some((msg) => msg.kind === 'conflict.report' && msg.compositionPending === false)).toBe(true)
+    linked.session.detachPanel(linked.sessionId)
+    expect(linked.notices).toMatchObject([{ type: 'panel-closed-with-input', webviewText: view.state.doc.toString() }])
+    expect(view.state.doc.line(3).text).toBe('| | | 你|')
+  })
+
   it.each([false, true])('纯空白格组合提交时外部%s增量按原有规则重定位或暂停', async (overlap) => {
     const source = 'a|b|c\n---|---|---\n | | \n'
     const linked = await setupLinked(source)
