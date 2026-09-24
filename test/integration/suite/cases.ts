@@ -17,6 +17,13 @@ const CMD = {
   perfProbe: 'onegayi.vsidian._test.perfProbe',
   readingPerf: 'onegayi.vsidian._test.readingPerf',
   linkLog: 'onegayi.vsidian._test.getLinkLog',
+  // #33 设置链路
+  settingsPageInfo: 'onegayi.vsidian._test.settingsPageInfo',
+  closeSettingsPage: 'onegayi.vsidian._test.closeSettingsPage',
+  installSettingsFixture: 'onegayi.vsidian._test.installSettingsFixture',
+  getSettings: 'onegayi.vsidian._test.getSettings',
+  setSettings: 'onegayi.vsidian._test.setSettings',
+  injectSettingsPageMessage: 'onegayi.vsidian._test.injectSettingsPageMessage',
 }
 
 const wsDir = process.env['WORKSPACE_DIR'] ?? ''
@@ -242,6 +249,8 @@ interface ViewState {
     currentFrom: number | null
     currentTo: number | null
   }
+  /** #33 设置快照缓存（宿主 snapshot/changed 下发后非空） */
+  settings?: Record<string, unknown>
 }
 
 /** #7 阅读视图探针回报（reading.perf.report） */
@@ -2394,5 +2403,171 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // 切回 live 验证面板仍可用
     await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
     await waitViewState('table13.md', (v) => v.viewMode === 'live')
+  }],
+
+  // ---- #33：独立设置页与设置数据链路 ----
+
+  ['设置页：无文档时命令面板可打开、关闭后可重开（#33）', async () => {
+    // 无文档前提：runner 每例结束 closeAllEditors，此处再显式兜底
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors')
+    const info0 = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as { open: boolean }
+    assert(info0.open === false, '初始应无设置页打开')
+
+    // 命令路径（命令面板入口）：不要求当前有任何 Vsidian 编辑器
+    await vscode.commands.executeCommand('onegayi.vsidian.openSettings')
+    const info = await poll('设置页打开', async () => {
+      const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
+        | { open: boolean; ready: boolean }
+        | undefined
+      return i?.open ? i : undefined
+    })
+    // webview 装载完成（ready 握手：页面已发 settings.get 拉取权威快照）
+    await poll('设置页 webview 就绪', async () => {
+      const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
+        | { ready: boolean }
+        | undefined
+      return i?.ready ? true : undefined
+    })
+    assert(info.open === true, '设置页应处于打开状态')
+
+    await vscode.commands.executeCommand(CMD.closeSettingsPage)
+    await poll('设置页关闭', async () => {
+      const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
+        | { open: boolean }
+        | undefined
+      return i && !i.open ? true : undefined
+    })
+
+    // 关闭后重开（生命周期）：再次打开得到新面板且 ready 握手重新完成
+    await vscode.commands.executeCommand('onegayi.vsidian.openSettings')
+    await poll('设置页重开并就绪', async () => {
+      const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
+        | { open: boolean; ready: boolean }
+        | undefined
+      return i?.open && i.ready ? true : undefined
+    })
+    await vscode.commands.executeCommand(CMD.closeSettingsPage)
+  }],
+
+  ['设置页：工具栏消息入口打开、标题归属 Vsidian、不改文档与撤销历史（#33）', async () => {
+    await openWithEditor('lf.md')
+    await waitSessionReady('lf.md')
+    const uri = wsUri('lf.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('lf.md'))
+    // lf.md 被早前用例编辑保存过（未还原）：以打开时的权威文本为基线，
+    // 不假设 fixture 原文
+    const original = doc.getText()
+
+    // 先落一笔真实编辑（驱动撤销历史存在），再开/关设置页
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'sync.test.edit',
+      offset: 0,
+      text: '# ',
+    })
+    const editedText = `# ${original}`
+    await poll('编辑写入权威', () => (doc.getText() === editedText ? true : undefined))
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+
+    // 工具栏入口（webview「设置」按钮产生的 settings.open 消息，经同一
+    // 校验与 provider 拦截入口注入）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'settings.open' })
+    const info = await poll('设置页经工具栏消息打开', async () => {
+      const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
+        | { open: boolean; ready: boolean; title: string }
+        | undefined
+      return i?.open ? i : undefined
+    })
+    // 标题与界面归属 Vsidian（面板标题即命令面板/页头呈现）
+    assert(info.title === 'Vsidian 设置', `设置页标题应归属 Vsidian，实际 ${info.title}`)
+    await poll('设置页 webview 就绪', async () => {
+      const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
+        | { ready: boolean }
+        | undefined
+      return i?.ready ? true : undefined
+    })
+
+    // 打开期间文档零变更
+    const duringOpen = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(doc.getText() === editedText, '打开设置页不得修改当前文档')
+    assert(duringOpen.version === before.version, `打开设置页不得推进文档版本（${before.version} → ${duringOpen.version}）`)
+    assert(duringOpen.appliedEdits === before.appliedEdits, '打开设置页不得产生写回')
+
+    // 关闭设置页后：文档不变、撤销历史仍在（undo 一次回退此前编辑）
+    await vscode.commands.executeCommand(CMD.closeSettingsPage)
+    await poll('设置页关闭', async () => {
+      const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
+        | { open: boolean }
+        | undefined
+      return i && !i.open ? true : undefined
+    })
+    assert(doc.getText() === editedText, '关闭设置页不得修改当前文档')
+    // 设置页关闭后焦点回落的目标不受控（C-5：undo 守卫要求活动 tab 为本
+    // 文档的 custom editor），先 reveal 再请求撤销
+    await vscode.commands.executeCommand('vscode.openWith', wsUri('lf.md'), VIEW_TYPE)
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('撤销历史保留', () => (doc.getText() === original ? true : undefined))
+    await doc.save()
+  }],
+
+  ['设置链路：有效值保存回读、无效值拒绝、快照到达与广播已开编辑器（#33）', async () => {
+    // fixture 定义经运行时注册并入（生产注册表为空——空状态页面的依据）
+    const install = (await vscode.commands.executeCommand(CMD.installSettingsFixture)) as { ok: boolean }
+    assert(install.ok === true, 'fixture 定义注册失败')
+
+    // 有效值保存并回读（真实宿主 globalState 持久层）
+    const okSet = (await vscode.commands.executeCommand(CMD.setSettings, { 'test.flag': true })) as { ok: boolean }
+    assert(okSet.ok === true, '有效值应保存成功')
+    const snap = (await vscode.commands.executeCommand(CMD.getSettings)) as Record<string, unknown>
+    assert(snap['test.flag'] === true, `保存后回读应为 true，实际 ${String(snap['test.flag'])}`)
+
+    // 无效值与未知键按定义拒绝（快照不被污染）
+    const badType = (await vscode.commands.executeCommand(CMD.setSettings, { 'test.flag': 1 })) as { ok: boolean }
+    assert(badType.ok === false, '类型不符的值必须被拒绝')
+    const unknown = (await vscode.commands.executeCommand(CMD.setSettings, { 'unknown.key': true })) as { ok: boolean }
+    assert(unknown.ok === false, '未知键必须被拒绝')
+    const snap2 = (await vscode.commands.executeCommand(CMD.getSettings)) as Record<string, unknown>
+    assert(snap2['test.flag'] === true, '拒绝的保存不得改变快照')
+
+    // init 拉取链路：后打开的编辑器面板装载时收到当前设置（settings.get）。
+    // 用 untouched.md（无任何用例编辑它）保证全新面板 init，不受前序用例
+    // 的面板状态影响
+    await openWithEditor('untouched.md')
+    await waitSessionReady('untouched.md')
+    const pulled = await waitViewState('untouched.md', (v) => v.settings?.['test.flag'] === true)
+    assert(pulled.settings?.['test.flag'] === true, '面板装载后应拉取到当前设置快照')
+
+    // 广播链路：宿主保存变更 → 已打开编辑器面板收到 settings.changed
+    await vscode.commands.executeCommand(CMD.setSettings, { 'test.flag': false })
+    const broadcast = await waitViewState('untouched.md', (v) => v.settings?.['test.flag'] === false)
+    assert(broadcast.settings?.['test.flag'] === false, '设置变更应广播到已打开编辑器面板')
+
+    // 设置页 webview → 宿主正式处理链路（注入与真实消息同一入口）：
+    // settings.set 经设置页消息处理入口保存成功
+    await vscode.commands.executeCommand('onegayi.vsidian.openSettings')
+    await poll('设置页就绪', async () => {
+      const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
+        | { open: boolean; ready: boolean }
+        | undefined
+      return i?.open && i.ready ? true : undefined
+    })
+    await vscode.commands.executeCommand(CMD.injectSettingsPageMessage, {
+      kind: 'settings.set',
+      values: { 'test.flag': true },
+    })
+    await poll('设置页链路保存生效', async () => {
+      const s = (await vscode.commands.executeCommand(CMD.getSettings)) as Record<string, unknown>
+      return s['test.flag'] === true ? true : undefined
+    })
+    // 广播同样把变更带回已打开编辑器
+    // 设置页打开期间其他面板可能被遮挡卸载（VSCode 默认卸载隐藏 webview），
+    // 广播以「面板可见时」为准：关闭设置页使编辑器面板恢复（必要时重载）
+    // 后，经 init 后的 settings.get 拉取链路看到最新值
+    await vscode.commands.executeCommand(CMD.closeSettingsPage)
+    const revived = await waitViewState('untouched.md', (v) => v.settings?.['test.flag'] === true)
+    assert(revived.settings?.['test.flag'] === true, '设置页链路的保存应经拉取/广播到达编辑器面板')
+
+    // 清理：恢复 fixture 默认值
+    await vscode.commands.executeCommand(CMD.setSettings, { 'test.flag': false })
+    await vscode.commands.executeCommand(CMD.closeSettingsPage)
   }],
 ]
