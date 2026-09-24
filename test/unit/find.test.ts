@@ -135,8 +135,11 @@ describe('打开与关闭（焦点契约）', () => {
     key(document, 'f', { ctrlKey: true })
     expect(viewState(c, h).find?.open).toBe(true)
     expect(document.activeElement).toBe(findInput())
-    // 焦点被移走后再按 Mod-F：重新聚焦（VSCode find 同款手感）
-    ;(parent!.querySelector('.vsidian-toolbar button') as HTMLElement).focus()
+    // 焦点被移走后再按 Mod-F：重新聚焦（VSCode find 同款手感）。
+    // #38：webview 工具栏移除后，借临时按钮把焦点移出查找输入框
+    const other = document.createElement('button')
+    parent!.appendChild(other)
+    other.focus()
     expect(document.activeElement).not.toBe(findInput())
     key(document, 'f', { metaKey: true })
     expect(document.activeElement).toBe(findInput())
