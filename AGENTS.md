@@ -117,12 +117,15 @@ vsidian/
 │       └── taskToggle.ts         # 任务勾选解析纯函数（#9）
 ├── test/             # 测试根
 │   ├── integration/ # 真宿主集成测试
-│   │   ├── fixtures.mjs     # 集成测试 fixture 单一事实源
-│   │   ├── runInstalled.mjs # VSIX 安装态集成回归启动器
-│   │   ├── runTest.mjs      # 集成测试启动器
-│   │   └── suite/           # 集成测试套件
-│   │       ├── cases.ts # 集成测试用例
-│   │       └── index.ts # 集成测试入口 runner
+│   │   ├── fixtures.mjs      # 集成测试 fixture 单一事实源
+│   │   ├── hiddenDesktop.ps1 # Windows 独立桌面启动器
+│   │   ├── runInstalled.mjs  # VSIX 安装态集成回归启动器
+│   │   ├── runTest.mjs       # 集成测试启动器
+│   │   ├── suite/            # 集成测试套件
+│   │   │   ├── cases.ts # 集成测试用例
+│   │   │   └── index.ts # 集成测试入口 runner
+│   │   ├── testHost.mjs      # 集成宿主启动策略
+│   │   └── testHost.test.mjs # 集成宿主启动契约测试
 │   ├── perf/        # 性能测量脚本与套件（#5）
 │   │   ├── gen-sample.mjs # 性能样例生成器（#5）
 │   │   ├── runPerf.mjs    # 性能测量启动器（#5）
