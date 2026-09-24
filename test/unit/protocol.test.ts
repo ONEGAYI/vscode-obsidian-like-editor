@@ -39,6 +39,64 @@ describe('isWebviewToHost', () => {
     ).toBe(true)
   })
 
+  it('接受携带未知扩展字段的 view.state（前向兼容）', () => {
+    // 校验器只校验已知字段、不拒绝未知字段——这是新观测面可以先行上车、
+    // 协议后补正式字段的扩展前提（#32 的 typography 即经此通道先行后于
+    // #34 正式入协议）。本用例固化该前向兼容契约，防止未来收紧时静默破坏。
+    expect(
+      isWebviewToHost({
+        kind: 'view.state',
+        text: '# t',
+        docLength: 4,
+        lineCount: 1,
+        renderedLines: 40,
+        futureExtension: { any: ['payload', 1] },
+      }),
+    ).toBe(true)
+  })
+
+  it('view.state 的 typography 观测（#32）：合法样本接受、字段非法拒绝', () => {
+    const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
+    const validTypography = {
+      live: { fontFamily: 'monospace', fontSizePx: 14, lineHeightPx: 19.6, textInsetPx: 24 },
+      reading: null,
+      liveList: { fontFamily: 'monospace', fontSizePx: 14 },
+      readingList: null,
+      liveQuote: { fontFamily: 'monospace', fontSizePx: null },
+      readingQuote: null,
+      liveTable: null,
+      readingTable: { fontFamily: null, fontSizePx: null },
+    }
+    // 合法：八个采样位均可为 null；样本数值非负（亚像素小数常态）
+    expect(isWebviewToHost({ ...base, typography: validTypography })).toBe(true)
+    expect(
+      isWebviewToHost({
+        ...base,
+        typography: {
+          live: null, reading: null, liveList: null, readingList: null,
+          liveQuote: null, readingQuote: null, liveTable: null, readingTable: null,
+        },
+      }),
+    ).toBe(true)
+    // 非法：fontSizePx 负数 / fontFamily 非字符串非 null / textInsetPx 非数
+    expect(
+      isWebviewToHost({ ...base, typography: { ...validTypography, live: { ...validTypography.live!, fontSizePx: -1 } } }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({ ...base, typography: { ...validTypography, live: { ...validTypography.live!, fontFamily: 14 } } }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({ ...base, typography: { ...validTypography, live: { ...validTypography.live!, textInsetPx: '24' } } }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({ ...base, typography: { ...validTypography, liveList: { fontFamily: 'x', fontSizePx: 1.5 } } }),
+    ).toBe(true) // 继承样本字号允许小数
+    expect(isWebviewToHost({ ...base, typography: { ...validTypography, liveTable: 42 } })).toBe(false)
+    expect(isWebviewToHost({ ...base, typography: null })).toBe(false)
+    // 缺省合法（向后兼容：#32 之前的旧 webview 不回报该字段）
+    expect(isWebviewToHost(base)).toBe(true)
+  })
+
   it('接受空 changes 的 edit.request', () => {
     expect(
       isWebviewToHost({
@@ -93,6 +151,77 @@ describe('isWebviewToHost', () => {
     expect(isWebviewToHost({ ...base, suspended: true })).toBe(true)
     expect(isWebviewToHost(base)).toBe(true)
     expect(isWebviewToHost({ ...base, suspended: 'yes' })).toBe(false)
+  })
+
+  it('view.state 的 lineGutter 观测（#34）：合法样本接受、字段非法拒绝', () => {
+    const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
+    // 合法：on 布尔、count 非负整数、first/last 字符串或 null
+    expect(
+      isWebviewToHost({
+        ...base,
+        lineGutter: { on: true, count: 12, first: '1', last: '12' },
+      }),
+    ).toBe(true)
+    expect(
+      isWebviewToHost({
+        ...base,
+        lineGutter: { on: false, count: 0, first: null, last: null },
+      }),
+    ).toBe(true)
+    // 非法：on 非布尔 / count 负数或小数 / first 非字符串非 null
+    expect(isWebviewToHost({ ...base, lineGutter: { on: 1, count: 1, first: null, last: null } })).toBe(false)
+    expect(isWebviewToHost({ ...base, lineGutter: { on: true, count: -1, first: null, last: null } })).toBe(false)
+    expect(isWebviewToHost({ ...base, lineGutter: { on: true, count: 1.5, first: null, last: null } })).toBe(false)
+    expect(isWebviewToHost({ ...base, lineGutter: { on: true, count: 1, first: 3, last: null } })).toBe(false)
+    // 缺省合法（向后兼容：行号扩展未装配的旧 webview）
+    expect(isWebviewToHost(base)).toBe(true)
+  })
+
+  it('view.state 的 paint 观测（P0 回归）：合法样本接受、字段非法拒绝', () => {
+    const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
+    // 合法：textVisible/darkTheme 布尔；display/userSelect/caretColor 字符串或 null
+    expect(
+      isWebviewToHost({
+        ...base,
+        paint: {
+          textVisible: true,
+          scrollerDisplay: 'flex',
+          gutterUserSelect: 'none',
+          darkTheme: true,
+          caretColor: 'rgb(255, 255, 255)',
+        },
+      }),
+    ).toBe(true)
+    expect(
+      isWebviewToHost({
+        ...base,
+        paint: {
+          textVisible: false,
+          scrollerDisplay: null,
+          gutterUserSelect: null,
+          darkTheme: false,
+          caretColor: null,
+        },
+      }),
+    ).toBe(true)
+    // 非法：textVisible 非布尔 / scrollerDisplay 非字符串非 null / darkTheme 非布尔 / caretColor 非字符串非 null
+    expect(
+      isWebviewToHost({ ...base, paint: { textVisible: 1, scrollerDisplay: 'flex', gutterUserSelect: 'none', darkTheme: false, caretColor: null } }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({ ...base, paint: { textVisible: true, scrollerDisplay: 3, gutterUserSelect: 'none', darkTheme: false, caretColor: null } }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({ ...base, paint: { textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: [], darkTheme: false, caretColor: null } }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({ ...base, paint: { textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none', darkTheme: 'dark', caretColor: null } }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({ ...base, paint: { textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none', darkTheme: false, caretColor: 0 } }),
+    ).toBe(false)
+    // 缺省合法（向后兼容：探针未装配的旧 webview）
+    expect(isWebviewToHost(base)).toBe(true)
   })
 
   it('拒绝 null、非对象与数组', () => {
@@ -607,5 +736,57 @@ describe('任务勾选协议（#9）', () => {
     expect(
       isWebviewToHost({ ...baseViewState, cssProbe: { ...probe, readingTaskCheckboxDecorationColor: undefined } }),
     ).toBe(false) // 缺字段（undefined 违反 isNullOrString）
+  })
+})
+
+describe('设置消息协议（#33）', () => {
+  const baseViewState = {
+    kind: 'view.state' as const,
+    text: '# t',
+    docLength: 4,
+    lineCount: 1,
+    renderedLines: 1,
+  }
+
+  it('接受合法 settings.open 与 settings.get，拒绝携带多余非法形态', () => {
+    expect(isWebviewToHost({ kind: 'settings.open' })).toBe(true)
+    expect(isWebviewToHost({ kind: 'settings.get' })).toBe(true)
+    // 方向校验：宿主方向不接受
+    expect(isHostToWebview({ kind: 'settings.open' })).toBe(false)
+    expect(isHostToWebview({ kind: 'settings.get' })).toBe(false)
+  })
+
+  it('接受合法 settings.set（标量键值对，含空对象），拒绝非对象 values 与非标量值', () => {
+    expect(isWebviewToHost({ kind: 'settings.set', values: {} })).toBe(true)
+    expect(isWebviewToHost({ kind: 'settings.set', values: { 'editor.lineNumbers': true } })).toBe(true)
+    expect(isWebviewToHost({ kind: 'settings.set', values: { 'a.b': 3, 'c.d': 'x' } })).toBe(true)
+    expect(isWebviewToHost({ kind: 'settings.set' })).toBe(false)
+    expect(isWebviewToHost({ kind: 'settings.set', values: null })).toBe(false)
+    expect(isWebviewToHost({ kind: 'settings.set', values: 'x' })).toBe(false)
+    expect(isWebviewToHost({ kind: 'settings.set', values: { nested: { a: 1 } } })).toBe(false)
+    expect(isWebviewToHost({ kind: 'settings.set', values: { arr: [true] } })).toBe(false)
+    expect(isWebviewToHost({ kind: 'settings.set', values: { nul: null } })).toBe(false)
+    // 方向校验
+    expect(isHostToWebview({ kind: 'settings.set', values: {} })).toBe(false)
+  })
+
+  it('接受合法 settings.snapshot 与 settings.changed，拒绝非法 values', () => {
+    expect(isHostToWebview({ kind: 'settings.snapshot', values: {} })).toBe(true)
+    expect(isHostToWebview({ kind: 'settings.snapshot', values: { 'editor.lineNumbers': false } })).toBe(true)
+    expect(isHostToWebview({ kind: 'settings.changed', values: { 'a.b': true, 'c.d': 2 } })).toBe(true)
+    expect(isHostToWebview({ kind: 'settings.snapshot' })).toBe(false)
+    expect(isHostToWebview({ kind: 'settings.changed', values: [] })).toBe(false)
+    expect(isHostToWebview({ kind: 'settings.changed', values: { bad: undefined } })).toBe(false)
+    // 方向校验：webview 方向不接受
+    expect(isWebviewToHost({ kind: 'settings.snapshot', values: {} })).toBe(false)
+    expect(isWebviewToHost({ kind: 'settings.changed', values: {} })).toBe(false)
+  })
+
+  it('view.state 接受 settings 可选快照字段，拒绝类型错误', () => {
+    expect(isWebviewToHost({ ...baseViewState, settings: { 'editor.lineNumbers': true } })).toBe(true)
+    expect(isWebviewToHost({ ...baseViewState, settings: {} })).toBe(true)
+    expect(isWebviewToHost({ ...baseViewState, settings: { bad: { x: 1 } } })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, settings: { bad: null } })).toBe(false)
+    expect(isWebviewToHost({ ...baseViewState, settings: 'x' })).toBe(false)
   })
 })
