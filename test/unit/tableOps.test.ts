@@ -440,6 +440,25 @@ describe('表格点阵与悬停控件', () => {
 })
 
 describe('表格增删行列权威链路', () => {
+  it('创建表格命令：行中文字拆开隔行，单笔写回且一次撤销', async () => {
+    const original = '左文右文\n尾段'
+    const linked = await setupLinked(original)
+    const view = linked.controller.getView()!
+    view.dispatch({ selection: EditorSelection.single(2) })
+    linked.controller.handleHostMessage({ kind: 'table.create' })
+    await settle()
+    const expected = '左文\n\n|  |  |\n| --- | --- |\n|  |  |\n\n右文\n尾段'
+    expect(linked.doc.getText()).toBe(expected)
+    expect(linked.doc.applyCalls).toHaveLength(1)
+    expect(view.state.selection.main.from).toBe(expected.indexOf('|  |') + 2)
+    await linked.session.handleWebviewMessage(
+      { kind: 'history.request', op: 'undo' },
+      linked.sessionId,
+    )
+    await settle()
+    expect(linked.doc.getText()).toBe(original)
+  })
+
   it('插入行（命令路径）：一笔 edit.request，权威文档与保存回读一致，焦点落新行首格', async () => {
     const linked = await setupLinked(TABLE_DOC)
     const view = linked.controller.getView()!

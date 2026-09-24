@@ -37,19 +37,19 @@ VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 ```
 <!-- file-tree:tree:begin 由脚本渲染，禁止手改 -->
 vsidian/
-├── .agents/          # agent 技能与本地配置
+├── .agents/               # agent 技能与本地配置
 │   └── skills/ # 已部署 agent 技能
 │       └── file-tree/ # file-tree 技能部署实例
-├── .gitignore        # Git 忽略规则
-├── .scratch/         # MVP 开票草稿，临时目录
-├── .vscode/          # VSCode 工作区配置
+├── .gitignore             # Git 忽略规则
+├── .scratch/              # MVP 开票草稿，临时目录
+├── .vscode/               # VSCode 工作区配置
 │   ├── launch.json # F5 扩展宿主启动配置
 │   └── tasks.json  # 调试前编译任务
-├── .vscodeignore     # VSIX 打包排除清单
-├── AGENTS.md         # 项目级 agent 规则单一事实源
-├── CLAUDE.md         # Claude 专属规则导入入口
-├── CONTEXT.md        # 领域语言与产品边界事实源
-├── docs/             # 项目文档根
+├── .vscodeignore          # VSIX 打包排除清单
+├── AGENTS.md              # 项目级 agent 规则单一事实源
+├── CLAUDE.md              # Claude 专属规则导入入口
+├── CONTEXT.md             # 领域语言与产品边界事实源
+├── docs/                  # 项目文档根
 │   ├── adr/      # 架构决策记录
 │   │   ├── 0001-vscode-186-remote-support.md     # 兼容 VSCode 1.86 与远程
 │   │   ├── 0002-wikilink-on-demand-resolution.md # 双链按需解析不建持久索引
@@ -77,14 +77,16 @@ vsidian/
 │       ├── manual-verification.md # 人工验证清单
 │       ├── mvp-issues.md          # MVP GitHub Issue 索引
 │       └── mvp.md                 # MVP 规格主文档
-├── esbuild.mjs       # esbuild 双产物构建脚本
-├── media/            # 随扩展打包的静态资源
+├── esbuild.mjs            # esbuild 双产物构建脚本
+├── media/                 # 随扩展打包的静态资源
 │   ├── css-contract-probe.css # 样式契约内部测试片段
 │   └── vsidian-icon.png       # Vsidian 扩展图标
-├── package-lock.json # npm 依赖锁定文件
-├── package.json      # 扩展清单与锁定依赖
-├── README.md         # 项目门面说明
-├── src/              # 扩展源码
+├── package-lock.json      # npm 依赖锁定文件
+├── package.json           # 扩展清单与锁定依赖
+├── package.nls.json       # 命令默认英文文案
+├── package.nls.zh-cn.json # 命令简体中文文案
+├── README.md              # 项目门面说明
+├── src/                   # 扩展源码
 │   ├── extension.ts # 扩展激活入口
 │   ├── host/        # 宿主端实现
 │   │   ├── documentSession.ts    # 文档会话与写回同步
@@ -115,10 +117,11 @@ vsidian/
 │       ├── syncController.ts     # CM6 同步控制器
 │       ├── tableCells.ts         # 表格单元格拆分纯函数（#12）
 │       ├── tableControls.ts      # 表格可见行控件与拖动
+│       ├── tableCreate.ts        # 光标处建表规划纯函数
 │       ├── tableEditing.ts       # 表格输入钩子（#12）
 │       ├── tableStructure.ts     # 表格导航与增删行列纯函数（#13）
 │       └── taskToggle.ts         # 任务勾选解析纯函数（#9）
-├── test/             # 测试根
+├── test/                  # 测试根
 │   ├── integration/ # 真宿主集成测试
 │   │   ├── fixtures.mjs      # 集成测试 fixture 单一事实源
 │   │   ├── hiddenDesktop.ps1 # Windows 独立桌面启动器
@@ -158,6 +161,7 @@ vsidian/
 │       ├── readingVirtualView.test.ts  # 虚拟化装配契约测试
 │       ├── suspendResume.test.ts       # 暂停恢复契约测试
 │       ├── tableCells.test.ts          # 单元格拆分契约测试（#12）
+│       ├── tableCreate.test.ts         # 建表与本地化契约测试
 │       ├── tableOps.test.ts            # 表格导航与结构命令链路契约（#13）
 │       ├── tableStructure.test.ts      # 表格结构操作纯函数契约（#13）
 │       ├── taskInteraction.test.ts     # 任务勾选交互契约测试（#9）
@@ -167,8 +171,8 @@ vsidian/
 │       ├── wikilinkInteraction.test.ts # 双链交互契约测试（#11）
 │       ├── wikilinkParse.test.ts       # 双链形态学契约测试（#11）
 │       └── wikilinkTarget.test.ts      # 双链目标解析契约测试（#11）
-├── tsconfig.json     # TypeScript 类型检查配置
-└── vitest.config.ts  # vitest 单元测试配置
+├── tsconfig.json          # TypeScript 类型检查配置
+└── vitest.config.ts       # vitest 单元测试配置
 <!-- file-tree:tree:end -->
 ```
 

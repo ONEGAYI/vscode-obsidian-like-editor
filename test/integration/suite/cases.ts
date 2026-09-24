@@ -2264,6 +2264,27 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await doc.save()
   }],
 
+  ['创建空表格命令：行内拆分、上下空行、CRLF 回读与单次撤销', async () => {
+    await openWithEditor('table-create-crlf.md')
+    await waitSessionReady('table-create-crlf.md')
+    const uri = wsUri('table-create-crlf.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('table-create-crlf.md'))
+    const original = '左文右文\r\n尾段\r\n'
+    const expected = '左文\r\n\r\n|  |  |\r\n| --- | --- |\r\n|  |  |\r\n\r\n右文\r\n尾段\r\n'
+    assert(doc.getText() === original, '创建表格夹具原文不符')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: 2 })
+    const invoked = await vscode.commands.executeCommand('onegayi.vsidian.table.create')
+    assert(invoked === true, '创建表格命令应在活动 Vsidian 编辑器中可用')
+    await poll('创建表格写回 CRLF 文档', () => doc.getText() === expected ? true : undefined)
+    const state = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(state.appliedEdits === 1, '创建表格应只产生一笔宿主编辑')
+    assert(await doc.save(), '创建表格保存失败')
+    assert(await readDisk('table-create-crlf.md') === expected, '创建表格保存回读未保留 CRLF 或上下文')
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('创建表格一次撤销恢复原文', () => doc.getText() === original ? true : undefined)
+    await doc.save()
+  }],
+
   // ---- 工单 #13：表格键盘导航与增删行列 ----
 
   ['表格增删行列：命令路径写回权威文档、区域不变、一次撤销（#13）', async () => {
