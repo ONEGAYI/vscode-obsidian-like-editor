@@ -102,6 +102,8 @@ export type HostToWebview =
   /** 测试钩子（#42）：在真实 webview 网格单元格派发鼠标点击及当前位置输入。 */
   | { kind: 'table.test.cellClick'; rowIndex: number; columnIndex: number; point?: 'edge' | 'middle' }
   | { kind: 'table.test.type'; text: string }
+  /** 测试钩子（#43）：点击真实行/列抓手，验证选中态实际绘制。 */
+  | { kind: 'table.test.select'; axis: 'row' | 'column'; index: number }
   /** 测试钩子（#43）：真实 webview DOM 的点阵抓手拖动事件。 */
   | { kind: 'table.test.drag'; sourceIndex: number; targetSlot: number }
   /** 测试钩子（#21）：在真实 webview 的 CM6 中输入，验证暂停态即时留存。 */
@@ -400,6 +402,21 @@ export interface PaintProbe {
    *  drawSelection 时 CM6 光标即原生 caret，颜色由 baseTheme 明暗变体
    *  决定（light=black / dark=white）；jsdom 无 CSS 引擎为 null */
   caretColor: string | null
+  /** #42/#43 表格绘制：真宿主文本命中与计算样式；无表格/未选中为 null。 */
+  table?: {
+    cellVisible: boolean
+    gridDisplay: string | null
+    cellBorderWidth: string | null
+    rowOutlineColor: string | null
+    rowOutlineWidth: string | null
+    rowBackgroundColor: string | null
+    columnBorderColor: string | null
+    columnBorderWidth: string | null
+    columnRightBorderWidth: string | null
+    columnTopBorderWidth: string | null
+    columnBottomBorderWidth: string | null
+    columnBackgroundColor: string | null
+  }
 }
 
 /** #32 排版一致性探针：正文基础排版四项样本（null = 元素缺失/不可读） */
@@ -566,7 +583,22 @@ function isPaintProbe(v: unknown): v is PaintProbe {
     isNullOrString(v.scrollerDisplay) &&
     isNullOrString(v.gutterUserSelect) &&
     typeof v.darkTheme === 'boolean' &&
-    isNullOrString(v.caretColor)
+    isNullOrString(v.caretColor) &&
+    (v.table === undefined || (
+      isObject(v.table) &&
+      typeof v.table.cellVisible === 'boolean' &&
+      isNullOrString(v.table.gridDisplay) &&
+      isNullOrString(v.table.cellBorderWidth) &&
+      isNullOrString(v.table.rowOutlineColor) &&
+      isNullOrString(v.table.rowOutlineWidth) &&
+      isNullOrString(v.table.rowBackgroundColor) &&
+      isNullOrString(v.table.columnBorderColor) &&
+      isNullOrString(v.table.columnBorderWidth) &&
+      isNullOrString(v.table.columnRightBorderWidth) &&
+      isNullOrString(v.table.columnTopBorderWidth) &&
+      isNullOrString(v.table.columnBottomBorderWidth) &&
+      isNullOrString(v.table.columnBackgroundColor)
+    ))
   )
 }
 
@@ -970,6 +1002,8 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
         (v.point === undefined || v.point === 'edge' || v.point === 'middle')
     case 'table.test.type':
       return isString(v.text)
+    case 'table.test.select':
+      return (v.axis === 'row' || v.axis === 'column') && isNonNegativeInt(v.index)
     case 'table.test.drag':
       return isNonNegativeInt(v.sourceIndex) && isNonNegativeInt(v.targetSlot)
     case 'sync.test.edit':

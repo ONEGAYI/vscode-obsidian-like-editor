@@ -283,6 +283,20 @@ interface ViewState {
     gutterUserSelect: string | null
     darkTheme: boolean
     caretColor: string | null
+    table?: {
+      cellVisible: boolean
+      gridDisplay: string | null
+      cellBorderWidth: string | null
+      rowOutlineColor: string | null
+      rowOutlineWidth: string | null
+      rowBackgroundColor: string | null
+      columnBorderColor: string | null
+      columnBorderWidth: string | null
+      columnRightBorderWidth: string | null
+      columnTopBorderWidth: string | null
+      columnBottomBorderWidth: string | null
+      columnBackgroundColor: string | null
+    }
   }
 }
 
@@ -1857,6 +1871,12 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(clicked.tableGrid?.visibleRows === 3, '活动格不得撤掉表格网格行')
     assert(clicked.tableGrid?.rowHandles === 3, '活动格仍须保留 #43 点阵抓手')
     assert(clicked.tableGrid?.selectedRowCells[0]?.includes('苹果') === true, '点击应命中苹果单元格')
+    assert(clicked.paint?.table?.cellVisible === true,
+      '表格单元格文字须在绘制层命中，不能仅有 DOM 文本')
+    assert(clicked.paint?.table?.gridDisplay === 'grid',
+      `表格行须实际按网格绘制：${clicked.paint?.table?.gridDisplay}`)
+    assert(Number.parseFloat(clicked.paint?.table?.cellBorderWidth ?? '') > 0,
+      `表格单元格须实际绘出边框：${clicked.paint?.table?.cellBorderWidth}`)
 
     await vscode.commands.executeCommand(CMD.postToPanel, uri,
       { kind: 'table.test.cellClick', rowIndex: 1, columnIndex: 0, point: 'middle' })
@@ -2327,6 +2347,43 @@ export const cases: Array<[string, () => Promise<void>]> = [
     }
 
     assert(await readDisk('wikilinks.md') === diskBefore, '歧义/缺失链路不得改写源文档')
+  }],
+
+  ['表格行列选中在绘制层显示完整轮廓与高亮（#43）', async () => {
+    await openWithEditor('table43-crlf.md')
+    await waitSessionReady('table43-crlf.md')
+    const uri = wsUri('table43-crlf.md').toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.select', axis: 'row', index: 1 })
+    const row = await waitViewState('table43-crlf.md', (v) => v.paint?.table?.rowOutlineWidth != null)
+    const rowPaint = row.paint!.table!
+    assert(rowPaint.cellVisible === true && rowPaint.gridDisplay === 'grid',
+      '选中行的表格文字仍须真实可见且保持网格布局')
+    assert(rowPaint.rowOutlineColor !== null && rowPaint.rowOutlineColor !== 'rgba(0, 0, 0, 0)',
+      `选中行轮廓须有实色：${rowPaint.rowOutlineColor}`)
+    const baseBorderWidth = Number.parseFloat(rowPaint.cellBorderWidth ?? '')
+    assert(baseBorderWidth > 0 && Number.parseFloat(rowPaint.rowOutlineWidth ?? '') > baseBorderWidth,
+      `选中行轮廓须比普通格线更醒目：格线=${rowPaint.cellBorderWidth}，轮廓=${rowPaint.rowOutlineWidth}`)
+    assert(rowPaint.rowBackgroundColor !== null && rowPaint.rowBackgroundColor !== 'rgba(0, 0, 0, 0)',
+      `选中行单元格须实际着色：${rowPaint.rowBackgroundColor}`)
+
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.select', axis: 'column', index: 0 })
+    const column = await waitViewState('table43-crlf.md', (v) => v.paint?.table?.columnBorderWidth != null)
+    const colPaint = column.paint!.table!
+    assert(colPaint.cellVisible === true && colPaint.gridDisplay === 'grid',
+      '选中列的表格文字仍须真实可见且保持网格布局')
+    assert(colPaint.columnBorderColor === rowPaint.rowOutlineColor,
+      `行列轮廓须使用同一主题强调色：行=${rowPaint.rowOutlineColor}，列=${colPaint.columnBorderColor}`)
+    assert(Number.parseFloat(colPaint.columnBorderWidth ?? '') > baseBorderWidth,
+      `选中列两侧轮廓须比普通格线更醒目：格线=${colPaint.cellBorderWidth}，轮廓=${colPaint.columnBorderWidth}`)
+    assert(Number.parseFloat(colPaint.columnRightBorderWidth ?? '') > baseBorderWidth,
+      `选中列右侧轮廓须闭合：${colPaint.columnRightBorderWidth}`)
+    assert(Number.parseFloat(colPaint.columnTopBorderWidth ?? '') > baseBorderWidth &&
+      Number.parseFloat(colPaint.columnBottomBorderWidth ?? '') > baseBorderWidth,
+      `选中列顶边和底边须闭合：${colPaint.columnTopBorderWidth}/${colPaint.columnBottomBorderWidth}`)
+    assert(colPaint.columnBackgroundColor !== null && colPaint.columnBackgroundColor !== 'rgba(0, 0, 0, 0)',
+      `选中列单元格须实际着色：${colPaint.columnBackgroundColor}`)
   }],
 
   ['点阵拖排行经真实 webview 鼠标处理器写回 CRLF，一次撤销（#43）', async () => {
