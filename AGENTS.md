@@ -2,19 +2,20 @@
 
 VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 
-> 当前状态：**MVP 主要功能已实施，整体验收未结**。双视图编辑器、增量写回、任务、链接与图片、双链、表格和查找已落地；#21–#25、#28、#30 跟进规格票验收缺口，#26–#27 记录人工与跨环境结果，#29 待明确活动位置的语法呈现。当前开发工作树基线为 676 单测 + 58 集成用例通过（真实 1.86.2 宿主），不代表用户人工验收。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能数据与待验项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 和 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
+> 当前状态：**MVP 主要功能已实施，整体验收未结**。双视图编辑器、增量写回、任务、链接与图片、双链、表格和查找已落地；#21–#25、#28、#30 跟进规格票验收缺口，#26–#27 记录人工与跨环境结果，#29 待明确活动位置的语法呈现，#32 统一两模式基础排版基线，#33 增加独立设置页面，#34 实时预览源文件行号（设置页可开关）。当前开发工作树基线为 773 单测 + 75 集成用例通过（真实 1.86.2 宿主），不代表用户人工验收。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能数据与待验项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 和 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
 
 ## 约定
 
 - 通用工程规范（提交规范、TDD、文件树维护）遵循工程根 `D:\CODE\Project\AGENTS.md`，此处不重复展开。
 - **插件设置入口**：Vsidian 面向用户的设置统一在扩展自己的设置页面展示与修改，不复用 VSCode 统一设置中心作为设置界面。后续新增设置项时，同步纳入该页面，并验证设置持久化、重新打开后的回显及变更生效。
+- **视觉层断言（评审必查）**：webview/样式/渲染类变更，评审必须核对断言对象是"用户看到的东西"（可见性、对齐、颜色）而非 DOM 存在性或几何坐标——样式注入失效时后者照样通过（PR #37 P0 实证：CSP 拦截 CM6 注入样式后 74 集成用例仍全绿，正文实际不可见）。涉及呈现的新特性至少一条集成断言落在绘制层（现有 `view.state.paint` 探针），CSS 关键规则由契约测试钉住。
 
 ## 技术栈与构建（工单 #2 确立）
 
 - **运行时**：TypeScript + CodeMirror 6（`@codemirror/state`、`@codemirror/view`、`@codemirror/commands`，单包组合，不用 `codemirror` 聚合包与 basicSetup/history——撤销栈归宿主文本管线）。阅读模式将用 markdown-it（后续工单引入）。
 - **宿主端**（`src/extension.ts`、`src/host/`）：`CustomTextEditorProvider`，保存/dirty/Hot Exit 由 VSCode 文本管线自动处理；`TextDocument` 为权威文本，编辑经 `WorkspaceEdit` 写回。
 - **webview 端**（`src/webview/`）：CM6 EditorView + `acquireVsCodeApi` 消息桥；`src/shared/` 为两端共享的消息协议单一事实源（不依赖 vscode/DOM）。协议约定 webview 全程 LF 坐标（CM6 内部把 `\r\n` 规范化为 `\n`，宿主侧 `NewlineCoordinator` 负责双向坐标与文本转换）。
-- **构建**：esbuild 双产物——宿主 `out/extension.js`（node18/cjs/external vscode）、webview `out/webview/main.js`（chrome118/iife，CSS 随 import 打包为 `main.css`）；`npm run compile` 另跑 `tsc --noEmit` 做类型检查（esbuild 不查类型）。
+- **构建**：esbuild 多产物——宿主 `out/extension.js`（node18/cjs/external vscode）、编辑器 webview `out/webview/main.js` 与设置页 webview `out/webview/settings.js`（#33；chrome118/iife，CSS 随 import 打包为同名 `.css`）；`npm run compile` 另跑 `tsc --noEmit` 做类型检查（esbuild 不查类型）。
 - **测试**：`npm run test:unit`（vitest，纯逻辑 + jsdom 的 webview 控制器）；`npm run test:integration`（@vscode/test-electron 指定 1.86.2 真宿主，fixture 由 `test/integration/fixtures.mjs` 统一生成、`runTest.mjs` 启动）。扩展注册 `onegayi.vsidian._test.*` 辅助命令供集成测试观测/注入（仅 `VSIDIAN_TEST_HOOKS=1` 时注册）。测试消息通道是**宿主侧门控、webview 侧被动接收**的分层设计：`_test.*` 注入命令（含向 webview 转发 `table.test.key`/`task.test.click`/`reading.test.image` 等）在宿主侧受 `VSIDIAN_TEST_HOOKS` 门控；webview 侧这些消息分支不做二次门控——webview 面板的消息源只有扩展自身（`panel.webview.postMessage`），封住注入源即封住入口，勿误判为 webview 未设防。
 - **打包与安装态回归（#15）**：`npx @vscode/vsce package --no-dependencies` 产出 VSIX（esbuild bundle 自包含，不带 node_modules；`.vscodeignore` 排除 src/test/docs）。`node test/integration/runInstalled.mjs` 把 VSIX 经 `--install-extension` 装入隔离 profile 的 1.86.2 便携宿主（安装注册链路真实走通；1.86 测试模式要求 `--extensionTestsPath` 依赖 `--extensionDevelopmentPath` 同时存在，故 dev path 指向安装解压目录——加载代码仍是 VSIX 产物而非仓库源码树）后跑同一集成套件。
 - **性能测量**：`node test/perf/runPerf.mjs`（1千/1万/10万行、10 KB/100 KB/1 MB、超长行、图片密集与大围栏；报告写 `docs/perf/data/perf-report.json`）；档位数据与解读汇总在 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md)。
@@ -75,7 +76,7 @@ vsidian/
 │       ├── manual-verification.md # 人工验证清单
 │       ├── mvp-issues.md          # MVP GitHub Issue 索引
 │       └── mvp.md                 # MVP 规格主文档
-├── esbuild.mjs       # esbuild 双产物构建脚本
+├── esbuild.mjs       # esbuild 多产物构建脚本
 ├── media/            # 随扩展打包的静态资源
 │   ├── css-contract-probe.css # 样式契约内部测试片段
 │   └── vsidian-icon.png       # Vsidian 扩展图标
@@ -87,12 +88,15 @@ vsidian/
 │   ├── host/        # 宿主端实现
 │   │   ├── documentSession.ts    # 文档会话与写回同步
 │   │   ├── linkTarget.ts         # 宿主侧链接目标分类纯逻辑（#10）
+│   │   ├── settingsPage.ts       # 独立设置页面板装配
+│   │   ├── settingsService.ts    # 宿主设置服务
 │   │   ├── textEditorProvider.ts # 自定义文本编辑器提供者
 │   │   └── wikilinkTarget.ts     # 宿主侧双链目标解析纯逻辑（#11）
 │   ├── shared/      # 两端共享纯逻辑
 │   │   ├── changeMapping.ts # 变更重定位纯函数
 │   │   ├── newline.ts       # CRLF/LF 换行协调器
 │   │   ├── protocol.ts      # 消息协议单一事实源
+│   │   ├── settings.ts      # 设置定义与读写纯逻辑
 │   │   └── wikilink.ts      # 双链形态学单一事实源（#11）
 │   └── webview/     # webview 端实现
 │       ├── css.d.ts              # CSS 导入类型声明
@@ -110,6 +114,9 @@ vsidian/
 │       ├── readingView.ts        # 阅读视图 DOM 构建与锚点定位
 │       ├── readingViewport.ts    # 阅读视口挂载窗口纯函数
 │       ├── readingVirtualView.ts # 阅读视图虚拟化装配层
+│       ├── settingsMain.ts       # 设置页 webview 入口
+│       ├── settingsPage.css      # 设置页样式
+│       ├── settingsPageView.ts   # 设置页 webview 视图
 │       ├── syncController.ts     # CM6 同步控制器
 │       ├── tableCells.ts         # 表格单元格拆分纯函数（#12）
 │       ├── tableEditing.ts       # 表格输入钩子（#12）
@@ -117,10 +124,13 @@ vsidian/
 │       └── taskToggle.ts         # 任务勾选解析纯函数（#9）
 ├── test/             # 测试根
 │   ├── integration/ # 真宿主集成测试
-│   │   ├── fixtures.mjs     # 集成测试 fixture 单一事实源
-│   │   ├── runInstalled.mjs # VSIX 安装态集成回归启动器
-│   │   ├── runTest.mjs      # 集成测试启动器
-│   │   └── suite/           # 集成测试套件
+│   │   ├── fixtures.mjs              # 集成测试 fixture 单一事实源
+│   │   ├── runInstalled.mjs          # VSIX 安装态集成回归启动器
+│   │   ├── runSettingsActivation.mjs # 空窗口激活实测启动器
+│   │   ├── runTest.mjs               # 集成测试启动器
+│   │   ├── settingsActivation/       # 空窗口命令激活实测套件（#33）
+│   │   │   └── index.ts # 空窗口命令激活实测套件
+│   │   └── suite/                    # 集成测试套件
 │   │       ├── cases.ts # 集成测试用例
 │   │       └── index.ts # 集成测试入口 runner
 │   ├── perf/        # 性能测量脚本与套件（#5）
@@ -128,39 +138,46 @@ vsidian/
 │   │   ├── runPerf.mjs    # 性能测量启动器（#5）
 │   │   └── suite.ts       # 性能测量套件（#5）
 │   └── unit/        # vitest 单元契约测试
-│       ├── changeMapping.test.ts       # 变更重定位契约
-│       ├── compositionBuffer.test.ts   # 组合期间缓冲契约测试
-│       ├── conflictRetention.test.ts   # 冲突保留与暂停契约测试
-│       ├── documentSession.test.ts     # 文档会话契约
-│       ├── find.test.ts                # 查找会话契约测试（#14）
-│       ├── findSession.test.ts         # 查找匹配语义测试（#14）
-│       ├── historyForwarding.test.ts   # 撤销重做转发契约测试
-│       ├── imageResource.test.ts       # 图片资源管理器契约测试
-│       ├── linkInteraction.test.ts     # 链接交互契约测试（#10）
-│       ├── linkTarget.test.ts          # 链接目标分类契约测试
-│       ├── liveDecorations.test.ts     # Live 装饰契约测试
-│       ├── liveTable.test.ts           # live 表格装饰测试（#12）
-│       ├── markdownDoc.test.ts         # 文档工具契约测试
-│       ├── newline.test.ts             # 换行协调契约
-│       ├── perfProbe.test.ts           # 性能探针契约测试
-│       ├── protocol.test.ts            # 消息协议校验契约
-│       ├── readingBlocks.test.ts       # 阅读块切分契约测试
-│       ├── readingMarkdown.test.ts     # 渲染层契约测试
-│       ├── readingTable.test.ts        # 阅读表格契约测试（#12）
-│       ├── readingView.test.ts         # 阅读视图 DOM 契约测试
-│       ├── readingViewport.test.ts     # 视口窗口纯函数契约测试
-│       ├── readingVirtualView.test.ts  # 虚拟化装配契约测试
-│       ├── suspendResume.test.ts       # 暂停恢复契约测试
-│       ├── tableCells.test.ts          # 单元格拆分契约测试（#12）
-│       ├── tableOps.test.ts            # 表格导航与结构命令链路契约（#13）
-│       ├── tableStructure.test.ts      # 表格结构操作纯函数契约（#13）
-│       ├── taskInteraction.test.ts     # 任务勾选交互契约测试（#9）
-│       ├── taskToggle.test.ts          # 任务勾选解析纯函数契约测试
-│       ├── viewMode.test.ts            # 模式切换状态机契约测试
-│       ├── webviewSync.test.ts         # webview 同步契约
-│       ├── wikilinkInteraction.test.ts # 双链交互契约测试（#11）
-│       ├── wikilinkParse.test.ts       # 双链形态学契约测试（#11）
-│       └── wikilinkTarget.test.ts      # 双链目标解析契约测试（#11）
+│       ├── changeMapping.test.ts           # 变更重定位契约
+│       ├── compositionBuffer.test.ts       # 组合期间缓冲契约测试
+│       ├── conflictRetention.test.ts       # 冲突保留与暂停契约测试
+│       ├── documentSession.test.ts         # 文档会话契约
+│       ├── editorChromeCssContract.test.ts # 编辑器铬件主题适配契约测试
+│       ├── find.test.ts                    # 查找会话契约测试（#14）
+│       ├── findSession.test.ts             # 查找匹配语义测试（#14）
+│       ├── historyForwarding.test.ts       # 撤销重做转发契约测试
+│       ├── imageResource.test.ts           # 图片资源管理器契约测试
+│       ├── lineNumberCssContract.test.ts   # 行号公式与 CSS 双写钉子测试
+│       ├── lineNumbers.test.ts             # 行号装配契约测试（#34）
+│       ├── linkInteraction.test.ts         # 链接交互契约测试（#10）
+│       ├── linkTarget.test.ts              # 链接目标分类契约测试
+│       ├── liveDecorations.test.ts         # Live 装饰契约测试
+│       ├── liveTable.test.ts               # live 表格装饰测试（#12）
+│       ├── markdownDoc.test.ts             # 文档工具契约测试
+│       ├── newline.test.ts                 # 换行协调契约
+│       ├── perfProbe.test.ts               # 性能探针契约测试
+│       ├── protocol.test.ts                # 消息协议校验契约
+│       ├── readingBlocks.test.ts           # 阅读块切分契约测试
+│       ├── readingMarkdown.test.ts         # 渲染层契约测试
+│       ├── readingTable.test.ts            # 阅读表格契约测试（#12）
+│       ├── readingView.test.ts             # 阅读视图 DOM 契约测试
+│       ├── readingViewport.test.ts         # 视口窗口纯函数契约测试
+│       ├── readingVirtualView.test.ts      # 虚拟化装配契约测试
+│       ├── settings.test.ts                # 设置纯逻辑契约测试
+│       ├── settingsInteraction.test.ts     # 设置交互契约测试
+│       ├── settingsPage.test.ts            # 设置页 UI 契约测试
+│       ├── settingsService.test.ts         # 设置服务契约测试
+│       ├── suspendResume.test.ts           # 暂停恢复契约测试
+│       ├── tableCells.test.ts              # 单元格拆分契约测试（#12）
+│       ├── tableOps.test.ts                # 表格导航与结构命令链路契约（#13）
+│       ├── tableStructure.test.ts          # 表格结构操作纯函数契约（#13）
+│       ├── taskInteraction.test.ts         # 任务勾选交互契约测试（#9）
+│       ├── taskToggle.test.ts              # 任务勾选解析纯函数契约测试
+│       ├── viewMode.test.ts                # 模式切换状态机契约测试
+│       ├── webviewSync.test.ts             # webview 同步契约
+│       ├── wikilinkInteraction.test.ts     # 双链交互契约测试（#11）
+│       ├── wikilinkParse.test.ts           # 双链形态学契约测试（#11）
+│       └── wikilinkTarget.test.ts          # 双链目标解析契约测试（#11）
 ├── tsconfig.json     # TypeScript 类型检查配置
 └── vitest.config.ts  # vitest 单元测试配置
 <!-- file-tree:tree:end -->

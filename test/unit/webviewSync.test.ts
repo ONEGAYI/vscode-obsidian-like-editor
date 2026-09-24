@@ -101,9 +101,10 @@ describe('本地编辑 → edit.request', () => {
         { from: 5, to: 6, insert: '乙' },
       ],
     })
-    // ready + init 主动回报 view.state（模式缓存数据源）+ 一条 edit.request
+    // ready + init 主动回报 view.state（模式缓存数据源）+ init 后拉取设置
+    // 快照的 settings.get（#33）+ 一条 edit.request
     expect(sent.filter((m) => m.kind === 'edit.request')).toHaveLength(1)
-    expect(sent.filter((m) => m.kind !== 'view.state')).toHaveLength(2)
+    expect(sent.filter((m) => m.kind !== 'view.state')).toHaveLength(3)
     const req = sent.find((m): m is Extract<WebviewToHost, { kind: 'edit.request' }> => m.kind === 'edit.request')!
     expect(req.changes).toEqual([
       { offset: 0, length: 1, text: '甲' },
@@ -246,6 +247,59 @@ describe('view.state 诊断', () => {
     expect(msg.docLength).toBe('# 标题\n正文'.length)
     expect(msg.lineCount).toBe(2)
     expect(Number.isInteger(msg.renderedLines)).toBe(true)
+  })
+})
+
+describe('排版一致性探针（#32：view.state 可选字段）', () => {
+  // fixture 同时覆盖标题、正文、列表与引用（表格由集成层覆盖）；
+  // jsdom 无样式表层叠，computed 值不反映 main.css——此处只契约
+  // 字段结构与采集路径，两模式计算值一致性断言在真实宿主集成层。
+  const TYPO_TEXT = '# 排版标题\n\n普通段落。\n\n- 列表项\n\n> 引用内容\n'
+
+  type ViewStateMsg = Extract<WebviewToHost, { kind: 'view.state' }>
+
+  function lastViewState(sent: WebviewToHost[]): ViewStateMsg {
+    return sent.filter((m): m is ViewStateMsg => m.kind === 'view.state').at(-1)!
+  }
+
+  it('live 模式回报 typography 字段：live 样本结构完整，reading 样本缺挂载为 null', () => {
+    const { bridge, sent } = makeBridge()
+    const c = mount(bridge)
+    init(c, TYPO_TEXT, 1)
+    c.handleHostMessage({ kind: 'view.state.request' })
+    const t = lastViewState(sent).typography
+    expect(t, 'view.state 应携带 typography 字段').toBeDefined()
+    // live 侧元素常驻（CM6 视口渲染），样本应存在且四键齐全
+    expect(t!.live).not.toBeNull()
+    expect(Object.keys(t!.live!).sort()).toEqual(['fontFamily', 'fontSizePx', 'lineHeightPx', 'textInsetPx'])
+    // jsdom 无 main.css 层叠，值只要求「null 或有限数」形态合法
+    for (const v of [t!.live!.fontSizePx, t!.live!.lineHeightPx, t!.live!.textInsetPx]) {
+      expect(v === null || Number.isFinite(v)).toBe(true)
+    }
+    // live 列表/引用行在视口内，装饰 DOM 存在，样本结构完整
+    expect(t!.liveList).not.toBeNull()
+    expect(Object.keys(t!.liveList!).sort()).toEqual(['fontFamily', 'fontSizePx'])
+    expect(t!.liveQuote).not.toBeNull()
+    // live 模式下阅读块未挂载（容器 display:none），reading 样本为 null
+    expect(t!.reading).toBeNull()
+    expect(t!.readingList).toBeNull()
+  })
+
+  it('切换 reading 后 reading 样本随挂载出现，live 样本仍可采集（继承链不受显隐影响）', () => {
+    const { bridge, sent } = makeBridge()
+    const c = mount(bridge)
+    init(c, TYPO_TEXT, 1)
+    c.handleHostMessage({ kind: 'view.mode.set', mode: 'reading' })
+    c.handleHostMessage({ kind: 'view.state.request' })
+    const t = lastViewState(sent).typography
+    expect(t, 'view.state 应携带 typography 字段').toBeDefined()
+    expect(t!.reading).not.toBeNull()
+    expect(Object.keys(t!.reading!).sort()).toEqual(['fontFamily', 'fontSizePx', 'lineHeightPx', 'textInsetPx'])
+    expect(t!.readingList).not.toBeNull()
+    expect(t!.readingQuote).not.toBeNull()
+    // live 侧 DOM 常驻（仅隐藏），computed 字体族/字号仍可读
+    expect(t!.live).not.toBeNull()
+    expect(t!.liveList).not.toBeNull()
   })
 })
 

@@ -1,0 +1,59 @@
+/* 设置页样式（#33）：独立样式文件，不与编辑器排版规则（#32 范围）混用。
+   颜色与字体跟随 VSCode CSS 变量（与 main.css 同口径）。 */
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--vscode-font-family);
+  color: var(--vscode-editor-foreground);
+  background-color: var(--vscode-editor-background);
+}
+
+.vsidian-settings {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 24px 20px;
+  box-sizing: border-box;
+}
+
+.vsidian-settings-title {
+  font-size: 1.4em;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+
+.vsidian-settings-subtitle {
+  color: var(--vscode-descriptionForeground);
+  margin: 0 0 20px;
+}
+
+.vsidian-settings-item {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+}
+
+.vsidian-settings-item-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.vsidian-settings-item-title {
+  font-size: var(--vscode-font-size, 13px);
+}
+
+.vsidian-settings-item-description {
+  margin: 4px 0 0 24px;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--vscode-font-size, 13px);
+}
+
+.vsidian-settings-empty {
+  color: var(--vscode-descriptionForeground);
+  padding: 24px 0;
+}
