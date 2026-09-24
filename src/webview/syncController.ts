@@ -682,6 +682,37 @@ export class WebviewSyncController {
         }
         break
       }
+      case 'table.test.cellClick': {
+        if (this.view && this.viewMode === 'live') {
+          const row = this.view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')[message.rowIndex]
+          const cell = row?.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')[message.columnIndex]
+          if (cell) {
+            const rect = cell.getBoundingClientRect()
+            const x = rect.left + Math.min(message.point === 'middle' ? 35 : 15,
+              Math.max(1, rect.width - 1))
+            const y = rect.top + rect.height / 2
+            cell.dispatchEvent(new MouseEvent('mousedown', {
+              bubbles: true, cancelable: true, button: 0, buttons: 1, clientX: x, clientY: y,
+            }))
+            const settledRow = this.view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')[message.rowIndex]
+            const settledCell = settledRow?.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')[message.columnIndex]
+            settledCell?.dispatchEvent(new MouseEvent('mouseup', {
+              bubbles: true, cancelable: true, button: 0, clientX: x, clientY: y,
+            }))
+          }
+        }
+        break
+      }
+      case 'table.test.type': {
+        if (this.view && this.viewMode === 'live') {
+          const range = this.view.state.selection.main
+          this.view.dispatch({
+            changes: { from: range.from, to: range.to, insert: message.text },
+            userEvent: 'input.type',
+          })
+        }
+        break
+      }
       case 'table.test.drag': {
         // 测试钩子（#43）：在真实宿主 webview 中向点阵抓手派发鼠标指针序列。
         // 仍经控件的 pointerdown/move/up 与 CM6 标准写回链路。
@@ -855,6 +886,24 @@ export class WebviewSyncController {
   private reportViewState(): void {
     const doc = this.view?.state.doc
     const content = this.view?.dom.querySelector('.cm-content')
+    let selectedGridRow: HTMLElement | null = null
+    if (this.view && this.viewMode === 'live') {
+      try {
+        const node = this.view.domAtPos(this.view.state.selection.main.from).node
+        selectedGridRow = (node instanceof Element ? node : node.parentElement)?.closest<HTMLElement>('.cm-line') ?? null
+      } catch {
+        // 屏外选区没有 DOM；表格探针仅报告当前已挂载节点。
+      }
+    }
+    const tableGrid = {
+      visibleRows: content?.querySelectorAll('.vsidian-table-grid-row').length ?? 0,
+      selectedRowIsGrid: selectedGridRow?.classList.contains('vsidian-table-grid-row') ?? false,
+      selectedRowCells: selectedGridRow
+        ? [...selectedGridRow.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')]
+          .map((cell) => cell.textContent ?? '')
+        : [],
+      rowHandles: this.view?.dom.querySelectorAll('.vsidian-table-row-handle').length ?? 0,
+    }
     // 标题装饰的可观测 DOM 文本：活动（源码态）与非活动（隐藏标记）
     // 各取第一个样本，供集成测试断言 Live Preview 语义
     let headingActiveText: string | undefined
@@ -925,6 +974,7 @@ export class WebviewSyncController {
       readingScrollHeightPx: rScroll?.scrollHeight,
       cssProbe: this.collectCssProbe(),
       liveSyntax: this.collectLiveSyntax(),
+      tableGrid,
       readingSyntax: this.viewMode === 'reading' ? this.collectReadingSyntax() : undefined,
       // #10 链接/图片观测（DOM 级：live 限视口，reading 限挂载块）
       liveLinkCount: content ? content.querySelectorAll('.vsidian-link').length : 0,

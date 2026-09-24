@@ -2,7 +2,7 @@
 // 表格单元格编辑契约（工单 #12/#42）：live 网格装饰 + 编辑链路 + 权威回读。
 //
 // 核心断言（用户可观察行为，非实现复述）：
-// - 装饰：表格行/单元格/管道符/对齐的稳定类名；非活动安全表格显示网格，
+// - 装饰：表格行/单元格/管道符/对齐的稳定类名；安全表格的活动格也保留网格，
 //   空单元格仅有零宽定位 widget（编辑仍在 CM6 原文，无覆盖层状态机）
 // - 编辑链路：视图单元格输入（CM6 事务）→ edit.request → 宿主权威文档
 //   → 保存回读（getText）→ 以权威文本重建装饰与编辑后呈现一致
@@ -13,13 +13,14 @@
 // - 真冲突进入暂停并保留输入（conflict.report），不静默丢字
 // - 增量装饰与全量重建对拍一致（RangeSet.eq）
 // - 千行单表：装饰构建/单格编辑增量在宽松时限内完成且写回正确
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { EditorSelection, EditorState, RangeSet, Text } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import type { DecorationSet } from '@codemirror/view'
 import {
   LIVE_CLASS_NAMES,
   buildLivePreviewDecorations,
+  getTableGridStats,
   liveDecorationsField,
   livePreviewDecorations,
 } from '../../src/webview/liveDecorations'
@@ -156,7 +157,7 @@ describe('live 表格装饰', () => {
     expect(textsFor(set, LIVE_CLASS_NAMES.tableLine, doc)).toHaveLength(0)
   })
 
-  it('非活动安全表格形成网格，活动单元格回到原文编辑且选区切换不改文本', () => {
+  it('活动单元格仍留在完整网格内，原文编辑和选区切换不改其他格', () => {
     const at = TABLE_DOC.indexOf('苹果')
     const view = new EditorView({
       parent: document.body.appendChild(document.createElement('div')),
@@ -174,10 +175,15 @@ describe('live 表格装饰', () => {
     expect(view.state.doc.toString()).toBe(TABLE_DOC)
 
     view.dispatch({ selection: EditorSelection.single(at) })
-    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(3)
+    const activeRow = view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')[1]!
+    expect(activeRow.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(2)
     expect(view.state.doc.toString()).toBe(TABLE_DOC)
     view.dispatch({ changes: { from: at, to: at + 2, insert: '香蕉' } })
     expect(view.state.doc.toString()).toContain('| 香蕉 | 3 |')
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(3)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]
+      ?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(2)
     view.destroy()
   })
 
@@ -208,11 +214,15 @@ describe('live 表格装饰', () => {
     expect(slot!.parentElement?.querySelectorAll(':scope > .cm-widgetBuffer')).toHaveLength(1)
     slot!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
     expect(emptyView.state.selection.main.from).toBe(empty.indexOf('|| x |') + 1)
+    expect(emptyView.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
     emptyView.destroy()
     const unsafe = '| A | B |\n| --- | --- |\n| only one |\n'
     const unsafeSet = build(unsafe)
     expect(textsFor(unsafeSet, LIVE_CLASS_NAMES.tableGridRow, unsafe)).toHaveLength(0)
     expect(textsFor(unsafeSet, LIVE_CLASS_NAMES.tableLine, unsafe)).toHaveLength(3)
+    const trailing = '| A | B |\n| --- | --- |\n| c | d |  \n'
+    expect(textsFor(build(trailing, { anchor: trailing.length }), LIVE_CLASS_NAMES.tableGridRow, trailing))
+      .toHaveLength(2)
   })
 
   it('增量维护：单元格编辑后装饰与全量重建对拍一致', () => {
@@ -502,6 +512,43 @@ describe('单元格编辑权威链路', () => {
     expect(view.state.doc.toString()).toContain('| 40 |')
     expect(linked.doc.getText()).toContain('苹果汁')
     expect(linked.doc.getText()).toContain('| 40 |')
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(3)
+  })
+
+  it('网格边框附近点击被约束在被点击的单元格源区间，不落到隐藏管道符', () => {
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc: TABLE_DOC, extensions: [livePreviewDecorations] }),
+    })
+    const first = view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')[1]!
+      .querySelector<HTMLElement>('.vsidian-table-grid-cell')!
+    const pipe = TABLE_DOC.indexOf('| 苹果 |')
+    const hit = vi.spyOn(view, 'posAtCoords').mockReturnValue(pipe)
+    const originalPosAtDOM = view.posAtDOM.bind(view)
+    const domMap = vi.spyOn(view, 'posAtDOM').mockImplementation((node, offset) =>
+      node === first ? pipe : originalPosAtDOM(node, offset))
+    first.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }))
+    expect(view.state.selection.main.from).toBe(pipe + 2)
+    view.dispatch({ selection: EditorSelection.single(pipe) }) // 浏览器默认定位若晚于装饰处理
+    first.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, button: 0 }))
+    expect(view.state.selection.main.from).toBe(pipe + 2)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(3)
+    hit.mockRestore()
+    domMap.mockRestore()
+    view.destroy()
+  })
+
+  it('活动格粘贴经同一 CM6 事务写回，网格和邻格不变', async () => {
+    const linked = await setupLinked(TABLE_DOC)
+    const view = linked.controller.getView()!
+    const at = TABLE_DOC.indexOf('苹果') + 2
+    view.dispatch({ selection: EditorSelection.single(at) })
+    view.dispatch({ changes: { from: at, insert: '汁' }, userEvent: 'input.paste' })
+    await settle()
+    expect(linked.doc.getText()).toBe(TABLE_DOC.replace('苹果', '苹果汁'))
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(3)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]
+      ?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(2)
   })
 
   it('单元格在途编辑与外部变更真重叠：暂停并保留输入（不静默丢字）', async () => {
@@ -536,6 +583,16 @@ function bigTableDoc(rows: number): string {
 }
 
 describe('千行单表性能边界', () => {
+  it('光标跨行仅重建局部装饰，不重复遍历整张表规划网格', () => {
+    const doc = bigTableDoc(1000)
+    const state0 = EditorState.create({ doc, extensions: [liveDecorationsField] })
+    const before = getTableGridStats()
+    const at = state0.doc.line(502).from + 3
+    const state1 = state0.update({ selection: EditorSelection.single(at) }).state
+    const after = getTableGridStats()
+    expect(state1.doc.toString()).toBe(doc)
+    expect(after.rowsScanned - before.rowsScanned).toBeLessThan(20)
+  })
   it('网格 DOM 仍由 CM6 视口裁剪，千行表不常驻全部单元格节点', () => {
     const doc = bigTableDoc(1000)
     const view = new EditorView({

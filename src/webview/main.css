@@ -247,8 +247,8 @@ body {
   opacity: 0.9;
 }
 
-/* 表格（#42）：源文本仍在 CM6；非活动安全行以同列数 CSS grid 呈现。
-   光标进入行后恢复一维源码，原有 IME、Tab 与宿主写回链路继续工作。 */
+/* 表格（#42）：源文本仍在 CM6；安全行始终以同列数 CSS grid 呈现。
+   活动格留在网格中直接编辑，IME、Tab 与宿主写回链路继续工作。 */
 #app .cm-editor .cm-scroller .vsidian-table-line {
   font-family: var(--vscode-editor-font-family, monospace);
   background-color: var(--vsidian-table-background, rgba(128, 128, 128, 0.05));
@@ -271,8 +271,8 @@ body {
   font-weight: 400;
 }
 
-/* 只在非活动行启用网格。每个单元格 span 仍对应原始文档区间，点击后
-   CM6 把光标放回该行并撤掉网格布局。列数在行装饰的 CSS 变量中。 */
+/* 每个单元格 span 对应原始文档区间；点击后光标留在该格，网格不撤下。
+   列数在行装饰的 CSS 变量中。 */
 #app .cm-editor .cm-scroller .vsidian-table-grid-row {
   display: grid;
   grid-template-columns: repeat(var(--vsidian-table-columns), minmax(0, 1fr));

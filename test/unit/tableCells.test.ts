@@ -56,6 +56,14 @@ describe('splitTableRowCells：GFM 单元格切分', () => {
     expect(cells).toHaveLength(2)
   })
 
+  it('尾管道后有空白仍是边界，不凭空多出第三格', () => {
+    const cells = splitTableRowCells('| c | d |  ', 40)
+    expect(cells).toHaveLength(2)
+    expect(cells.map((cell) => '| c | d |  '.slice(cell.contentFrom - 40, cell.contentTo - 40)))
+      .toEqual(['c', 'd'])
+    expect(splitTableRowCells('  | c | d |\t', 0)).toHaveLength(2)
+  })
+
   it('空单元格：| a || b | 的中间空段是空格零内容单元格', () => {
     const cells = splitTableRowCells('| a || b |', 0)
     expect(cells).toHaveLength(3)
@@ -94,6 +102,7 @@ describe('parseTableDelimiter：分隔行判定与列对齐', () => {
 
   it('无边界管道的分隔行同样识别', () => {
     expect(parseTableDelimiter('--- | ---')).toEqual([null, null])
+    expect(parseTableDelimiter('| --- | --- |  ')).toEqual([null, null])
   })
 
   it('非分隔行返回 null', () => {

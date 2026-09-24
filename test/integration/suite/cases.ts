@@ -210,6 +210,12 @@ interface ViewState {
     tableLines?: number
     tableCells?: number
   }
+  tableGrid?: {
+    visibleRows: number
+    selectedRowIsGrid: boolean
+    selectedRowCells: string[]
+    rowHandles: number
+  }
   readingSyntax?: {
     headings: number
     strongCount: number
@@ -1795,7 +1801,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     )
   }],
 
-  ['实时预览网格切换不写文档，进入单元格后仍由 CM6 写回（#42）', async () => {
+  ['实时预览活动格保留网格与抓手，格内输入经 CM6 写回（#42）', async () => {
     await openWithEditor('table42.md')
     const beforeSession = await waitSessionReady('table42.md')
     const uri = wsUri('table42.md').toString()
@@ -1804,7 +1810,26 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(before === TABLE_DOC_TEXT, '独立表格 fixture 初始文本不符')
     const at = before.indexOf('苹果') + 2
 
-    // 定位相当于点击单元格后的选区更新；显示状态不应触发 edit.request。
+    // 在真实 1.86.2 webview 内派发鼠标事件，点击第一数据行首格。
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.cellClick', rowIndex: 1, columnIndex: 0 })
+    const appleCellStart = before.indexOf('| 苹果 |') + 1
+    const clicked = await waitViewState('table42.md', (v) =>
+      v.selectionOffset !== undefined && v.selectionOffset >= appleCellStart &&
+      v.selectionOffset <= appleCellStart + ' 苹果 '.length)
+    assert(clicked.tableGrid?.selectedRowIsGrid === true, '鼠标进入单元格后整行必须仍是网格')
+    assert(clicked.tableGrid?.visibleRows === 3, '活动格不得撤掉表格网格行')
+    assert(clicked.tableGrid?.rowHandles === 3, '活动格仍须保留 #43 点阵抓手')
+    assert(clicked.tableGrid?.selectedRowCells[0]?.includes('苹果') === true, '点击应命中苹果单元格')
+
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.cellClick', rowIndex: 1, columnIndex: 0, point: 'middle' })
+    const middle = await waitViewState('table42.md', (v) =>
+      v.selectionOffset !== undefined && v.selectionOffset > before.indexOf('苹果') &&
+      v.selectionOffset <= before.indexOf('苹果') + 2)
+    assert(middle.tableGrid?.selectedRowIsGrid === true, '格内中部点击仍须保留网格')
+
+    // 精确定位到内容末端后模拟格内输入；定位只改变选区，不触发 edit.request。
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: at })
     const located = await waitViewState('table42.md', (v) => v.selectionOffset === at)
     assert(located.text === before && doc.getText() === before, '进入单元格不得改写 Markdown')
@@ -1812,9 +1837,15 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(afterLocate.appliedEdits === beforeSession.appliedEdits, '网格进入源码不得产生宿主编辑')
 
     // 真实 webview 内 CM6 事务写回，与网格显示不建立第二份输入状态。
-    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sync.test.edit', offset: at, text: '汁' })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.type', text: '汁' })
     const edited = before.replace('苹果', '苹果汁')
     await poll('网格单元格编辑写回', () => (doc.getText() === edited ? true : undefined))
+    const afterTyping = await waitViewState('table42.md', (v) => v.text === edited)
+    assert(afterTyping.tableGrid?.selectedRowIsGrid === true, '键入后活动格仍须保持网格')
+    assert(afterTyping.tableGrid?.selectedRowCells[0]?.includes('苹果汁') === true,
+      '键入应只更新目标单元格的可见内容')
+    assert(afterTyping.tableGrid?.selectedRowCells[1]?.includes('3') === true, '邻格内容不得改变')
+    assert(afterTyping.tableGrid?.rowHandles === 3, '键入后点阵抓手仍须可用')
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
     const reading = await waitViewState('table42.md', (v) => v.viewMode === 'reading')
     assert(reading.text === edited,
@@ -1824,6 +1855,29 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(live.text === edited, `切回实时预览后文本不一致：${JSON.stringify(live.text)}`)
     assert(await doc.save(), '网格单元格编辑保存失败')
     assert(await readDisk('table42.md') === edited, '网格单元格编辑的磁盘回读不一致')
+  }],
+
+  ['实时预览空单元格点击与输入仍在目标网格格内（#42）', async () => {
+    await openWithEditor('table42-empty.md')
+    const initial = await waitSessionReady('table42-empty.md')
+    const uri = wsUri('table42-empty.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('table42-empty.md'))
+    const before = '| A | B |\n| --- | --- |\n| | 空 |\n'
+    assert(doc.getText() === before, '空格 fixture 初始内容不符')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.cellClick', rowIndex: 1, columnIndex: 0 })
+    const emptyAt = before.indexOf('| | 空 |') + 2
+    const clicked = await waitViewState('table42-empty.md', (v) => v.selectionOffset === emptyAt)
+    assert(clicked.tableGrid?.selectedRowIsGrid === true, '空单元格点击后不得撤网格')
+    assert(clicked.tableGrid?.selectedRowCells.length === 2, '空单元格所在行应保留两列')
+    const afterClick = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterClick.appliedEdits === initial.appliedEdits, '空单元格点击不应写回')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.type', text: '新' })
+    const edited = before.replace('| | 空 |', '| 新| 空 |')
+    await poll('空单元格输入写回', () => doc.getText() === edited ? true : undefined)
+    const live = await waitViewState('table42-empty.md', (v) => v.text === edited)
+    assert(live.tableGrid?.selectedRowIsGrid === true, '空单元格输入后仍须保持网格')
+    assert(live.tableGrid?.selectedRowCells[0]?.includes('新') === true, '空格输入应留在目标格')
   }],
 
   ['阅读视图表格：真实 table 只读呈现与样式入口（#12）', async () => {

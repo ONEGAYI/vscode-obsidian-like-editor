@@ -34,6 +34,8 @@ class TableControlsView {
   private scheduled = false
   private destroyed = false
   private suppressNextClick = false
+  private rowsCache: Array<{ first: number; last: number; rows: TableRowInfo[] }> = []
+  private rowsCacheTree: Tree | null = null
 
   constructor(private readonly view: EditorView, private readonly actions: TableControlActions) {
     this.layer = document.createElement('div')
@@ -47,7 +49,12 @@ class TableControlsView {
   }
 
   update(update: ViewUpdate): void {
-    if (update.docChanged) { this.selected = null; this.endDrag() }
+    if (update.docChanged) {
+      this.selected = null
+      this.endDrag()
+      this.rowsCache = []
+      this.rowsCacheTree = null
+    }
     if (update.docChanged || update.selectionSet || update.viewportChanged || update.geometryChanged) {
       this.scheduleRender()
     }
@@ -126,6 +133,10 @@ class TableControlsView {
     if (!field) {
       return
     }
+    if (this.rowsCacheTree !== field.tree) {
+      this.rowsCacheTree = field.tree
+      this.rowsCache = []
+    }
     const editorRect = this.view.dom.getBoundingClientRect()
     for (const element of this.view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')) {
       let pos: number
@@ -135,7 +146,11 @@ class TableControlsView {
         continue // CM6 正在回收行 DOM
       }
       const lineFrom = this.view.state.doc.lineAt(pos).from
-      const rows = this.actions.tableRowsAt(this.view.state, lineFrom, field.tree)
+      let rows = this.rowsCache.find((item) => item.first <= lineFrom && lineFrom <= item.last)?.rows
+      if (!rows) {
+        rows = this.actions.tableRowsAt(this.view.state, lineFrom, field.tree) ?? undefined
+        if (rows) this.rowsCache.push({ first: rows[0]!.lineFrom, last: rows[rows.length - 1]!.lineTo, rows })
+      }
       if (!rows) {
         continue
       }

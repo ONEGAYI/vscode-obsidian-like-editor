@@ -43,16 +43,16 @@
 
 ## 表格（#12 基础编辑，#42 网格呈现）
 
-编辑面仍是 CM6 源文本行。#42 起非活动安全表格用 CSS grid 呈现表头、单元格边框、等宽列与 GFM 对齐；管道符和分隔行在网格状态隐藏。光标或选区进入行后，该行回到源码形态，直接复用 CM6 输入、IME、导航及宿主写回。列数不一致等无法逐格映射的表格维持整表可编辑源码。单元格边界按 GFM 语义自研拆分（`\|` 与行内代码内的 `|` 不切分，见 `src/webview/tableCells.ts`），lezer 的 TableCell 节点不作定位依据。
+编辑面仍是 CM6 原文区间。#42 起安全表格始终用 CSS grid 呈现表头、单元格边框、等宽列与 GFM 对齐；光标进入格子后网格不撤下，直接在该格源区间输入，继续复用 CM6 的 IME、导航及宿主写回。网格状态隐藏管道符和分隔行；列数不一致等无法逐格映射的表格维持整表可编辑源码。单元格边界按 GFM 语义自研拆分（`\|` 与行内代码内的 `|` 不切分，尾边界管道符后的空白不新增单元格，见 `src/webview/tableCells.ts`），lezer 的 TableCell 节点不作定位依据。
 
 | 本项目稳定类名 | 本项目用途 | Obsidian 对应选择器 | 核对结果 |
 | --- | --- | --- | --- |
-| `.vsidian-table-line` | 表格行（表头/分隔/数据行通用） | `.HyperMD-table-line` 方向（Obsidian live 表格行类族） | 语义对应（行级）；源码降级和活动行仍显示管道符 |
+| `.vsidian-table-line` | 表格行（表头/分隔/数据行通用） | `.HyperMD-table-line` 方向（Obsidian live 表格行类族） | 语义对应（行级）；仅源码降级或活动分隔行显示管道符 |
 | `.vsidian-table-header-line` / `.vsidian-table-delimiter-line` | 表头行 / 分隔行修饰 | 无直接对应（Obsidian 以 thead 样式承担） | 本项目自有修饰形态 |
 | `.vsidian-table-cell`（+ `-header` 修饰） | 单元格内容 span（trim 后区间） | `.cm-table-cell` 方向（社区主题常用） | 语义等价（span 级）；GFM 拆分语义自研 |
 | `.vsidian-table-pipe` | 管道符 span（含首尾边界管道） | 无对应（Obsidian 隐藏或原样呈现管道） | 本项目自有形态；网格状态隐藏，源码状态可见 |
 | `.vsidian-table-align-{left/center/right}` | 分隔行声明的列对齐修饰（trim 后内容） | 无对应（对齐由渲染布局承担） | 本项目自有稳定类；网格实际布局由下项承担 |
-| `.vsidian-table-grid-row` / `.vsidian-table-grid-cell` | 非活动安全表格的网格行/单元格；行附 `data-vsidian-table-row=header/row` 和 `--vsidian-table-columns` | Obsidian live 网格方向 | 本项目自有 CSS grid 结构；单元格仍与源区间对应，并非独立表格数据模型 |
+| `.vsidian-table-grid-row` / `.vsidian-table-grid-cell` | 安全表格的网格行/单元格，活动格也保留；行附 `data-vsidian-table-row=header/row` 和 `--vsidian-table-columns` | Obsidian live 网格方向 | 本项目自有 CSS grid 结构；单元格仍与源区间对应，并非独立表格数据模型 |
 | `.vsidian-table-grid-delimiter` / `.vsidian-table-grid-align-{left/center/right}` | 网格状态的分隔行隐藏与列对齐 | Obsidian 表格对齐方向 | 本项目自有修饰；活动分隔行回到源码 |
 | `.vsidian-table-escaped-pipe` | 网格中隐藏转义管道符前的反斜杠 | 无直接对应 | 只改变显示，不改 Markdown 原文 |
 

@@ -146,10 +146,10 @@ export function splitTableRowCells(lineText: string, lineStart: number): TableCe
     }
   }
   segs.push({ from: segStart, to: lineText.length })
-  if (segs.length > 0 && segs[0]!.from === segs[0]!.to) {
+  if (segs.length > 0 && lineText.slice(segs[0]!.from, segs[0]!.to).trim() === '') {
     segs.shift()
   }
-  if (segs.length > 0 && segs[segs.length - 1]!.from === segs[segs.length - 1]!.to) {
+  if (segs.length > 0 && lineText.slice(segs[segs.length - 1]!.from, segs[segs.length - 1]!.to).trim() === '') {
     segs.pop()
   }
   return segs.map((seg) => {

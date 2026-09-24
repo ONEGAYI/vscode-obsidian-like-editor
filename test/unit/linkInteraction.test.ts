@@ -186,6 +186,9 @@ describe('实时预览：渲染态单击跳转，源码态普通单击编辑', (
       expect(sentOf(h, 'link.activate')).toHaveLength(0)
       rendered.dispatchEvent(new MouseEvent('mousedown', { ctrlKey: true, bubbles: true, cancelable: true, clientX: 10, clientY: 10 }))
       expect(sentOf(h, 'link.activate')).toHaveLength(1)
+      view.dispatch({ selection: { anchor: text.indexOf('目标') } })
+      expect(host.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
+      expect(host.querySelector('.vsidian-table-grid-row .vsidian-link')).not.toBeNull()
     } finally {
       hit.mockRestore()
       c.dispose()

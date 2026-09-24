@@ -89,6 +89,7 @@ const TABLE_DOC = [
   '结尾段落。',
   '',
 ].join('\n')
+const TABLE42_EMPTY_DOC = '| A | B |\n| --- | --- |\n| | 空 |\n'
 // #13 表格导航/结构操作样例：表格前后有段落（区域不变断言），含对齐、
 // 行内代码管道与转义管道
 const TABLE13_DOC = [
@@ -251,6 +252,7 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   writeFileSync(path.join(wsDir, 'task.md'), TASK_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'table.md'), TABLE_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'table42.md'), TABLE_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'table42-empty.md'), TABLE42_EMPTY_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'table13.md'), TABLE13_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'table43-crlf.md'), TABLE43_CRLF_DOC, 'utf8')
   const largeLines = Array.from({ length: LARGE_DOC_LINES }, (_, i) => `第 ${i + 1} 行 ——固定宽度填充文本，用于长文档视口渲染验证——`)
