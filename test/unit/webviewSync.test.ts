@@ -250,24 +250,13 @@ describe('view.state 诊断', () => {
   })
 })
 
-describe('排版一致性探针（#32：view.state 本地扩展字段）', () => {
+describe('排版一致性探针（#32：view.state 可选字段）', () => {
   // fixture 同时覆盖标题、正文、列表与引用（表格由集成层覆盖）；
   // jsdom 无样式表层叠，computed 值不反映 main.css——此处只契约
   // 字段结构与采集路径，两模式计算值一致性断言在真实宿主集成层。
   const TYPO_TEXT = '# 排版标题\n\n普通段落。\n\n- 列表项\n\n> 引用内容\n'
 
-  type ViewStateMsg = Extract<WebviewToHost, { kind: 'view.state' }> & {
-    typography?: {
-      live: { fontFamily: string | null; fontSizePx: number | null; lineHeightPx: number | null; textInsetPx: number | null } | null
-      reading: { fontFamily: string | null; fontSizePx: number | null; lineHeightPx: number | null; textInsetPx: number | null } | null
-      liveList: { fontFamily: string | null; fontSizePx: number | null } | null
-      readingList: { fontFamily: string | null; fontSizePx: number | null } | null
-      liveQuote: { fontFamily: string | null; fontSizePx: number | null } | null
-      readingQuote: { fontFamily: string | null; fontSizePx: number | null } | null
-      liveTable: { fontFamily: string | null; fontSizePx: number | null } | null
-      readingTable: { fontFamily: string | null; fontSizePx: number | null } | null
-    }
-  }
+  type ViewStateMsg = Extract<WebviewToHost, { kind: 'view.state' }>
 
   function lastViewState(sent: WebviewToHost[]): ViewStateMsg {
     return sent.filter((m): m is ViewStateMsg => m.kind === 'view.state').at(-1)!
@@ -279,7 +268,7 @@ describe('排版一致性探针（#32：view.state 本地扩展字段）', () =>
     init(c, TYPO_TEXT, 1)
     c.handleHostMessage({ kind: 'view.state.request' })
     const t = lastViewState(sent).typography
-    expect(t, 'view.state 应携带 typography 扩展字段').toBeDefined()
+    expect(t, 'view.state 应携带 typography 字段').toBeDefined()
     // live 侧元素常驻（CM6 视口渲染），样本应存在且四键齐全
     expect(t!.live).not.toBeNull()
     expect(Object.keys(t!.live!).sort()).toEqual(['fontFamily', 'fontSizePx', 'lineHeightPx', 'textInsetPx'])
@@ -303,7 +292,7 @@ describe('排版一致性探针（#32：view.state 本地扩展字段）', () =>
     c.handleHostMessage({ kind: 'view.mode.set', mode: 'reading' })
     c.handleHostMessage({ kind: 'view.state.request' })
     const t = lastViewState(sent).typography
-    expect(t, 'view.state 应携带 typography 扩展字段').toBeDefined()
+    expect(t, 'view.state 应携带 typography 字段').toBeDefined()
     expect(t!.reading).not.toBeNull()
     expect(Object.keys(t!.reading!).sort()).toEqual(['fontFamily', 'fontSizePx', 'lineHeightPx', 'textInsetPx'])
     expect(t!.readingList).not.toBeNull()

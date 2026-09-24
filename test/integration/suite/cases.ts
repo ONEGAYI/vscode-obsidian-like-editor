@@ -249,7 +249,7 @@ interface ViewState {
     currentFrom: number | null
     currentTo: number | null
   }
-  /** #32 排版一致性探针（view.state 的 webview 本地扩展字段）：
+  /** #32 排版一致性探针（view.state 可选字段，协议正式校验）：
    *  各侧样本只在对应模式激活态断言（隐藏侧几何口径无意义） */
   typography?: {
     live: { fontFamily: string | null; fontSizePx: number | null; lineHeightPx: number | null; textInsetPx: number | null } | null
@@ -2897,5 +2897,173 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
     await waitViewState('large.md', (v) => v.lineGutter?.on === true && (v.lineGutter?.count ?? 0) > 0)
     console.log(`[#34] large.md：顶部 DOM=${topG.count}（有界），底部行号 ${String(bottomG.last)} scaleX=${bottomG.scaleX}，基线 ${insetOn}px 恒定`)
+  }],
+
+  ['文档中部插入/粘贴多行与删除表格行后行号随源文更新', async () => {
+    await openWithEditor('linenumbers.md')
+    await waitSessionReady('linenumbers.md')
+    const uri = wsUri('linenumbers.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('linenumbers.md'))
+    const original = doc.getText()
+    // 跨用例状态防御：前序用例（开关/大文档）会切换行号设置，卸载期间的
+    // 隐藏面板可能错过后续广播——openWith reveal 的可能是幸存面板（实测
+    // sessionId 为用例 1 的 panel-1）。显式确保开启：apply 对同值补丁仍会
+    // 广播，幸存面板据此对齐当前全局值（与用例 4 的「恢复默认开启」同款
+    // 清理动作）
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
+    const before = await waitViewState('linenumbers.md', (v) => (v.lineGutter?.count ?? 0) > 0)
+    const beforeLines = before.lineCount
+    assert(before.lineGutter!.last === String(beforeLines), '初始行号应与源行一致')
+
+    // 中部插入多行（列表区行首）：行号整体推进
+    const midOffset = original.indexOf('- 列表项甲\n')
+    assert(midOffset > 0, 'fixture 应包含列表行（中部插入锚点）')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'sync.test.edit',
+      offset: midOffset,
+      text: '中部新行一\n中部新行二\n中部新行三\n',
+    })
+    const afterMid = await poll('中部插入后行号随动', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines + 3 && v.lineGutter?.last === String(beforeLines + 3) ? v : undefined
+    })
+    assert(afterMid.lineGutter!.first === '1', '中部插入后首行行号仍为 1')
+
+    // 粘贴多行（单事务大块插入，与用户粘贴同一 CM6 事务链路）：行号按新增行数推进
+    const pasteText = Array.from({ length: 6 }, (_, i) => `粘贴第 ${i + 1} 行`).join('\n') + '\n'
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'sync.test.edit',
+      offset: afterMid.docLength,
+      text: pasteText,
+    })
+    await poll('粘贴多行后行号随动', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines + 9 && v.lineGutter?.last === String(beforeLines + 9) ? v : undefined
+    })
+    // 等宿主写回完成（后续删除锚点按权威文本计算：中部插入使表格行 offset 后移）
+    await poll('编辑写入权威', () =>
+      doc.getText().includes('中部新行一\n') && doc.getText().endsWith(pasteText) ? true : undefined)
+
+    // 删除行：定位到表格数据行后执行宿主表格命令（webview 经 CM6 事务真实删除整行）
+    const tableRowOffset = doc.getText().indexOf('| 甲格 | 乙格 |')
+    assert(tableRowOffset > 0, 'fixture 应包含表格数据行（删除锚点）')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate',
+      offset: tableRowOffset + 2,
+    })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'table.command',
+      op: 'deleteRow',
+    })
+    await poll('删除行后行号回落', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines + 8 && v.lineGutter?.last === String(beforeLines + 8) ? v : undefined
+    })
+
+    // 三笔编辑逐次撤销（一笔 edit.request = 宿主撤销一次）：行号逐步回落至原文
+    await vscode.commands.executeCommand('vscode.openWith', wsUri('linenumbers.md'), VIEW_TYPE)
+    const undoSteps = [beforeLines + 9, beforeLines + 3, beforeLines]
+    for (const expected of undoSteps) {
+      await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+      await poll(`撤销后行号回落到 ${expected}`, async () => {
+        const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+        return v?.lineCount === expected && v.lineGutter?.last === String(expected) ? v : undefined
+      })
+    }
+    await poll('还原 fixture 原文', () => (doc.getText() === original ? true : undefined))
+    if (doc.isDirty) {
+      await doc.save()
+    }
+  }],
+
+  ['外部变更（宿主 WorkspaceEdit）增删行后行号与源文同步', async () => {
+    await openWithEditor('untouched.md')
+    await waitSessionReady('untouched.md')
+    const doc = await vscode.workspace.openTextDocument(wsUri('untouched.md'))
+    const original = doc.getText()
+    const before = await waitViewState('untouched.md', (v) => (v.lineGutter?.count ?? 0) > 0)
+    const beforeLines = before.lineCount
+
+    // 外部插入两行（模拟另一编辑器/其他扩展修改同一文件）：增量回流后行号随动。
+    // Position 为 0 基行号：原文档末行（空行）是 line(beforeLines-1)，其行首即文末
+    const insert = new vscode.WorkspaceEdit()
+    insert.insert(wsUri('untouched.md'), new vscode.Position(beforeLines - 1, 0), '外部行甲\n外部行乙\n')
+    assert(await vscode.workspace.applyEdit(insert), '外部插入应成功')
+    const afterInsert = await poll('外部插入后行号随动', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, wsUri('untouched.md').toString(), 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines + 2 && v.lineGutter?.last === String(beforeLines + 2) ? v : undefined
+    })
+    // 独立断言 lineGutter 观测面（不依赖 text 断言）：开关态、首末行号、视口计数
+    const g = afterInsert.lineGutter!
+    assert(g.on === true, `外部变更后行号开关应保持，实际 ${String(g.on)}`)
+    assert(g.first === '1', `首行行号应为 1，实际 ${String(g.first)}`)
+    assert(g.count === beforeLines + 2, `小文档行号计数应等于源行数 ${beforeLines + 2}，实际 ${g.count}`)
+    assert(doc.lineCount === beforeLines + 2, `宿主行数应同步为 ${beforeLines + 2}，实际 ${doc.lineCount}`)
+
+    // 外部删除这两行（插入区间恰为两个新行 + 其后的末空行行首边界）：行号回落
+    const remove = new vscode.WorkspaceEdit()
+    remove.delete(wsUri('untouched.md'), new vscode.Range(beforeLines - 1, 0, beforeLines + 1, 0))
+    assert(await vscode.workspace.applyEdit(remove), '外部删除应成功')
+    const afterDelete = await poll('外部删除后行号回落', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, wsUri('untouched.md').toString(), 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines && v.lineGutter?.last === String(beforeLines) ? v : undefined
+    })
+    assert(afterDelete.lineGutter!.on === true, '外部变更不得改变行号开关态')
+    await poll('外部删除落盘还原', () => (doc.getText() === original ? true : undefined))
+    if (doc.isDirty) {
+      await doc.save()
+    }
+    console.log(`[#34] 外部变更：插入后行号 1..${beforeLines + 2}，删除后回落 1..${beforeLines}`)
+  }],
+
+  ['CRLF 文档增删行后行号仍与源行一致', async () => {
+    await openWithEditor('crlf.md')
+    await waitSessionReady('crlf.md')
+    const uri = wsUri('crlf.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('crlf.md'))
+    const original = doc.getText()
+    const before = await waitViewState('crlf.md', (v) => (v.lineGutter?.count ?? 0) > 0)
+    const beforeLines = before.lineCount
+    assert(beforeLines === doc.lineCount, `初始两系行数应一致（${beforeLines} vs ${doc.lineCount}）`)
+
+    // 行首插入两行（webview LF 坐标）：行号随动，写回后宿主文本保持 CRLF 保真
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'sync.test.edit',
+      offset: 0,
+      text: '新 CRLF 行甲\n新 CRLF 行乙\n',
+    })
+    const afterInsert = await poll('CRLF 插入后行号随动', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines + 2 && v.lineGutter?.last === String(beforeLines + 2) ? v : undefined
+    })
+    assert(afterInsert.lineGutter!.first === '1', 'CRLF 插入后首行行号仍为 1')
+    await poll('CRLF 写回保真', () =>
+      doc.getText().startsWith('新 CRLF 行甲\r\n新 CRLF 行乙\r\n') ? true : undefined)
+
+    // 撤销插入（宿主权威栈回流走 external 路径）：行号回落
+    await vscode.commands.executeCommand('vscode.openWith', wsUri('crlf.md'), VIEW_TYPE)
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('CRLF 撤销后行号回落', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines && v.lineGutter?.last === String(beforeLines) ? v : undefined
+    })
+
+    // 外部变更（宿主 WorkspaceEdit）追加 CRLF 行：行号随动且行数与宿主一致
+    const extEdit = new vscode.WorkspaceEdit()
+    extEdit.insert(wsUri('crlf.md'), new vscode.Position(beforeLines, 0), '外部 CRLF 行\r\n')
+    assert(await vscode.workspace.applyEdit(extEdit), '外部 CRLF 插入应成功')
+    const afterExternal = await poll('CRLF 外部变更后行号随动', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines + 1 && v.lineGutter?.last === String(beforeLines + 1) ? v : undefined
+    })
+    assert(afterExternal.lineCount === doc.lineCount,
+      `外部变更后行数应与宿主一致（${afterExternal.lineCount} vs ${doc.lineCount}）`)
+
+    // 还原（撤销外部变更）并落盘
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('CRLF 还原原文', () => (doc.getText() === original ? true : undefined))
+    if (doc.isDirty) {
+      await doc.save()
+    }
   }],
 ]

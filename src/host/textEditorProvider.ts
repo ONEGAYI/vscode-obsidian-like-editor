@@ -25,18 +25,18 @@ import { parseWikilinkInner } from '../shared/wikilink'
 import { NewlineCoordinator } from '../shared/newline'
 import { isWebviewToHost, type HostToWebview, type SerChange, type TableEditOp } from '../shared/protocol'
 import type { SettingsService } from './settingsService'
+import type { SettingsPageHandle } from './settingsPage'
 
 export const VIEW_TYPE = 'onegayi.vsidian.editor'
 
 /** #33 设置链路的 provider 接线（extension.ts 注入）：编辑器面板的设置
  *  消息拦截（settings.open/get）、宿主保存后的变更广播（settings.changed
- *  到全部已打开编辑器面板）与设置页测试钩子的观测/注入通道 */
+ *  到全部已打开编辑器面板）与设置页测试钩子的观测/注入通道。
+ *  page 直接复用 settingsPage 的面板句柄（open/close/getInfo/injectMessage），
+ *  不再逐方法转发展开 */
 export interface SettingsWiring {
   service: SettingsService
-  openPage(): void
-  closePage(): void
-  getPageInfo(): { open: boolean; ready: boolean; title: string }
-  injectPageMessage(message: unknown): void
+  page: SettingsPageHandle
 }
 
 /** 活动标签是否为指定文档的本扩展 custom editor（C-5）。
@@ -491,7 +491,7 @@ export function createTextEditorProvider(
         // #33 设置端口：工具栏 settings.open 与 init 后 settings.get 的
         // 面板级处理（与 link.activate 同模式；settings.set 只存在于
         // 设置页 webview 链路，不经文档会话）
-        openSettings: () => settings?.openPage(),
+        openSettings: () => settings?.page.open(),
         requestSettings: () => settings?.service.getSnapshot() ?? {},
       })
       entry.panels.set(sessionId, webviewPanel)
@@ -865,17 +865,17 @@ export function createTextEditorProvider(
     ),
     vscode.commands.registerCommand('onegayi.vsidian._test.settingsPageInfo', () =>
       settings
-        ? settings.getPageInfo()
+        ? settings.page.getInfo()
         : { open: false, ready: false, title: '' },
     ),
     vscode.commands.registerCommand('onegayi.vsidian._test.closeSettingsPage', () => {
-      settings?.closePage()
+      settings?.page.close()
       return true
     }),
     vscode.commands.registerCommand(
       'onegayi.vsidian._test.injectSettingsPageMessage',
       (message: unknown) => {
-        settings?.injectPageMessage(message)
+        settings?.page.injectMessage(message)
         return true
       },
     ),

@@ -12,7 +12,6 @@ import {
   applySettingsPatch,
   isSettingDefinition,
   sanitizeStoredSettings,
-  settingsDefaults,
   type SettingDefinition,
   type SettingsPayload,
   type SettingsPayloadValue,
@@ -122,10 +121,5 @@ export class SettingsService {
     return () => {
       this.listeners.delete(listener)
     }
-  }
-
-  /** 默认值快照（辅助：重置语义与文档用） */
-  defaults(): SettingsPayload {
-    return settingsDefaults(this.getDefinitions())
   }
 }

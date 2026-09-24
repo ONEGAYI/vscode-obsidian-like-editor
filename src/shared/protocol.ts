@@ -204,6 +204,8 @@ export type WebviewToHost =
       settings?: SettingsPayload
       /** #34 行号栏观测（设置开关态与视口内渲染结果；旧 webview 缺省） */
       lineGutter?: LineGutterProbe
+      /** #32 排版一致性探针（两模式基础排版对照采样；旧 webview 缺省） */
+      typography?: TypographyProbe
     }
       /** 阅读视图性能探针回报（#7）：滚动往返期间的挂载/回收与解析观测 */
   | {
@@ -360,6 +362,40 @@ export interface LineGutterProbe {
   scaleX: number | null
 }
 
+/** #32 排版一致性探针：正文基础排版四项样本（null = 元素缺失/不可读） */
+export interface TypographySample {
+  /** computed font-family（浏览器归一化串） */
+  fontFamily: string | null
+  fontSizePx: number | null
+  /** computed line-height 换算 px；'normal'（未解析为长度）为 null */
+  lineHeightPx: number | null
+  /** 正文文本左缘相对滚动容器左缘（几何口径，含中间层 padding/border；
+   *  display:none 侧 rect 全 0，不可作断言依据——各模式态取各自激活侧） */
+  textInsetPx: number | null
+}
+
+/** #32 排版一致性探针：继承型元素样本（列表/引用/表格——行高与缩进属
+ *  各自语义，只对照字体族与字号） */
+export interface TypographyInheritSample {
+  fontFamily: string | null
+  fontSizePx: number | null
+}
+
+/** #32 排版一致性探针（view.state 可选字段）：两模式基础排版对照采样。
+ *  各侧样本只在对应模式激活态断言（隐藏侧几何口径 textInsetPx 无意义）。 */
+export interface TypographyProbe {
+  /** live 正文：.cm-content（scroller 基线字体作用面，视口常驻） */
+  live: TypographySample | null
+  /** reading 正文：首个阅读块内段落（虚拟化下须已挂载） */
+  reading: TypographySample | null
+  liveList: TypographyInheritSample | null
+  readingList: TypographyInheritSample | null
+  liveQuote: TypographyInheritSample | null
+  readingQuote: TypographyInheritSample | null
+  liveTable: TypographyInheritSample | null
+  readingTable: TypographyInheritSample | null
+}
+
 /** live 侧语法装饰统计（#8：装饰集合计数，覆盖标题/行内/块级/任务/降级观测） */
 export interface LiveSyntaxProbe {
   /** 标题行数（#5 类） */
@@ -474,6 +510,40 @@ function isLineGutterProbe(v: unknown): v is LineGutterProbe {
     (v.first === null || isString(v.first)) &&
     (v.last === null || isString(v.last)) &&
     (v.scaleX === null || (typeof v.scaleX === 'number' && v.scaleX > 0))
+  )
+}
+
+/** #32 排版样本校验：字体族字符串或 null、字号/行高/几何 inset 非负数或 null */
+function isTypographySample(v: unknown): v is TypographySample {
+  return (
+    isObject(v) &&
+    isNullOrString(v.fontFamily) &&
+    (v.fontSizePx === null || isNonNegativeNumber(v.fontSizePx)) &&
+    (v.lineHeightPx === null || isNonNegativeNumber(v.lineHeightPx)) &&
+    (v.textInsetPx === null || isNonNegativeNumber(v.textInsetPx))
+  )
+}
+
+function isTypographyInheritSample(v: unknown): v is TypographyInheritSample {
+  return (
+    isObject(v) &&
+    isNullOrString(v.fontFamily) &&
+    (v.fontSizePx === null || isNonNegativeNumber(v.fontSizePx))
+  )
+}
+
+/** #32 排版一致性探针校验：八个采样位各为 null（元素缺失/不可读）或合法样本 */
+function isTypographyProbe(v: unknown): v is TypographyProbe {
+  return (
+    isObject(v) &&
+    (v.live === null || isTypographySample(v.live)) &&
+    (v.reading === null || isTypographySample(v.reading)) &&
+    (v.liveList === null || isTypographyInheritSample(v.liveList)) &&
+    (v.readingList === null || isTypographyInheritSample(v.readingList)) &&
+    (v.liveQuote === null || isTypographyInheritSample(v.liveQuote)) &&
+    (v.readingQuote === null || isTypographyInheritSample(v.readingQuote)) &&
+    (v.liveTable === null || isTypographyInheritSample(v.liveTable)) &&
+    (v.readingTable === null || isTypographyInheritSample(v.readingTable))
   )
 }
 
@@ -680,7 +750,8 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.imageStates === undefined || isImageStateCounts(v.imageStates)) &&
         (v.find === undefined || isFindSessionProbe(v.find)) &&
         (v.settings === undefined || isSettingsPayload(v.settings)) &&
-        (v.lineGutter === undefined || isLineGutterProbe(v.lineGutter))
+        (v.lineGutter === undefined || isLineGutterProbe(v.lineGutter)) &&
+        (v.typography === undefined || isTypographyProbe(v.typography))
       )
     case 'reading.perf.report':
       return (

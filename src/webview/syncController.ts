@@ -34,6 +34,9 @@ import {
   type LiveSyntaxProbe,
   type ReadingSyntaxProbe,
   type SerChange,
+  type TypographyInheritSample,
+  type TypographyProbe,
+  type TypographySample,
   type WebviewToHost,
 } from '../shared/protocol'
 import {
@@ -70,10 +73,21 @@ function scheduleFrame(fn: () => void): void {
 }
 
 // ---- #34 行号降级公式常量（推导见 syncLineNumberScale 注释）----
+// 带宽 / 间隙 / 字号比例 / 字号上限与 main.css 的 #32 留白带变量及
+// .cm-gutterElement 字号规则是同一知识的两处落点（CSS 管呈现、JS 管降级
+// 档位计算），由 test/unit/lineNumberCssContract.test.ts 逐值钉住一致——
+// 改动任一侧须同步另一侧，钉子测试失配即拦截。
 /** 留白带宽度（px）：与 #32 的 --vsidian-content-padding-inline 一致 */
-const LN_BAND_PX = 24
-/** 行号与正文的最小间隙（px，含在带宽内） */
-const LN_GAP_PX = 2
+export const LN_BAND_PX = 24
+/** 行号与正文的最小间隙（px，含在带宽内）：与 .cm-gutterElement 右 padding 一致 */
+export const LN_GAP_PX = 2
+/** 行号字号 = min(基准 × 比例, 上限)：与 main.css 的
+ *  font-size: min(calc(var(--vsidian-content-font-size) * 0.75), 12px) 一致 */
+export const LN_FONT_RATIO = 0.75
+export const LN_FONT_CAP_PX = 12
+/** 基准字号读取失败（无样式环境）时的回退（px）：与 --vsidian-content-font-size
+ *  的内层回退值一致 */
+export const LN_FONT_BASE_FALLBACK_PX = 14
 /** 等宽字体数字 advance 宽度与字号之比（通行值 0.6，见注释兜底说明） */
 const LN_CHAR_RATIO = 0.6
 
@@ -293,44 +307,6 @@ interface BufferedIncremental {
    *  届时缓冲增量的参考系（不含组合编辑）与已确认链（含）不再一致，迟到
    *  的逆穿会多平移组合编辑部分（#12 表格 IME 场景实测暴露） */
   baseChanges: SerChange[] | null
-}
-
-/** #32 排版一致性探针：正文基础排版四项样本（null = 元素缺失/不可读） */
-export interface TypographySample {
-  /** computed font-family（浏览器归一化串） */
-  fontFamily: string | null
-  fontSizePx: number | null
-  /** computed line-height 换算 px；'normal'（未解析为长度）为 null */
-  lineHeightPx: number | null
-  /** 正文文本左缘相对滚动容器左缘（几何口径，含中间层 padding/border；
-   *  display:none 侧 rect 全 0，不可作断言依据——各模式态取各自激活侧） */
-  textInsetPx: number | null
-}
-
-/** #32 排版一致性探针：继承型元素样本（列表/引用/表格——行高与缩进属
- *  各自语义，只对照字体族与字号） */
-export interface TypographyInheritSample {
-  fontFamily: string | null
-  fontSizePx: number | null
-}
-
-/** #32 view.state 本地扩展字段：两模式基础排版对照采样。
- *  协议边界：本字段不经 shared/protocol.ts 定义（与 #33 并行工单的边界
- *  约定），依赖 isWebviewToHost 校验器对未知字段的前向兼容透传（宿主侧
- *  原样缓存整个消息对象）；契约由 protocol.test.ts 的前向兼容用例与
- *  webviewSync.test.ts 的结构用例钉住。后续如需正式化，迁入 protocol.ts
- *  的 view.state 可选字段即可（纯增量，两端无破坏）。 */
-export interface TypographyProbe {
-  /** live 正文：.cm-content（scroller 基线字体作用面，视口常驻） */
-  live: TypographySample | null
-  /** reading 正文：首个阅读块内段落（虚拟化下须已挂载） */
-  reading: TypographySample | null
-  liveList: TypographyInheritSample | null
-  readingList: TypographyInheritSample | null
-  liveQuote: TypographyInheritSample | null
-  readingQuote: TypographyInheritSample | null
-  liveTable: TypographyInheritSample | null
-  readingTable: TypographyInheritSample | null
 }
 
 export class WebviewSyncController {
@@ -634,14 +610,11 @@ export class WebviewSyncController {
         this.bridge.postMessage({ kind: 'settings.get' })
         break
       case 'settings.snapshot':
-        // 设置快照缓存（#33）：设置页请求-响应与编辑器拉取共用同一形态；
-        // #34：行号开关经 Compartment 热重配应用（缺键回默认、非法形态忽略）
-        this.settings = message.values
-        this.applyLineNumbersSetting()
-        break
       case 'settings.changed':
-        // 设置变更广播（#33）：缓存后由 #34 等消费方按需读取关心的键
-        // （editor.lineNumbers 触发 CM6 扩展热重配）
+        // 设置快照与变更广播共用同一处理（#33）：snapshot 为设置页请求-
+        // 响应与编辑器拉取的回填，changed 为保存成功的全量广播；缓存后由
+        // #34 等消费方按需读取关心的键（editor.lineNumbers 经 Compartment
+        // 热重配，缺键回默认、非法形态忽略）
         this.settings = message.values
         this.applyLineNumbersSetting()
         break
@@ -957,10 +930,9 @@ export class WebviewSyncController {
         readingAnchorTopPx = el.getBoundingClientRect().top - box.top + this.readingContainer.scrollTop
       }
     }
-    // #32：typography 为 view.state 的 webview 本地扩展字段（见 TypographyProbe
-    // 注释），经宿主校验器的前向兼容透传缓存；变量化构造避免字面量触发
-    // postMessage 参数类型的多余属性检查
-    const state: Extract<WebviewToHost, { kind: 'view.state' }> & { typography: TypographyProbe } = {
+    // #32：typography 为 view.state 正式可选字段（协议校验器见
+    // shared/protocol.ts 的 isTypographyProbe）
+    const state: Extract<WebviewToHost, { kind: 'view.state' }> = {
       kind: 'view.state',
       text: doc?.toString() ?? '',
       docLength: doc?.length ?? 0,
@@ -2094,8 +2066,8 @@ export class WebviewSyncController {
    * 字号到 6px 的不可读），公式可复核：
    *   scale = min(1, (带宽 − 右缘间隙) / (0.6 × 行号字号 × 位数))
    * - 位数取视口最大行号（gutter 只渲染视口行，滚动跨越位数边界时更新）
-   * - 行号字号公式 min(0.75 × 正文基准, 12px) 与 main.css 的
-   *   .cm-lineNumbers 字号规则绑定，两处须同步修改
+   * - 行号字号公式 min(0.75 × 正文基准, 12px) 与 main.css 的 .cm-lineNumbers
+   *   字号规则是同一知识两处落点，由 lineNumberCssContract.test.ts 钉住一致
    * - 等宽数字宽比 0.6 为通行值（0.55–0.62），配合栏 overflow: hidden
    *   兜底（极端字体下最多裁左缘极小部分，不覆盖正文）
    */
@@ -2113,8 +2085,8 @@ export class WebviewSyncController {
     this.lnScaleDigits = digits
     const scroller = view.dom.querySelector('.cm-scroller')
     const basePx = Number.parseFloat(scroller ? getComputedStyle(scroller).fontSize : '')
-    const base = Number.isFinite(basePx) && basePx > 0 ? basePx : 14
-    const fontPx = Math.min(base * 0.75, 12)
+    const base = Number.isFinite(basePx) && basePx > 0 ? basePx : LN_FONT_BASE_FALLBACK_PX
+    const fontPx = Math.min(base * LN_FONT_RATIO, LN_FONT_CAP_PX)
     view.dom.style.setProperty('--vsidian-ln-scale', String(lineNumberScale(digits, fontPx)))
   }
 

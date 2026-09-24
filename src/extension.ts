@@ -17,10 +17,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const settingsPage = createSettingsPage(context, settingsService)
   const provider = createTextEditorProvider(context, {
     service: settingsService,
-    openPage: () => settingsPage.open(),
-    closePage: () => settingsPage.close(),
-    getPageInfo: () => settingsPage.getInfo(),
-    injectPageMessage: (message) => settingsPage.injectMessage(message),
+    page: settingsPage,
   })
   context.subscriptions.push(
     // enableScripts 在每个面板的 webview.options 上设置（provider 内）；

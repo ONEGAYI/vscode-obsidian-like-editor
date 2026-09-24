@@ -39,10 +39,10 @@ describe('isWebviewToHost', () => {
     ).toBe(true)
   })
 
-  it('接受携带未知扩展字段的 view.state（前向兼容；#32 排版探针依赖此通道）', () => {
-    // #32：排版一致性探针经 view.state 的本地扩展字段回传（不修改协议
-    // 单一事实源）。校验器只校验已知字段、不拒绝未知字段，是该扩展方式
-    // 成立的协议前提——本用例固化该前向兼容契约，防止未来收紧时静默破坏。
+  it('接受携带未知扩展字段的 view.state（前向兼容）', () => {
+    // 校验器只校验已知字段、不拒绝未知字段——这是新观测面可以先行上车、
+    // 协议后补正式字段的扩展前提（#32 的 typography 即经此通道先行后于
+    // #34 正式入协议）。本用例固化该前向兼容契约，防止未来收紧时静默破坏。
     expect(
       isWebviewToHost({
         kind: 'view.state',
@@ -50,18 +50,51 @@ describe('isWebviewToHost', () => {
         docLength: 4,
         lineCount: 1,
         renderedLines: 40,
+        futureExtension: { any: ['payload', 1] },
+      }),
+    ).toBe(true)
+  })
+
+  it('view.state 的 typography 观测（#32）：合法样本接受、字段非法拒绝', () => {
+    const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
+    const validTypography = {
+      live: { fontFamily: 'monospace', fontSizePx: 14, lineHeightPx: 19.6, textInsetPx: 24 },
+      reading: null,
+      liveList: { fontFamily: 'monospace', fontSizePx: 14 },
+      readingList: null,
+      liveQuote: { fontFamily: 'monospace', fontSizePx: null },
+      readingQuote: null,
+      liveTable: null,
+      readingTable: { fontFamily: null, fontSizePx: null },
+    }
+    // 合法：八个采样位均可为 null；样本数值非负（亚像素小数常态）
+    expect(isWebviewToHost({ ...base, typography: validTypography })).toBe(true)
+    expect(
+      isWebviewToHost({
+        ...base,
         typography: {
-          live: { fontFamily: 'monospace', fontSizePx: 14, lineHeightPx: 19, textInsetPx: 24 },
-          reading: null,
-          liveList: { fontFamily: 'monospace', fontSizePx: 14 },
-          readingList: null,
-          liveQuote: { fontFamily: 'monospace', fontSizePx: 14 },
-          readingQuote: null,
-          liveTable: { fontFamily: 'monospace', fontSizePx: 14 },
-          readingTable: null,
+          live: null, reading: null, liveList: null, readingList: null,
+          liveQuote: null, readingQuote: null, liveTable: null, readingTable: null,
         },
       }),
     ).toBe(true)
+    // 非法：fontSizePx 负数 / fontFamily 非字符串非 null / textInsetPx 非数
+    expect(
+      isWebviewToHost({ ...base, typography: { ...validTypography, live: { ...validTypography.live!, fontSizePx: -1 } } }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({ ...base, typography: { ...validTypography, live: { ...validTypography.live!, fontFamily: 14 } } }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({ ...base, typography: { ...validTypography, live: { ...validTypography.live!, textInsetPx: '24' } } }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({ ...base, typography: { ...validTypography, liveList: { fontFamily: 'x', fontSizePx: 1.5 } } }),
+    ).toBe(true) // 继承样本字号允许小数
+    expect(isWebviewToHost({ ...base, typography: { ...validTypography, liveTable: 42 } })).toBe(false)
+    expect(isWebviewToHost({ ...base, typography: null })).toBe(false)
+    // 缺省合法（向后兼容：#32 之前的旧 webview 不回报该字段）
+    expect(isWebviewToHost(base)).toBe(true)
   })
 
   it('接受空 changes 的 edit.request', () => {

@@ -79,8 +79,9 @@ body {
 }
 
 /* 行号单元格：字号公式 min(0.75 × 正文基准, 12px)——与
-   syncController.syncLineNumberScale 的 JS 复刻绑定，两处须同步修改；
-   右缘 2px 间隙含在带宽内（正文自留白带右缘起，行号不侵入）。
+   syncController.syncLineNumberScale 的 JS 复刻是同一知识两处落点
+   （CSS 管呈现、JS 管降级档位计算），由 test/unit/lineNumberCssContract.test.ts
+   逐值钉住一致；右缘 2px 间隙含在带宽内（正文自留白带右缘起，行号不侵入）。
    flex 右对齐 + 垂直居中：小字号行号在行高单元格内与正文行对齐 */
 #app .cm-editor .cm-scroller .cm-lineNumbers .cm-gutterElement {
   display: flex;
