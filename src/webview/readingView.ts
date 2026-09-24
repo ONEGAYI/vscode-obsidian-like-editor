@@ -19,6 +19,7 @@
 // - 类名映射 Obsidian 同款选择器，见 docs/design/obsidian-selector-map.md
 import { splitReadingBlocks, type ReadingBlock } from './readingBlocks'
 import { convertTaskItems, sanitizeReadingDom } from './readingMarkdown'
+import type { ImageResourceManager } from './imageResource'
 
 /** 稳定类名常量：一期 CSS 契约入口（ADR-0004），风格沿 `oile-` 前缀 */
 export const READING_CLASS_NAMES = {
@@ -106,6 +107,20 @@ export function renderReadingBlocks(container: HTMLElement, text: string): numbe
     container.appendChild(createReadingBlockElement(block, text))
   }
   return blocks.length
+}
+
+/**
+ * 阅读图片预备（#10）：markdown-it 渲染出的 <img> 剥离原生 src（相对路径
+ * 在 webview origin 下不可解析，必须经宿主通道），原始地址转入
+ * data-oile-img-src 并绑定资源管理器（块挂载即装载；卸载由 detachWithin
+ * 释放）。alt 保留（加载前占位与无障碍语义）。
+ */
+export function prepareReadingImages(root: HTMLElement, images: ImageResourceManager): void {
+  for (const img of Array.from(root.querySelectorAll('img'))) {
+    const raw = img.getAttribute('src') ?? ''
+    img.removeAttribute('src')
+    images.attach(img, raw)
+  }
 }
 
 /**

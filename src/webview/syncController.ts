@@ -34,9 +34,11 @@ import {
   type SerChange,
 } from '../shared/protocol'
 import { liveDecorationsField, livePreviewDecorations, LIVE_CLASS_NAMES } from './liveDecorations'
+import { createLinkInteractions } from './liveLinks'
+import { ImageResourceManager } from './imageResource'
 import { runPerfProbe } from './perfProbe'
 import { runReadingPerfProbe } from './readingProbe'
-import { createReadingContainer } from './readingView'
+import { createReadingContainer, prepareReadingImages } from './readingView'
 import { READING_MARKDOWN_CLASS_NAMES } from './readingMarkdown'
 import { resolveStaleTaskToggle } from './taskToggle'
 import { VirtualReadingView } from './readingVirtualView'
@@ -257,6 +259,8 @@ export class WebviewSyncController {
   private readingContainer: HTMLElement | undefined
   /** 阅读视图虚拟化控制器（#7：接管阅读容器的按需挂载/回收/锚点定位） */
   private readingView: VirtualReadingView | undefined
+  /** 图片资源管理器（#10：双视图共用；经宿主通道解析工作区图源） */
+  private images: ImageResourceManager | undefined
   private toolbar: HTMLElement | undefined
 
   // ---- 冲突暂停状态（#4）----
@@ -316,7 +320,27 @@ export class WebviewSyncController {
     this.liveWrapper.className = 'oile-view-live'
     this.readingContainer = createReadingContainer()
     this.readingContainer.style.display = 'none'
-    this.readingView = new VirtualReadingView(this.readingContainer)
+    this.images = new ImageResourceManager({
+      // http/https 图源直连（可加载性由 webview CSP 决定），其余经宿主解析
+      isDirectSrc: (src) => /^https?:\/\//i.test(src),
+      requestHost: (src, reqId) => {
+        if (!this.sessionId) {
+          return // init 前不可能有槽位；防御
+        }
+        this.bridge.postMessage({
+          kind: 'image.request',
+          sessionId: this.sessionId,
+          docUri: this.docUri,
+          reqId,
+          src,
+        })
+      },
+    })
+    this.readingView = new VirtualReadingView(this.readingContainer, {
+      // #10 图片生命周期：块挂载预备装载，卸载释放（src 清空、条目回收）
+      onBlockMounted: (el) => this.images && prepareReadingImages(el, this.images),
+      onBlockUnmounted: (el) => this.images?.detachWithin(el),
+    })
     // 阅读滚动更新锚点（用户滚动即改变"当前位置"语义；短文档滚不动时
     // 锚点保持进入/定位时的值——视口读取无法表达目标，modeAnchor 是权威）。
     // 同一事件驱动 #7 的窗口重算（rAF 合帧）
@@ -348,6 +372,33 @@ export class WebviewSyncController {
       if (event.key === 'Enter' && this.isTaskCheckbox(target)) {
         event.preventDefault()
         this.toggleReadingTask(target)
+      }
+    })
+    // 阅读链接单击 = 跳转意图上报（#10：执行归宿主；preventDefault 阻断
+    // webview 原生导航——相对路径在本 origin 下必然失败且产生控制台噪声）
+    this.readingContainer.addEventListener('click', (event) => {
+      const target = event.target as HTMLElement | null
+      const anchor = target?.closest?.('a')
+      if (!anchor || !this.readingContainer!.contains(anchor)) {
+        return
+      }
+      event.preventDefault()
+      const href = anchor.getAttribute('href')
+      if (href === null) {
+        return // 渲染层已净化的危险链接（无 href）
+      }
+      const block = anchor.closest<HTMLElement>('[data-oile-src-start]')
+      const srcStart = Number(block?.dataset['oileSrcStart'] ?? 0)
+      const srcEnd = Number(block?.dataset['oileSrcEnd'] ?? srcStart)
+      if (this.sessionId) {
+        this.bridge.postMessage({
+          kind: 'link.activate',
+          sessionId: this.sessionId,
+          docUri: this.docUri,
+          href,
+          srcStart: Number.isInteger(srcStart) ? srcStart : 0,
+          srcEnd: Number.isInteger(srcEnd) ? srcEnd : srcStart,
+        })
       }
     })
     parent.appendChild(this.toolbar)
@@ -383,6 +434,8 @@ export class WebviewSyncController {
     this.readingView = undefined
     this.readingContainer?.remove()
     this.readingContainer = undefined
+    this.images?.dispose()
+    this.images = undefined
   }
 
   /** 宿主消息入口（window message 事件转发） */
@@ -554,6 +607,10 @@ export class WebviewSyncController {
         boxes?.[message.index]?.click()
         break
       }
+      case 'image.result':
+        // #10 图片解析结果路由（只读显示通道：暂停态同样可用）
+        this.images?.handleResult(message)
+        break
       case 'view.state.request': {
         const doc = this.view?.state.doc
         const content = this.view?.dom.querySelector('.cm-content')
@@ -621,6 +678,18 @@ export class WebviewSyncController {
           cssProbe: this.collectCssProbe(),
           liveSyntax: this.collectLiveSyntax(),
           readingSyntax: this.viewMode === 'reading' ? this.collectReadingSyntax() : undefined,
+          // #10 链接/图片观测（DOM 级：live 限视口，reading 限挂载块）
+          liveLinkCount: content ? content.querySelectorAll('.oile-link').length : 0,
+          liveImageCount: content ? content.querySelectorAll('.oile-image').length : 0,
+          readingLinkCount: readingActive
+            ? this.readingContainer!.querySelectorAll('a').length
+            : 0,
+          readingImageCount: readingActive
+            ? this.readingContainer!.querySelectorAll('img').length
+            : 0,
+          // 图片状态计数按当前视图作用域（隐藏视图的槽位不计入——同一管理器
+          // 服务双视图，隐藏侧的 DOM 不代表用户可见状态）
+          imageStates: this.collectImageStates(),
         })
         break
       }
@@ -855,6 +924,22 @@ export class WebviewSyncController {
     return Math.max(0, Math.min(offset, this.view?.state.doc.length ?? 0))
   }
 
+  /** 图片槽位状态计数（#10）：按当前激活视图的作用域统计 DOM 状态标记 */
+  private collectImageStates(): { loading: number; loaded: number; error: number } {
+    const scope = this.viewMode === 'reading' ? this.readingContainer : this.liveWrapper
+    const out = { loading: 0, loaded: 0, error: 0 }
+    if (!scope) {
+      return out
+    }
+    for (const el of Array.from(scope.querySelectorAll<HTMLElement>('[data-oile-img-state]'))) {
+      const s = el.dataset['oileImgState']
+      if (s === 'loading' || s === 'loaded' || s === 'error') {
+        out[s] += 1
+      }
+    }
+    return out
+  }
+
   /** CSS 契约探针（#6 内部测试验证入口；#8 扩展 span 级类）：宿主注入的
    *  测试片段仅经稳定类名定位；此处在 view.state 请求时读取 computed style
    *  回报。jsdom 无样式表计算，值可为空串/空变量（返回 null），真实断言在集成。 */
@@ -869,6 +954,9 @@ export class WebviewSyncController {
     const readingTaskBox = this.readingContainer?.querySelector(
       `.${READING_MARKDOWN_CLASS_NAMES.taskCheckbox}`,
     ) ?? null
+    const liveLink = this.liveWrapper?.querySelector('.oile-link') ?? null
+    const readingLink = this.readingContainer?.querySelector('.oile-reading-block a') ?? null
+    const readingImage = this.readingContainer?.querySelector('.oile-reading-block img.oile-image') ?? null
     const read = (el: Element | null): string | null =>
       el ? getComputedStyle(el).textDecorationColor : null
     let readingVarProbe: string | null = null
@@ -888,6 +976,9 @@ export class WebviewSyncController {
       readingStrongDecorationColor: read(readingStrong),
       liveTaskCheckboxDecorationColor: read(liveTaskBox),
       readingTaskCheckboxDecorationColor: read(readingTaskBox),
+      liveLinkDecorationColor: read(liveLink),
+      readingLinkDecorationColor: read(readingLink),
+      readingImageDecorationColor: read(readingImage),
     }
   }
 
@@ -1327,6 +1418,23 @@ export class WebviewSyncController {
       // 标题实时预览装饰（#5 切片）：直接装饰（StateField）+ 间接装饰
       // （ViewPlugin 按 visibleRanges），见 liveDecorations.ts 头注释
       livePreviewDecorations,
+      // #10 链接/图片：视口间接装饰（链接 span、图片 widget）+ Ctrl/Cmd
+      // 单击跳转意图上报（执行归宿主）
+      createLinkInteractions({
+        postActivate: (href, srcStart, srcEnd) => {
+          if (this.sessionId) {
+            this.bridge.postMessage({
+              kind: 'link.activate',
+              sessionId: this.sessionId,
+              docUri: this.docUri,
+              href,
+              srcStart,
+              srcEnd,
+            })
+          }
+        },
+        images: this.images!,
+      }),
       ...this.extraExtensions,
       EditorView.updateListener.of((update) => {
         if (!update.docChanged) {

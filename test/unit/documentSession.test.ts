@@ -736,3 +736,145 @@ describe('P3 修复批：B-4 / B-6 / C-6', () => {
     expect(s.session.getConflictState(id)?.suspended).toBe(true)
   })
 })
+
+// ---- 工单 #10：链接跳转与图片解析的会话路由 ----
+
+async function ready10(s: ReturnType<typeof setup>, id: string): Promise<void> {
+  await s.send(id, { kind: 'ready' })
+}
+
+describe('#10 link.activate：会话校验后交面板端口执行', () => {
+  it('ready 面板的合法意图路由到 openLink（携带原始 href 与源位置）', async () => {
+    const s = setup()
+    const opened: Array<{ href: string; srcStart: number; srcEnd: number }> = []
+    const id = s.session.attachPanel({
+      send: () => undefined,
+      openLink: (intent) => opened.push(intent),
+    })
+    await ready10(s, id)
+    await s.send(id, {
+      kind: 'link.activate', sessionId: id, docUri: DOC_URI,
+      href: './目标 文档.md', srcStart: 10, srcEnd: 30,
+    })
+    expect(opened).toEqual([{ href: './目标 文档.md', srcStart: 10, srcEnd: 30 }])
+  })
+
+  it('docUri 不匹配或未 ready 的意图被丢弃，不触达 openLink', async () => {
+    const s = setup()
+    const opened: unknown[] = []
+    const id = s.session.attachPanel({
+      send: () => undefined,
+      openLink: (intent) => opened.push(intent),
+    })
+    // 未 ready：丢弃
+    await s.session.handleWebviewMessage(
+      { kind: 'link.activate', sessionId: id, docUri: DOC_URI, href: './a.md', srcStart: 0, srcEnd: 1 },
+      id,
+    )
+    expect(opened).toEqual([])
+    await ready10(s, id)
+    // docUri 不匹配：丢弃
+    await s.send(id, {
+      kind: 'link.activate', sessionId: id, docUri: 'file:///other.md', href: './a.md', srcStart: 0, srcEnd: 1,
+    })
+    expect(opened).toEqual([])
+    // 合法：触达
+    await s.send(id, { kind: 'link.activate', sessionId: id, docUri: DOC_URI, href: './a.md', srcStart: 0, srcEnd: 1 })
+    expect(opened.length).toBe(1)
+  })
+
+  it('暂停（冲突）面板的链接意图仍被放行：跳转是只读交互，不受写回暂停影响', async () => {
+    const s = setup('abc')
+    const opened: unknown[] = []
+    const id = s.session.attachPanel({
+      send: () => undefined,
+      openLink: (intent) => opened.push(intent),
+    })
+    await ready10(s, id)
+    // 触发暂停：不可安全应用的过期请求
+    s.doc.content = '外部改写'
+    s.doc.ver++
+    s.session.handleDocChanged([{ offset: 0, length: 3, text: '外部改写' }], 2)
+    await s.send(id, {
+      kind: 'edit.request', sessionId: id, docUri: DOC_URI,
+      seq: 1, baseVersion: 1, changes: [{ offset: 0, length: 2, text: '未确认' }],
+    })
+    expect(s.session.getConflictState(id)?.suspended).toBe(true)
+    await s.send(id, {
+      kind: 'link.activate', sessionId: id, docUri: DOC_URI, href: 'https://example.com', srcStart: 0, srcEnd: 5,
+    })
+    expect(opened.length).toBe(1)
+  })
+})
+
+describe('#10 image.request：会话解析、去重与结果回发', () => {
+  function imageSetup(resolve: (src: string) => Promise<{ ok: true; src: string } | { ok: false; reason: 'blocked' | 'outside-workspace' | 'not-found' | 'read-error' }>) {
+    const s = setup()
+    const calls: string[] = []
+    const out: HostToWebview[] = []
+    const id = s.session.attachPanel({
+      send: (m) => out.push(m),
+      resolveImage: async (src) => {
+        calls.push(src)
+        return resolve(src)
+      },
+    })
+    return { s, calls, out, id }
+  }
+
+  it('请求经 resolveImage 解析并以 image.result 回发（reqId 对应）', async () => {
+    const t = imageSetup(async () => ({ ok: true, src: 'vscode-webview://res/a.png' }))
+    await ready10(t.s, t.id)
+    await t.s.send(t.id, { kind: 'image.request', sessionId: t.id, docUri: DOC_URI, reqId: 7, src: './a.png' })
+    expect(t.calls).toEqual(['./a.png'])
+    expect(t.out.filter((m) => m.kind === 'image.result')).toEqual([
+      { kind: 'image.result', reqId: 7, ok: true, src: 'vscode-webview://res/a.png' },
+    ])
+  })
+
+  it('并发同 src 去重为单次解析；成功结果缓存：后续请求不再触达解析器', async () => {
+    const t = imageSetup(async () => ({ ok: true, src: 'vscode-webview://res/a.png' }))
+    await ready10(t.s, t.id)
+    await t.s.send(t.id, { kind: 'image.request', sessionId: t.id, docUri: DOC_URI, reqId: 1, src: './a.png' })
+    await t.s.send(t.id, { kind: 'image.request', sessionId: t.id, docUri: DOC_URI, reqId: 2, src: './a.png' })
+    expect(t.calls.length).toBe(1)
+    expect(t.out.filter((m) => m.kind === 'image.result').length).toBe(2)
+    // 缓存命中：第三次请求（如滚动回视口）直接回发缓存结果
+    await t.s.send(t.id, { kind: 'image.request', sessionId: t.id, docUri: DOC_URI, reqId: 3, src: './a.png' })
+    expect(t.calls.length).toBe(1)
+    expect(t.out.filter((m) => m.kind === 'image.result').length).toBe(3)
+  })
+
+  it('失败结果不缓存：重试（新请求）重新触达解析器', async () => {
+    let fail = true
+    const t = imageSetup(async () =>
+      fail ? { ok: false as const, reason: 'not-found' as const } : { ok: true as const, src: 'res://x' },
+    )
+    await ready10(t.s, t.id)
+    await t.s.send(t.id, { kind: 'image.request', sessionId: t.id, docUri: DOC_URI, reqId: 1, src: './miss.png' })
+    fail = false
+    await t.s.send(t.id, { kind: 'image.request', sessionId: t.id, docUri: DOC_URI, reqId: 2, src: './miss.png' })
+    expect(t.calls.length).toBe(2)
+    const results = t.out.filter((m) => m.kind === 'image.result')
+    expect((results[0] as { ok: boolean }).ok).toBe(false)
+    expect((results[1] as { ok: boolean }).ok).toBe(true)
+  })
+
+  it('未注入解析器的面板与未 ready 面板的请求不解析；前者回发 read-error', async () => {
+    const s = setup()
+    const out: HostToWebview[] = []
+    const id = s.session.attachPanel({ send: (m) => out.push(m) })
+    // 未 ready：丢弃
+    await s.session.handleWebviewMessage(
+      { kind: 'image.request', sessionId: id, docUri: DOC_URI, reqId: 1, src: './a.png' },
+      id,
+    )
+    expect(out.filter((m) => m.kind === 'image.result').length).toBe(0)
+    await ready10(s, id)
+    await s.send(id, { kind: 'image.request', sessionId: id, docUri: DOC_URI, reqId: 2, src: './a.png' })
+    const results = out.filter((m) => m.kind === 'image.result')
+    expect(results.length).toBe(1)
+    expect((results[0] as { ok: boolean; reason?: string }).ok).toBe(false)
+    expect((results[0] as { reason?: string }).reason).toBe('read-error')
+  })
+})

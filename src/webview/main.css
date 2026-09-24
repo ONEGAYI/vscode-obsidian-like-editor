@@ -187,6 +187,50 @@ body {
   outline-offset: 1px;
 }
 
+/* ---- #10：链接（live 视图）----
+   .oile-link 为链接内容 span 稳定类名（Obsidian 对应 .cm-link）；
+   非活动行隐藏 ](url) 尾部，活动行显示源码（编辑语义）。
+   单击 = 光标编辑；Ctrl/Cmd+单击 = 跳转（宿主执行），故不给 pointer 光标 */
+#app .cm-editor .cm-scroller .oile-link {
+  color: var(--vscode-textLink-foreground, #4fc1ff);
+}
+
+/* ---- #10：图片槽位（双视图共用 oile-image + 状态修饰类）----
+   阅读视图：槽位即 <img>（块挂载时创建，卸载释放）；
+   live 视图：槽位为 widget 容器 span（内部 <img> 由资源管理器装载）。
+   图片加载后的高度变化：阅读侧经虚拟化高度实测回填与滚动锚定（#7 机制），
+   live 侧由 CM6 视口重测承接 */
+#app .oile-view-reading .oile-reading-block img.oile-image {
+  max-width: 100%;
+  vertical-align: bottom;
+}
+
+#app .cm-editor .cm-scroller .oile-image {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: bottom;
+}
+
+#app .cm-editor .cm-scroller .oile-image img {
+  display: block;
+  max-width: 100%;
+}
+
+/* 占位（loading）：alt 文本形态，弱化呈现 */
+#app .oile-image.oile-image-loading {
+  opacity: 0.65;
+}
+
+/* 失败态：可见的错误轮廓 + 点击重试（管理器阻断冒泡，不触发外层链接） */
+#app .oile-image.oile-image-error {
+  cursor: pointer;
+  border: 1px dashed var(--vscode-inputValidation-errorBorder, #be1100);
+  border-radius: 3px;
+  padding: 2px 8px;
+  color: var(--vscode-errorForeground, #f48771);
+  opacity: 0.9;
+}
+
 /* ---- 阅读视图（#6 基础版，#8 完整 Markdown 显示）----
    .oile-view-reading 为阅读视图稳定容器类（Obsidian 对应 .markdown-preview-view）。
    公开 CSS 变量入口（外部片段可覆盖）：--oile-reading-font-size / -max-width /

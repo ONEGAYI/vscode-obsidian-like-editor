@@ -58,3 +58,21 @@
 #app .oile-view-reading .oile-reading-task-checkbox {
   text-decoration-color: rgb(22, 23, 24);
 }
+
+/* ---- #10：链接与图片稳定类名探针 ---- */
+
+/* live 链接内容 span（Obsidian 对应 .cm-link） */
+#app .oile-view-live .oile-link {
+  text-decoration-color: rgb(19, 20, 21);
+}
+
+/* reading 链接（Obsidian 对应 .markdown-preview-view a） */
+#app .oile-view-reading .oile-reading-block a {
+  text-decoration-color: rgb(22, 23, 24);
+}
+
+/* reading 图片槽位（Obsidian 对应 .markdown-preview-view img；本项目加
+   oile-image 稳定类承载状态修饰） */
+#app .oile-view-reading .oile-reading-block img.oile-image {
+  text-decoration-color: rgb(25, 26, 27);
+}

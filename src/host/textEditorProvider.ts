@@ -7,7 +7,15 @@
 // WorkspaceEdit 写回；文档事件回流经 session 识别自家确认与外部变更。
 import * as vscode from 'vscode'
 import { randomUUID } from 'node:crypto'
+import * as path from 'node:path'
 import { DocumentSession, type HostDocumentPort, type SessionNotice } from './documentSession'
+import {
+  classifyImageTarget,
+  classifyLinkTarget,
+  imageBlockReasonOf,
+  type ImageResolution,
+  type LinkContext,
+} from './linkTarget'
 import type { HostToWebview, SerChange } from '../shared/protocol'
 
 export const VIEW_TYPE = 'onegayi.obsidian-like-markdown-editor'
@@ -28,12 +36,49 @@ export function isActiveTabCustomEditorOf(
   )
 }
 
+/** 链接跳转执行日志（#10 测试钩子观测：OILE_TEST_HOOKS 下集成测试断言
+ *  宿主收到的跳转意图与处置结果） */
+export interface LinkLogEntry {
+  kind: 'external' | 'doc' | 'blocked' | 'not-found'
+  href: string
+  /** blocked 的原因码 */
+  reason?: string
+  /** blocked-scheme 的协议名 */
+  scheme?: string
+  /** doc 的实际目标路径 */
+  path?: string
+}
+
 interface SessionEntry {
   session: DocumentSession
   doc: vscode.TextDocument
   /** 面板发送通道（测试钩子 requestViewState 复用） */
   sends: Map<string, (message: HostToWebview) => void>
   appliedEdits: number
+  /** #10 链接跳转执行日志（容量有界） */
+  linkLog: LinkLogEntry[]
+}
+
+/** 文档的资源根（#10）：图片 webview 资源许可面 = 工作区文件夹根
+ *  （无工作区时为文档所在目录）——与链接/图片路径不得越过工作区边界的
+ *  白名单口径一致 */
+function imageResourceRoot(document: vscode.TextDocument): vscode.Uri {
+  return (
+    vscode.workspace.getWorkspaceFolder(document.uri)?.uri ??
+    vscode.Uri.joinPath(document.uri, '..')
+  )
+}
+
+/** 链接目标解析上下文（宿主文件系统语义：扩展宿主进程的平台即工作区
+ *  文件系统所在机器——本地 Windows 是 win32，远程 SSH 宿主是远程平台，
+ *  两类路径语义天然不混用） */
+function linkContextOf(document: vscode.TextDocument): LinkContext {
+  const docPath = document.uri.fsPath
+  return {
+    docDir: path.dirname(docPath),
+    rootDir: imageResourceRoot(document).fsPath,
+    isWindowsHost: process.platform === 'win32',
+  }
 }
 
 export function createTextEditorProvider(
@@ -147,7 +192,7 @@ export function createTextEditorProvider(
     if (entry) {
       return entry
     }
-    const fresh: SessionEntry = { session: undefined as never, doc, sends: new Map(), appliedEdits: 0 }
+    const fresh: SessionEntry = { session: undefined as never, doc, sends: new Map(), appliedEdits: 0, linkLog: [] }
     const port: HostDocumentPort = {
       get version() {
         return doc.version
@@ -209,7 +254,15 @@ export function createTextEditorProvider(
       const send = (message: HostToWebview): void => {
         void webviewPanel.webview.postMessage(message)
       }
-      const sessionId = entry.session.attachPanel({ send })
+      // ---- #10 链接跳转与图片资源执行（面板端口注入；URI 解析在宿主侧） ----
+      const linkCtx = linkContextOf(document)
+      const openLink = (intent: { href: string; srcStart: number; srcEnd: number }): void => {
+        void executeLinkIntent(document, linkCtx, intent, entry.linkLog)
+      }
+      const resolveImage = async (src: string): Promise<ImageResolution> => {
+        return resolveWorkspaceImage(src, linkCtx, webviewPanel.webview)
+      }
+      const sessionId = entry.session.attachPanel({ send, openLink, resolveImage })
       entry.sends.set(sessionId, send)
 
       const messageSub = webviewPanel.webview.onDidReceiveMessage((message) => {
@@ -226,10 +279,12 @@ export function createTextEditorProvider(
       webviewPanel.webview.options = {
         enableScripts: true,
         // C-7：显式收紧资源根到扩展产物与样式目录（脚本/CSS 均在其内），
-        // 不留整个扩展目录的默认可读面
+        // 不留整个扩展目录的默认可读面；#10 增补图片资源根（工作区文件
+        // 经夹带 asWebviewUri 的地址需在许可面内——口径与路径白名单一致）
         localResourceRoots: [
           vscode.Uri.joinPath(context.extensionUri, 'out'),
           vscode.Uri.joinPath(context.extensionUri, 'media'),
+          imageResourceRoot(document),
         ],
       }
       webviewPanel.webview.html = buildWebviewHtml(webviewPanel.webview, context.extensionUri)
@@ -433,10 +488,117 @@ export function createTextEditorProvider(
         return entry.session.getLastReadingPerfReport(panel.sessionId)
       },
     ),
+    vscode.commands.registerCommand(
+      // 链接跳转执行日志（#10）：集成测试经注入 link.observe 消息断言宿主
+      // 收到的意图与处置（external/blocked/doc/not-found）
+      'onegayi.obsidian-like-editor._test.getLinkLog',
+      (uriStr: string) => {
+        const entry = getEntry(vscode.Uri.parse(uriStr))
+        return { found: !!entry, log: entry ? [...entry.linkLog] : [] }
+      },
+    ),
     )
   }
 
   return provider
+}
+
+/** blocked 链接的用户可见反馈文案（拦截不静默——验收标准要求） */
+function blockedLinkMessage(
+  target: Extract<ReturnType<typeof classifyLinkTarget>, { kind: 'blocked' }>,
+): string {
+  switch (target.reason) {
+    case 'empty':
+      return `链接目标为空（空白或仅锚点）：本期不支持页内锚点定位`
+    case 'scheme':
+      return `不允许打开的链接协议「${target.scheme || '//'}」：仅支持 http/https 与工作区内路径`
+    case 'escape':
+      return `链接指向工作区之外，已拦截：${target.detail ?? ''}`
+    case 'windows-drive-on-posix':
+      return `远程（POSIX）工作区不支持 Windows 盘符路径链接`
+  }
+}
+
+/**
+ * 链接跳转意图执行（#10）：分类 → external 经 env.openExternal 外开；
+ * doc 按候选探测存在性（精确优先、无扩展名补 .md）后以文本编辑器打开；
+ * blocked/not-found 给用户可见反馈。全程只读：不触碰 TextDocument。
+ */
+async function executeLinkIntent(
+  document: vscode.TextDocument,
+  ctx: LinkContext,
+  intent: { href: string; srcStart: number; srcEnd: number },
+  log: LinkLogEntry[],
+): Promise<void> {
+  const pushLog = (entry: LinkLogEntry): void => {
+    log.push(entry)
+    while (log.length > 64) {
+      log.shift()
+    }
+  }
+  const target = classifyLinkTarget(intent.href, ctx)
+  if (target.kind === 'external') {
+    pushLog({ kind: 'external', href: intent.href })
+    if (process.env.OILE_TEST_HOOKS === '1') {
+      // 集成测试环境不真开系统浏览器（CI 无浏览器且产生噪声）；
+      // 分类正确性已由单测钉死，真实外开留给人工验收（#15）
+      return
+    }
+    const ok = await vscode.env.openExternal(vscode.Uri.parse(target.url))
+    if (!ok) {
+      void vscode.window.showWarningMessage(`无法打开外部链接：${target.url}`)
+    }
+    return
+  }
+  if (target.kind === 'blocked') {
+    pushLog({ kind: 'blocked', href: intent.href, reason: target.reason, scheme: target.scheme })
+    void vscode.window.showWarningMessage(blockedLinkMessage(target))
+    return
+  }
+  for (const fsPath of target.candidates) {
+    const uri = vscode.Uri.file(fsPath)
+    try {
+      await vscode.workspace.fs.stat(uri)
+    } catch {
+      continue
+    }
+    pushLog({ kind: 'doc', href: intent.href, path: fsPath })
+    const doc = await vscode.workspace.openTextDocument(uri)
+    await vscode.window.showTextDocument(doc)
+    return
+  }
+  pushLog({ kind: 'not-found', href: intent.href })
+  void vscode.window.showWarningMessage(
+    `链接目标不存在：${intent.href}（已按相对当前文档目录解析）`,
+  )
+  void document // 意图源自本文档；名称留给后续 #11 锚点定位使用
+}
+
+/**
+ * 工作区图片解析（#10）：白名单分类 → 存在性探测 → asWebviewUri 转为
+ * webview 可加载地址。本地与远程（SSH）工作区同通道——webview 资源服务
+ * 按远程权威路由（真实远程宿主表现属 #15 人工验证项）。
+ */
+async function resolveWorkspaceImage(
+  src: string,
+  ctx: LinkContext,
+  webview: vscode.Webview,
+): Promise<ImageResolution> {
+  const target = classifyImageTarget(src, ctx)
+  if (target.kind === 'blocked') {
+    return {
+      ok: false,
+      reason: imageBlockReasonOf(target),
+      detail: target.scheme ?? target.detail,
+    }
+  }
+  const uri = vscode.Uri.file(target.fsPath)
+  try {
+    await vscode.workspace.fs.stat(uri)
+  } catch {
+    return { ok: false, reason: 'not-found', detail: target.fsPath }
+  }
+  return { ok: true, src: webview.asWebviewUri(uri).toString() }
 }
 
 function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {

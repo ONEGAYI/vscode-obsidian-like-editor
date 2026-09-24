@@ -75,6 +75,7 @@ vscode-obsidian-like-editor/
 │   ├── extension.ts # 扩展激活入口
 │   ├── host/        # 宿主端实现
 │   │   ├── documentSession.ts    # 文档会话与写回同步
+│   │   ├── linkTarget.ts         # 宿主侧链接目标分类纯逻辑（#10）
 │   │   └── textEditorProvider.ts # 自定义文本编辑器提供者
 │   ├── shared/      # 两端共享纯逻辑
 │   │   ├── changeMapping.ts # 变更重定位纯函数
@@ -82,7 +83,9 @@ vscode-obsidian-like-editor/
 │   │   └── protocol.ts      # 消息协议单一事实源
 │   └── webview/     # webview 端实现
 │       ├── css.d.ts              # CSS 导入类型声明
+│       ├── imageResource.ts      # 图片资源状态机（#10）
 │       ├── liveDecorations.ts    # 语法树驱动 Live 装饰（#8）
+│       ├── liveLinks.ts          # live 链接装饰与跳转（#10）
 │       ├── main.css              # webview 全局布局样式
 │       ├── main.ts               # webview 启动入口
 │       ├── markdownDoc.ts        # Markdown 文档工具与树查询
@@ -94,7 +97,7 @@ vscode-obsidian-like-editor/
 │       ├── readingViewport.ts    # 阅读视口挂载窗口纯函数
 │       ├── readingVirtualView.ts # 阅读视图虚拟化装配层
 │       ├── syncController.ts     # CM6 同步控制器
-│       └── taskToggle.ts         # 任务勾选点击解析：源位置严格校验与安全替换区间（工单 #9）
+│       └── taskToggle.ts         # 任务勾选解析纯函数（#9）
 ├── test/             # 测试根
 │   ├── integration/ # 真宿主集成测试
 │   │   ├── runTest.mjs # 集成测试启动器
@@ -111,6 +114,9 @@ vscode-obsidian-like-editor/
 │       ├── conflictRetention.test.ts  # 冲突保留与暂停契约测试
 │       ├── documentSession.test.ts    # 文档会话契约
 │       ├── historyForwarding.test.ts  # 撤销重做转发契约测试
+│       ├── imageResource.test.ts      # 图片资源管理器契约测试
+│       ├── linkInteraction.test.ts    # 链接交互契约测试（#10）
+│       ├── linkTarget.test.ts         # 链接目标分类契约测试
 │       ├── liveDecorations.test.ts    # Live 装饰契约测试
 │       ├── markdownDoc.test.ts        # 文档工具契约测试
 │       ├── newline.test.ts            # 换行协调契约
@@ -122,7 +128,7 @@ vscode-obsidian-like-editor/
 │       ├── readingViewport.test.ts    # 视口窗口纯函数契约测试
 │       ├── readingVirtualView.test.ts # 虚拟化装配契约测试
 │       ├── suspendResume.test.ts      # 暂停恢复契约测试
-│       ├── taskInteraction.test.ts    # 两种模式任务勾选交互契约测试（jsdom 直驱 CM6）
+│       ├── taskInteraction.test.ts    # 任务勾选交互契约测试（#9）
 │       ├── taskToggle.test.ts         # 任务勾选解析纯函数契约测试
 │       ├── viewMode.test.ts           # 模式切换状态机契约测试
 │       └── webviewSync.test.ts        # webview 同步契约

@@ -14,12 +14,42 @@ const CMD = {
   resumePanel: 'onegayi.obsidian-like-editor._test.resumePanel',
   perfProbe: 'onegayi.obsidian-like-editor._test.perfProbe',
   readingPerf: 'onegayi.obsidian-like-editor._test.readingPerf',
+  linkLog: 'onegayi.obsidian-like-editor._test.getLinkLog',
 }
 
 const wsDir = process.env['WORKSPACE_DIR'] ?? ''
 if (!wsDir) {
   throw new Error('环境变量 WORKSPACE_DIR 未设置（应由 runTest.mjs 注入）')
 }
+
+const LINKS_DOC_TEXT = [
+  '# 链接样例',
+  '',
+  '[外部链接](https://example.com/obsidian-like) 与 [本地目标](./链接目标.md)。',
+  '',
+  '[空格目录目标](./子%20目录/目标%20二.md) 与自动链接 <https://autolink.example.com/x>。',
+  '',
+  '[无扩展名目标](./无扩展名目标)（省略扩展名按 Markdown 处理）。',
+  '',
+  '危险：[file](file:///d:/x.md) 与 [js](javascript:alert(1))。',
+  '',
+  '![好图](assets/图片%20一.png)',
+  '',
+].join('\n')
+const IMAGES_DOC_TEXT = [
+  '# 图片样例',
+  '',
+  '正常图片（中文与空格文件名）：',
+  '',
+  '![好图](assets/图片%20一.png)',
+  '',
+  '缺失图片（可重试错误态）：',
+  '',
+  '![缺失图](assets/不存在.png)',
+  '',
+  '结尾段。',
+  '',
+].join('\n')
 
 const LF_DOC = '中文编辑测试\n\n包含 emoji：🎉 与组合 emoji 👨‍👩‍👧‍👦\n\n- 列表项一\n- 列表项二\n'
 const CRLF_DOC = '标题一\r\n正文 A 行\r\n正文 B 行\r\n'
@@ -125,6 +155,9 @@ interface ViewState {
     readingStrongDecorationColor: string | null
     liveTaskCheckboxDecorationColor: string | null
     readingTaskCheckboxDecorationColor: string | null
+    liveLinkDecorationColor: string | null
+    readingLinkDecorationColor: string | null
+    readingImageDecorationColor: string | null
   }
   /** #8 双视图语法一致性观测 */
   liveSyntax?: {
@@ -153,6 +186,12 @@ interface ViewState {
     taskCheckboxes: number
     taskChecked: number
   }
+  /** #10 链接/图片观测 */
+  liveLinkCount?: number
+  liveImageCount?: number
+  readingLinkCount?: number
+  readingImageCount?: number
+  imageStates?: { loading: number; loaded: number; error: number }
 }
 
 /** #7 阅读视图探针回报（reading.perf.report） */
@@ -186,6 +225,12 @@ interface ConflictState {
   fragments?: string[]
   webviewText?: string
   webviewVersion?: number
+}
+
+/** #10 链接跳转执行日志（_test.getLinkLog 回报） */
+interface LinkLogData {
+  found: boolean
+  log: Array<{ kind: string; href: string; reason?: string; scheme?: string; path?: string }>
 }
 
 async function waitSessionReady(file: string): Promise<SessionState> {
@@ -1314,5 +1359,168 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(panel1.text === panel1Expected, `面板 1 应正确应用外部增量：${JSON.stringify(panel1.text)}`)
     const finalState = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
     assert(finalState.version > afterFirst.version, `外部增量版本必须大于 ack 版本（${finalState.version} <= ${afterFirst.version}）`)
+  }],
+
+  // ---- 工单 #10：普通链接打开与本地/SSH 工作区图片显示 ----
+
+  ['链接跳转：宿主解析相对路径并打开工作区目标（中文/空格/%20 编码，#10）', async () => {
+    await openWithEditor('links.md')
+    const session = await waitSessionReady('links.md')
+    const uri = wsUri('links.md').toString()
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await poll('进入阅读模式', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' ? true : undefined
+    })
+    const versionBefore = session.version
+    const diskBefore = await readDisk('links.md')
+
+    // 阅读单击链路的消息形态（webview 上报原始 URI + 块源锚点）：
+    // 空格目录与中文文件名经 %20 编码，宿主解码解析到磁盘真实路径
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, {
+      kind: 'link.activate',
+      sessionId: '',
+      docUri: uri,
+      href: './子%20目录/目标%20二.md',
+      srcStart: 0,
+      srcEnd: 10,
+    })
+    // 宿主以文本编辑器打开目标文档（真实 openTextDocument + showTextDocument）
+    await poll('目标文档被打开', () =>
+      vscode.window.activeTextEditor?.document.uri.toString() === wsUri('子 目录/目标 二.md').toString()
+        ? true
+        : undefined,
+    )
+    const opened = vscode.window.activeTextEditor!.document
+    assert(opened.getText().startsWith('# 目标 二'), `打开的目标内容不符：${JSON.stringify(opened.getText().slice(0, 20))}`)
+
+    // 跳转全程只读：源文档零写回、磁盘不变
+    const diskAfter = await readDisk('links.md')
+    assert(diskAfter === diskBefore, '链接跳转不得改写源文档')
+    const state = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState | undefined
+    if (state?.found) {
+      assert(state.version === versionBefore, `跳转不得改变文档版本（${versionBefore} → ${state.version}）`)
+      assert(state.appliedEdits === 0, `跳转不得产生 applyEdit，实际 ${state.appliedEdits}`)
+    }
+  }],
+
+  ['危险 scheme 与缺失目标：宿主拦截并给可见反馈，外链在测试钩子下不真开浏览器（#10）', async () => {
+    await openWithEditor('links2.md')
+    const session = await waitSessionReady('links2.md')
+    const uri = wsUri('links2.md').toString()
+    const diskBefore = await readDisk('links2.md')
+
+    // file:// 与 javascript: —— 拦截（无编辑器切换，面板存活可读日志）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, {
+      kind: 'link.activate', sessionId: '', docUri: uri,
+      href: 'file:///d:/x.md', srcStart: 0, srcEnd: 5,
+    })
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, {
+      kind: 'link.activate', sessionId: '', docUri: uri,
+      href: 'javascript:alert(1)', srcStart: 0, srcEnd: 5,
+    })
+    // 缺失目标：not-found 反馈（不打开任何编辑器）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, {
+      kind: 'link.activate', sessionId: '', docUri: uri,
+      href: './不存在的目标.md', srcStart: 0, srcEnd: 5,
+    })
+    // 外链 https：归类 external（测试钩子模式仅记录，不真开系统浏览器）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, {
+      kind: 'link.activate', sessionId: '', docUri: uri,
+      href: 'https://example.com/obsidian-like', srcStart: 0, srcEnd: 5,
+    })
+    const logData = await poll('链接执行日志就绪', async () => {
+      const data = (await vscode.commands.executeCommand(CMD.linkLog, uri)) as LinkLogData | undefined
+      return data && data.found && data.log.length >= 4 ? data : undefined
+    })
+    const kinds = logData.log.map((e) => `${e.kind}:${e.reason ?? e.scheme ?? ''}`)
+    assert(kinds.includes('blocked:scheme'), `file:// 应被拦截，实际 ${JSON.stringify(logData.log)}`)
+    assert(
+      logData.log.some((e) => e.kind === 'blocked' && e.scheme === 'javascript'),
+      `javascript: 应被拦截并给出协议名，实际 ${JSON.stringify(logData.log)}`,
+    )
+    assert(kinds.includes('not-found:'), `缺失目标应有 not-found 反馈，实际 ${JSON.stringify(logData.log)}`)
+    assert(kinds.includes('external:'), `https 外链应归类 external，实际 ${JSON.stringify(logData.log)}`)
+    assert(
+      logData.log.every((e) => e.kind !== 'doc'),
+      `拦截类意图不得打开编辑器，实际 ${JSON.stringify(logData.log)}`,
+    )
+
+    // 无扩展名目标：候选补 .md 后真实打开（放最后——面板随编辑器切换退场）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, {
+      kind: 'link.activate', sessionId: '', docUri: uri,
+      href: './无扩展名目标', srcStart: 0, srcEnd: 5,
+    })
+    await poll('无扩展名目标（补 .md）被打开', () =>
+      vscode.window.activeTextEditor?.document.uri.toString() === wsUri('无扩展名目标.md').toString()
+        ? true
+        : undefined,
+    )
+    const diskAfter = await readDisk('links2.md')
+    assert(diskAfter === diskBefore, '链接执行不得改写源文档')
+    assert(session.appliedEdits === 0, `链接执行不得产生 applyEdit，实际 ${session.appliedEdits}`)
+  }],
+
+  ['图片显示：本地工作区图片经宿主通道装载，缺失图进入可重试错误态，零写回（#10）', async () => {
+    await openWithEditor('images.md')
+    await waitSessionReady('images.md')
+    const uri = wsUri('images.md').toString()
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    // 真实 webview：宿主 asWebviewUri → img.src → load 事件 → loaded 态
+    const view = await poll('图片装载完成', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      const s = v?.imageStates
+      return v?.viewMode === 'reading' && s && s.loaded >= 1 && s.error >= 1 ? v : undefined
+    }, 30000)
+    assert((view.readingImageCount ?? 0) >= 2, `阅读图片数应 >=2，实际 ${view.readingImageCount}`)
+    assert((view.readingLinkCount ?? 0) === 0, '图片样例不含链接')
+    // loaded 只能由 img load 事件置位——宿主解析地址确实可加载
+    assert((view.imageStates?.loaded ?? 0) === 1, `应有 1 张加载成功，实际 ${JSON.stringify(view.imageStates)}`)
+    assert((view.imageStates?.error ?? 0) === 1, `缺失图应进入错误态，实际 ${JSON.stringify(view.imageStates)}`)
+    // 零写回：文本不变、无 applyEdit、磁盘不变
+    assert(view.text === IMAGES_DOC_TEXT, '图片装载不得改写文档文本')
+    const state = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(state.appliedEdits === 0, `图片链路不得产生 applyEdit，实际 ${state.appliedEdits}`)
+    const disk = await readDisk('images.md')
+    assert(disk === IMAGES_DOC_TEXT, '图片链路不得写磁盘')
+  }],
+
+  ['live 视图链接/图片装饰与样式契约：视口内 span/widget 渲染且稳定类名可被外部片段命中（#10）', async () => {
+    await openWithEditor('links.md')
+    await waitSessionReady('links.md')
+    const uri = wsUri('links.md').toString()
+    // live 默认模式：视口内链接 span 与图片 widget（间接装饰，视口外不创建）
+    const live = await waitViewState('links.md', (v) => (v.liveLinkCount ?? -1) >= 5 && (v.liveImageCount ?? -1) >= 1)
+    assert((live.liveLinkCount ?? 0) >= 5, `live 链接 span 应 >=5（外链/本地/空格目录/无扩展名/危险×2/自动链接），实际 ${live.liveLinkCount}`)
+    assert((live.liveImageCount ?? 0) >= 1, `live 图片 widget 应 >=1，实际 ${live.liveImageCount}`)
+    assert(
+      live.cssProbe!.liveLinkDecorationColor === 'rgb(19, 20, 21)',
+      `live 链接 span 应被测试片段命中 rgb(19, 20, 21)，实际 ${live.cssProbe!.liveLinkDecorationColor}`,
+    )
+    // live 图片同样经宿主通道装载成功
+    await poll('live 图片装载', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v && (v.imageStates?.loaded ?? 0) >= 1 ? true : undefined
+    })
+    // 阅读侧：链接与图片探针 + 挂载计数
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    const reading = await poll('阅读模式链接/图片观测', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' && v.readingLinkCount !== undefined && v.readingImageCount !== undefined ? v : undefined
+    })
+    assert((reading.readingLinkCount ?? 0) >= 5, `阅读链接数应 >=5，实际 ${reading.readingLinkCount}`)
+    assert((reading.readingImageCount ?? 0) >= 1, `阅读图片数应 >=1，实际 ${reading.readingImageCount}`)
+    assert(
+      reading.cssProbe!.readingLinkDecorationColor === 'rgb(22, 23, 24)',
+      `阅读链接应被测试片段命中 rgb(22, 23, 24)，实际 ${reading.cssProbe!.readingLinkDecorationColor}`,
+    )
+    assert(
+      reading.cssProbe!.readingImageDecorationColor === 'rgb(25, 26, 27)',
+      `阅读图片应被测试片段命中 rgb(25, 26, 27)，实际 ${reading.cssProbe!.readingImageDecorationColor}`,
+    )
+    // 全程零写回
+    const state = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(state.appliedEdits === 0, `显示链路不得产生 applyEdit，实际 ${state.appliedEdits}`)
+    assert(reading.text === LINKS_DOC_TEXT, '显示链路不得改写文档文本')
   }],
 ]
