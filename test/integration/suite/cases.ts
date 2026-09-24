@@ -2239,6 +2239,31 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(await readDisk('wikilinks.md') === diskBefore, '歧义/缺失链路不得改写源文档')
   }],
 
+  ['点阵拖排行经真实 webview 鼠标处理器写回 CRLF，一次撤销（#43）', async () => {
+    await openWithEditor('table43-crlf.md')
+    await waitSessionReady('table43-crlf.md')
+    const uri = wsUri('table43-crlf.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('table43-crlf.md'))
+    const original = TABLE13_DOC_TEXT.replace(/\n/g, '\r\n')
+    const movedLf = TABLE13_DOC_TEXT.replace(
+      '| 名字 | 数量 |\n| --- | :---: |\n| 苹果 | 3 |\n| `x|y` | 4 |',
+      '| `x|y` | 4 |\n| --- | :---: |\n| 名字 | 数量 |\n| 苹果 | 3 |',
+    )
+    const moved = movedLf.replace(/\n/g, '\r\n')
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'table.test.drag', sourceIndex: 2, targetSlot: 0,
+    })
+    await poll('拖动写回权威 CRLF 文本', () => doc.getText() === moved ? true : undefined)
+    const after = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(after.appliedEdits === before.appliedEdits + 1, '一次拖动必须只产生一笔 applyEdit')
+    assert(await doc.save(), '拖排行保存失败')
+    assert(await readDisk('table43-crlf.md') === moved, '拖排行保存回读丢失 CRLF 或顺序')
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('一次撤销恢复原行序', () => doc.getText() === original ? true : undefined)
+    await doc.save()
+  }],
+
   // ---- 工单 #13：表格键盘导航与增删行列 ----
 
   ['表格增删行列：命令路径写回权威文档、区域不变、一次撤销（#13）', async () => {

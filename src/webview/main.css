@@ -315,6 +315,96 @@ body {
   display: none;
 }
 
+/* #43 悬停控件位于 CM6 文本层之上，只为视口内网格行建立 DOM。 */
+#app .cm-editor .vsidian-table-controls {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+}
+
+#app .cm-editor .vsidian-table-controls button {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  transform: translate(-50%, -50%);
+  border: 0;
+  border-radius: 4px;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editor-foreground);
+  cursor: pointer;
+  pointer-events: auto;
+  opacity: 0;
+}
+
+#app .cm-editor .vsidian-table-controls button:hover,
+#app .cm-editor .vsidian-table-controls button:focus-visible,
+#app .cm-editor .vsidian-table-controls button.vsidian-table-control-hover {
+  opacity: 1;
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
+}
+
+#app .cm-editor .vsidian-table-controls .vsidian-table-row-handle {
+  cursor: grab;
+  font-size: 16px;
+  line-height: 20px;
+}
+
+#app .cm-editor .vsidian-table-controls .vsidian-table-row-handle:active {
+  cursor: grabbing;
+}
+
+#app .cm-editor .vsidian-table-controls .vsidian-table-insert-row,
+#app .cm-editor .vsidian-table-controls .vsidian-table-insert-column {
+  color: var(--vscode-textLink-foreground, #8abce2);
+  font-size: 18px;
+  line-height: 20px;
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row.vsidian-table-row-selected {
+  border-radius: 6px;
+  outline: 2px solid var(--vscode-focusBorder, #7ab0d0);
+  outline-offset: -1px;
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row.vsidian-table-row-selected > .vsidian-table-grid-cell,
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-selected {
+  background: color-mix(in srgb, var(--vscode-focusBorder, #7ab0d0) 12%, transparent);
+}
+
+/* 整列只有外轮廓强调，内部横线保持表格原有分隔，与参考图一致。 */
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-selected {
+  border-left: 2px solid var(--vscode-focusBorder, #7ab0d0);
+  border-right: 2px solid var(--vscode-focusBorder, #7ab0d0);
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-first {
+  border-top: 2px solid var(--vscode-focusBorder, #7ab0d0);
+  border-radius: 6px 6px 0 0;
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-last {
+  border-bottom: 2px solid var(--vscode-focusBorder, #7ab0d0);
+  border-radius: 0 0 6px 6px;
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-first.vsidian-table-column-last {
+  border-radius: 6px;
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row.vsidian-table-dragging {
+  opacity: 0.55;
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row.vsidian-table-drop-before {
+  box-shadow: inset 0 3px 0 var(--vscode-focusBorder, #7ab0d0);
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row.vsidian-table-drop-after {
+  box-shadow: inset 0 -3px 0 var(--vscode-focusBorder, #7ab0d0);
+}
+
 /* 表头单元格内容强调 */
 #app .cm-editor .cm-scroller .vsidian-table-cell-header {
   color: var(--vscode-symbolIcon-fieldForeground, inherit);

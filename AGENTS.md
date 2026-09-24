@@ -112,6 +112,7 @@ vsidian/
 │       ├── readingVirtualView.ts # 阅读视图虚拟化装配层
 │       ├── syncController.ts     # CM6 同步控制器
 │       ├── tableCells.ts         # 表格单元格拆分纯函数（#12）
+│       ├── tableControls.ts      # 表格可见行控件与拖动
 │       ├── tableEditing.ts       # 表格输入钩子（#12）
 │       ├── tableStructure.ts     # 表格导航与增删行列纯函数（#13）
 │       └── taskToggle.ts         # 任务勾选解析纯函数（#9）
