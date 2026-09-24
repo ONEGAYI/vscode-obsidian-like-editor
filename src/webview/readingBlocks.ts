@@ -1,160 +1,248 @@
-// 阅读块切分（工单 #6）：把 LF 全文切成携带源区间的块序列。
+// 阅读块切分（工单 #8）：markdown-it token 流驱动的块模型。
 //
-// 坐标契约（#7/#8/#9 依赖，改动需同步这三票的设计）：
+// 坐标契约（#6 确立，#7/#9 依赖，本票保持不变）：
 // - start/end 为 LF 全文 UTF-16 code unit offset（与协议 SerChange、
 //   CodeMirror 文档定位同构），end 不含块尾换行符
-// - 阅读视图的每个块元素以 data-oile-src-start/end 携带该区间；#7 按需
-//   挂载以块为最小单位创建/回收 DOM，#9 任务勾选经 task.marker 区间构造
-//   精确的 edit.request（走共同保存/历史/冲突链路）
-// - 本模块为 #6 基础版：段落级手工切分，不解析完整 Markdown 语义；
-//   #8 引入 markdown-it 后由其 token 流取代，但源区间坐标约定不变
+// - 每个块元素携带 data-oile-src-start/end；#7 按需挂载以块为最小单位，
+//   #9 任务勾选经 li/checkbox 的 marker 区间锚点构造精确 edit.request
 //
-// 切分规则（基础版）：
-// - 代码围栏（```/~~~ ≥3）之间整体一个 code-block（含围栏行）；未闭合
-//   持续到文档末尾；围栏内的伪标题/伪任务不解析
-// - ATX 标题行（复用 live 装饰的 parseHeadingLine，保证两视图标题判定
-//   一致）单独成块
-// - 列表标记行（≤3 空格缩进 + -/*/+ + 空白）单独成块；带 `[ ]`/`[x]`/
-//   `[X]` + 空白/行尾的为任务项，task.marker 恰为方括号三字符区间
-// - 其余连续非空行合并为一个 paragraph（空行分隔；标题/列表行打断）
-// - 深缩进（>3 空格）列表标记按普通段落处理（切片限制，#8 修正）
-import { parseHeadingLine, type HeadingLineInfo } from './headings'
+// #8 语义升级（取代 #6 的手工行切分）：
+// - 语义来源换成 markdown-it token 流（规格「阅读渲染用 markdown-it」）：
+//   嵌套引用/列表、setext 标题、围栏语言等按真实 Markdown 语义切块渲染；
+//   行内粗斜体/行内代码经渲染器输出语义标签（em/strong/code）
+// - 安全：html:false + 渲染后 DOM 纵深净化（见 readingMarkdown.ts）；
+//   frontmatter 手工提取为源码块（两视图共用 markdownDoc.frontmatterRange，
+//   头块内 `#` 等不作为 Markdown 解析——语义一致的边界）
+// - 大围栏按行细分：超过 FENCE_CHUNK_LINES 行的围栏按块切分为多个挂载
+//   单位（#7「超大单块」限制的缓解；细分后仍按 #7 机制挂载/回收）
+// - 未支持语法（脚注 [^1]、定义列表等）由 markdown-it 按普通段落文本
+//   渲染——保留原文的局部源码降级，不触发整篇改写
+import { frontmatterRange } from './markdownDoc'
+import {
+  buildLineBounds,
+  createMarkdownRenderer,
+  renderTokenHtml,
+  type ReadingRenderEnv,
+} from './readingMarkdown'
+import type { Env, Token } from 'markdown-it'
 
-/** 阅读块种类（基础版；#8 由完整 Markdown 语义细分） */
-export type ReadingBlockKind = 'heading' | 'paragraph' | 'list-item' | 'code-block'
+/** 阅读块种类（#8：完整 Markdown 语义） */
+export type ReadingBlockKind =
+  | 'frontmatter'
+  | 'heading'
+  | 'paragraph'
+  | 'list'
+  | 'blockquote'
+  | 'code-block'
+  | 'hr'
 
-/** 任务语义入口：#9 据此把 `[ ]`/`[x]` 区间替换为勾选状态 */
-export interface TaskMarker {
-  /** `[` 字符的源 offset */
-  markerStart: number
-  /** `]` 之后（markerStart + 3） */
-  markerEnd: number
-  checked: boolean
-}
-
-/** 一个阅读块：源文本的 [start, end) 区间及其渲染身份 */
+/** 一个阅读块：源文本的 [start, end) 区间、渲染身份与内部 HTML */
 export interface ReadingBlock {
   kind: ReadingBlockKind
   start: number
   end: number
+  /** 该块的内部 HTML（markdown-it 渲染产物或转义源码；进 DOM 前再净化） */
+  html: string
   /** heading 专用：1-6 */
-  level?: HeadingLineInfo['level']
-  /** list-item 专用：任务项的标记区间 */
-  task?: TaskMarker
+  level?: 1 | 2 | 3 | 4 | 5 | 6
+  /** 块内子锚点（升序；列表块为各 li 的源 start）：锚点映射按最细粒度
+   *  归位（live↔reading 光标恢复到项级），挂载单位仍是整块（#7 语义） */
+  itemAnchors?: number[]
 }
 
-/** 列表标记行：前缀长度与是否任务 */
-const LIST_RE = /^( {0,3})([-*+])(\s+)/
-const TASK_RE = /^( {0,3})[-*+] \[([ xX])\]( |$)/
+/** 超过该行数的围栏代码块按行细分为多个挂载单位（#7 超大单块缓解） */
+export const FENCE_CHUNK_LINES = 60
 
-/** 围栏行：``` 或 ~~~（≥3 个），返回围栏字符与缩进 */
-function fenceOf(line: string): { ch: string; indent: string } | null {
-  const m = /^( {0,3})(`{3,}|~{3,})/.exec(line)
-  if (!m) {
-    return null
-  }
-  return { ch: m[2]!.charAt(0), indent: m[1]! }
+/** 单例渲染器（规则链一次装配；渲染是同步纯函数，实例可安全复用） */
+const md = createMarkdownRenderer()
+
+function escapeHtml(s: string): string {
+  return md.utils.escapeHtml(s)
+}
+
+/** heading_open 的 tag（h1..h6）→ 级别；其他返回 null */
+function headingLevelOfTag(tag: string): 1 | 2 | 3 | 4 | 5 | 6 | null {
+  const m = /^h([1-6])$/.exec(tag)
+  return m ? (Number(m[1]) as 1 | 2 | 3 | 4 | 5 | 6) : null
+}
+
+/** 围栏 chunk 的内部 HTML（转义源码 + 语言类） */
+function fenceChunkHtml(text: string, from: number, to: number, info: string): string {
+  const lang = /^[\w-]+/.exec(info.trim())?.[0]
+  const cls = lang ? ` class="language-${lang}"` : ''
+  return `<pre><code${cls}>${escapeHtml(text.slice(from, to))}</code></pre>`
 }
 
 /**
- * 把 LF 全文切分为阅读块序列（单调有序、互不重叠、互不相邻）。
+ * 把 LF 全文切分为阅读块序列（单调有序、互不重叠）。
+ * 解析与渲染在切块时一次完成（块携带 html），#7 挂载路径不再解析。
  */
 export function splitReadingBlocks(text: string): ReadingBlock[] {
   const blocks: ReadingBlock[] = []
-  const lines = text.split('\n')
-  // 每行行尾（不含换行）的累计 offset，供段落 flush O(1) 取末行 end
-  const lineEnds: number[] = []
-  let offset = 0 // 当前行首的全文 offset
-  let fence: { ch: string; start: number } | null = null
-  let paragraph: { start: number; endLine: number } | null = null
+  const env = buildLineBounds(text)
+  const fm = frontmatterRange(text)
 
-  const flushParagraph = (): void => {
-    if (!paragraph) {
-      return
-    }
-    blocks.push({ kind: 'paragraph', start: paragraph.start, end: lineEnds[paragraph.endLine]! })
-    paragraph = null
+  if (fm) {
+    const fmEndLine = lineNumberOfOffset(env, fm.end)
+    blocks.push({
+      kind: 'frontmatter',
+      start: 0,
+      end: fm.end,
+      html: `<pre class="oile-reading-frontmatter-text">${escapeHtml(text.slice(0, fm.end))}</pre>`,
+    })
+    return splitBody(text, env, fmEndLine + 1, blocks)
   }
+  return splitBody(text, env, 0, blocks)
+}
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!
-    const lineStart = offset
-    const lineEnd = lineStart + line.length
-    lineEnds.push(lineEnd)
-    offset = lineEnd + 1
+/** offset → 0 基行号（env.lineEnds 上的线性定位；仅 frontmatter 边界用） */
+function lineNumberOfOffset(env: ReadingRenderEnv, offset: number): number {
+  for (let i = env.lineEnds.length - 1; i >= 0; i--) {
+    if ((env.lineEnds[i] ?? 0) <= offset) {
+      return i
+    }
+  }
+  return 0
+}
 
-    // 围栏态：累积到闭合围栏（同字符）或文档末尾
-    if (fence) {
-      const f = fenceOf(line)
-      if (f && f.ch === fence.ch) {
-        blocks.push({ kind: 'code-block', start: fence.start, end: lineEnd })
-        fence = null
+/** body 切分：baseLine 为 body 首行的 0 基行号（token.map 加该基值） */
+function splitBody(
+  text: string,
+  env: ReadingRenderEnv,
+  baseLine: number,
+  blocks: ReadingBlock[],
+): ReadingBlock[] {
+  const bodyStart = env.lineStarts[baseLine] ?? text.length
+  const body = text.slice(bodyStart)
+  // 渲染规则的 li 锚点换算需要 body 基行（渲染是同步的，env 变更不外泄）
+  env.baseLine = baseLine
+  if (body.trim() === '') {
+    return blocks
+  }
+  const tokens = md.parse(body, env as unknown as Env)
+  for (let i = 0; i < tokens.length; ) {
+    const token = tokens[i]!
+    if (token.level !== 0 || token.hidden) {
+      i += 1
+      continue
+    }
+    if (token.nesting === 1) {
+      // 复合块：找到配对的 close（nesting 归零）
+      let depth = 0
+      let j = i
+      for (; j < tokens.length; j++) {
+        depth += tokens[j]!.nesting
+        if (depth === 0) {
+          break
+        }
       }
+      const group = tokens.slice(i, j + 1)
+      const map = token.map
+      if (map) {
+        pushBlock(text, env, baseLine, blocks, group, map, token)
+      }
+      i = j + 1
       continue
     }
-
-    const f = fenceOf(line)
-    if (f) {
-      flushParagraph()
-      fence = { ch: f.ch, start: lineStart }
-      continue
+    // 叶子块（fence / hr / code_block / html_block 等）
+    const map = token.map
+    if (map && token.type !== 'html_block') {
+      pushBlock(text, env, baseLine, blocks, [token], map, token)
     }
-
-    if (line.trim() === '') {
-      flushParagraph()
-      continue
-    }
-
-    const heading = parseHeadingLine(line)
-    if (heading) {
-      flushParagraph()
-      blocks.push({ kind: 'heading', start: lineStart, end: lineEnd, level: heading.level })
-      continue
-    }
-
-    const task = TASK_RE.exec(line)
-    if (task) {
-      flushParagraph()
-      const markerStart = lineStart + task[1]!.length + 2 // 缩进 + "- "
-      blocks.push({
-        kind: 'list-item',
-        start: lineStart,
-        end: lineEnd,
-        task: { markerStart, markerEnd: markerStart + 3, checked: task[2] !== ' ' },
-      })
-      continue
-    }
-
-    if (LIST_RE.test(line)) {
-      flushParagraph()
-      blocks.push({ kind: 'list-item', start: lineStart, end: lineEnd })
-      continue
-    }
-
-    // 普通行：并入相邻段落（行号连续）
-    if (paragraph && paragraph.endLine === i - 1) {
-      paragraph.endLine = i
-    } else {
-      flushParagraph()
-      paragraph = { start: lineStart, endLine: i }
-    }
-  }
-
-  flushParagraph()
-  if (fence) {
-    // 未闭合围栏：持续到文档末尾
-    blocks.push({ kind: 'code-block', start: fence.start, end: text.length })
+    i += 1
   }
   return blocks
 }
 
+/** 按块种类落块（围栏超过阈值时按行细分） */
+function pushBlock(
+  text: string,
+  env: ReadingRenderEnv,
+  baseLine: number,
+  blocks: ReadingBlock[],
+  group: Token[],
+  map: [number, number],
+  opener: Token,
+): void {
+  const startLine = baseLine + map[0]
+  let endLine = baseLine + map[1] - 1 // map 的 end 为下一块首行
+  // 列表等复合块的 map 可能吞并尾随空行：锚点收缩到内容末行
+  while (endLine > startLine && (env.lineStarts[endLine] ?? 0) === (env.lineEnds[endLine] ?? 0)) {
+    endLine -= 1
+  }
+  const start = env.lineStarts[startLine] ?? 0
+  const end = env.lineEnds[endLine] ?? Math.max(start, text.length - 1)
+
+  if (opener.type === 'fence') {
+    const fenceLines = endLine - startLine + 1
+    if (fenceLines > FENCE_CHUNK_LINES) {
+      // 按行细分：每片 ≤ FENCE_CHUNK_LINES 行；首片含开围栏行、末片含闭围栏行
+      const info = opener.info ?? ''
+      const hasClose = text.slice(env.lineStarts[endLine] ?? 0, end).trimStart().startsWith(opener.markup)
+      let idx = 0
+      for (let l = startLine; l <= endLine; l += FENCE_CHUNK_LINES) {
+        const chunkEnd = Math.min(l + FENCE_CHUNK_LINES - 1, endLine)
+        const cs = env.lineStarts[l] ?? start
+        const ce = env.lineEnds[chunkEnd] ?? end
+        // 内容行去掉围栏标记行（首片去首行、末片去尾行）
+        const contentFrom = l === startLine ? (env.lineEnds[l] ?? cs) + 1 : cs
+        const contentTo = chunkEnd === endLine && hasClose ? (env.lineStarts[chunkEnd] ?? ce) : ce
+        blocks.push({
+          kind: 'code-block',
+          start: cs,
+          end: ce,
+          html: fenceChunkHtml(text, contentFrom, contentTo, info),
+        })
+        idx += 1
+        void idx
+      }
+      return
+    }
+    blocks.push({ kind: 'code-block', start, end, html: renderTokenHtml(md, group, env) })
+    return
+  }
+
+  switch (opener.type) {
+    case 'heading_open': {
+      const level = headingLevelOfTag(opener.tag)
+      blocks.push({ kind: 'heading', start, end, level: level ?? 1, html: renderTokenHtml(md, group, env) })
+      return
+    }
+    case 'paragraph_open':
+      blocks.push({ kind: 'paragraph', start, end, html: renderTokenHtml(md, group, env) })
+      return
+    case 'blockquote_open':
+      blocks.push({ kind: 'blockquote', start, end, html: renderTokenHtml(md, group, env) })
+      return
+    case 'bullet_list_open':
+    case 'ordered_list_open': {
+      const itemAnchors: number[] = []
+      for (const t of group) {
+        if (t.type === 'list_item_open' && t.map) {
+          const s = env.lineStarts[(env.baseLine ?? 0) + t.map[0]]
+          if (typeof s === 'number' && s >= start) {
+            itemAnchors.push(s)
+          }
+        }
+      }
+      blocks.push({ kind: 'list', start, end, html: renderTokenHtml(md, group, env), itemAnchors })
+      return
+    }
+    case 'hr':
+      blocks.push({ kind: 'hr', start, end, html: renderTokenHtml(md, group, env) })
+      return
+    default:
+      // code_block（缩进代码）与其他形态：按段落语义渲染（局部降级）
+      blocks.push({ kind: 'paragraph', start, end, html: renderTokenHtml(md, group, env) })
+      return
+  }
+}
+
 /**
- * 源 offset → 块身份：
+ * 源 offset → 块身份（#6 语义保持）：
  * - offset 落在块区间内返回该块
- * - 落在块间缝隙（换行/空行）返回其前最近的内容块（floor 语义——
- *   光标停在行尾换行处应定位到刚离开的段落）
- * - 超出末块 end（文档尾部换行/越界）返回末块
- * - 空列表返回 null
+ * - 落在块间缝隙（换行/空行）返回其前最近的内容块（floor 语义）
+ * - 超出末块 end 返回末块；空列表返回 null
  */
 export function blockForOffset(
   blocks: ReadingBlock[],

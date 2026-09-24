@@ -54,6 +54,7 @@ vscode-obsidian-like-editor/
 │   ├── design/   # 设计文档（选择器映射等）
 │   │   └── obsidian-selector-map.md # Obsidian 选择器映射表
 │   ├── perf/     # 性能实测数据与测量工具说明
+│   │   ├── 2026-09-live-syntax-decorations.md   # 语法树装饰与大围栏细分实测（#8）
 │   │   ├── 2026-09-reading-viewport-mount.md    # 阅读按需挂载实测数据
 │   │   ├── 2026-09-title-decoration-viewport.md # 标题切片视口渲染实测数据
 │   │   └── data/                                # 性能探针原始报告数据
@@ -81,11 +82,13 @@ vscode-obsidian-like-editor/
 │   │   └── protocol.ts      # 消息协议单一事实源
 │   └── webview/     # webview 端实现
 │       ├── css.d.ts              # CSS 导入类型声明
-│       ├── headings.ts           # 标题装饰：直接/间接分类与增量
+│       ├── liveDecorations.ts    # 语法树驱动 Live 装饰（#8）
 │       ├── main.css              # webview 全局布局样式
 │       ├── main.ts               # webview 启动入口
+│       ├── markdownDoc.ts        # Markdown 文档工具与树查询
 │       ├── perfProbe.ts          # webview 性能探针（#5）
-│       ├── readingBlocks.ts      # 阅读块切分与源锚点映射
+│       ├── readingBlocks.ts      # markdown-it 阅读块切分
+│       ├── readingMarkdown.ts    # markdown-it 安全渲染层
 │       ├── readingProbe.ts       # 阅读视图性能探针
 │       ├── readingView.ts        # 阅读视图 DOM 构建与锚点定位
 │       ├── readingViewport.ts    # 阅读视口挂载窗口纯函数
@@ -106,12 +109,14 @@ vscode-obsidian-like-editor/
 │       ├── compositionBuffer.test.ts  # 组合期间缓冲契约测试
 │       ├── conflictRetention.test.ts  # 冲突保留与暂停契约测试
 │       ├── documentSession.test.ts    # 文档会话契约
-│       ├── headings.test.ts           # 标题装饰增量契约测试
 │       ├── historyForwarding.test.ts  # 撤销重做转发契约测试
+│       ├── liveDecorations.test.ts    # Live 装饰契约测试
+│       ├── markdownDoc.test.ts        # 文档工具契约测试
 │       ├── newline.test.ts            # 换行协调契约
 │       ├── perfProbe.test.ts          # 性能探针契约测试
 │       ├── protocol.test.ts           # 消息协议校验契约
 │       ├── readingBlocks.test.ts      # 阅读块切分契约测试
+│       ├── readingMarkdown.test.ts    # 渲染层契约测试
 │       ├── readingView.test.ts        # 阅读视图 DOM 契约测试
 │       ├── readingViewport.test.ts    # 视口窗口纯函数契约测试
 │       ├── readingVirtualView.test.ts # 虚拟化装配契约测试

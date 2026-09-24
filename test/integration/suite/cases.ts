@@ -119,6 +119,37 @@ interface ViewState {
     liveHeadingDecorationColor: string | null
     readingHeadingDecorationColor: string | null
     readingVarProbe: string | null
+    liveStrongDecorationColor: string | null
+    liveInlineCodeDecorationColor: string | null
+    liveCodeLineDecorationColor: string | null
+    readingStrongDecorationColor: string | null
+  }
+  /** #8 双视图语法一致性观测 */
+  liveSyntax?: {
+    headingLines: number
+    headerSpans: number
+    strongSpans: number
+    emphasisSpans: number
+    inlineCodeSpans: number
+    quoteLines: number
+    codeLines: number
+    listLines: number
+    hrLines: number
+    frontmatterLines: number
+    taskGlyphs: number
+    taskChecked: number
+  }
+  readingSyntax?: {
+    headings: number
+    strongCount: number
+    emphasisCount: number
+    inlineCodeCount: number
+    blockquoteBlocks: number
+    codeBlocks: number
+    hrCount: number
+    listItems: number
+    taskCheckboxes: number
+    taskChecked: number
   }
 }
 
@@ -925,5 +956,165 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // 零写回
     const st = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
     assert(st.appliedEdits === 0, `图片尺寸变化链路不应产生写回，实际 ${st.appliedEdits}`)
+  }],
+
+  // ---- 工单 #8：基础 Markdown 双模式显示与源码降级 ----
+
+  ['双模式语义一致：live 装饰与 reading 渲染对同一样例语义相同（#8）', async () => {
+    await openWithEditor('syntax.md')
+    await waitSessionReady('syntax.md')
+    const uri = wsUri('syntax.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('syntax.md'))
+    const diskBefore = doc.getText()
+
+    // live 侧：语法装饰统计（装饰集合级计数，与 DOM 无关）
+    const live = await waitViewState('syntax.md', (v) => (v.liveSyntax?.headingLines ?? 0) >= 2)
+    const ls = live.liveSyntax!
+    // 样例语义：3 个标题（h1/h2/setext-h1）+ frontmatter 3 行 + 1 粗 + 1 斜 +
+    // 1 行内码 + 2 引用行 + 3 围栏行 + 5 列表行（3 无序 + 2 有序）+ 1 HR +
+    // 2 任务（1 勾选）；frontmatter 内伪标题不计入
+    assert(ls.headingLines === 3, `标题行应为 3，实际 ${ls.headingLines}`)
+    assert(ls.headerSpans === 3, `标题内容 span 应为 3，实际 ${ls.headerSpans}`)
+    assert(ls.frontmatterLines === 4, `frontmatter 行应为 4，实际 ${ls.frontmatterLines}`)
+    assert(ls.strongSpans === 2, `粗体 span 应为 2（正文+引用内），实际 ${ls.strongSpans}`)
+    assert(ls.emphasisSpans === 1, `斜体 span 应为 1，实际 ${ls.emphasisSpans}`)
+    assert(ls.inlineCodeSpans === 1, `行内代码 span 应为 1，实际 ${ls.inlineCodeSpans}`)
+    assert(ls.quoteLines === 2, `引用行应为 2，实际 ${ls.quoteLines}`)
+    assert(ls.codeLines === 3, `围栏代码行应为 3，实际 ${ls.codeLines}`)
+    assert(ls.listLines === 5, `列表行应为 5，实际 ${ls.listLines}`)
+    assert(ls.hrLines === 1, `水平线行应为 1，实际 ${ls.hrLines}`)
+    assert(ls.taskGlyphs === 2 && ls.taskChecked === 1, `任务字形应为 2（1 勾选），实际 ${ls.taskGlyphs}/${ls.taskChecked}`)
+
+    // reading 侧：同一样例的渲染语义
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    const reading = await poll('切换并读取阅读语义', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' && v.readingSyntax !== undefined && v.readingSyntax.headings >= 3 ? v : undefined
+    })
+    const rs = reading.readingSyntax!
+    assert(rs.headings === 3, `阅读标题应为 3，实际 ${rs.headings}`)
+    assert(rs.strongCount === 2, `阅读粗体应为 2，实际 ${rs.strongCount}`)
+    assert(rs.emphasisCount === 1, `阅读斜体应为 1，实际 ${rs.emphasisCount}`)
+    assert(rs.inlineCodeCount === 1, `阅读行内代码应为 1（pre 内 code 不计），实际 ${rs.inlineCodeCount}`)
+    assert(rs.blockquoteBlocks === 1, `阅读引用块应为 1，实际 ${rs.blockquoteBlocks}`)
+    assert(rs.codeBlocks === 1, `阅读围栏块应为 1，实际 ${rs.codeBlocks}`)
+    assert(rs.hrCount === 1, `阅读水平线应为 1（frontmatter 的 --- 不计），实际 ${rs.hrCount}`)
+    assert(rs.listItems === 5, `阅读列表项应为 5，实际 ${rs.listItems}`)
+    assert(rs.taskCheckboxes === 2 && rs.taskChecked === 1, `阅读任务勾选框应为 2（1 勾选），实际 ${rs.taskCheckboxes}/${rs.taskChecked}`)
+    // 转义的 \* 不产生斜体（两种视图一致的边界语义）
+    assert(reading.text.includes('\\*不斜体\\*'), '源文转义序列应原样保留')
+
+    // 全程零写回：显示与切换不改写文本
+    assert(reading.text === diskBefore, '双模式显示不得改写文档文本')
+    const st = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(st.appliedEdits === 0, `显示链路不应产生写回，实际 ${st.appliedEdits}`)
+  }],
+
+  ['代码内伪语法不误解析：围栏内 # / [[ / 任务标记按源码呈现（#8）', async () => {
+    await openWithEditor('syntax.md')
+    await waitSessionReady('syntax.md')
+    const uri = wsUri('syntax.md').toString()
+    const live = await waitViewState('syntax.md', (v) => (v.liveSyntax?.codeLines ?? 0) === 3)
+    // 围栏内的 "# 伪标题"、"[[伪双链]]"、"- [ ] 伪任务" 不产生标题/任务装饰：
+    // 标题恰好 3 个（不含围栏内），任务恰好 2 个（不含围栏内）
+    assert(live.liveSyntax!.headingLines === 3, `围栏内伪标题被误判：标题行 ${live.liveSyntax!.headingLines}`)
+    assert(live.liveSyntax!.taskGlyphs === 2, `围栏内伪任务被误判：任务字形 ${live.liveSyntax!.taskGlyphs}`)
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    const reading = await poll('阅读模式语义', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' && v.readingSyntax !== undefined ? v : undefined
+    })
+    assert(reading.readingSyntax!.headings === 3, `阅读侧围栏内伪标题被误判：${reading.readingSyntax!.headings}`)
+    assert(reading.readingSyntax!.taskCheckboxes === 2, `阅读侧围栏内伪任务被误判：${reading.readingSyntax!.taskCheckboxes}`)
+  }],
+
+  ['未支持语法局部源码降级：保留文本、无整篇重写、HTML 不执行（#8）', async () => {
+    await openWithEditor('syntax.md')
+    await waitSessionReady('syntax.md')
+    const uri = wsUri('syntax.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('syntax.md'))
+    const disk = doc.getText()
+    const live = await waitViewState('syntax.md', (v) => (v.liveSyntax?.headingLines ?? 0) === 3)
+    // 脚注 [^1] 与原始 HTML 在 live 侧无任何装饰（不产生 span/隐藏）
+    // ——liveSyntax 计数不含脚注/HTML 语法（其只按普通段落装饰为 0 类）
+    assert(live.text.includes('脚注 [^1] 文本'), '脚注文本保留')
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    const reading = await poll('阅读模式读取', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' && v.readingSyntax !== undefined ? v : undefined
+    })
+    // 脚注按普通段落渲染（保留文本）；原始 HTML 被转义为纯文本（无脚本元素）
+    assert(reading.text === disk, '阅读渲染不得改写文档文本（无整篇格式化重写）')
+    const st = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(st.appliedEdits === 0, '源码降级不产生写回')
+  }],
+
+  ['frontmatter 边界：头块按源码呈现，内部伪标题在两种视图都不解析（#8）', async () => {
+    await openWithEditor('syntax.md')
+    await waitSessionReady('syntax.md')
+    const uri = wsUri('syntax.md').toString()
+    const live = await waitViewState('syntax.md', (v) => (v.liveSyntax?.frontmatterLines ?? 0) === 4)
+    assert(live.liveSyntax!.frontmatterLines === 4, `frontmatter 应为 4 行，实际 ${live.liveSyntax!.frontmatterLines}`)
+    // '# frontmatter 内伪标题' 不产生标题装饰（标题恰 3：h1/h2/setext）
+    assert(live.liveSyntax!.headingLines === 3, 'frontmatter 内伪标题不得判定为标题')
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    const reading = await poll('阅读模式 frontmatter', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' && v.readingSyntax !== undefined ? v : undefined
+    })
+    // 阅读侧标题也恰 3（frontmatter 内伪标题不渲染为 h1）
+    assert(reading.readingSyntax!.headings === 3, `阅读侧 frontmatter 伪标题误判：${reading.readingSyntax!.headings}`)
+  }],
+
+  ['稳定样式契约扩展：span 级类名经测试片段命中两种视图（#8）', async () => {
+    await openWithEditor('syntax.md')
+    await waitSessionReady('syntax.md')
+    const uri = wsUri('syntax.md').toString()
+    // live：视口内粗体/行内码/代码行（DOM 渲染限于视口，样例首屏含目标）
+    const live = await waitViewState('syntax.md', (v) => v.cssProbe?.liveStrongDecorationColor !== undefined && v.viewMode === 'live')
+    assert(
+      live.cssProbe!.liveStrongDecorationColor === 'rgb(7, 8, 9)',
+      `live 粗体 span 应被片段命中 rgb(7, 8, 9)，实际 ${live.cssProbe!.liveStrongDecorationColor}`,
+    )
+    assert(
+      live.cssProbe!.liveInlineCodeDecorationColor === 'rgb(10, 11, 12)',
+      `live 行内代码 span 应被片段命中，实际 ${live.cssProbe!.liveInlineCodeDecorationColor}`,
+    )
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    const reading = await poll('阅读模式样式探针', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' && v.cssProbe?.readingStrongDecorationColor !== undefined ? v : undefined
+    })
+    assert(
+      reading.cssProbe!.readingStrongDecorationColor === 'rgb(16, 17, 18)',
+      `阅读语义 strong 应被片段命中，实际 ${reading.cssProbe!.readingStrongDecorationColor}`,
+    )
+  }],
+
+  ['大围栏按行细分：120 行围栏切为多块按需挂载，仍保持零重复解析（#8）', async () => {
+    await openWithEditor('fence-chunk.md')
+    await waitSessionReady('fence-chunk.md')
+    const uri = wsUri('fence-chunk.md').toString()
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    const view = await poll('切换并虚拟化', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' && v.readingVirtualized === true ? v : undefined
+    })
+    // 块模型：标题 + 3 片围栏 + 结尾段 = 5 块（120 行围栏按 60 行阈值切 3 片）
+    assert((view.readingTotalBlocks ?? 0) === 5, `块模型应为 5（围栏切 3 片），实际 ${view.readingTotalBlocks}`)
+    assert((view.readingMountedBlocks ?? 0) < (view.readingTotalBlocks ?? 1), '只挂载窗口内块')
+    assert((view.readingParseCount ?? 0) === 1, `装载解析应为 1 次，实际 ${view.readingParseCount}`)
+    // 滚动到围栏中部：中间片挂载、首片回收（按需挂载对细分片生效）
+    const doc = await vscode.workspace.openTextDocument(wsUri('fence-chunk.md'))
+    const midFence = doc.getText().indexOf('围栏内第 90 行')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: midFence })
+    const located = await poll('定位围栏中部', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v && (v.readingScrollTopPx ?? 0) > 0 ? v : undefined
+    })
+    assert((located.readingMountedBlocks ?? 0) <= (located.readingTotalBlocks ?? 1), '细分片不触发全量挂载')
+    assert((located.readingParseCount ?? 0) === 1, '滚动/定位不得重新解析')
+    const st = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(st.appliedEdits === 0, '大围栏细分链路零写回')
   }],
 ]

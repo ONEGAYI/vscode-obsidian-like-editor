@@ -167,7 +167,9 @@ export async function run(): Promise<void> {
     await vscode.commands.executeCommand('workbench.action.closeAllEditors')
   }
 
-  // #7 超大单块限制记录：2 万行未拆分围栏的实测（窗口无法在块内拆分）
+  // #8 起：大围栏按行细分（FENCE_CHUNK_LINES=60）。2 万行围栏切块后的实测——
+  // 块模型从 3 块变为约 336 块，挂载窗口只覆盖视口附近的片，进入 reading 的
+  // 首屏挂载成本与整块文本布局成本解耦（对照 #7 的整块实测记录）
   {
     const file = 'reading-giant.md'
     const uri = vscode.Uri.file(`${wsDir}/${file}`)
@@ -194,7 +196,7 @@ export async function run(): Promise<void> {
       contentDomCount: giantView.readingContentDomCount,
       virtualizedMountPollMs: mountMs,
     }
-    console.log(`[perf] 超大单块：块模型 ${giantView.readingTotalBlocks}，挂载 ${giantView.readingMountedBlocks}（含 2 万行围栏整体一块），容器元素 ${giantView.readingContentDomCount}，进入 reading 轮询耗时 ${mountMs}ms`)
+    console.log(`[perf] 大围栏细分：块模型 ${giantView.readingTotalBlocks}（2 万行围栏切为多片），挂载 ${giantView.readingMountedBlocks}，容器元素 ${giantView.readingContentDomCount}，进入 reading 轮询耗时 ${mountMs}ms`)
     await vscode.commands.executeCommand('workbench.action.closeAllEditors')
   }
 

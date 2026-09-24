@@ -29,10 +29,12 @@ import { EditorView, keymap } from '@codemirror/view'
 import {
   isHostToWebview,
   type CssProbeReport,
+  type LiveSyntaxProbe,
+  type ReadingSyntaxProbe,
   type SerChange,
 } from '../shared/protocol'
 import { mapChangeThroughChanges } from '../shared/changeMapping'
-import { headingDecorations } from './headings'
+import { liveDecorationsField, livePreviewDecorations } from './liveDecorations'
 import { runPerfProbe } from './perfProbe'
 import { runReadingPerfProbe } from './readingProbe'
 import { createReadingContainer } from './readingView'
@@ -432,6 +434,8 @@ export class WebviewSyncController {
           readingScrollTopPx: rScroll?.scrollTop,
           readingScrollHeightPx: rScroll?.scrollHeight,
           cssProbe: this.collectCssProbe(),
+          liveSyntax: this.collectLiveSyntax(),
+          readingSyntax: this.viewMode === 'reading' ? this.collectReadingSyntax() : undefined,
         })
         break
       }
@@ -612,12 +616,16 @@ export class WebviewSyncController {
     return Math.max(0, Math.min(offset, this.view?.state.doc.length ?? 0))
   }
 
-  /** CSS 契约探针（#6 内部测试验证入口）：宿主注入的测试片段仅经稳定
-   *  类名定位；此处在 view.state 请求时读取 computed style 回报。
-   *  jsdom 无样式表计算，值可为空串/空变量（返回 null），真实断言在集成。 */
+  /** CSS 契约探针（#6 内部测试验证入口；#8 扩展 span 级类）：宿主注入的
+   *  测试片段仅经稳定类名定位；此处在 view.state 请求时读取 computed style
+   *  回报。jsdom 无样式表计算，值可为空串/空变量（返回 null），真实断言在集成。 */
   private collectCssProbe(): CssProbeReport {
     const liveEl = this.liveWrapper?.querySelector('.oile-heading-line-1') ?? null
     const readingEl = this.readingContainer?.querySelector('.oile-reading-heading-1') ?? null
+    const liveStrong = this.liveWrapper?.querySelector('.oile-strong') ?? null
+    const liveInlineCode = this.liveWrapper?.querySelector('.oile-inline-code') ?? null
+    const liveCodeLine = this.liveWrapper?.querySelector('.oile-code-line') ?? null
+    const readingStrong = this.readingContainer?.querySelector('.oile-reading-block strong') ?? null
     const read = (el: Element | null): string | null =>
       el ? getComputedStyle(el).textDecorationColor : null
     let readingVarProbe: string | null = null
@@ -631,6 +639,103 @@ export class WebviewSyncController {
       liveHeadingDecorationColor: read(liveEl),
       readingHeadingDecorationColor: read(readingEl),
       readingVarProbe,
+      liveStrongDecorationColor: read(liveStrong),
+      liveInlineCodeDecorationColor: read(liveInlineCode),
+      liveCodeLineDecorationColor: read(liveCodeLine),
+      readingStrongDecorationColor: read(readingStrong),
+    }
+  }
+
+  /** live 侧语法装饰统计（#8 双视图一致性观测）：直接装饰集合级计数 */
+  private collectLiveSyntax(): LiveSyntaxProbe {
+    const counts = {
+      headingLines: 0,
+      headerSpans: 0,
+      strongSpans: 0,
+      emphasisSpans: 0,
+      inlineCodeSpans: 0,
+      quoteLines: 0,
+      codeLines: 0,
+      listLines: 0,
+      hrLines: 0,
+      frontmatterLines: 0,
+      taskGlyphs: 0,
+      taskChecked: 0,
+    }
+    const view = this.view
+    if (view) {
+      view.state
+        .field(liveDecorationsField)
+        .decos.between(0, view.state.doc.length, (_from, _to, value) => {
+          const spec = value.spec as { class?: string; widget?: { checked?: boolean } }
+          if (typeof spec['class'] === 'string') {
+            const cls = spec['class']
+            if (cls.includes('oile-heading-line') && !cls.includes('oile-heading-inview')) {
+              counts.headingLines += 1
+            } else if (cls.includes('oile-header-')) {
+              counts.headerSpans += 1
+            } else if (cls.includes('oile-strong')) {
+              counts.strongSpans += 1
+            } else if (cls.includes('oile-emphasis')) {
+              counts.emphasisSpans += 1
+            } else if (cls.includes('oile-inline-code')) {
+              counts.inlineCodeSpans += 1
+            } else if (cls.includes('oile-quote-line')) {
+              counts.quoteLines += 1
+            } else if (cls.includes('oile-code-line')) {
+              counts.codeLines += 1
+            } else if (cls.includes('oile-list-line')) {
+              counts.listLines += 1
+            } else if (cls.includes('oile-hr-line')) {
+              counts.hrLines += 1
+            } else if (cls.includes('oile-frontmatter-line')) {
+              counts.frontmatterLines += 1
+            }
+          } else if (spec.widget !== undefined) {
+            counts.taskGlyphs += 1
+            if (spec.widget.checked === true) {
+              counts.taskChecked += 1
+            }
+          }
+        })
+    }
+    return counts
+  }
+
+  /** reading 侧渲染语义统计（#8：DOM 级计数；虚拟化下仅统计已挂载块，
+   *  一致性对拍用小文档（全量挂载）进行） */
+  private collectReadingSyntax(): ReadingSyntaxProbe {
+    const container = this.readingContainer
+    if (!container) {
+      return {
+        headings: 0,
+        strongCount: 0,
+        emphasisCount: 0,
+        inlineCodeCount: 0,
+        blockquoteBlocks: 0,
+        codeBlocks: 0,
+        hrCount: 0,
+        listItems: 0,
+        taskCheckboxes: 0,
+        taskChecked: 0,
+      }
+    }
+    const count = (selector: string): number => container.querySelectorAll(selector).length
+    return {
+      headings: count(
+        '.oile-reading-block h1, .oile-reading-block h2, .oile-reading-block h3, .oile-reading-block h4, .oile-reading-block h5, .oile-reading-block h6',
+      ),
+      strongCount: count('.oile-reading-block strong'),
+      emphasisCount: count('.oile-reading-block em'),
+      inlineCodeCount: count('.oile-reading-block code:not(pre code)'),
+      blockquoteBlocks: count('.oile-reading-block blockquote'),
+      codeBlocks: count('.oile-reading-block:not(.oile-reading-frontmatter) pre'),
+      hrCount: count('.oile-reading-block hr'),
+      listItems: count('.oile-reading-block li'),
+      taskCheckboxes: count('.oile-reading-task-checkbox'),
+      taskChecked: Array.from(
+        container.querySelectorAll<HTMLInputElement>('.oile-reading-task-checkbox'),
+      ).filter((b) => b.checked).length,
     }
   }
 
@@ -828,7 +933,7 @@ export class WebviewSyncController {
       EditorView.lineWrapping,
       // 标题实时预览装饰（#5 切片）：直接装饰（StateField）+ 间接装饰
       // （ViewPlugin 按 visibleRanges），见 headings.ts 头注释
-      headingDecorations,
+      livePreviewDecorations,
       ...this.extraExtensions,
       EditorView.updateListener.of((update) => {
         if (!update.docChanged) {

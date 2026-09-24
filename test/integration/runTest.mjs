@@ -40,6 +40,55 @@ const MODE_DOC = [
 ].join('\n')
 // #6 锚点恢复：无特殊语法的多段落（块边界清晰）
 const MODE_ANCHOR_DOC = '模式锚点第一段文字\n\n中间段落文本\n\n最后段落结束\n'
+// #8 双模式显示一致性样例：覆盖标题/粗斜体/列表/任务/引用/行内代码/围栏/
+// frontmatter/水平线 + 代码内伪语法 + 未支持语法（脚注、原始 HTML）
+const SYNTAX_DOC = [
+  '---',
+  'title: 语法样例',
+  '# frontmatter 内伪标题',
+  '---',
+  '',
+  '# 一级标题',
+  '',
+  '正文有 **加粗**、*斜体* 与 `行内代码`，还有转义 \\*不斜体\\*。',
+  '',
+  '## 二级标题',
+  '',
+  '- 普通列表项',
+  '- [ ] 未完成任务',
+  '- [x] 已完成任务',
+  '',
+  '> 引用第一行',
+  '> 引用内 **粗体**',
+  '',
+  '1. 有序项一',
+  '2. 有序项二',
+  '',
+  '```js',
+  'const x = 1 // # 伪标题 与 [[伪双链]] 与 - [ ] 伪任务',
+  '```',
+  '',
+  '主题行',
+  '===',
+  '',
+  '---',
+  '',
+  '未支持语法样例：脚注 [^1] 文本。',
+  '',
+  '<script>alert(1)</script> 与 <b>原始 HTML</b>',
+  '',
+  '结尾段落。',
+  '',
+].join('\n')
+// #8 大围栏细分样例：120 行围栏（超过 FENCE_CHUNK_LINES=60，切为 3 片）
+const FENCE_CHUNK_DOC = (() => {
+  const out = ['# 大围栏样例', '', '```text']
+  for (let i = 1; i <= 120; i++) {
+    out.push(`围栏内第 ${i} 行：大围栏细分挂载样本文本。`)
+  }
+  out.push('```', '', '结尾段。', '')
+  return out.join('\n')
+})()
 const LARGE_LINES = 100_000
 
 const wsDir = mkdtempSync(path.join(tmpdir(), 'oile-itest-'))
@@ -56,6 +105,8 @@ try {
   writeFileSync(path.join(wsDir, 'heading.md'), HEADING_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'mode.md'), MODE_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'mode-anchor.md'), MODE_ANCHOR_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'syntax.md'), SYNTAX_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'fence-chunk.md'), FENCE_CHUNK_DOC, 'utf8')
   const largeLines = Array.from({ length: LARGE_LINES }, (_, i) => `第 ${i + 1} 行 ——固定宽度填充文本，用于长文档视口渲染验证——`)
   writeFileSync(path.join(wsDir, 'large.md'), largeLines.join('\n') + '\n', 'utf8')
   // 性能体量对比样例（#5）：同构普通段落 + 每 50 行一个二级标题

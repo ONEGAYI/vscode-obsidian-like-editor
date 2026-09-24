@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
-// 阅读视图 DOM 结构契约（工单 #6）：
+// 阅读视图 DOM 结构契约（工单 #8：markdown-it 渲染形态）：
 // - 稳定类名入口（oile-view-reading / oile-reading-block / 细分类）
 // - 源位置锚点 data-oile-src-start|end（LF 全文 UTF-16 offset，与协议
 //   SerChange 坐标同构；#7 按需挂载与 #9 任务定位依赖此结构）
+// - 块内容为语义标签（h1/p/blockquote/ul/pre…），行内语义（em/strong/code）
+//   随 markdown-it 渲染；Obsidian 片段的标签选择器可命中
 // - 任务语义入口：disabled checkbox + marker 区间锚点（#9 实现写回）
-// - 源文本一律经 textContent 注入，不得作为 HTML 解析
+// - 源文中的 HTML 形态按纯文本呈现（html:false + DOM 净化）
 import { describe, it, expect } from 'vitest'
 import {
   READING_CLASS_NAMES,
@@ -31,12 +33,12 @@ describe('createReadingContainer：稳定容器类名', () => {
 })
 
 describe('renderReadingBlocks：块结构与源锚点', () => {
-  it('返回块数并在容器内生成对应块元素', () => {
+  it('返回块数并生成对应块元素（列表整体一块）', () => {
     const { container, count } = rendered()
     const els = container.querySelectorAll(`.${READING_CLASS_NAMES.block}`)
     expect(els.length).toBe(count)
-    // 标题 / 第一段 / 两个任务项 / 代码块 / 结尾段
-    expect(count).toBe(6)
+    // 标题 / 段落 / 列表（整体） / 代码块 / 结尾段
+    expect(count).toBe(5)
   })
 
   it('每块带 data-oile-src-start/end，区间内容与源文本一致', () => {
@@ -51,26 +53,22 @@ describe('renderReadingBlocks：块结构与源锚点', () => {
     }
   })
 
-  it('标题块带级别细分类名 oile-reading-heading-1', () => {
+  it('标题块带级别细分类名，内容为语义 h1（无 # 源码标记）', () => {
     const { container } = rendered()
     const h1 = container.querySelector(`.${READING_CLASS_NAMES.heading(1)}`)
     expect(h1).not.toBeNull()
     expect(h1!.classList.contains(READING_CLASS_NAMES.block)).toBe(true)
-    expect(h1!.textContent).toBe('# 顶部标题')
+    expect(h1!.querySelector('h1')?.textContent).toBe('顶部标题')
+    expect(h1!.textContent).not.toContain('#')
   })
 
-  it('段落块带 oile-reading-paragraph；代码块带 oile-reading-code-block', () => {
+  it('段落与代码块的语义标签；代码内容不含围栏标记', () => {
     const { container } = rendered()
-    expect(container.querySelector(`.${READING_CLASS_NAMES.paragraph}`)).not.toBeNull()
+    expect(container.querySelector(`.${READING_CLASS_NAMES.paragraph} p`)).not.toBeNull()
     const code = container.querySelector(`.${READING_CLASS_NAMES.codeBlock}`)
     expect(code).not.toBeNull()
-    expect(code!.textContent).toContain('```code')
-  })
-
-  it('列表项带 oile-reading-list-item', () => {
-    const { container } = rendered()
-    const items = container.querySelectorAll(`.${READING_CLASS_NAMES.listItem}`)
-    expect(items.length).toBe(2)
+    expect(code!.querySelector('pre code')?.textContent).toContain('伪内容')
+    expect(code!.textContent).not.toContain('```')
   })
 
   it('重入渲染先清空旧块（外部变更后的重建路径）', () => {
@@ -94,19 +92,45 @@ describe('任务语义入口（#9 预留）', () => {
     const s = Number(boxes[1]!.dataset['oileSrcStart'])
     const e = Number(boxes[1]!.dataset['oileSrcEnd'])
     expect(DOC.slice(s, e)).toBe('[x]')
-    // 任务块本体带 oile-reading-task 类
-    const tasks = container.querySelectorAll(`.${READING_CLASS_NAMES.task}`)
+    // 任务 li 带任务语义类与自身锚点
+    const tasks = container.querySelectorAll(`li.${READING_CLASS_NAMES.task}`)
     expect(tasks.length).toBe(2)
+    expect(DOC.slice(Number(tasks[0]!.querySelector('input')!.dataset['oileSrcStart']), Number(tasks[0]!.querySelector('input')!.dataset['oileSrcEnd']))).toBe('[ ]')
   })
 })
 
 describe('源文本安全注入', () => {
   it('HTML 形态的源文本按纯文本呈现，不产生元素节点', () => {
     const container = createReadingContainer()
-    renderReadingBlocks(container, '<script>alert(1)</script>\n<b>加粗</b>\n')
+    renderReadingBlocks(container, '<script>alert(1)</script>\n\n<b>加粗</b>\n')
     expect(container.querySelector('script')).toBeNull()
     expect(container.querySelector('b')).toBeNull()
     expect(container.textContent).toContain('<script>alert(1)</script>')
+    expect(container.textContent).toContain('<b>加粗</b>')
+  })
+
+  it('javascript: 链接不产生可执行 href', () => {
+    const container = createReadingContainer()
+    renderReadingBlocks(container, '[点我](javascript:alert(1))\n')
+    const anchors = Array.from(container.querySelectorAll('a'))
+    for (const a of anchors) {
+      expect(a.getAttribute('href')).not.toContain('javascript:')
+    }
+  })
+})
+
+describe('frontmatter 呈现（局部源码降级）', () => {
+  it('frontmatter 块按源码呈现，内部 # 不渲染为标题', () => {
+    const container = createReadingContainer()
+    renderReadingBlocks(container, '---\ntitle: 元\n# 伪\n---\n\n# 真标题\n')
+    const fm = container.querySelector(`.${READING_CLASS_NAMES.frontmatter}`)
+    expect(fm).not.toBeNull()
+    expect(fm!.textContent).toContain('title: 元')
+    expect(fm!.textContent).toContain('# 伪')
+    expect(fm!.querySelector('h1')).toBeNull()
+    const headings = Array.from(container.querySelectorAll(`.${READING_CLASS_NAMES.block} h1`))
+    expect(headings.length).toBe(1)
+    expect(headings[0]!.textContent).toBe('真标题')
   })
 })
 
@@ -120,7 +144,6 @@ describe('阅读锚点定位', () => {
   it('findReadingAnchor：有布局时返回视口内首个可见块的源 start', () => {
     const { container } = rendered()
     const els = Array.from(container.querySelectorAll<HTMLElement>(`.${READING_CLASS_NAMES.block}`))
-    // stub offsetTop/offsetHeight：前两块在视口上方，第三块起可见
     els.forEach((el, i) => {
       Object.defineProperty(el, 'offsetTop', { value: i * 100 })
       Object.defineProperty(el, 'offsetHeight', { value: 50 })

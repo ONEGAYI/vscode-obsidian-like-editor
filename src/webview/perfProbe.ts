@@ -12,7 +12,7 @@
 // 应与文档体量无关，验证增量装饰策略在真实视图中生效）。
 import { EditorView } from '@codemirror/view'
 import type { PerfSnapshot } from '../shared/protocol'
-import { getHeadingStats } from './headings'
+import { getHeadingStats } from './liveDecorations'
 import { externalSync } from './syncController'
 
 export interface PerfProbeOptions {

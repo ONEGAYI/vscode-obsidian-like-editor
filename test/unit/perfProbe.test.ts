@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest'
 import { EditorState, EditorSelection } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { runPerfProbe } from '../../src/webview/perfProbe'
-import { headingDecorations } from '../../src/webview/headings'
+import { livePreviewDecorations } from '../../src/webview/liveDecorations'
 import { WebviewSyncController, externalSync, type VsCodeBridge } from '../../src/webview/syncController'
 import type { WebviewToHost } from '../../src/shared/protocol'
 
@@ -37,7 +37,7 @@ function makeView(doc: string): EditorView {
     parent,
     state: EditorState.create({
       doc,
-      extensions: [headingDecorations, EditorView.lineWrapping],
+      extensions: [livePreviewDecorations, EditorView.lineWrapping],
       selection: EditorSelection.single(0),
     }),
   })
@@ -73,7 +73,7 @@ describe('runPerfProbe：测量与还原', () => {
       state: EditorState.create({
         doc,
         extensions: [
-          headingDecorations,
+          livePreviewDecorations,
           EditorView.updateListener.of((update) => {
             for (const tr of update.transactions) {
               if (tr.docChanged) {
