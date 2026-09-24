@@ -472,6 +472,45 @@ describe('外部变更广播与不写回保证', () => {
     s.session.detachPanel(id)
     expect(notices).toMatchObject([{ type: 'panel-closed-with-input', webviewText: 'a\nb你' }])
   })
+
+  it('另一面板阻塞请求队列时，组合提交后立即关闭仍可取回；确认后正常关闭不误报', async () => {
+    const source = 'a|b|c\n---|---|---\n | | \n'
+    const final = 'a|b|c\n---|---|---\n| | | 你|\n'
+    const rowFrom = source.indexOf(' | | ')
+    const notices: SessionNotice[] = []
+    const s = setup(source, { onNotice: (notice) => notices.push(notice) })
+    const blocker = s.attach()
+    const editing = s.attach()
+    await readyPanel(s, blocker)
+    await readyPanel(s, editing)
+    const gate = s.doc.holdNextApply()
+    void s.send(blocker, { kind: 'edit.request', sessionId: blocker, docUri: DOC_URI,
+      seq: 1, baseVersion: 1, changes: [{ offset: 0, length: 0, text: 'X' }] })
+    await new Promise((resolve) => setTimeout(resolve, 0)) // 第一面板占住 DocumentSession.queue
+    await s.send(editing, { kind: 'conflict.report', sessionId: editing, docUri: DOC_URI,
+      version: 1, revision: 1, text: final, compositionPending: true })
+    void s.send(editing, { kind: 'edit.request', sessionId: editing, docUri: DOC_URI,
+      seq: 1, baseVersion: 1, changes: [{ offset: rowFrom, length: 5, text: '| | | 你|' }] })
+    await s.send(editing, { kind: 'conflict.report', sessionId: editing, docUri: DOC_URI,
+      version: 1, revision: 2, text: final, compositionPending: false })
+    s.session.detachPanel(editing)
+    expect(notices).toMatchObject([{ type: 'panel-closed-with-input', webviewText: final }])
+    gate.release()
+
+    const confirmedNotices: SessionNotice[] = []
+    const confirmed = setup(source, { onNotice: (notice) => confirmedNotices.push(notice) })
+    const id = confirmed.attach()
+    await readyPanel(confirmed, id)
+    await confirmed.send(id, { kind: 'conflict.report', sessionId: id, docUri: DOC_URI,
+      version: 1, revision: 1, text: final, compositionPending: true })
+    await confirmed.send(id, { kind: 'edit.request', sessionId: id, docUri: DOC_URI,
+      seq: 1, baseVersion: 1, changes: [{ offset: rowFrom, length: 5, text: '| | | 你|' }] })
+    await confirmed.send(id, { kind: 'conflict.report', sessionId: id, docUri: DOC_URI,
+      version: 1, revision: 2, text: final, compositionPending: false })
+    confirmed.session.detachPanel(id)
+    expect(confirmed.doc.getText()).toBe(final)
+    expect(confirmedNotices).toHaveLength(0)
+  })
 })
 
 describe('CRLF 文档的换行协调（CM6 端统一 LF）', () => {

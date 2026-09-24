@@ -89,6 +89,8 @@ interface PanelEntry {
   port: PanelPort
   ready: boolean
   pending: PendingEdit[]
+  /** 已收但仍在全局 queue 中等待执行的请求；关闭检查须同步看见。 */
+  queued: Map<number, SerChange[]>
   /** seq → 已发送的 ack（幂等去重：重复消息重发同一 ack） */
   ackCache: Map<number, HostToWebview>
   lastViewState?: Extract<WebviewToHost, { kind: 'view.state' }>
@@ -177,6 +179,7 @@ export class DocumentSession {
       port,
       ready: false,
       pending: [],
+      queued: new Map(),
       ackCache: new Map(),
       suspended: false,
       suspendedReason: 'conflict',
@@ -197,6 +200,13 @@ export class DocumentSession {
     const panel = this.panels.get(sessionId)
     if (panel) {
       const fragments = [...panel.conflictFragments]
+      let queuedChanges = false
+      for (const changes of panel.queued.values()) {
+        queuedChanges ||= changes.length > 0
+        for (const change of changes) {
+          if (change.text) fragments.push(change.text) // 入队请求本身已是 LF 坐标与文本
+        }
+      }
       for (const p of panel.pending) {
         if (!p.confirmed) {
           this.collectFragments(fragments, p.changes)
@@ -205,7 +215,7 @@ export class DocumentSession {
       const snapshotText = panel.compositionSnapshot?.toString() ?? panel.conflictWebviewText
       const pendingComposition = panel.compositionPending && snapshotText !== undefined &&
         snapshotText !== this.newline.toLfText(this.doc.getText())
-      if (panel.suspended || fragments.length > 0 || pendingComposition) {
+      if (panel.suspended || fragments.length > 0 || queuedChanges || pendingComposition) {
         this.notify({
           type: 'panel-closed-with-input',
           sessionId,
@@ -281,7 +291,13 @@ export class DocumentSession {
         if (!panel.ready || message.docUri !== this.docUri) {
           return Promise.resolve()
         }
-        const task = this.queue.then(() => this.processEditRequest(panel, message))
+        if (!panel.queued.has(message.seq)) panel.queued.set(message.seq, message.changes)
+        const task = this.queue.then(() => {
+          // 同一个微任务中从 queued 移入 processEditRequest 的 pending；
+          // 关闭面板不会观察到两者都为空的中间窗口。
+          panel.queued.delete(message.seq)
+          return this.processEditRequest(panel, message)
+        })
         this.queue = task.catch(() => undefined)
         return task
       }
