@@ -343,8 +343,18 @@ describe('表格点阵与悬停控件', () => {
   it('长表滚动复用行结构，控件不按可见行数重复扫描整表', async () => {
     const doc = ['| a | b |', '| --- | --- |', ...Array.from({ length: 1000 }, (_, i) => `| ${i} | x |`), ''].join('\n')
     let scans = 0
+    let rowIndexReads = 0
     const controls = createTableControls({
-      tableRowsAt: (state, pos, tree) => { scans++; return tableRowsAt(state, pos, tree) },
+      tableRowsAt: (state, pos, tree) => {
+        scans++
+        const rows = tableRowsAt(state, pos, tree)
+        return rows && new Proxy(rows, {
+          get(target, key, receiver) {
+            if (typeof key === 'string' && /^\d+$/.test(key)) rowIndexReads++
+            return Reflect.get(target, key, receiver)
+          },
+        })
+      },
       runTableEditAt: () => false,
       runTableRowMove: () => false,
     })
@@ -355,11 +365,16 @@ describe('表格点阵与悬停控件', () => {
     await Promise.resolve()
     expect(scans).toBe(1)
     const first = scans
+    const firstReads = rowIndexReads
+    // 红态每个可见行 slice 千行表，首轮实测 36073 次索引读取；二分定位
+    // 后只随可见行数与 log(总行数) 增长。
+    expect(firstReads).toBeLessThan(500)
     for (let i = 0; i < 4; i++) {
       view.scrollDOM.dispatchEvent(new Event('scroll'))
       await Promise.resolve()
     }
     expect(scans - first).toBe(0)
+    expect(rowIndexReads - firstReads).toBeLessThan(2000)
     view.destroy()
   })
 

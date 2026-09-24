@@ -22,6 +22,19 @@ interface VisibleGridRow {
   handle: HTMLButtonElement
 }
 
+/** 表格行按源位置升序：二分定位可见内容行，索引跳过固定分隔行。 */
+function contentRowIndex(rows: TableRowInfo[], lineFrom: number): number {
+  let lo = 0
+  let hi = rows.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (rows[mid]!.lineFrom < lineFrom) lo = mid + 1
+    else hi = mid
+  }
+  if (lo >= rows.length || rows[lo]!.lineFrom !== lineFrom || lo === 1) return -1
+  return lo === 0 ? 0 : lo - 1
+}
+
 /**
  * 控件是编辑器上的浮层，不进入 CM6 文本 DOM，也没有独立的单元格状态。
  * 每次只扫描已挂载的网格行；CM6 视口回收后同步重建控件。
@@ -154,8 +167,7 @@ class TableControlsView {
       if (!rows) {
         continue
       }
-      const content = [rows[0]!, ...rows.slice(2)]
-      const index = content.findIndex((row) => row.lineFrom === lineFrom)
+      const index = contentRowIndex(rows, lineFrom)
       if (index < 0) {
         continue // 分隔行没有抓手
       }
@@ -214,7 +226,7 @@ class TableControlsView {
         insertCol.dataset['tableFrom'] = String(anchor.tableFrom)
       }
       const tableRows = group[0]!.rows
-      const lastLineFrom = [tableRows[0]!, ...tableRows.slice(2)].at(-1)!.lineFrom
+      const lastLineFrom = tableRows[tableRows.length > 2 ? tableRows.length - 1 : 0]!.lineFrom
       const last = group.find((item) => item.lineFrom === lastLineFrom)
       if (last) {
         const rect = last.element.getBoundingClientRect()
