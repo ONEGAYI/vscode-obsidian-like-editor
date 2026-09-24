@@ -360,8 +360,6 @@ export interface LineGutterProbe {
   first: string | null
   /** 末个行号单元格文本（视口尾行号观测；栏未装配为 null） */
   last: string | null
-  /** 当前宽编号降级的水平压缩系数（1 = 无压缩；栏未装配为 null） */
-  scaleX: number | null
 }
 
 /**
@@ -520,16 +518,14 @@ function isNonNegativeInt(v: unknown): boolean {
   return typeof v === 'number' && Number.isInteger(v) && v >= 0
 }
 
-/** #34 行号栏观测校验：on 布尔、count 非负整数、first/last 字符串或 null、
- *  scaleX 正数（1 = 无压缩）或 null（栏未装配） */
+/** #34 行号栏观测校验：on 布尔、count 非负整数、first/last 字符串或 null */
 function isLineGutterProbe(v: unknown): v is LineGutterProbe {
   return (
     isObject(v) &&
     typeof v.on === 'boolean' &&
     isNonNegativeInt(v.count) &&
     (v.first === null || isString(v.first)) &&
-    (v.last === null || isString(v.last)) &&
-    (v.scaleX === null || (typeof v.scaleX === 'number' && v.scaleX > 0))
+    (v.last === null || isString(v.last))
   )
 }
 

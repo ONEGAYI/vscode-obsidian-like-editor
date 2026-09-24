@@ -73,37 +73,6 @@ function scheduleFrame(fn: () => void): void {
   }
 }
 
-// ---- #34 行号降级公式常量（推导见 syncLineNumberScale 注释）----
-// 带宽 / 间隙 / 字号比例 / 字号上限与 main.css 的 #32 留白带变量及
-// .cm-gutterElement 字号规则是同一知识的两处落点（CSS 管呈现、JS 管降级
-// 档位计算），由 test/unit/lineNumberCssContract.test.ts 逐值钉住一致——
-// 改动任一侧须同步另一侧，钉子测试失配即拦截。
-/** 留白带宽度（px）：与 #32 的 --vsidian-content-padding-inline 一致 */
-export const LN_BAND_PX = 24
-/** 行号与正文的最小间隙（px，含在带宽内）：与 .cm-gutterElement 右 padding 一致 */
-export const LN_GAP_PX = 2
-/** 行号字号 = min(基准 × 比例, 上限)：与 main.css 的
- *  font-size: min(calc(var(--vsidian-content-font-size) * 0.75), 12px) 一致 */
-export const LN_FONT_RATIO = 0.75
-export const LN_FONT_CAP_PX = 12
-/** 基准字号读取失败（无样式环境）时的回退（px）：与 --vsidian-content-font-size
- *  的内层回退值一致 */
-export const LN_FONT_BASE_FALLBACK_PX = 14
-/** 等宽字体数字 advance 宽度与字号之比（通行值 0.6，见注释兜底说明） */
-const LN_CHAR_RATIO = 0.6
-
-/**
- * #34 宽编号降级公式（纯函数，契约测试直测）：
- * scale = min(1, (带宽 − 间隙) / (0.6 × 行号字号 × 行号位数))
- * 行号栏落在 #32 留白带内且带宽固定，超出容量的位数以水平压缩保全
- * 完整行号值（数字高度不变、可读性优先于宽度）。
- */
-export function lineNumberScale(digits: number, fontPx: number): number {
-  if (!Number.isFinite(digits) || !Number.isFinite(fontPx) || digits < 1 || fontPx <= 0) {
-    return 1
-  }
-  return Math.min(1, (LN_BAND_PX - LN_GAP_PX) / (LN_CHAR_RATIO * fontPx * digits))
-}
 
 /** webview 与宿主的通信通道（由 acquireVsCodeApi 适配） */
 export interface VsCodeBridge {
@@ -365,7 +334,6 @@ export class WebviewSyncController {
   /** 行号扩展的运行时开关通道（extensions 装配点） */
   private readonly lineNumbersCompartment = new Compartment()
   /** 当前降级档位（视口最大行号十进制位数；-1 = 未初始化，触发首次计算） */
-  private lnScaleDigits = -1
 
   // ---- 冲突暂停状态（#4）----
   /** 暂停写回：保留本地文本、忽略外部增量、不再发送 edit.request */
@@ -2050,47 +2018,9 @@ export class WebviewSyncController {
       return
     }
     this.lineNumbersOn = on
-    if (on) {
-      // 重开后降级档位强制重算：关闭期间文档/字号可能已变化
-      this.lnScaleDigits = -1
-    }
     this.view?.dispatch({
       effects: this.lineNumbersCompartment.reconfigure(on ? lineNumbers() : []),
     })
-    this.syncLineNumberScale()
-  }
-
-  /**
-   * 宽编号降级档位（docChanged / viewportChanged / 重开行号时调用）：
-   * 行号栏落在 #32 留白带（--vsidian-content-padding-inline，默认 24px）
-   * 内且不得覆盖正文、不得右移正文基线——带宽固定，超出 3 位数字的行号
-   * 无法以原字号完整显示。降级策略为水平压缩（scaleX，origin 贴右缘）：
-   * 保持数字高度可读、行号值完整无歧义（优于裁剪高位的歧义显示与缩小
-   * 字号到 6px 的不可读），公式可复核：
-   *   scale = min(1, (带宽 − 右缘间隙) / (0.6 × 行号字号 × 位数))
-   * - 位数取视口最大行号（gutter 只渲染视口行，滚动跨越位数边界时更新）
-   * - 行号字号公式 min(0.75 × 正文基准, 12px) 与 main.css 的 .cm-lineNumbers
-   *   字号规则是同一知识两处落点，由 lineNumberCssContract.test.ts 钉住一致
-   * - 等宽数字宽比 0.6 为通行值（0.55–0.62），配合栏 overflow: hidden
-   *   兜底（极端字体下最多裁左缘极小部分，不覆盖正文）
-   */
-  private syncLineNumberScale(): void {
-    const view = this.view
-    if (!view) {
-      return
-    }
-    const doc = view.state.doc
-    const lastLineNo = doc.lineAt(Math.min(view.viewport.to, doc.length)).number
-    const digits = String(lastLineNo).length
-    if (digits === this.lnScaleDigits) {
-      return
-    }
-    this.lnScaleDigits = digits
-    const scroller = view.dom.querySelector('.cm-scroller')
-    const basePx = Number.parseFloat(scroller ? getComputedStyle(scroller).fontSize : '')
-    const base = Number.isFinite(basePx) && basePx > 0 ? basePx : LN_FONT_BASE_FALLBACK_PX
-    const fontPx = Math.min(base * LN_FONT_RATIO, LN_FONT_CAP_PX)
-    view.dom.style.setProperty('--vsidian-ln-scale', String(lineNumberScale(digits, fontPx)))
   }
 
   /** 行号栏观测（#34 view.state 扩展字段）。过滤 CM6 的隐藏测量探针
@@ -2099,20 +2029,18 @@ export class WebviewSyncController {
   private collectLineGutter(): LineGutterProbe {
     const view = this.view
     if (!view || !this.lineNumbersOn) {
-      return { on: this.lineNumbersOn, count: 0, first: null, last: null, scaleX: null }
+      return { on: this.lineNumbersOn, count: 0, first: null, last: null }
     }
     const texts = Array.from(
       view.dom.querySelectorAll('.cm-lineNumbers .cm-gutterElement'),
     )
       .filter((el) => (el as HTMLElement).style.visibility !== 'hidden')
       .map((el) => el.textContent ?? '')
-    const raw = Number.parseFloat(view.dom.style.getPropertyValue('--vsidian-ln-scale'))
     return {
       on: this.lineNumbersOn,
       count: texts.length,
       first: texts.length > 0 ? texts[0] : null,
       last: texts.length > 0 ? texts[texts.length - 1] : null,
-      scaleX: Number.isFinite(raw) && raw > 0 ? raw : 1,
     }
   }
 
@@ -2211,8 +2139,8 @@ export class WebviewSyncController {
     return [
       EditorView.lineWrapping,
       // 行号栏（#34）：源文件行号经 Compartment 装配（设置开关热重配，
-      // mount 时按定义默认开）；栏落在留白带内的定位与宽编号降级样式
-      // 见 main.css 的 #34 段与 syncLineNumberScale
+      // mount 时按定义默认开）；列在流内、与正文以固定间距相隔的布局
+      // 见 main.css 的 #34 段（行号列宽随位数自适应，无降级机制）
       this.lineNumbersCompartment.of(this.lineNumbersOn ? lineNumbers() : []),
       // 标题实时预览装饰（#5 切片）：直接装饰（StateField）+ 间接装饰
       // （ViewPlugin 按 visibleRanges），见 liveDecorations.ts 头注释
@@ -2253,11 +2181,6 @@ export class WebviewSyncController {
       findDecorations,
       ...this.extraExtensions,
       EditorView.updateListener.of((update) => {
-        // #34 宽编号降级档位：文档增删行或视口滚动跨越位数边界时更新
-        // （纯 CSS 变量写入，无事务、无写回）
-        if (update.docChanged || update.viewportChanged) {
-          this.syncLineNumberScale()
-        }
         if (!update.docChanged) {
           return
         }

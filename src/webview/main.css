@@ -25,12 +25,16 @@ body {
      1.5（数字行高，随字号自动缩放）。live 的 .cm-scroller 与 reading
      的 .vsidian-view-reading 共同消费这组变量，保证模式切换时正文
      基础排版（字体族/字号/行高/左留白）一致。
-     --vsidian-content-padding-inline 为正文文本左缘基线留白：#34 的
-     行号栏须落在此留白带内，不得覆盖正文或右移该基线。 */
+     --vsidian-content-padding-inline 为正文文本左缘基线留白（两模式共用的
+     页面留白）。行号开启时的布局（用户修订 #32 旧契约）：行号列 + 固定
+     间距 + 主体文字总宽 = 行号关闭时的正文宽度——列不外扩、正文向右
+     内缩，间距随 VSCode UI 字号缩放（--vsidian-ln-gap）。 */
   --vsidian-content-font-family: var(--vscode-editor-font-family, monospace);
   --vsidian-content-font-size: var(--vscode-editor-font-size, 14px);
   --vsidian-content-line-height: var(--vscode-editor-line-height, 1.5);
   --vsidian-content-padding-inline: 24px;
+  /* 行号列与正文的固定间距：响应 VSCode UI 字号（界面元素大小） */
+  --vsidian-ln-gap: calc(var(--vscode-font-size, 13px) * 2);
 }
 
 #app .cm-editor {
@@ -58,27 +62,15 @@ body {
   outline: none;
 }
 
-/* ---- #34 行号栏：#32 留白带内叠加，不动正文基线 ----
-   CM6 默认 gutter 是 scroller flex 流的占位列（会把 .cm-content 右移）。
-   此处改为负左外边距把栏移入 --vsidian-content-padding-inline 留白带并
-   固定栏宽 = 带宽：净占位为 0，正文左缘基线（留白带右缘）在开关行号
-   前后均不变（对齐 Obsidian 行为）。
-   - 溢出方向：justify-content: flex-end 使超宽行号向左溢出，被
-     overflow: hidden 裁掉高位一侧，右缘（贴正文侧）永不越出带宽
-   - 宽编号（≥4 位）降级：JS 按视口最大行号位数设 --vsidian-ln-scale
-     做水平压缩（公式见 syncController.syncLineNumberScale），scaleX
-     保持数字高度可读、行号值完整；overflow 裁剪仅作极端字体的兜底 */
+/* ---- #34 行号列：流内布局（用户修订 #32 旧契约）----
+   行号列 + 固定间距（--vsidian-ln-gap，响应 UI 字号）+ 主体文字的总宽 =
+   行号关闭时的正文宽度：列在 scroller 内容流内、随位数自适应宽度，
+   不外扩也不覆盖正文，正文左缘相应右移（向右内缩）；关闭行号时
+   Compartment 卸载整列，正文回到 --vsidian-content-padding-inline 基线。
+   CM6 Gutter 以 JS 内联样式设 position: sticky（横向滚动钉住），在流内
+   静态位（留白带右缘）与包含块钳制一致，无需干预。 */
 #app .cm-editor .cm-scroller .cm-gutters {
-  /* CM6 Gutter 以 JS 内联样式设置 position: sticky（横向滚动时钉住行号，
-     见 @codemirror/view dist index.js Gutter#update 附近 dom.style.position
-     赋值）；sticky 会被包含块钳制在内容盒左缘，使负边距失效、行号栏压到
-     正文。live 预览启用软换行（无横向滚动），sticky 无用，须以 !important
-     压过内联样式让负边距把行号栏移入留白带。 */
-  position: relative !important;
-  margin-left: calc(-1 * var(--vsidian-content-padding-inline));
-  width: var(--vsidian-content-padding-inline);
-  justify-content: flex-end;
-  overflow: hidden;
+  margin-right: var(--vsidian-ln-gap);
   background-color: transparent;
   border: none;
   color: var(--vscode-editorLineNumber-foreground, rgba(127, 127, 127, 0.6));
@@ -86,10 +78,8 @@ body {
   user-select: none;
 }
 
-/* 行号单元格：字号公式 min(0.75 × 正文基准, 12px)——与
-   syncController.syncLineNumberScale 的 JS 复刻是同一知识两处落点
-   （CSS 管呈现、JS 管降级档位计算），由 test/unit/lineNumberCssContract.test.ts
-   逐值钉住一致；右缘 2px 间隙含在带宽内（正文自留白带右缘起，行号不侵入）。
+/* 行号单元格：字号公式 min(0.75 × 正文基准, 12px)；列宽随位数自适应，
+   无降级机制（旧 24px 留白带内的 scaleX 压缩随带宽约束一并移除）。
    垂直锚定首个视觉行（CM6 原生行为）：单元格高度与源码行块同步（软换行
    时为多视觉行总高），垂直居中（flex + align-items: center）会把数字放到
    折行块中心——折 2 行低半行、折 3 行低整行。改为顶部锚定 + 半差补偿
@@ -100,12 +90,10 @@ body {
   padding-top: calc(
     (1.5 * var(--vsidian-content-font-size) - 1.5 * min(0.75 * var(--vsidian-content-font-size), 12px)) / 2
   );
-  padding-right: 2px;
+  padding-right: 0;
   text-align: right;
   white-space: nowrap;
   font-size: min(calc(var(--vsidian-content-font-size, 14px) * 0.75), 12px);
-  transform: scaleX(var(--vsidian-ln-scale, 1));
-  transform-origin: right center;
 }
 
 /* 标题实时预览（#5 切片）：类名为稳定样式入口（ADR-0004），字号/字重

@@ -269,7 +269,6 @@ interface ViewState {
     count: number
     first: string | null
     last: string | null
-    scaleX: number | null
   }
   /** 绘制层探针（P0 回归）：正文可见性 / CM6 注入样式存活 / 行号禁选 */
   paint?: {
@@ -2440,8 +2439,13 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await openWithEditor('typography.md')
     await waitSessionReady('typography.md')
     const uri = wsUri('typography.md').toString()
+    // 行号开启时 live 正文向右内缩（行号列+固定间距占宽，#34 流内列布局），
+    // 左留白对照须在行号关闭态进行（此时两模式正文同处 --vsidian-content-
+    // padding-inline 基线）；字体族/字号/行高不受布局影响
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': false })
     const live = await waitViewState('typography.md', (v) =>
       v.viewMode === 'live' &&
+      v.lineGutter?.on === false &&
       v.typography?.live != null &&
       v.typography.live.fontSizePx != null &&
       v.typography.live.lineHeightPx != null &&
@@ -2471,6 +2475,9 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(s0.appliedEdits === 0, `切换后不得产生写回，实际 ${s0.appliedEdits}`)
     const doc = await vscode.workspace.openTextDocument(wsUri('typography.md'))
     assert(!doc.isDirty, '切换不得触发保存')
+    // 还原默认行号开启（跨用例状态清理，同 #34 既有用例约定）
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
+    await waitViewState('typography.md', (v) => v.lineGutter?.on === true)
   }],
 
   ['两模式列表/引用/表格基础排版一致（#32）', async () => {
@@ -2856,23 +2863,23 @@ export const cases: Array<[string, () => Promise<void>]> = [
       `切回后末行号应为 ${back.lineCount}，实际 ${String(back.lineGutter!.last)}`)
   }],
 
-  ['大文档行号 DOM 有界、宽编号降级且开关行号不动正文基线', async () => {
+  ['大文档行号 DOM 有界、流内列不覆盖正文且开关正文内缩（#34 布局契约）', async () => {
     await openWithEditor('large.md')
     await waitSessionReady('large.md')
     const uri = wsUri('large.md').toString()
-    // 初始视口在顶部：行号 DOM 有界（远小于 10 万行），短行号不压缩
+    // 初始视口在顶部：行号 DOM 有界（远小于 10 万行）
     const top = await waitViewState('large.md', (v) => (v.lineGutter?.count ?? 0) > 0)
     const topG = top.lineGutter!
     assert(topG.count > 0 && topG.count < 2000,
       `行号 DOM 应有界（视口级），实际 ${topG.count}`)
     assert(topG.first === '1', '顶部行号从 1 起')
-    assert(topG.scaleX === 1, `短行号不应压缩，实际 scaleX=${String(topG.scaleX)}`)
-    // 开关行号不动 #32 正文基线：留白带内叠加，正文左缘 textInsetPx 不变
+    // 流内列布局（用户修订 #32 旧契约）：开启行号时正文左缘 = 页面留白 +
+    // 行号列 + 固定间距，即比关闭态右移（列宽随位数自适应，无降级机制）
     const insetOn = top.typography?.live?.textInsetPx
-    assert(typeof insetOn === 'number' && Math.abs(insetOn - 24) < 1,
-      `开启行号时正文左缘应为 24px 基线，实际 ${String(insetOn)}`)
+    assert(typeof insetOn === 'number' && insetOn > 24,
+      `开启行号时正文左缘应右移到留白之外（> 24px），实际 ${String(insetOn)}`)
 
-    // 滚动到底部：行号达 6 位（10 万行），降级档位收紧（scale < 1）。
+    // 滚动到底部：行号达 6 位（10 万行），列宽自适应变宽、正文相应再内缩。
     // 经正式定位消息 view.locate 驱动（scrollIntoView 官方滚动路径）
     await vscode.commands.executeCommand(CMD.postToPanel, uri, {
       kind: 'view.locate',
@@ -2880,29 +2887,28 @@ export const cases: Array<[string, () => Promise<void>]> = [
     })
     const bottom = await waitViewState('large.md', (v) =>
       (v.lineGutter?.last ?? '').length >= 6 && v.lineGutter?.on === true)
-    const bottomG = bottom.lineGutter!
-    assert(bottomG.scaleX !== null && bottomG.scaleX < 1,
-      `6 位行号应启用水平压缩（scale < 1），实际 ${String(bottomG.scaleX)}`)
-    assert(bottomG.scaleX! > 0.4, `压缩下限应保可辨认（> 0.4），实际 ${bottomG.scaleX}`)
     const insetBottom = bottom.typography?.live?.textInsetPx
     assert(typeof insetBottom === 'number' && Math.abs(insetBottom - insetOn!) < 1,
-      `宽编号降级不得移动正文基线（${insetOn} → ${String(insetBottom)}）`)
+      `滚动全程列宽应稳定（CM6 按文档最大行号预留列宽，正文内缩量恒定：` +
+        `${insetOn} → ${String(insetBottom)}）——列宽自适应取代 scaleX 压缩的收益`)
 
-    // 滚回顶部：档位放松回 1（视口行号位数驱动）
+    // 滚回顶部：列宽随位数回落，正文内缩量回到顶部档
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: 0 })
-    const backTop = await waitViewState('large.md', (v) => v.lineGutter?.scaleX === 1)
-    assert(backTop.lineGutter!.first === '1', '滚回顶部后行号从 1 起')
+    const backTop = await waitViewState('large.md', (v) => v.lineGutter?.first === '1' && (v.lineGutter?.count ?? 0) > 0)
+    const insetBack = backTop.typography?.live?.textInsetPx
+    assert(typeof insetBack === 'number' && Math.abs(insetBack - insetOn!) < 1,
+      `滚回顶部后正文内缩量应回落（${insetOn} → ${String(insetBack)}）`)
 
-    // 关闭行号后正文基线仍不变（负边距方案的净占位为 0）
+    // 关闭行号：列整体卸载，正文回到 24px 页面留白基线（= 阅读模式基线）
     await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': false })
     const off = await waitViewState('large.md', (v) => v.lineGutter?.on === false && v.lineGutter?.count === 0)
     const insetOff = off.typography?.live?.textInsetPx
-    assert(typeof insetOff === 'number' && Math.abs(insetOff - insetOn!) < 1,
-      `关闭行号后正文左缘应保持 24px 基线（${insetOn} → ${String(insetOff)}）`)
+    assert(typeof insetOff === 'number' && Math.abs(insetOff - 24) < 1,
+      `关闭行号后正文左缘应回到 24px 基线（实际 ${String(insetOff)}）`)
     // 恢复默认开启
     await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
     await waitViewState('large.md', (v) => v.lineGutter?.on === true && (v.lineGutter?.count ?? 0) > 0)
-    console.log(`[#34] large.md：顶部 DOM=${topG.count}（有界），底部行号 ${String(bottomG.last)} scaleX=${bottomG.scaleX}，基线 ${insetOn}px 恒定`)
+    console.log(`[#34] large.md：顶部 DOM=${topG.count}（有界），开启内缩 ${insetOn}px 恒定（列宽按 10 万行 6 位预留，滚动无回流），关闭基线 ${insetOff}px`)
   }],
 
   ['文档中部插入/粘贴多行与删除表格行后行号随源文更新', async () => {
