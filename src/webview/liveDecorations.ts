@@ -54,6 +54,7 @@ import {
   escapedPipeBackslashes,
   parseTableDelimiter,
   splitTableRowCells,
+  tableRowCellsForColumns,
   type TableAlign,
 } from './tableCells'
 
@@ -285,7 +286,7 @@ function tableGridPlan(doc: Text, table: SyntaxNode): TableGridPlan | null {
   }
   for (const lineNo of rows.keys()) {
     tableGridStats.rowsScanned += 1
-    if (splitTableRowCells(doc.line(lineNo).text, 0).length !== columns) {
+    if (!tableRowCellsForColumns(doc.line(lineNo).text, 0, columns)) {
       return null
     }
   }
@@ -376,11 +377,14 @@ function emitTableRowMarks(
   node: SyntaxNode,
   path: SyntaxNode[],
   grid: boolean,
+  columns?: number,
 ): void {
   const line = doc.lineAt(node.from)
   const header = node.name === 'TableHeader'
   const aligns = tableAlignsOf(doc, tableAncestor(path))
-  const cells = splitTableRowCells(line.text, line.from)
+  const cells = grid && columns
+    ? tableRowCellsForColumns(line.text, line.from, columns) ?? []
+    : splitTableRowCells(line.text, line.from)
   for (let col = 0; col < cells.length; col++) {
     const cell = cells[col]!
     if (grid) {
@@ -584,7 +588,7 @@ function emitForRange(
         if (lineNo >= fromLine && lineNo <= toLine) {
           addLineCls(lineNo, LIVE_CLASS_NAMES.tableHeaderLine)
           const grid = gridPlans.get(tableAncestor(path)?.from ?? -1)
-          emitTableRowMarks(out, doc, node, path, Boolean(grid && gridLines.has(lineNo)))
+          emitTableRowMarks(out, doc, node, path, Boolean(grid && gridLines.has(lineNo)), grid?.columns)
         }
         return
       }
@@ -592,7 +596,7 @@ function emitForRange(
         const lineNo = doc.lineAt(node.from).number
         if (lineNo >= fromLine && lineNo <= toLine) {
           const grid = gridPlans.get(tableAncestor(path)?.from ?? -1)
-          emitTableRowMarks(out, doc, node, path, Boolean(grid && gridLines.has(lineNo)))
+          emitTableRowMarks(out, doc, node, path, Boolean(grid && gridLines.has(lineNo)), grid?.columns)
         }
         return
       }
@@ -1132,7 +1136,8 @@ function clampGridCellPointer(event: MouseEvent, view: EditorView, useSelection:
   const column = [...row.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')].indexOf(cell)
   if (column < 0) return false
   const line = view.state.doc.lineAt(view.posAtDOM(row, 0))
-  const range = splitTableRowCells(line.text, line.from)[column]
+  const range = tableRowCellsForColumns(line.text, line.from,
+    row.querySelectorAll(':scope > .vsidian-table-grid-cell').length)?.[column]
   if (!range) return false
   const from = range.contentFrom
   const to = range.contentTo
