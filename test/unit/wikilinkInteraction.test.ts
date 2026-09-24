@@ -2,13 +2,13 @@
 // 双链显示与跳转意图的 webview 契约（工单 #11）：
 // - live 视图：非活动行 `[[…]]` 整体替换为显示文字 widget（vsidian-wikilink
 //   稳定类名）、活动行显示源码（mark 标记）；围栏代码与行内代码内不装饰
-// - live Ctrl/Cmd+单击 = wikilink.activate 上报（原始 target + 源区间）；
-//   普通单击不产生意图；嵌入/块引用形态不上报
+// - live 渲染态单击或 Ctrl/Cmd+单击 = wikilink.activate 上报；
+//   源码态普通单击编辑，嵌入/块引用形态不上报
 // - 阅读视图：合法双链渲染为 a.vsidian-wikilink（href=原文 target，显示别名
 //   或链接名）；单击上报意图；嵌入与块引用按原文显示
 // - 全程零写回（显示与跳转意图不改文档）
 // - 新增协议消息（wikilink.activate）与探针字段的结构校验
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { EditorView } from '@codemirror/view'
 import { EditorState } from '@codemirror/state'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
@@ -153,7 +153,79 @@ describe('实时预览：双链间接装饰（视口内、非活动行替换显�
   })
 })
 
-describe('实时预览：Ctrl/Cmd+单击 = wikilink.activate 上报', () => {
+describe('实时预览：渲染态双链单击跳转，源码态普通单击编辑', () => {
+  it('非活动行渲染的双链普通单击也执行跳转', () => {
+    const h = makeBridge()
+    const c = mount(h, '普通行\n\n[[目标笔记]]\n')
+    const view = c.getView()!
+    const widget = host.querySelector<HTMLElement>('.vsidian-wikilink')!
+    expect(widget).not.toBeNull()
+    const pos = view.state.doc.toString().indexOf('目标笔记')
+    const hit = vi.spyOn(view, 'posAtCoords').mockReturnValue(pos)
+    try {
+      const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 })
+      widget.dispatchEvent(event)
+      expect(sentOf(h, 'wikilink.activate')).toHaveLength(0)
+      view.contentDOM.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }))
+      expect(sentOf(h, 'wikilink.activate')).toHaveLength(1)
+    } finally {
+      hit.mockRestore()
+      c.dispose()
+    }
+  })
+
+  it('渲染双链上开始拖选时不跳转', () => {
+    const h = makeBridge()
+    const c = mount(h, '普通行\n\n[[目标笔记]]\n')
+    const view = c.getView()!
+    const widget = host.querySelector<HTMLElement>('.vsidian-wikilink')!
+    const pos = view.state.doc.toString().indexOf('目标笔记')
+    const hit = vi.spyOn(view, 'posAtCoords').mockReturnValue(pos)
+    try {
+      widget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }))
+      view.contentDOM.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, clientX: 40, clientY: 10 }))
+      expect(sentOf(h, 'wikilink.activate')).toHaveLength(0)
+    } finally {
+      hit.mockRestore()
+      c.dispose()
+    }
+  })
+
+  it('活动行源码态的普通 mousedown 不触发跳转', () => {
+    const h = makeBridge()
+    const c = mount(h, '普通行\n\n[[目标笔记]]\n')
+    const view = c.getView()!
+    const pos = view.state.doc.toString().indexOf('目标笔记')
+    view.dispatch({ selection: { anchor: pos } })
+    const mark = host.querySelector<HTMLElement>('.vsidian-wikilink')!
+    expect(mark).not.toBeNull()
+    const hit = vi.spyOn(view, 'posAtCoords').mockReturnValue(pos)
+    try {
+      mark.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+      expect(sentOf(h, 'wikilink.activate')).toHaveLength(0)
+    } finally {
+      hit.mockRestore()
+      c.dispose()
+    }
+  })
+
+  it('非活动行真实 widget 的 Ctrl+mousedown 经编辑器事件路由上报双链', () => {
+    const h = makeBridge()
+    const c = mount(h, '普通行\n\n[[目标笔记]]\n')
+    const view = c.getView()!
+    const widget = host.querySelector<HTMLElement>('.vsidian-wikilink')!
+    expect(widget).not.toBeNull()
+    const pos = view.state.doc.toString().indexOf('目标笔记')
+    const hit = vi.spyOn(view, 'posAtCoords').mockReturnValue(pos)
+    try {
+      widget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, ctrlKey: true }))
+      expect(sentOf(h, 'wikilink.activate')).toHaveLength(1)
+    } finally {
+      hit.mockRestore()
+      c.dispose()
+    }
+  })
+
   function liveWithDoc(): { view: EditorView; parent: HTMLElement } {
     const state = EditorState.create({ doc: WIKILINK_DOC, extensions: [liveDecorationsField] })
     const parent = document.createElement('div')

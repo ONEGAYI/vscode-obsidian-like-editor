@@ -1,6 +1,6 @@
 # MVP GitHub Issue 索引
 
-已根据用户批准的 MVP 与后续性能要求开票，2026-09-23。2026-09-24 更新：#2–#15 均已实现并通过验收（工单流见各 Issue；性能与人工验证记录见 docs/perf/ 与 docs/specs/manual-verification.md）。
+已根据用户批准的 MVP 与后续性能要求开票，2026-09-23。#2–#15 已完成原定实施与当时的代理自动化回归；#1 的整体验收仍受后续缺口与人工验证约束，不能把代理自检写作用户验收。
 
 - [MVP 规格与总览 #1](https://github.com/ONEGAYI/vsidian/issues/1)
 - [本地规格](mvp.md)
@@ -24,13 +24,30 @@
 | #14 | feat: 编辑区查找与屏外匹配定位 | #8 |
 | #15 | chore: 打包 MVP 并验收 1.86、Remote SSH 与长文档性能 | #9, #11, #13, #14 |
 
+## #1 规格票复核的后续工单
+
+以下工单由 2026-09-24 的规格复核产生。编号链接指向实时状态；本工作树的代码与性能自检不等于这些 Issue 已关闭或用户已验收。
+
+| Issue | 待验事项 | Blocked by |
+| --- | --- | --- |
+| [#21](https://github.com/ONEGAYI/vsidian/issues/21) | 冲突后快速关闭时保留最后一笔输入 | 无 |
+| [#22](https://github.com/ONEGAYI/vsidian/issues/22) | 阅读表格的行内代码管道符不切列 | 无 |
+| [#23](https://github.com/ONEGAYI/vsidian/issues/23) | 超长行与图片密集性能专项 | 无 |
+| [#24](https://github.com/ONEGAYI/vsidian/issues/24) | 10 KB／100 KB／1 MB 档与完整装载计时 | 无 |
+| [#25](https://github.com/ONEGAYI/vsidian/issues/25) | 规格、测试计数与验收状态说明一致 | 无 |
+| [#26](https://github.com/ONEGAYI/vsidian/issues/26) | 本机人工交互验收 | #21、#22 |
+| [#27](https://github.com/ONEGAYI/vsidian/issues/27) | 日常安装、新版 Windows 与远端环境验证 | #21、#22 |
+| [#28](https://github.com/ONEGAYI/vsidian/issues/28) | live 渲染链接单击跳转缺陷 | 无 |
+| [#29](https://github.com/ONEGAYI/vsidian/issues/29) | 活动位置 Markdown 标记呈现规则待决策 | 无 |
+| [#30](https://github.com/ONEGAYI/vsidian/issues/30) | 阅读模式标题字号过大，与实时预览不一致 | 无 |
+
 ## 后续路线
 
 - 二期范围：#16
 - 二期 CSS 片段与 Obsidian 选择器：#17（一期 #6 预留，后续语法票维护入口）
 - 三期插件上插件调研：#18
 
-上述父子与阻塞关系已使用 GitHub 原生关系建立；正文保留 Blocked by 以便工具读取。沿用仓库现有标签，不新建 triage 标签；可实施状态以阻塞关系为准。
+原实施票的父子与阻塞关系已使用 GitHub 原生关系建立；后续票的正文写明 Blocked by。沿用仓库现有标签，不新建 triage 标签；可实施状态以阻塞关系为准。
 
 
 上表中的编号对应 `ONEGAYI/vsidian`；实时状态以 GitHub 为准。

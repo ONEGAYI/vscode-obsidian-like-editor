@@ -9,24 +9,49 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { generatePerfSample, generateReadingSample, generateGiantBlockSample } from './gen-sample.mjs'
+import {
+  generatePerfSample,
+  generateReadingSample,
+  generateGiantBlockSample,
+  generateSampleNearBytes,
+  generateLongLineSample,
+  generateImageDenseSample,
+} from './gen-sample.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const outDir = process.argv[2] ?? path.join(root, 'docs', 'perf', 'data')
 const SIZES = [
-  ['1k', 1_000],
-  ['10k', 10_000],
-  ['100k', 100_000],
+  { name: '1k', lines: 1_000 },
+  { name: '10k', lines: 10_000 },
+  { name: '100k', lines: 100_000 },
+  { name: '10kb', targetBytes: 10 * 1024 },
+  { name: '100kb', targetBytes: 100 * 1024 },
+  { name: '1mb', targetBytes: 1024 * 1024 },
 ]
 
 const wsDir = mkdtempSync(path.join(tmpdir(), 'vsidian-perf-'))
 try {
-  for (const [name, lines] of SIZES) {
-    writeFileSync(path.join(wsDir, `perf-${name}.md`), generatePerfSample(lines), 'utf8')
-    writeFileSync(path.join(wsDir, `reading-${name}.md`), generateReadingSample(lines), 'utf8')
+  for (const sample of SIZES) {
+    const live = sample.lines
+      ? generatePerfSample(sample.lines)
+      : generateSampleNearBytes(sample.targetBytes, generatePerfSample)
+    const reading = sample.lines
+      ? generateReadingSample(sample.lines)
+      : generateSampleNearBytes(sample.targetBytes, generateReadingSample)
+    writeFileSync(path.join(wsDir, `perf-${sample.name}.md`), live, 'utf8')
+    writeFileSync(path.join(wsDir, `reading-${sample.name}.md`), reading, 'utf8')
   }
   // 超大单块（#7 限制记录）：2 万行未拆分围栏
   writeFileSync(path.join(wsDir, 'reading-giant.md'), generateGiantBlockSample(20_000), 'utf8')
+  writeFileSync(path.join(wsDir, 'perf-longline.md'), generateLongLineSample(), 'utf8')
+  writeFileSync(path.join(wsDir, 'perf-images.md'), generateImageDenseSample(), 'utf8')
+  for (let i = 0; i < 24; i++) {
+    const width = 320 + (i % 4) * 80
+    const height = 180 + (i % 6) * 60
+    writeFileSync(path.join(wsDir, `probe-${i}.svg`),
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="${width}" height="${height}" fill="#5979a9"/></svg>`,
+      'utf8')
+  }
   mkdirSync(outDir, { recursive: true })
   console.log(`[runPerf] fixture 工作区：${wsDir}`)
   console.log(`[runPerf] 报告目录：${outDir}`)
@@ -38,7 +63,7 @@ try {
     extensionTestsEnv: {
       WORKSPACE_DIR: wsDir,
       PERF_REPORT_DIR: outDir,
-      PERF_SIZES: SIZES.map(([n]) => n).join(','),
+      PERF_SIZES: SIZES.map((sample) => sample.name).join(','),
       // 测量经 _test.* 钩子命令驱动探针（与集成测试同一开关）
       VSIDIAN_TEST_HOOKS: '1',
     },

@@ -23,7 +23,7 @@ import {
 } from './wikilinkTarget'
 import { parseWikilinkInner } from '../shared/wikilink'
 import { NewlineCoordinator } from '../shared/newline'
-import type { HostToWebview, SerChange, TableEditOp } from '../shared/protocol'
+import { isWebviewToHost, type HostToWebview, type SerChange, type TableEditOp } from '../shared/protocol'
 
 export const VIEW_TYPE = 'onegayi.vsidian.editor'
 
@@ -114,6 +114,7 @@ export function createTextEditorProvider(
   context: vscode.ExtensionContext,
 ): vscode.CustomTextEditorProvider {
   const sessions = new Map<string, SessionEntry>()
+  let lastClosedInput: { docUri: string; webviewText?: string; fragments: string[] } | undefined
 
   const getEntry = (uri: vscode.Uri): SessionEntry | undefined =>
     sessions.get(uri.toString())
@@ -199,7 +200,10 @@ export function createTextEditorProvider(
     }
     // panel-closed-with-input：面板关闭（或 SSH 断连触发的 dispose）时未确认
     // 输入仍在宿主快照中——提示取回，不得误报已保存。文本优先取 webview
-    // 防抖重报的全文快照（R-1：含暂停后新输入与暂缓集内容），回退逐笔片段
+    // 即时上报的全文快照（#21：含暂停后新输入与暂缓集内容），回退逐笔片段
+    if (process.env.VSIDIAN_TEST_HOOKS === '1') {
+      lastClosedInput = { docUri: notice.docUri, webviewText: notice.webviewText, fragments: notice.fragments }
+    }
     const closedText = notice.webviewText ?? notice.fragments.join('\n')
     void vscode.window
       .showWarningMessage(
@@ -470,6 +474,12 @@ export function createTextEditorProvider(
       entry.panels.set(sessionId, webviewPanel)
 
       const messageSub = webviewPanel.webview.onDidReceiveMessage((message) => {
+        if (process.env.VSIDIAN_TEST_HOOKS === '1' && isWebviewToHost(message) &&
+          message.kind === 'sync.test.close' && message.sessionId === sessionId &&
+          message.docUri === document.uri.toString()) {
+          webviewPanel.dispose()
+          return
+        }
         void entry.session.handleWebviewMessage(message, sessionId)
       })
       const closeSub = webviewPanel.onDidDispose(() => {
@@ -671,6 +681,10 @@ export function createTextEditorProvider(
       },
     ),
     vscode.commands.registerCommand(
+      'onegayi.vsidian._test.getLastClosedInput',
+      () => lastClosedInput,
+    ),
+    vscode.commands.registerCommand(
       // 宿主缓存的 view.state（模式主动回报的观测面）：断言宿主侧写命令
       // 拦截所依据的 viewMode 缓存已就位/常新
       'onegayi.vsidian._test.getPanelViewStateCache',
@@ -682,6 +696,14 @@ export function createTextEditorProvider(
         }
         const cached = entry.session.getViewState(panel.sessionId)
         return { found: cached !== undefined, viewMode: cached?.viewMode }
+      },
+    ),
+    vscode.commands.registerCommand(
+      'onegayi.vsidian._test.getCachedViewState',
+      (uriStr: string, panelIndex = 0) => {
+        const entry = getEntry(vscode.Uri.parse(uriStr))
+        const panel = entry?.session.getInfo().panels[panelIndex]
+        return panel ? entry?.session.getViewState(panel.sessionId) : undefined
       },
     ),
     vscode.commands.registerCommand(

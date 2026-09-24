@@ -2,8 +2,8 @@
 // 执行性能探针并把报告写盘。由 test/perf/runPerf.mjs 启动，不经 npm test。
 //
 // 测量项（对应 mvp.md「MVP 性能契约」）：
-// - 打开耗时（#15 档位补全）：openWith 命令发出 → webview ready 握手
-//   （宿主侧 Date.now 轮询，档位口径非微基准；25ms 轮询压缩量化粒度）
+// - 打开耗时：分别记录 webview ready、init 后有内容 DOM、首次探针输入完成
+//   （前两者为宿主轮询，第三项为 webview 内 Date.now 时间戳）
 // - 打开装载后的基线 DOM 数（view.state 快照）
 // - 输入延迟（50 轮逐字符插入+删除，每轮含 2×rAF 稳定等待）
 // - 长任务（PerformanceObserver longtask）
@@ -14,6 +14,7 @@ const VIEW_TYPE = 'onegayi.vsidian.editor'
 const CMD = {
   sessionState: 'onegayi.vsidian._test.getSessionState',
   viewState: 'onegayi.vsidian._test.requestViewState',
+  cachedViewState: 'onegayi.vsidian._test.getCachedViewState',
   perfProbe: 'onegayi.vsidian._test.perfProbe',
   readingPerf: 'onegayi.vsidian._test.readingPerf',
   toggleViewMode: 'onegayi.vsidian.toggleViewMode',
@@ -33,6 +34,7 @@ interface ViewState {
   contentDomCount?: number
   headingLineCount?: number
   viewMode?: 'live' | 'reading'
+  imageStates?: { loading: number; loaded: number; error: number }
 }
 
 interface PerfSnapshot {
@@ -46,6 +48,7 @@ interface PerfReport {
   typingRounds: number
   scrollRounds: number
   docLines: number
+  firstInputSettledEpochMs: number
   baseline: PerfSnapshot
   afterTyping: PerfSnapshot
   afterScroll: PerfSnapshot
@@ -93,14 +96,21 @@ async function poll<T>(
 }
 
 /**
- * #15 打开档位：openWith 命令发出 → webview ready 握手的耗时。
- * 口径为宿主侧 Date.now（含命令派发、面板创建与 webview 脚本加载；档位
- * 口径非微基准），25ms 轮询与模式切换同粒度以压缩量化误差。不含 ready
- * 之后 init 全文装载（装载量另由基线 DOM 快照与切换档位覆盖）。
+ * 打开档位：分别等待宿主 ready 握手与 webview 装载非空全文、产生内容
+ * DOM，再实际执行一次探针输入。首次输入经 CM6 dispatch 与两个 rAF 稳定
+ * 等待，属于真实编辑路径的可用性代理，包含测试命令调度开销。
  */
 async function openWithTiming(
   file: string,
-): Promise<{ uri: vscode.Uri; openToReadyMs: number; pollIntervalMs: number }> {
+): Promise<{
+  uri: vscode.Uri
+  view: ViewState
+  byteSize: number
+  openToReadyMs: number
+  openToEditableMs: number
+  openToFirstInputMs: number
+  pollIntervalMs: number
+}> {
   const uri = vscode.Uri.file(`${wsDir}/${file}`)
   const pollMs = 25
   const t0 = Date.now()
@@ -116,7 +126,20 @@ async function openWithTiming(
     30000,
     pollMs,
   )
-  return { uri, openToReadyMs: Date.now() - t0, pollIntervalMs: pollMs }
+  const openToReadyMs = Date.now() - t0
+  const view = await poll(`全文可编辑 ${file}`, async () => {
+    const v = (await vscode.commands.executeCommand(CMD.cachedViewState, uri.toString())) as ViewState | undefined
+    return v && v.docLength > 0 && (v.contentDomCount ?? 0) > 0 ? v : undefined
+  }, 30000, pollMs)
+  const openToEditableMs = Date.now() - t0
+  const byteSize = (await vscode.workspace.fs.stat(uri)).size
+  const firstProbe = (await vscode.commands.executeCommand(CMD.perfProbe, uri.toString(),
+    { typingRounds: 1, scrollRounds: 1 })) as PerfReport | undefined
+  if (!firstProbe || firstProbe.firstInputSettledEpochMs < t0) {
+    throw new Error(`首次输入探针无有效时间戳：${file}`)
+  }
+  const openToFirstInputMs = firstProbe.firstInputSettledEpochMs - t0
+  return { uri, view, byteSize, openToReadyMs, openToEditableMs, openToFirstInputMs, pollIntervalMs: pollMs }
 }
 
 export async function run(): Promise<void> {
@@ -126,12 +149,7 @@ export async function run(): Promise<void> {
 
   for (const size of samples) {
     const file = `perf-${size}.md`
-    const { uri, openToReadyMs, pollIntervalMs } = await openWithTiming(file)
-    // 装载后的基线快照（view.state 含 DOM 计数）
-    const view = await poll(`视图状态 ${file}`, async () => {
-      const v = (await vscode.commands.executeCommand(CMD.viewState, uri.toString())) as ViewState | undefined
-      return v && (v.contentDomCount ?? -1) > 0 ? v : undefined
-    })
+    const { uri, view, byteSize, openToReadyMs, openToEditableMs, openToFirstInputMs, pollIntervalMs } = await openWithTiming(file)
     const report = (await vscode.commands.executeCommand(
       CMD.perfProbe,
       uri.toString(),
@@ -142,7 +160,8 @@ export async function run(): Promise<void> {
     }
     sampleStore[size] = {
       file,
-      open: { openToReadyMs, pollIntervalMs },
+      byteSize,
+      open: { openToReadyMs, openToEditableMs, openToFirstInputMs, pollIntervalMs },
       lineCount: view.lineCount,
       docLength: view.docLength,
       baselineViewState: {
@@ -152,20 +171,23 @@ export async function run(): Promise<void> {
       },
       report,
     }
-    console.log(`[perf] ${size} 打开：openWith → ready ${openToReadyMs}ms（轮询粒度 ${pollIntervalMs}ms）`)
+    console.log(`[perf] ${size} 打开：${byteSize} bytes，ready ${openToReadyMs}ms，内容装载 ${openToEditableMs}ms，首次输入 ${openToFirstInputMs}ms（轮询粒度 ${pollIntervalMs}ms）`)
     console.log(`[perf] ${size} 完成：基线 DOM ${report.baseline.contentDomCount}，输入 avg ${report.inputDelayMs.avgMs.toFixed(1)}ms / max ${report.inputDelayMs.maxMs.toFixed(1)}ms`)
 
     // #7 阅读视图按需挂载：同体量的每行一块样例，切换 reading 后测量
     const readingFile = `reading-${size}.md`
     const {
       uri: readingUri,
+      byteSize: readingByteSize,
       openToReadyMs: readingOpenMs,
+      openToEditableMs: readingEditableMs,
+      openToFirstInputMs: readingFirstInputMs,
       pollIntervalMs: readingPollMs,
     } = await openWithTiming(readingFile)
     // #15 模式切换档位：live → reading（细粒度轮询压缩计时量化误差）
     const switchPollMs = 25
-    await vscode.commands.executeCommand(CMD.toggleViewMode)
     const tToReading = Date.now()
+    await vscode.commands.executeCommand(CMD.toggleViewMode)
     const readingView = await poll(
       `阅读模式虚拟化 ${readingFile}`,
       async () => {
@@ -187,8 +209,8 @@ export async function run(): Promise<void> {
       throw new Error(`阅读探针无报告：${readingFile}`)
     }
     // #15 模式切换档位：reading → live（CM6 重建完成判据：viewMode=live 且已渲染行）
-    await vscode.commands.executeCommand(CMD.toggleViewMode)
     const tToLive = Date.now()
+    await vscode.commands.executeCommand(CMD.toggleViewMode)
     await poll(
       `切回 live ${readingFile}`,
       async () => {
@@ -203,7 +225,8 @@ export async function run(): Promise<void> {
     const toLiveMs = Date.now() - tToLive
     sampleStore[size]!['reading'] = {
       file: readingFile,
-      open: { openToReadyMs: readingOpenMs, pollIntervalMs: readingPollMs },
+      byteSize: readingByteSize,
+      open: { openToReadyMs: readingOpenMs, openToEditableMs: readingEditableMs, openToFirstInputMs: readingFirstInputMs, pollIntervalMs: readingPollMs },
       totalBlocks: readingView.readingTotalBlocks,
       mountedBaseline: readingView.readingMountedBlocks,
       domBaseline: readingView.readingContentDomCount,
@@ -241,6 +264,58 @@ export async function run(): Promise<void> {
     console.log(`[perf] 大围栏细分：块模型 ${giantView.readingTotalBlocks}（2 万行围栏切为多片），挂载 ${giantView.readingMountedBlocks}，容器元素 ${giantView.readingContentDomCount}，进入 reading 轮询耗时 ${mountMs}ms`)
     await vscode.commands.executeCommand('workbench.action.closeAllEditors')
   }
+
+  // #23：超长行与图片密集文档分别测两种视图。两类不是同构短行档，
+  // 数据单列，避免把大块布局例外混入 1k/10k/100k 的 DOM 比率比较。
+  const boundaryShapes: Record<string, unknown> = {}
+  for (const [shape, file] of [['longLine', 'perf-longline.md'], ['imageDense', 'perf-images.md']]) {
+    const { uri, view, byteSize, openToReadyMs, openToEditableMs, openToFirstInputMs, pollIntervalMs } = await openWithTiming(file)
+    const liveReport = (await vscode.commands.executeCommand(CMD.perfProbe, uri.toString(),
+      { typingRounds: 10, scrollRounds: 6 })) as PerfReport | undefined
+    if (!liveReport) {
+      throw new Error(`边界形态 live 探针无报告：${file}`)
+    }
+    const toReadingStart = Date.now()
+    await vscode.commands.executeCommand(CMD.toggleViewMode)
+    const readingView = await poll(`边界形态阅读装载 ${file}`, async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri.toString())) as
+        | (ViewState & ReadingViewState) | undefined
+      return v?.viewMode === 'reading' && v.readingVirtualized === true ? v : undefined
+    }, 30000, 25)
+    const toReadingMs = Date.now() - toReadingStart
+    const loadedImages = shape === 'imageDense'
+      ? await poll(`图片密集样例加载 ${file}`, async () => {
+        const v = (await vscode.commands.executeCommand(CMD.viewState, uri.toString())) as ViewState | undefined
+        const states = v?.imageStates
+        return states && states.loaded > 0 && states.loading === 0 ? states : undefined
+      }, 10000, 100)
+      : undefined
+    const readingReport = (await vscode.commands.executeCommand(CMD.readingPerf, uri.toString(),
+      { scrollRounds: 6 })) as ReadingPerfReport | undefined
+    if (!readingReport?.ok) {
+      throw new Error(`边界形态 reading 探针无报告：${file}`)
+    }
+    const toLiveStart = Date.now()
+    await vscode.commands.executeCommand(CMD.toggleViewMode)
+    await poll(`边界形态返回 live ${file}`, async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri.toString())) as ViewState | undefined
+      return v?.viewMode === 'live' && v.renderedLines > 0 ? v : undefined
+    }, 30000, 25)
+    boundaryShapes[shape] = {
+      file, byteSize, lineCount: view.lineCount,
+      open: { openToReadyMs, openToEditableMs, openToFirstInputMs, pollIntervalMs },
+      live: liveReport,
+      reading: {
+        totalBlocks: readingView.readingTotalBlocks,
+        imageStatesAfterLoad: loadedImages,
+        report: readingReport,
+      },
+      modeSwitch: { toReadingMs, toLiveMs: Date.now() - toLiveStart, pollIntervalMs: 25 },
+    }
+    console.log(`[perf] ${shape}：${byteSize} bytes；live DOM ${liveReport.baseline.contentDomCount}→${liveReport.afterScroll.contentDomCount}；reading 挂载 ${readingReport.baseline.mountedBlocks}→${readingReport.afterScroll.mountedBlocks}`)
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors')
+  }
+  results['boundaryShapes'] = boundaryShapes
 
   const { writeFileSync } = await import('node:fs')
   const { join } = await import('node:path')

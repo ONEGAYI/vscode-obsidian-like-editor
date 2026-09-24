@@ -69,11 +69,12 @@ describe('isWebviewToHost', () => {
   })
 
   it('接受合法 conflict.report，拒绝缺字段或类型错误', () => {
-    const base = { kind: 'conflict.report', sessionId: 's1', docUri: 'file:///a.md', version: 3, text: '本地全文' }
+    const base = { kind: 'conflict.report', sessionId: 's1', docUri: 'file:///a.md', version: 3, revision: 1, text: '本地全文' }
     expect(isWebviewToHost(base)).toBe(true)
     expect(isWebviewToHost({ ...base, sessionId: 1 })).toBe(false)
     expect(isWebviewToHost({ ...base, docUri: null })).toBe(false)
     expect(isWebviewToHost({ ...base, version: -1 })).toBe(false)
+    expect(isWebviewToHost({ ...base, revision: 0 })).toBe(false)
     expect(isWebviewToHost({ ...base, text: 42 })).toBe(false)
     expect(isWebviewToHost({ kind: 'conflict.report', sessionId: 's1', docUri: 'u', version: 1 })).toBe(false)
   })
@@ -235,6 +236,7 @@ describe('perf 探针协议（#5）', () => {
     typingRounds: 30,
     scrollRounds: 10,
     docLines: 1000,
+    firstInputSettledEpochMs: 1760000000000,
     baseline: { renderedLines: 60, contentDomCount: 500, headingLineCount: 3, inviewHeadingCount: 3 },
     afterTyping: { renderedLines: 60, contentDomCount: 501, headingLineCount: 3, inviewHeadingCount: 3 },
     afterScroll: { renderedLines: 61, contentDomCount: 505, headingLineCount: 3, inviewHeadingCount: 3 },
@@ -255,6 +257,9 @@ describe('perf 探针协议（#5）', () => {
 
   it('接受合法 perf.report', () => {
     expect(isWebviewToHost(validReport)).toBe(true)
+    expect(isWebviewToHost({ ...validReport, firstInputSettledEpochMs: -1 })).toBe(false)
+    const { firstInputSettledEpochMs: _timestamp, ...missingTimestamp } = validReport
+    expect(isWebviewToHost(missingTimestamp)).toBe(false)
   })
 
   it('接受 longTasks 为 null 的 perf.report（宿主不支持 longtask 观测）', () => {

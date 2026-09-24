@@ -275,8 +275,9 @@ describe('doc.resync 恢复与 session.suspended', () => {
     // 暂停态不发送写回
     c.getView()!.dispatch({ changes: { from: 0, insert: 'x' } })
     expect(editRequests(sent)).toHaveLength(0)
-    // 干净 webview 的 session.suspended 不产生 report（本地无未确认输入）
-    expect(conflictReports(sent)).toHaveLength(0)
+    // 重载时没有历史本地输入；新输入仍须立即留存在宿主侧。
+    expect(conflictReports(sent)).toHaveLength(1)
+    expect(conflictReports(sent)[0]).toMatchObject({ text: 'x权威全文' })
   })
 })
 
@@ -351,11 +352,11 @@ describe('view.state 暂停标记', () => {
   })
 })
 
-describe('暂停/暂缓态本地输入的快照刷新（R-1）', () => {
+describe('暂停/暂缓态本地输入的即时快照（#21）', () => {
   // 场景：conflict.report 仅在 enterSuspended 时刻上报一次（或暂缓集根本
   // 不上报）；此后暂停态继续输入或暂缓集累积的文本宿主拿不到——面板关闭/
   // 断连后「复制未确认输入」缺这部分内容。修复契约：暂停态与暂缓态的本地
-  // 输入变化后 500ms 防抖重发 conflict.report 刷新宿主全文快照。
+  // 每次输入变化后立即刷新宿主快照，关闭面板前不得留下防抖空窗。
   afterEach(() => {
     vi.useRealTimers()
   })
@@ -371,7 +372,7 @@ describe('暂停/暂缓态本地输入的快照刷新（R-1）', () => {
     })
   }
 
-  it('暂停后继续输入：防抖重发 conflict.report，快照含新输入全文', async () => {
+  it('暂停后继续输入：立即上报最新全文，关闭前无丢字窗口', async () => {
     vi.useFakeTimers()
     const { bridge, sent } = makeBridge()
     const { c } = mount(bridge)
@@ -380,8 +381,7 @@ describe('暂停/暂缓态本地输入的快照刷新（R-1）', () => {
     expect(conflictReports(sent)).toHaveLength(1)
 
     c.getView()!.dispatch({ changes: { from: 0, insert: '新增输入' } })
-    // 防抖窗口内不重发
-    expect(conflictReports(sent)).toHaveLength(1)
+    expect(conflictReports(sent)).toHaveLength(2)
     await vi.advanceTimersByTimeAsync(600)
     const reports = conflictReports(sent)
     expect(reports).toHaveLength(2)
@@ -392,7 +392,7 @@ describe('暂停/暂缓态本地输入的快照刷新（R-1）', () => {
     })
   })
 
-  it('暂停后多次输入合并为一次防抖重发', async () => {
+  it('暂停后多次输入按顺序更新快照，旧全文不会覆盖新全文', async () => {
     vi.useFakeTimers()
     const { bridge, sent } = makeBridge()
     const { c } = mount(bridge)
@@ -400,15 +400,15 @@ describe('暂停/暂缓态本地输入的快照刷新（R-1）', () => {
     suspendByOverlap(c)
     const before = conflictReports(sent).length
     c.getView()!.dispatch({ changes: { from: 0, insert: '一' } })
-    await vi.advanceTimersByTimeAsync(200)
+    expect(conflictReports(sent).at(-1)).toMatchObject({ text: '一abc我的替换' })
     c.getView()!.dispatch({ changes: { from: 1, insert: '二' } })
-    await vi.advanceTimersByTimeAsync(400)
-    // 第二次输入落在防抖窗口内：合并到同一次重发
-    expect(conflictReports(sent)).toHaveLength(before + 1)
+    expect(conflictReports(sent)).toHaveLength(before + 2)
     expect(conflictReports(sent).at(-1)).toMatchObject({ text: '一二abc我的替换' })
+    await vi.advanceTimersByTimeAsync(600)
+    expect(conflictReports(sent)).toHaveLength(before + 2)
   })
 
-  it('恢复（doc.resync）后挂起的防抖不再发 conflict.report', async () => {
+  it('恢复（doc.resync）后继续输入不再发 conflict.report', async () => {
     vi.useFakeTimers()
     const { bridge, sent } = makeBridge()
     const { c } = mount(bridge)
@@ -416,10 +416,11 @@ describe('暂停/暂缓态本地输入的快照刷新（R-1）', () => {
     suspendByOverlap(c)
     const before = conflictReports(sent).length
     c.getView()!.dispatch({ changes: { from: 0, insert: '新' } })
-    // 恢复先于防抖到期：此后不再处于暂停/暂缓态，重报不发出
+    expect(conflictReports(sent)).toHaveLength(before + 1)
     c.handleHostMessage({ kind: 'doc.resync', version: 3, text: '权威全文' })
+    c.getView()!.dispatch({ changes: { from: 0, insert: '后续' } })
     await vi.advanceTimersByTimeAsync(600)
-    expect(conflictReports(sent)).toHaveLength(before)
+    expect(conflictReports(sent)).toHaveLength(before + 1)
   })
 
   it('暂缓集形成时同样上报：宿主留存含在途+暂缓输入的全文', async () => {
@@ -433,13 +434,14 @@ describe('暂停/暂缓态本地输入的快照刷新（R-1）', () => {
     // 输入 B 触及 A（插入点落在未确认内容闭区间）→ 进暂缓集
     c.getView()!.dispatch({ changes: { from: 1, insert: 'B' } })
     expect(editRequests(sent).length).toBeGreaterThanOrEqual(1)
-    await vi.advanceTimersByTimeAsync(600)
     const reports = conflictReports(sent)
     expect(reports).toHaveLength(1)
     expect(reports[0]).toMatchObject({ text: 'ABabcdef' })
+    await vi.advanceTimersByTimeAsync(600)
+    expect(conflictReports(sent)).toHaveLength(1)
   })
 
-  it('dispose 清理挂起的防抖定时器：此后不再发出 conflict.report', async () => {
+  it('立即关闭前最新快照已经上报，dispose 后不再发送', async () => {
     vi.useFakeTimers()
     const { bridge, sent } = makeBridge()
     const { c } = mount(bridge)
@@ -447,8 +449,10 @@ describe('暂停/暂缓态本地输入的快照刷新（R-1）', () => {
     suspendByOverlap(c)
     const before = conflictReports(sent).length
     c.getView()!.dispatch({ changes: { from: 0, insert: '尾' } })
+    expect(conflictReports(sent)).toHaveLength(before + 1)
+    expect(conflictReports(sent).at(-1)).toMatchObject({ text: '尾abc我的替换' })
     c.dispose()
     await vi.advanceTimersByTimeAsync(600)
-    expect(conflictReports(sent)).toHaveLength(before)
+    expect(conflictReports(sent)).toHaveLength(before + 1)
   })
 })
