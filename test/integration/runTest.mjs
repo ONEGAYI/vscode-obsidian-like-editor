@@ -94,6 +94,19 @@ const TABLE_DOC = [
   '结尾段落。',
   '',
 ].join('\n')
+// #13 表格导航/结构操作样例：表格前后有段落（区域不变断言），含对齐、
+// 行内代码管道与转义管道
+const TABLE13_DOC = [
+  '前导段落甲。',
+  '',
+  '| 名字 | 数量 |',
+  '| --- | :---: |',
+  '| 苹果 | 3 |',
+  '| `x|y` | 4 |',
+  '',
+  '结尾段落乙。',
+  '',
+].join('\n')
 // #8 大围栏细分样例：120 行围栏（超过 FENCE_CHUNK_LINES=60，切为 3 片）
 const FENCE_CHUNK_DOC = (() => {
   const out = ['# 大围栏样例', '', '```text']
@@ -226,6 +239,7 @@ try {
   writeFileSync(path.join(wsDir, 'fence-chunk.md'), FENCE_CHUNK_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'task.md'), TASK_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'table.md'), TABLE_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'table13.md'), TABLE13_DOC, 'utf8')
   const largeLines = Array.from({ length: LARGE_LINES }, (_, i) => `第 ${i + 1} 行 ——固定宽度填充文本，用于长文档视口渲染验证——`)
   writeFileSync(path.join(wsDir, 'large.md'), largeLines.join('\n') + '\n', 'utf8')
   // 性能体量对比样例（#5）：同构普通段落 + 每 50 行一个二级标题

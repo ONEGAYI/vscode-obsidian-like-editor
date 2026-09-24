@@ -92,6 +92,20 @@ const TABLE_DOC_TEXT = [
   '',
 ].join('\n')
 
+// #13 表格导航/结构操作 fixture（与 runTest.mjs 的 TABLE13_DOC 字节一致）：
+// 表格前后有普通段落（区域不变断言），含对齐、行内代码管道
+const TABLE13_DOC_TEXT = [
+  '前导段落甲。',
+  '',
+  '| 名字 | 数量 |',
+  '| --- | :---: |',
+  '| 苹果 | 3 |',
+  '| `x|y` | 4 |',
+  '',
+  '结尾段落乙。',
+  '',
+].join('\n')
+
 async function poll<T>(
   label: string,
   fn: () => T | undefined | Promise<T | undefined>,
@@ -2041,5 +2055,199 @@ export const cases: Array<[string, () => Promise<void>]> = [
     }
 
     assert(await readDisk('wikilinks.md') === diskBefore, '歧义/缺失链路不得改写源文档')
+  }],
+
+  // ---- 工单 #13：表格键盘导航与增删行列 ----
+
+  ['表格增删行列：命令路径写回权威文档、区域不变、一次撤销（#13）', async () => {
+    await openWithEditor('table13.md')
+    await waitSessionReady('table13.md')
+    const uri = wsUri('table13.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('table13.md'))
+    const original = TABLE13_DOC_TEXT
+
+    // 光标定位到「苹果」后（数据行内），经正式命令（命令面板路径）插入行
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate',
+      offset: original.indexOf('苹果') + 1,
+    })
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.table.insertRowBelow')
+    const inserted = original.replace(
+      '| 苹果 | 3 |\n| `x|y` | 4 |',
+      '| 苹果 | 3 |\n| | |\n| `x|y` | 4 |',
+    )
+    await poll('插入行写入权威', () => (doc.getText() === inserted ? true : undefined))
+    // 表格外区域逐字节不变（无其他区域重排）
+    assert(inserted.startsWith('前导段落甲。\n\n| 名字 | 数量 |\n| --- | :---: |\n'), '表格前区域被重排')
+    assert(inserted.endsWith('\n\n结尾段落乙。\n'), '表格后区域被重排')
+    // 焦点落点：新行首格（真实 webview 视图观测）
+    const view = await waitViewState('table13.md', (v) => v.selectionOffset === inserted.indexOf('| | |') + 2)
+    assert(view.selectionOffset === inserted.indexOf('| | |') + 2, `光标应落新行首格，实际 ${view.selectionOffset}`)
+
+    // 撤销一次 = 回退一笔结构提交；一笔命令恰好一笔 applyEdit
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('undo 回原', () => (doc.getText() === original ? true : undefined))
+    const state = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(state.appliedEdits === 1, `插行应恰好 1 笔 applyEdit，实际 ${state.appliedEdits}`)
+
+    // 保存回读：插行后保存，磁盘逐字一致（新行与对齐保持）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate',
+      offset: original.indexOf('苹果') + 1,
+    })
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.table.insertRowBelow')
+    await poll('再次插入', () => (doc.getText() === inserted ? true : undefined))
+    assert(await doc.save(), '保存失败')
+    const disk = await readDisk('table13.md')
+    assert(disk === inserted, `保存回读不一致：${JSON.stringify(disk)}`)
+    // 还原到 fixture 原文
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('还原', () => (doc.getText() === original ? true : undefined))
+    await doc.save()
+  }],
+
+  ['表格结构语义：删表头升格、分隔行保护、插列对齐同步（#13）', async () => {
+    await openWithEditor('table13.md')
+    await waitSessionReady('table13.md')
+    const uri = wsUri('table13.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('table13.md'))
+    const original = TABLE13_DOC_TEXT
+
+    // 删表头：首个数据行升为新表头，分隔行随移到升格行之后、对齐保留
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate',
+      offset: original.indexOf('名字') + 1,
+    })
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.table.deleteRow')
+    const promoted = original.replace(
+      '| 名字 | 数量 |\n| --- | :---: |\n| 苹果 | 3 |\n',
+      '| 苹果 | 3 |\n| --- | :---: |\n',
+    )
+    await poll('删表头升格', () => (doc.getText() === promoted ? true : undefined))
+
+    // 分隔行单独删除：拒绝（结构行保护，零写回）
+    const beforeReject = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate',
+      offset: promoted.indexOf(':---:'),
+    })
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.table.deleteRow')
+    await new Promise((r) => setTimeout(r, 800))
+    assert(doc.getText() === promoted, '分隔行删除必须被拒绝')
+    const afterReject = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterReject.appliedEdits === beforeReject.appliedEdits, '拒绝的操作不得产生写回')
+
+    // 插列（首列右侧）：表头/分隔/数据行同步插入，分隔行补默认对齐段
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate',
+      offset: promoted.indexOf('苹果') + 1,
+    })
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.table.insertColumnRight')
+    const columned = promoted
+      .replace('| 苹果 | 3 |', '| 苹果 | | 3 |')
+      .replace('| --- | :---: |', '| --- | --- | :---: |')
+      .replace('| `x|y` | 4 |', '| `x|y` | | 4 |')
+    await poll('插列写入', () => (doc.getText() === columned ? true : undefined))
+    assert(await doc.save(), '保存失败')
+    const disk = await readDisk('table13.md')
+    assert(disk === columned, `插列保存回读不一致：${JSON.stringify(disk)}`)
+    // 行内代码管道在结构操作后保真
+    assert(disk.includes('`x|y`'), '行内代码单元格保真')
+
+    // 删列（新插的空列）：对齐段同步删除
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate',
+      offset: columned.indexOf('| 苹果 | | 3 |') + 7,
+    })
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.table.deleteColumn')
+    const deleted = columned
+      .replace('| 苹果 | | 3 |', '| 苹果 | 3 |')
+      .replace('| --- | --- | :---: |', '| --- | :---: |')
+      .replace('| `x|y` | | 4 |', '| `x|y` | 4 |')
+    await poll('删列写入', () => (doc.getText() === deleted ? true : undefined))
+    // 还原（删表头 + 插列 + 删列 = 三笔各撤销一次）
+    for (let i = 0; i < 3; i++) {
+      await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    }
+    await poll('还原', () => (doc.getText() === original ? true : undefined))
+    await doc.save()
+  }],
+
+  ['表格 Tab 导航：真实 keymap 移动光标、边界不吞输入、零写回（#13）', async () => {
+    await openWithEditor('table13.md')
+    await waitSessionReady('table13.md')
+    const uri = wsUri('table13.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('table13.md'))
+    const text = TABLE13_DOC_TEXT
+    const session0 = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+
+    // 单元格内 Tab → 下一格内容首（table.test.key 驱动真实 keymap 链路）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate',
+      offset: text.indexOf('苹果') + 1,
+    })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'tab' })
+    await waitViewState('table13.md', (v) => v.selectionOffset === text.indexOf('| 3 |') + 2)
+
+    // 行末格 Tab → 下一表格行首格（跨行环绕）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'tab' })
+    await waitViewState('table13.md', (v) => v.selectionOffset === text.indexOf('| `x|y` |') + 2)
+
+    // Shift+Tab → 上一行末格内容尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'shift-tab' })
+    await waitViewState('table13.md', (v) => v.selectionOffset === text.indexOf('3') + 1)
+
+    // 表格外 Tab：不吞输入——无表格导航时不移动光标、不改文本
+    const outside = text.indexOf('前导段落甲') + 2
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: outside })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'tab' })
+    await new Promise((r) => setTimeout(r, 600))
+    const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState
+    assert(v.selectionOffset === outside, `表格外 Tab 不得移动光标，实际 ${v.selectionOffset}`)
+    assert(v.text === text, '表格外 Tab 不得改写文本')
+
+    // 末行末格 Tab：边界交默认（无动作）
+    const lastCell = text.indexOf('4') + 1
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: lastCell })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'tab' })
+    await new Promise((r) => setTimeout(r, 600))
+    const v2 = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState
+    assert(v2.selectionOffset === lastCell, `末行末格 Tab 应交默认（光标不动），实际 ${v2.selectionOffset}`)
+
+    // 全程零写回：导航是纯选区操作
+    const session1 = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(session1.version === session0.version, `导航不得改变文档版本（${session0.version} → ${session1.version}）`)
+    assert(session1.appliedEdits === session0.appliedEdits, `导航不得产生写回，实际 ${session1.appliedEdits}`)
+    assert(doc.getText() === text, '导航后权威文本不变')
+  }],
+
+  ['阅读模式表格操作忽略：只读语义零写回（#13）', async () => {
+    await openWithEditor('table13.md')
+    await waitSessionReady('table13.md')
+    const uri = wsUri('table13.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('table13.md'))
+    const text = TABLE13_DOC_TEXT
+    const session0 = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+
+    // 光标先落在表格内（live），再切换阅读模式——命令到达但视图只读
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate',
+      offset: text.indexOf('苹果') + 1,
+    })
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await poll('进入阅读模式', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.viewMode === 'reading' ? true : undefined
+    })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.command', op: 'insertRowBelow' })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'tab' })
+    await new Promise((r) => setTimeout(r, 800))
+    assert(doc.getText() === text, '阅读模式不得接受表格结构命令')
+    const session1 = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(session1.version === session0.version, `阅读模式命令不得改变版本（${session0.version} → ${session1.version}）`)
+    assert(session1.appliedEdits === session0.appliedEdits, `阅读模式命令不得产生写回，实际 ${session1.appliedEdits}`)
+    // 切回 live 验证面板仍可用
+    await vscode.commands.executeCommand('onegayi.obsidian-like-editor.toggleViewMode')
+    await waitViewState('table13.md', (v) => v.viewMode === 'live')
   }],
 ]

@@ -347,6 +347,34 @@ describe('edit.request 校验与写回', () => {
     expect(broadcasts).toHaveLength(0)
   })
 
+  it('多段变更的回流以任意顺序到达均识别为自家确认（VSCode 回流为降序）', async () => {
+    // #13 表格结构操作产生多段变更（删两行 + 插一行）；VSCode 对多段
+    // WorkspaceEdit 的 onDidChangeTextDocument contentChanges 按偏移降序
+    // 回流，而出站请求为升序——确认匹配必须与顺序无关，否则误判为外部
+    // 变更广播回发起面板，造成自我冲突暂停
+    const s = setup('AAAA\nBBBB\nCCCC\nDDDD\nEEEE\n')
+    const id = s.attach()
+    await readyPanel(s, id)
+    // 回流延迟到达（真实 VSCode：applyEdit resolve 后才发事件），走兜底确认
+    s.doc.fireChangeOnApply = false
+    // 升序出站：删 [0,10)（两行）+ 在 15 处插入（CM6 合并相邻删除后的形态）
+    const outbound = [
+      { offset: 0, length: 10, text: '' },
+      { offset: 15, length: 0, text: 'XXXX\n' },
+    ]
+    await s.send(id, {
+      kind: 'edit.request', sessionId: id, docUri: DOC_URI, seq: 1, baseVersion: 1,
+      changes: outbound,
+    })
+    const ack = s.sent.get(id)!.find((m) => m.kind === 'edit.ack')
+    expect(ack).toMatchObject({ seq: 1, ok: true })
+    // 回流以降序到达（真实 VSCode 形态）：不得广播 doc.changed 给发起面板
+    const refluxDesc = [...outbound].reverse()
+    s.session.handleDocChanged(refluxDesc, 2)
+    const broadcasts = s.sent.get(id)!.filter((m) => m.kind === 'doc.changed')
+    expect(broadcasts).toHaveLength(0)
+  })
+
   it('结构非法的消息被静默丢弃', async () => {
     const s = setup()
     const id = s.attach()

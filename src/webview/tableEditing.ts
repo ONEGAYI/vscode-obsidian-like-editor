@@ -1,21 +1,28 @@
-// 表格单元格输入钩子（工单 #12）：live 视图中表格编辑面的 CM6 扩展。
+// 表格单元格输入钩子与键盘导航/结构命令（工单 #12 + #13）：live 视图中
+// 表格编辑面的 CM6 扩展。
 //
 // 形态（架构约定：单元格编辑完全跑在既有出站同步链路上）：
 // - 表格编辑面即 CM6 源文本行：表格装饰（liveDecorations）只做样式标记
 //   （管道符/单元格/对齐稳定类），不隐藏源文、不建覆盖层——点击列区域
 //   即光标落位，IME 组合、出站暂缓、冲突暂停全部复用既有链路
 //   （syncController），无旁路直改文档
-// - 本模块只补一条输入语义：在表格行内（非行内代码、非已转义后）键入 |
-//   时自动写为 \|——保证「单元格输入含管道符 → 保存回读 → 再渲染」
-//   仍是单格语义（验收标准）；其余位置返回 false 走默认插入
-// - 转义以普通 CM6 事务 dispatch：单次按键 = 单次单元格文本变更 =
-//   单笔 edit.request，宿主撤销一次即撤销一次转义插入
+// - #12 输入语义：在表格行内（非行内代码、非已转义后）键入 | 时自动写为
+//   \|——保证「单元格输入含管道符 → 保存回读 → 再渲染」仍是单格语义；
+//   其余位置返回 false 走默认插入
+// - #13 键盘导航：Tab/Shift+Tab 在表格行内定位相邻单元格（语义见
+//   tableStructure.ts 头注释；纯选区事务——零写回、零编辑历史）；IME
+//   组合中不劫持（view.compositionStarted）；非表格上下文返回 false 交默认行为
+// - #13 结构命令（宿主 table.command → syncController 调 runTableEdit）：
+//   增删行列以单笔 CM6 事务派发 = 单笔 edit.request = 宿主撤销一次
+import { EditorSelection } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import type { Command } from '@codemirror/view'
 import type { EditorState } from '@codemirror/state'
 import type { SyntaxNode, Tree } from '@lezer/common'
+import type { TableEditOp } from '../shared/protocol'
 import { liveDecorationsField } from './liveDecorations'
 import { needsPipeEscapeAt } from './tableCells'
+import { planTableEdit, tableCellNavTarget, type TableRowInfo } from './tableStructure'
 
 /** 表格行身份的解析树节点名（分隔行整体是一个 TableDelimiter 节点） */
 const TABLE_LINE_NODE_NAMES = new Set(['TableHeader', 'TableRow', 'TableDelimiter'])
@@ -80,5 +87,151 @@ export const tablePipeKeyHandler: Command = (view: EditorView): boolean => {
   return true
 }
 
-/** 装配扩展：绑定 | 键（优先于默认字符插入） */
-export const tableEditing = [keymap.of([{ key: '|', run: tablePipeKeyHandler }])]
+// ---- 键盘导航与结构命令（工单 #13） ----
+
+/** Table 直接子行节点名 → 行身份（表头/数据行内的单字符管道节点不是直接子节点） */
+const ROW_KIND_BY_NODE: Partial<Record<string, TableRowInfo['kind']>> = {
+  TableHeader: 'header',
+  TableDelimiter: 'delimiter',
+  TableRow: 'row',
+}
+
+/**
+ * 提取包含 pos 的 Table 的行结构（Table 不可嵌套，前序下降命中即唯一）。
+ * 行身份依据解析树；返回 null = pos 不在表格行上。
+ */
+export function tableRowsAt(state: EditorState, pos: number, tree: Tree): TableRowInfo[] | null {
+  const line = state.doc.lineAt(pos)
+  const findTable = (node: SyntaxNode): SyntaxNode | null => {
+    if (node.from > line.to || node.to < line.from) {
+      return null
+    }
+    if (node.name === 'Table') {
+      // Lezer 块节点区间含尾换行：按去掉尾换行后的行界判定相交
+      let end = node.to
+      if (end > node.from && state.doc.sliceString(end - 1, end) === '\n') {
+        end -= 1
+      }
+      if (node.from <= line.to && end >= line.from) {
+        return node
+      }
+    }
+    for (let c = node.firstChild; c; c = c.nextSibling) {
+      const hit = findTable(c)
+      if (hit) {
+        return hit
+      }
+    }
+    return null
+  }
+  const table = findTable(tree.topNode)
+  if (!table) {
+    return null
+  }
+  const rows: TableRowInfo[] = []
+  for (let c = table.firstChild; c; c = c.nextSibling) {
+    const kind = ROW_KIND_BY_NODE[c.name]
+    if (!kind) {
+      continue
+    }
+    const l = state.doc.lineAt(c.from)
+    rows.push({ kind, lineFrom: l.from, lineTo: l.to })
+  }
+  return rows.length >= 2 ? rows.sort((a, b) => a.lineFrom - b.lineFrom) : null
+}
+
+/** 导航前置解析：全部 range（须为空光标）都在表格单元格序列上时返回目标数组 */
+function navTargetsOf(view: EditorView, forward: boolean): number[] | null {
+  if (view.compositionStarted) {
+    return null // IME 组合中不劫持 Tab（组合文本由既有链路上屏）
+  }
+  const state = view.state
+  const field = state.field(liveDecorationsField, false)
+  if (!field) {
+    return null
+  }
+  const targets: number[] = []
+  for (const range of state.selection.ranges) {
+    if (!range.empty) {
+      return null // 选区不作单元格导航（交默认行为）
+    }
+    const rows = tableRowsAt(state, range.from, field.tree)
+    if (!rows) {
+      return null
+    }
+    const target = tableCellNavTarget(state.doc.toString(), rows, range.from, forward)
+    if (target === null) {
+      return null // 边界（首行首格回退/末行末格前进）与非表格上下文：交默认
+    }
+    targets.push(target)
+  }
+  return targets.length > 0 ? targets : null
+}
+
+/** Tab：定位下一单元格内容首（行末环绕到下一表格行首格） */
+export const tableTabForward: Command = (view: EditorView): boolean => {
+  const targets = navTargetsOf(view, true)
+  if (!targets) {
+    return false
+  }
+  view.dispatch({
+    selection: EditorSelection.create(
+      targets.map((t) => EditorSelection.range(t, t)),
+      view.state.selection.ranges.length - 1,
+    ),
+  })
+  return true
+}
+
+/** Shift+Tab：定位上一单元格内容尾（行首回退到上一表格行末格） */
+export const tableTabBackward: Command = (view: EditorView): boolean => {
+  const targets = navTargetsOf(view, false)
+  if (!targets) {
+    return false
+  }
+  view.dispatch({
+    selection: EditorSelection.create(
+      targets.map((t) => EditorSelection.range(t, t)),
+      view.state.selection.ranges.length - 1,
+    ),
+  })
+  return true
+}
+
+/**
+ * 执行一次表格结构操作（增删行列；宿主 table.command 命令与测试共用）。
+ * 单笔 CM6 事务（多行变更合一）→ 单笔 edit.request → 宿主撤销一次；
+ * 光标落点由 planTableEdit 给出（新行首格 / 相邻行同列格）。
+ * 上下文不符（表格外、删分隔行、最小表格删表头、选区中）返回 false 零变更。
+ */
+export function runTableEdit(view: EditorView, op: TableEditOp): boolean {
+  const state = view.state
+  const field = state.field(liveDecorationsField, false)
+  if (!field) {
+    return false
+  }
+  const sel = state.selection.main
+  if (!sel.empty) {
+    return false
+  }
+  const rows = tableRowsAt(state, sel.from, field.tree)
+  if (!rows) {
+    return false
+  }
+  const plan = planTableEdit(state.doc.toString(), rows, sel.from, op)
+  if (!plan) {
+    return false
+  }
+  view.dispatch({
+    changes: plan.changes,
+    selection: { anchor: plan.selection },
+    scrollIntoView: true,
+  })
+  return true
+}
+
+/** 装配扩展：绑定 | 键（优先于默认字符插入）与 Tab/Shift+Tab 单元格导航 */
+export const tableEditing = [
+  keymap.of([{ key: '|', run: tablePipeKeyHandler }]),
+  keymap.of([{ key: 'Tab', run: tableTabForward, shift: tableTabBackward }]),
+]
