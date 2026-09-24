@@ -33,6 +33,7 @@ import {
   type LiveSyntaxProbe,
   type ReadingSyntaxProbe,
   type SerChange,
+  type WebviewToHost,
 } from '../shared/protocol'
 import {
   FIND_CLASS_NAMES,
@@ -257,7 +258,7 @@ function conflictsWithLocal(
 
 interface BufferedIncremental {
   version: number
-  /** 原始增量（权威变更前系；入队时点的参考系） */
+  /** 增量（权威变更前系；入队时点的参考系） */
   changes: SerChange[]
   /** 入队时逆穿当时已确认链得到的 baseVersion 系增量；null = 与当时已确认
    *  编辑二义，无法安全逆映射（flush 时按冲突暂停处理）。
@@ -265,6 +266,44 @@ interface BufferedIncremental {
    *  届时缓冲增量的参考系（不含组合编辑）与已确认链（含）不再一致，迟到
    *  的逆穿会多平移组合编辑部分（#12 表格 IME 场景实测暴露） */
   baseChanges: SerChange[] | null
+}
+
+/** #32 排版一致性探针：正文基础排版四项样本（null = 元素缺失/不可读） */
+export interface TypographySample {
+  /** computed font-family（浏览器归一化串） */
+  fontFamily: string | null
+  fontSizePx: number | null
+  /** computed line-height 换算 px；'normal'（未解析为长度）为 null */
+  lineHeightPx: number | null
+  /** 正文文本左缘相对滚动容器左缘（几何口径，含中间层 padding/border；
+   *  display:none 侧 rect 全 0，不可作断言依据——各模式态取各自激活侧） */
+  textInsetPx: number | null
+}
+
+/** #32 排版一致性探针：继承型元素样本（列表/引用/表格——行高与缩进属
+ *  各自语义，只对照字体族与字号） */
+export interface TypographyInheritSample {
+  fontFamily: string | null
+  fontSizePx: number | null
+}
+
+/** #32 view.state 本地扩展字段：两模式基础排版对照采样。
+ *  协议边界：本字段不经 shared/protocol.ts 定义（与 #33 并行工单的边界
+ *  约定），依赖 isWebviewToHost 校验器对未知字段的前向兼容透传（宿主侧
+ *  原样缓存整个消息对象）；契约由 protocol.test.ts 的前向兼容用例与
+ *  webviewSync.test.ts 的结构用例钉住。后续如需正式化，迁入 protocol.ts
+ *  的 view.state 可选字段即可（纯增量，两端无破坏）。 */
+export interface TypographyProbe {
+  /** live 正文：.cm-content（scroller 基线字体作用面，视口常驻） */
+  live: TypographySample | null
+  /** reading 正文：首个阅读块内段落（虚拟化下须已挂载） */
+  reading: TypographySample | null
+  liveList: TypographyInheritSample | null
+  readingList: TypographyInheritSample | null
+  liveQuote: TypographyInheritSample | null
+  readingQuote: TypographyInheritSample | null
+  liveTable: TypographyInheritSample | null
+  readingTable: TypographyInheritSample | null
 }
 
 export class WebviewSyncController {
@@ -862,7 +901,10 @@ export class WebviewSyncController {
         readingAnchorTopPx = el.getBoundingClientRect().top - box.top + this.readingContainer.scrollTop
       }
     }
-    this.bridge.postMessage({
+    // #32：typography 为 view.state 的 webview 本地扩展字段（见 TypographyProbe
+    // 注释），经宿主校验器的前向兼容透传缓存；变量化构造避免字面量触发
+    // postMessage 参数类型的多余属性检查
+    const state: Extract<WebviewToHost, { kind: 'view.state' }> & { typography: TypographyProbe } = {
       kind: 'view.state',
       text: doc?.toString() ?? '',
       docLength: doc?.length ?? 0,
@@ -910,7 +952,9 @@ export class WebviewSyncController {
       // 服务双视图，隐藏侧的 DOM 不代表用户可见状态）
       imageStates: this.collectImageStates(),
       find: this.collectFindProbe(),
-    })
+      typography: this.collectTypography(),
+    }
+    this.bridge.postMessage(state)
   }
 
   /**
@@ -1248,6 +1292,57 @@ export class WebviewSyncController {
       // #11 双链样式入口探针（live widget/mark / reading a）
       liveWikilinkDecorationColor: read(liveWikilink),
       readingWikilinkDecorationColor: read(readingWikilink),
+    }
+  }
+
+  /** #32 排版一致性采样：两模式正文/列表/引用/表格的 computed 基础排版。
+   *  只读 DOM 与计算样式，不触发布局写入；隐藏侧（display:none）computed
+   *  字体族/字号仍可读（继承链有效），几何口径 textInsetPx 无意义（rect
+   *  全 0）——断言端须在对应模式激活态取各自样本。 */
+  private collectTypography(): TypographyProbe {
+    const scroller = this.liveWrapper?.querySelector<HTMLElement>('.cm-scroller') ?? null
+    const readBase = (el: HTMLElement | null, anchor: HTMLElement | null): TypographySample | null => {
+      if (!el) {
+        return null
+      }
+      const cs = getComputedStyle(el)
+      const fontPx = Number.parseFloat(cs.fontSize)
+      const linePx = Number.parseFloat(cs.lineHeight)
+      return {
+        fontFamily: cs.fontFamily || null,
+        fontSizePx: Number.isFinite(fontPx) ? fontPx : null,
+        lineHeightPx: Number.isFinite(linePx) ? linePx : null,
+        textInsetPx: anchor
+          ? el.getBoundingClientRect().left - anchor.getBoundingClientRect().left
+          : null,
+      }
+    }
+    const readInherit = (el: HTMLElement | null): TypographyInheritSample | null => {
+      if (!el) {
+        return null
+      }
+      const cs = getComputedStyle(el)
+      const fontPx = Number.parseFloat(cs.fontSize)
+      return {
+        fontFamily: cs.fontFamily || null,
+        fontSizePx: Number.isFinite(fontPx) ? fontPx : null,
+      }
+    }
+    return {
+      live: readBase(
+        this.liveWrapper?.querySelector<HTMLElement>('.cm-content') ?? null,
+        scroller,
+      ),
+      reading: readBase(
+        this.readingContainer?.querySelector<HTMLElement>('.vsidian-reading-block p') ?? null,
+        this.readingContainer ?? null,
+      ),
+      liveList: readInherit(this.liveWrapper?.querySelector<HTMLElement>('.vsidian-list-line') ?? null),
+      readingList: readInherit(this.readingContainer?.querySelector<HTMLElement>('.vsidian-reading-block li') ?? null),
+      liveQuote: readInherit(this.liveWrapper?.querySelector<HTMLElement>('.vsidian-quote-line') ?? null),
+      readingQuote: readInherit(this.readingContainer?.querySelector<HTMLElement>('.vsidian-reading-block blockquote') ?? null),
+      liveTable: readInherit(this.liveWrapper?.querySelector<HTMLElement>('.vsidian-table-line') ?? null),
+      readingTable: readInherit(this.readingContainer?.querySelector<HTMLElement>('.vsidian-reading-table td') ?? null),
     }
   }
 

@@ -39,6 +39,31 @@ describe('isWebviewToHost', () => {
     ).toBe(true)
   })
 
+  it('接受携带未知扩展字段的 view.state（前向兼容；#32 排版探针依赖此通道）', () => {
+    // #32：排版一致性探针经 view.state 的本地扩展字段回传（不修改协议
+    // 单一事实源）。校验器只校验已知字段、不拒绝未知字段，是该扩展方式
+    // 成立的协议前提——本用例固化该前向兼容契约，防止未来收紧时静默破坏。
+    expect(
+      isWebviewToHost({
+        kind: 'view.state',
+        text: '# t',
+        docLength: 4,
+        lineCount: 1,
+        renderedLines: 40,
+        typography: {
+          live: { fontFamily: 'monospace', fontSizePx: 14, lineHeightPx: 19, textInsetPx: 24 },
+          reading: null,
+          liveList: { fontFamily: 'monospace', fontSizePx: 14 },
+          readingList: null,
+          liveQuote: { fontFamily: 'monospace', fontSizePx: 14 },
+          readingQuote: null,
+          liveTable: { fontFamily: 'monospace', fontSizePx: 14 },
+          readingTable: null,
+        },
+      }),
+    ).toBe(true)
+  })
+
   it('接受空 changes 的 edit.request', () => {
     expect(
       isWebviewToHost({
