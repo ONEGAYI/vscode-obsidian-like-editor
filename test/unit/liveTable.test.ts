@@ -24,12 +24,12 @@ import {
   liveDecorationsField,
   livePreviewDecorations,
 } from '../../src/webview/liveDecorations'
-import { tableEditing, tablePipeKeyHandler } from '../../src/webview/tableEditing'
+import { blankRowInputPlan, tableEditing, tablePipeKeyHandler } from '../../src/webview/tableEditing'
 import { splitTableRowCells, tableRowCellsForColumns } from '../../src/webview/tableCells'
 import { splitReadingBlocks } from '../../src/webview/readingBlocks'
 import { createReadingBlockElement } from '../../src/webview/readingView'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
-import { DocumentSession, type HostDocumentPort } from '../../src/host/documentSession'
+import { DocumentSession, type HostDocumentPort, type SessionNotice } from '../../src/host/documentSession'
 import type { HostToWebview, SerChange, WebviewToHost } from '../../src/shared/protocol'
 
 if (typeof Range !== 'undefined' && Range.prototype.getClientRects === undefined) {
@@ -459,11 +459,13 @@ interface LinkedPanel {
   doc: FakeDoc
   hostSent: WebviewToHost[]
   sessionId: string
+  notices: SessionNotice[]
 }
 
 async function setupLinked(text: string): Promise<LinkedPanel> {
   const doc = new FakeDoc(text)
-  const session = new DocumentSession(doc, { docUri: DOC_URI })
+  const notices: SessionNotice[] = []
+  const session = new DocumentSession(doc, { docUri: DOC_URI, onNotice: (notice) => notices.push(notice) })
   doc.onDocChanged((changes, version) => session.handleDocChanged(changes, version))
   const hostSent: WebviewToHost[] = []
   let sessionId = ''
@@ -485,7 +487,7 @@ async function setupLinked(text: string): Promise<LinkedPanel> {
   })
   controller.mount(document.createElement('div'))
   await settle()
-  return { controller, session, doc, hostSent, sessionId }
+  return { controller, session, doc, hostSent, sessionId, notices }
 }
 
 /** 宿主请求队列串行化后排空（applyChanges async 链） */
@@ -496,6 +498,93 @@ const settle = async (): Promise<void> => {
 }
 
 describe('单元格编辑权威链路', () => {
+  it('纯空白格 IME 组合预编辑与取消不规范化源行，也不向宿主写回', async () => {
+    const source = 'a|b|c\n---|---|---\n | | \n'
+    const linked = await setupLinked(source)
+    const view = linked.controller.getView()!
+    const pos = source.indexOf(' | | ') + 5
+    view.dispatch({ selection: EditorSelection.single(pos) })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionupdate'))
+    view.dispatch({ changes: { from: pos, insert: 'n' }, userEvent: 'input.type.compose' })
+    expect(view.state.doc.line(3).text).toBe(' | | n')
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]
+      ?.querySelectorAll(':scope > .vsidian-table-grid-cell')[2]?.textContent).toContain('n')
+    expect(linked.hostSent.filter((msg) => msg.kind === 'edit.request')).toHaveLength(0)
+    view.dispatch({ changes: { from: pos, to: pos + 1, insert: '' }, userEvent: 'input.type.compose' })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    expect(view.state.doc.toString()).toBe(source)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
+    expect(linked.doc.getText()).toBe(source)
+    expect(linked.hostSent.filter((msg) => msg.kind === 'edit.request')).toHaveLength(0)
+    linked.session.detachPanel(linked.sessionId)
+    expect(linked.notices.filter((notice) => notice.type === 'panel-closed-with-input')).toHaveLength(0)
+  })
+
+  it('纯空白格 IME 组合提交后补边界，只向宿主写一笔并维持目标列', async () => {
+    const source = 'a|b|c\n---|---|---\n | | \n'
+    const linked = await setupLinked(source)
+    const view = linked.controller.getView()!
+    const pos = source.indexOf(' | | ') + 5
+    view.dispatch({ selection: EditorSelection.single(pos) })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionupdate'))
+    view.dispatch({ changes: { from: pos, insert: 'ni' }, userEvent: 'input.type.compose' })
+    expect(linked.hostSent.filter((msg) => msg.kind === 'edit.request')).toHaveLength(0)
+    view.dispatch({ changes: { from: pos, to: pos + 2, insert: '你' }, userEvent: 'input.type.compose' })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    expect(linked.hostSent.filter((msg) => msg.kind === 'edit.request')).toHaveLength(1)
+    expect(linked.doc.getText()).toBe(view.state.doc.toString())
+    expect(view.state.doc.line(3).text).toBe('| | | 你|')
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]
+      ?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(3)
+    const table = splitReadingBlocks(linked.doc.getText()).find((block) => block.kind === 'table')!
+    expect(Array.from(createReadingBlockElement(table, linked.doc.getText()).querySelectorAll('tbody td'),
+      (cell) => cell.textContent)).toEqual(['', '', '你'])
+  })
+
+  it('纯空白格组合中面板关闭：未写回的候选文本通过宿主快照可取回', async () => {
+    const source = 'a|b|c\n---|---|---\n | | \n'
+    const linked = await setupLinked(source)
+    const view = linked.controller.getView()!
+    const pos = source.indexOf(' | | ') + 5
+    view.dispatch({ selection: EditorSelection.single(pos) })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.dispatch({ changes: { from: pos, insert: 'ni' }, userEvent: 'input.type.compose' })
+    await settle()
+    expect(linked.hostSent.filter((msg) => msg.kind === 'edit.request')).toHaveLength(0)
+    linked.session.detachPanel(linked.sessionId)
+    expect(linked.notices).toMatchObject([{ type: 'panel-closed-with-input', webviewText: view.state.doc.toString() }])
+  })
+
+  it.each([false, true])('纯空白格组合提交时外部%s增量按原有规则重定位或暂停', async (overlap) => {
+    const source = 'a|b|c\n---|---|---\n | | \n'
+    const linked = await setupLinked(source)
+    const view = linked.controller.getView()!
+    const pos = source.indexOf(' | | ') + 5
+    view.dispatch({ selection: EditorSelection.single(pos) })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.dispatch({ changes: { from: pos, insert: 'ni' }, userEvent: 'input.type.compose' })
+    const offset = overlap ? pos - 1 : 0
+    linked.doc.content = source.slice(0, offset) + 'X' + source.slice(offset + 1)
+    linked.doc.ver++
+    linked.session.handleDocChanged([{ offset, length: 1, text: 'X' }], linked.doc.ver)
+    view.dispatch({ changes: { from: pos, to: pos + 2, insert: '你' }, userEvent: 'input.type.compose' })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    if (overlap) {
+      expect(view.state.doc.toString()).toContain('你')
+      expect(linked.hostSent.some((msg) => msg.kind === 'conflict.report')).toBe(true)
+      expect(linked.notices.some((notice) => notice.type === 'conflict')).toBe(true)
+    } else {
+      expect(view.state.doc.toString()).toBe(linked.doc.getText())
+      expect(linked.doc.getText()).toContain('X|b|c')
+      expect(linked.doc.getText()).toContain('| | | 你|')
+    }
+  })
   it.each([
     [2, 'input.paste'],
     [3, 'input.type.compose'],
@@ -664,6 +753,16 @@ function bigTableDoc(rows: number): string {
   lines.push('')
   return lines.join('\n')
 }
+
+it('千行表纯空白格首键资格判断只触及有界行数', () => {
+  const doc = 'a|b|c\n---|---|---\n' + Array.from({ length: 1000 }, (_, i) => `a${i}|b${i}|c${i}\n`).join('') + ' | | \n'
+  const state = EditorState.create({ doc, extensions: [livePreviewDecorations] })
+  const line = state.doc.line(state.doc.lines - 1)
+  const spy = vi.spyOn(state.doc, 'lineAt')
+  expect(blankRowInputPlan(state, line.from + 5, line.from + 5, 'X')).not.toBeNull()
+  expect(spy.mock.calls.length).toBeLessThan(16)
+  spy.mockRestore()
+})
 
 describe('千行单表性能边界', () => {
   it('光标跨行仅重建局部装饰，不重复遍历整张表规划网格', () => {
