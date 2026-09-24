@@ -181,6 +181,9 @@ describe('Windows 宿主的 Win32 规范化怪异形态（NTFS ADS 等）', () =
   it('basename 尾随点或空格拦截（Win32 规范化会剥除）', () => {
     expect(classifyLinkTarget('note.md.', WIN)).toMatchObject({ kind: 'blocked', reason: 'escape' })
     expect(classifyLinkTarget('note.md ', WIN)).toMatchObject({ kind: 'blocked', reason: 'escape' })
+    // 点+tab 组合：tab 属 trim 家族空白，剥除后尾随点同样会被 Win32 规范化
+    expect(classifyLinkTarget('note.md.\t', WIN)).toMatchObject({ kind: 'blocked', reason: 'escape' })
+    expect(classifyLinkTarget('note.md\t', WIN)).toMatchObject({ kind: 'blocked', reason: 'escape' })
   })
 
   it('POSIX 宿主不适用该过滤（冒号/尾随点是合法文件名）', () => {

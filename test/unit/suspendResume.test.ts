@@ -438,4 +438,17 @@ describe('暂停/暂缓态本地输入的快照刷新（R-1）', () => {
     expect(reports).toHaveLength(1)
     expect(reports[0]).toMatchObject({ text: 'ABabcdef' })
   })
+
+  it('dispose 清理挂起的防抖定时器：此后不再发出 conflict.report', async () => {
+    vi.useFakeTimers()
+    const { bridge, sent } = makeBridge()
+    const { c } = mount(bridge)
+    init(c, 'abcdef', 1)
+    suspendByOverlap(c)
+    const before = conflictReports(sent).length
+    c.getView()!.dispatch({ changes: { from: 0, insert: '尾' } })
+    c.dispose()
+    await vi.advanceTimersByTimeAsync(600)
+    expect(conflictReports(sent)).toHaveLength(before)
+  })
 })

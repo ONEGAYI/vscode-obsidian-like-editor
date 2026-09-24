@@ -124,13 +124,14 @@ function isInsideRoot(
 }
 
 /** Windows 宿主的 Win32 规范化怪异形态：basename 含 ':'（NTFS 备用数据流，
- *  如 note.md::$DATA 会读备用数据流）或尾随 '.'/空格（规范化剥除后不指向
- *  用户可见文件）——两者都不该被放行为工作区目标。判定用 trim 前的原文
+ *  如 note.md::$DATA 会读备用数据流）或尾随 '.'/空白（规范化剥除后不指向
+ *  用户可见文件——含 tab 等 trim 家族空白，点+tab 组合同样被 Win32 剥点）——
+ *  两者都不该被放行为工作区目标。判定用 trim 前的原文
  *  （尾随空格 trim 后不可恢复），且先剥 hash/query */
 function isWin32OddBasename(raw: string): boolean {
   const rawPath = raw.split('#')[0]!.split('?')[0]!
   const base = path.win32.basename(rawPath)
-  return base.includes(':') || /[. ]$/.test(base)
+  return base.includes(':') || /[.\s]$/.test(base)
 }
 
 /** 通用分类前半段：外链放行 / 空白与锚点拦截 / scheme 拦截 / 盘符拦截 */

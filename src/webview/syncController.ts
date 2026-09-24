@@ -512,6 +512,10 @@ export class WebviewSyncController {
       clearTimeout(this.flushTimer)
       this.flushTimer = undefined
     }
+    if (this.conflictReportTimer !== undefined) {
+      clearTimeout(this.conflictReportTimer)
+      this.conflictReportTimer = undefined
+    }
     if (this.docKeydown) {
       document.removeEventListener('keydown', this.docKeydown, true)
       this.docKeydown = undefined
