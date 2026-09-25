@@ -90,6 +90,60 @@ function build(doc: string, selection = { anchor: 0 }): DecorationSet {
 // ---- 装饰契约 ----
 
 describe('live 表格装饰', () => {
+  it('跨过安全表格的非空选区不露出分隔行源码标记', () => {
+    const doc = '前文\n\n| A | B | C |\n| --- | --- | --- |\n| 带 | s是 | 送 |\n\n后文'
+    const selection = EditorSelection.single(1, doc.indexOf('后文') + 1)
+    const set = buildLivePreviewDecorations(Text.of(doc.split('\n')), selection)
+    expect(textsFor(set, LIVE_CLASS_NAMES.tableGridRow, doc)).toHaveLength(2)
+    const delimiterAt = doc.indexOf('| --- | --- | --- |')
+    expect(collect(set).some((item) => item.from === delimiterAt &&
+      item.cls?.split(' ').includes(LIVE_CLASS_NAMES.tableGridDelimiter))).toBe(true)
+  })
+
+  it('鼠标从段落跨行拖选到表格后方时停在表格边界，不把结构标记纳入选区', () => {
+    const doc = '前文\n\n| A | B | C |\n| --- | --- | --- |\n| 带 | s是 | 送 |\n\n后文'
+    const view = makeEditView(doc, 1)
+    view.dispatch({ selection: EditorSelection.single(1, doc.indexOf('后文') + 1),
+      userEvent: 'select.pointer' })
+    expect(view.state.selection.main.anchor).toBe(1)
+    expect(view.state.selection.main.head).toBe(doc.indexOf('| A | B | C |'))
+    expect(view.state.doc.toString()).toBe(doc)
+    const after = doc.indexOf('后文') + 1
+    view.dispatch({ selection: EditorSelection.single(after, 0), userEvent: 'select.pointer' })
+    expect(view.state.selection.main.head).toBe(doc.indexOf('| 带 | s是 | 送 |') + '| 带 | s是 | 送 |'.length)
+    view.destroy()
+  })
+
+  it('键盘跨过安全表格的非空选区删除不破坏隐藏结构', () => {
+    const doc = '前文\n\n| A | B | C |\n| --- | --- | --- |\n| 带 | s是 | 送 |\n\n后文'
+    const view = makeEditView(doc, 1)
+    view.dispatch({ selection: EditorSelection.single(1, doc.indexOf('后文') + 1), userEvent: 'select' })
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe(doc)
+    view.destroy()
+  })
+
+  it('中间空格连续退格后再输入仍包在中列网格标记中', () => {
+    const doc = '| 带 |  | 送 |\n| --- | --- | --- |\n| 左 | 右 | 末 |'
+    const line = doc.split('\n')[0]!
+    const middle = splitTableRowCells(line, 0)[1]!
+    const view = makeEditView(doc, middle.contentFrom)
+    deleteCharBackward(view)
+    deleteCharBackward(view)
+    expect(view.state.doc.line(1).text).toBe('| 带 || 送 |')
+    const at = view.state.selection.main.head
+    view.dispatch({ changes: { from: at, insert: '是' }, userEvent: 'input.type' })
+    expect(view.state.doc.line(1).text).toBe('| 带 |是| 送 |')
+    const rendered = view.state.field(liveDecorationsField).decos
+    const rebuilt = buildLivePreviewDecorations(view.state.doc, view.state.selection)
+    expect(RangeSet.eq([rendered], [rebuilt])).toBe(true)
+    const cells = view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')[0]!
+      .querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')
+    expect(cells).toHaveLength(3)
+    expect(cells[1]!.textContent).toContain('是')
+    view.destroy()
+  })
+
   it('表格各行带稳定行级类：表头/分隔/数据行区分', () => {
     const set = build(TABLE_DOC)
     // 4 行表格（header、delimiter、2 数据行）；行级装饰零宽 → @行首

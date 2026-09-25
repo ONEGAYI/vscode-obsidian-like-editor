@@ -71,7 +71,7 @@ Remove-Item Env:VSIDIAN_TEST_HOST_MODE
 
 ## 验证与性能
 
-- 本联合分支自动化套件包含 882 项 Vitest 单测、11 项启动器契约测试，以及开发态与 VSIX 安装态共用的 86 项真实 VSCode 1.86.2 宿主集成用例。覆盖单元格删除边界、中列点击后的可见光标、多表编辑后的行号绘制、真实 DOM 中文候选经 WorkspaceEdit 保存回读，以及关闭队列和确认重传；执行结果与人工复验见[验证清单](docs/specs/manual-verification.md)。
+- 本联合分支自动化套件包含 886 项 Vitest 单测、11 项启动器契约测试，以及开发态与 VSIX 安装态共用的 88 项真实 VSCode 1.86.2 宿主集成用例。覆盖单元格删除边界、跨行拖选时表格标记保护、中格空白退格后再输入的网格绘制、多表编辑后的行号绘制、真实 DOM 中文候选经 WorkspaceEdit 保存回读，以及关闭队列和确认重传；执行结果与人工复验见[验证清单](docs/specs/manual-verification.md)。
 - 性能实测与功能验证矩阵：[docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md)。
 - 人工验证项（IME/鼠标手感/远程环境）：[docs/specs/manual-verification.md](docs/specs/manual-verification.md)。
 

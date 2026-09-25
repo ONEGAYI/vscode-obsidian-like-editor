@@ -24,7 +24,7 @@
 //   （不再发送 edit.request、忽略 doc.changed）；doc.resync 兼作恢复信号
 // - seq 持久化：经 bridge.setState 保存，webview 重载（retainContextWhenHidden
 //   关闭导致的状态重建）后继续编号，宿主按 seq 幂等去重
-import { Annotation, ChangeSet, Compartment, EditorState, type Extension, type Text } from '@codemirror/state'
+import { Annotation, ChangeSet, Compartment, EditorSelection, EditorState, type Extension, type Text } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { liveLineNumbers, paintedLineNumbers } from './liveLineNumbers'
 import {
@@ -766,6 +766,16 @@ export class WebviewSyncController {
         }
         break
       }
+      case 'table.test.crossSelect': {
+        if (this.view && message.anchor <= this.view.state.doc.length &&
+            message.head <= this.view.state.doc.length) {
+          this.view.dispatch({
+            selection: EditorSelection.single(message.anchor, message.head),
+            userEvent: 'select.pointer',
+          })
+        }
+        break
+      }
       case 'table.test.type': {
         if (this.view && this.viewMode === 'live') {
           const range = this.view.state.selection.main
@@ -1055,6 +1065,7 @@ export class WebviewSyncController {
       headingFontPx,
       viewMode: this.viewMode,
       selectionOffset: this.view?.state.selection.main.from ?? 0,
+      selectionHead: this.view?.state.selection.main.head ?? 0,
       readingBlockCount: rStats?.mountedBlocks ?? 0,
       readingAnchorStart,
       // #7 按需挂载观测：块模型总量/挂载量/DOM 计数/解析次数/虚拟化状态
@@ -2369,6 +2380,13 @@ export class WebviewSyncController {
     }
     const guttersEl = view.dom.querySelector<HTMLElement>('.cm-gutters')
     const gridRow = view.contentDOM.querySelector<HTMLElement>('.vsidian-table-grid-row')
+    const delimiterRow = view.contentDOM.querySelector<HTMLElement>('.vsidian-table-grid-delimiter')
+    const headerRow = view.contentDOM.querySelector<HTMLElement>(
+      '.vsidian-table-grid-row.vsidian-table-header-line')
+    const headerCellBackgrounds = headerRow
+      ? [...headerRow.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')]
+        .map((cell) => getComputedStyle(cell).backgroundColor)
+      : []
     const firstCell = gridRow?.querySelector<HTMLElement>(':scope > .vsidian-table-grid-cell') ?? null
     const selectedRow = view.contentDOM.querySelector<HTMLElement>(
       '.vsidian-table-grid-row.vsidian-table-row-selected',
@@ -2478,6 +2496,8 @@ export class WebviewSyncController {
       table: {
         cellVisible,
         caretGridColumn,
+        delimiterDisplay: delimiterRow ? getComputedStyle(delimiterRow).display : null,
+        headerCellBackgrounds,
         gridDisplay: gridRow ? getComputedStyle(gridRow).display : null,
         cellBorderWidth: cellStyle?.borderLeftWidth ?? null,
         rowOutlineColor: rowStyle?.outlineColor ?? null,

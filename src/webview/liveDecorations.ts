@@ -217,7 +217,9 @@ function tableGridCellDeco(align: TableAlign | null): ReturnType<typeof Decorati
     : LIVE_CLASS_NAMES.tableGridCell
   let deco = tableGridCellDecos.get(cls)
   if (!deco) {
-    deco = Decoration.mark({ class: cls, inclusiveEnd: true })
+    // 内容恰好填满单元格区间时，网格 span 仍须包在内容 span 外层；
+    // 双端 inclusive 给 CM6 稳定的外层优先级，也让边界输入留在当前格。
+    deco = Decoration.mark({ class: cls, inclusiveStart: true, inclusiveEnd: true })
     tableGridCellDecos.set(cls, deco)
   }
   return deco
@@ -586,8 +588,12 @@ function emitForRange(
             addLineCls(lineNo, LIVE_CLASS_NAMES.tableGridRow)
             gridLines.set(lineNo, { kind, plan })
           }
+          // 只有光标直接停在分隔行才显露可编辑源码。跨行选区即使覆盖该行，
+          // 也继续隐藏结构标记，避免把 `| --- |` 当可选正文显示。
+          const editingDelimiter = selection.ranges.some((range) => range.empty &&
+            doc.lineAt(range.head).number === plan.delimiterLine)
           if (plan.delimiterLine >= fromLine && plan.delimiterLine <= toLine &&
-              !isLineActive(selection, doc, plan.delimiterLine)) {
+              !editingDelimiter) {
             addLineCls(plan.delimiterLine, LIVE_CLASS_NAMES.tableGridDelimiter)
           }
         }

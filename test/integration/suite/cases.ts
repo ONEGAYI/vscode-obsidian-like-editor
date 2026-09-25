@@ -171,6 +171,7 @@ interface ViewState {
   /** #6 模式切换观测 */
   viewMode?: 'live' | 'reading'
   selectionOffset?: number
+  selectionHead?: number
   readingBlockCount?: number
   readingAnchorStart?: number
   /** #7 按需挂载观测 */
@@ -287,6 +288,8 @@ interface ViewState {
     table?: {
       cellVisible: boolean
       caretGridColumn?: number | null
+      delimiterDisplay?: string | null
+      headerCellBackgrounds?: string[]
       gridDisplay: string | null
       cellBorderWidth: string | null
       rowOutlineColor: string | null
@@ -2083,6 +2086,49 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await poll('零宽空中格写回', () => doc.getText().includes('| 带 |零| 末 |') ? true : undefined)
     assert(await doc.save(), '三列表格保存失败')
     assert((await readDisk(name)) === doc.getText(), '三列点击写回与磁盘回读须一致')
+  }],
+
+  ['跨行选区不显露或选中安全表格分隔标记', async () => {
+    const name = 'table-cross-selection.md'
+    const source = '前文\n\n| 带 | s是 | 送 |\n| --- | --- | --- |\n| 甲 | 乙 | 丙 |\n\n后文'
+    await vscode.workspace.fs.writeFile(wsUri(name), Buffer.from(source))
+    await openWithEditor(name)
+    const initial = await waitSessionReady(name)
+    const uri = wsUri(name).toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'table.test.crossSelect', anchor: 1, head: source.indexOf('后文') + 1,
+    })
+    const state = await waitViewState(name, (v) => v.selectionHead === source.indexOf('| 带 | s是 | 送 |'))
+    assert(state.paint?.table?.delimiterDisplay === 'none',
+      `跨行选择后分隔行仍须隐藏：${JSON.stringify(state.paint?.table)}`)
+    assert(state.paint?.table?.gridDisplay === 'grid', '跨行选择后表格仍须绘制为网格')
+    const after = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(after.appliedEdits === initial.appliedEdits, '跨行选区不能改写源文')
+  }],
+
+  ['中格空白连续退格后再输入仍保持表头网格样式', async () => {
+    const name = 'table-middle-delete.md'
+    const source = '| 带 |  | 送 |\n| --- | --- | --- |\n| 左 | 右 | 末 |\n'
+    await vscode.workspace.fs.writeFile(wsUri(name), Buffer.from(source))
+    await openWithEditor(name)
+    await waitSessionReady(name)
+    const uri = wsUri(name).toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri(name))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.cellClick', rowIndex: 0, columnIndex: 1, point: 'right-edge' })
+    for (let i = 0; i < 2; i++) {
+      await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'backspace' })
+    }
+    await poll('中格空白退格后源文', () => doc.getText().startsWith('| 带 || 送 |') ? true : undefined)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.type', text: '是' })
+    await poll('中格再次输入写回', () => doc.getText().startsWith('| 带 |是| 送 |') ? true : undefined)
+    const state = await waitViewState(name, (v) => v.tableGrid?.selectedRowCells[1]?.includes('是') === true)
+    const backgrounds = state.paint?.table?.headerCellBackgrounds ?? []
+    assert(backgrounds.length === 3 && backgrounds.every((color) => color === backgrounds[0]),
+      `表头中格须与两侧同样绘制底色：${JSON.stringify(backgrounds)}`)
+    assert(state.paint?.table?.gridDisplay === 'grid', '退格再输入后表头仍须是网格')
+    assert(await doc.save(), '中格再次输入保存失败')
+    assert((await readDisk(name)) === doc.getText(), '中格退格再输入的磁盘回读须一致')
   }],
 
   ['阅读视图表格：真实 table 只读呈现与样式入口（#12）', async () => {

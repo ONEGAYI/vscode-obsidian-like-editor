@@ -229,13 +229,70 @@ function editableGridCellAt(state: EditorState, pos: number) {
   return { ...cell, cells, line }
 }
 
+/** 从当前网格装饰识别选区最先碰到的安全表格，避免局部缓存遗漏未改表。
+ *  反向拖选从锚点附近分段回查，长表格中不遍历整张表的每一行。 */
+function gridTableAcross(state: EditorState, from: number, to: number, reverse = false) {
+  const field = state.field(liveDecorationsField, false)
+  if (!field || from >= to) return null
+  const scan = (start: number, end: number): { from: number; to: number } | null => {
+    let found: { from: number; to: number } | null = null
+    let lastTableEnd = -1
+    field.decos.between(start, end, (at, next, deco) => {
+      if (at < lastTableEnd || at !== next ||
+          !deco.spec.class?.split(' ').includes(LIVE_CLASS_NAMES.tableGridRow)) return
+      const table = chainAt(field.tree, Math.min(at + 1, state.doc.length))
+        .find((node) => node.name === 'Table')
+      if (table) {
+        found = { from: table.from, to: table.to }
+        lastTableEnd = table.to
+        if (!reverse) return false
+      }
+    })
+    return found
+  }
+  if (!reverse) return scan(from, to)
+  for (let end = to; end > from;) {
+    const start = Math.max(from, end - 4096)
+    const found = scan(start, end)
+    if (found) return found
+    end = start
+  }
+  return null
+}
+
+/** 鼠标从表格外跨行拖选时停在网格边界，不把隐藏管道/分隔行纳入选区。 */
+const protectGridPointerSelection = EditorState.transactionFilter.of((tr) => {
+  if (tr.docChanged || tr.selection === undefined || !tr.isUserEvent('select.pointer') ||
+      tr.newSelection.ranges.length !== 1) return tr
+  const range = tr.newSelection.main
+  if (range.empty) return tr
+  const forward = range.anchor < range.head
+  const table = gridTableAcross(tr.startState, range.from, range.to, !forward)
+  const boundary = table && (forward
+    ? range.anchor < table.from && range.head > table.from ? table.from : null
+    : range.anchor > table.to && range.head < table.to ? table.to : null)
+  if (boundary === null) return tr
+  return {
+    selection: EditorSelection.single(range.anchor, boundary),
+    annotations: Transaction.userEvent.of('select.pointer'),
+    scrollIntoView: tr.scrollIntoView,
+  }
+})
+
 /** 原生删除命令可跨过隐藏源码。格内开始的编辑只修改这一格的可见内容。 */
 const protectGridCellContent = EditorState.transactionFilter.of((tr) => {
   if (!tr.docChanged || (!tr.isUserEvent('delete') && !tr.isUserEvent('input'))) return tr
   const ranges = tr.startState.selection.ranges
   if (ranges.length !== 1) return tr
   const cell = editableGridCellAt(tr.startState, ranges[0]!.anchor)
-  if (!cell) return tr
+  if (!cell) {
+    const range = ranges[0]!
+    if (!range.empty && !(range.from === 0 && range.to === tr.startState.doc.length) &&
+        gridTableAcross(tr.startState, range.from, range.to)) {
+      return [] // 键盘扩选等非鼠标路径也不能删除隐藏的安全表格源码。
+    }
+    return tr
+  }
   // 格内空白也是可编辑内容（包括刚键入的空格及 IME 预编辑替换）；
   // 边界取管道内侧，不用 trim 后的内容范围推断空白是否可删除。
   const lower = cell.from
@@ -489,6 +546,7 @@ export const tableEditing = [
   }),
   markTableCompositionInput,
   normalizeBlankRowInput,
+  protectGridPointerSelection,
   protectGridCellContent,
   keymap.of([{ key: 'Mod-a', run: selectGridCell }]),
   keymap.of([{ key: '|', run: tablePipeKeyHandler }]),
