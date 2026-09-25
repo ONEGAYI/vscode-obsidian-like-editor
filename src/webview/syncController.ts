@@ -2516,7 +2516,18 @@ export class WebviewSyncController {
       this.reassertReadingAnchor(start, 2)
     } else {
       this.modeAnchor = doc.length
+      // 双滚（QO To Bottom 同款）：第一滚走 CM6 标准路径（scrollIntoView
+      // 以高度模型定位），虚拟行高估算误差下可能停在「估算底部」；帧+宏
+      // 任务后按真实 scrollHeight 补滚（视口渲染挂载、docHeight 收敛后）
       view.dispatch({ effects: EditorView.scrollIntoView(doc.length, { y: 'end' }) })
+      scheduleFrame(() => {
+        setTimeout(() => {
+          if (this.view === view && this.viewMode !== 'reading') {
+            const scroller = view.scrollDOM
+            scroller.scrollTop = scroller.scrollHeight
+          }
+        }, 0)
+      })
     }
     this.outlineLocatedIndex = locateOutlineIndex(this.outlineItems, doc.lines)
     if (this.outlineLocatedIndex !== null) {
