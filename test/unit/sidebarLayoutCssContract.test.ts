@@ -30,14 +30,35 @@ describe('侧栏布局骨架 CSS 契约（#53）', () => {
     expect(main).toMatch(/flex-direction:\s*column/)
   })
 
-  it('侧栏默认收起不占位，open 类切换为可见 flex 列', () => {
-    const collapsed = rule('#app .vsidian-sidebar')
-    expect(collapsed).toMatch(/display:\s*none/)
-    expect(collapsed).toMatch(/width:\s*var\(--vsidian-sidebar-width,\s*280px\)/)
-    // 侧栏与主编辑区的视觉分界（用户可见的分隔线）
-    expect(collapsed).toMatch(/border-left:\s*1px solid var\(--vscode-panel-border/)
+  it('侧栏默认收起零宽不占位，open 类以宽度过渡展开（过渡动画）', () => {
+    // declaration 过滤区分主规则与 prefers-reduced-motion 媒体块内的同选择器规则
+    const collapsed = rule('#app .vsidian-sidebar', /width:\s*0/)
+    // 常驻 flex + 零宽表达收起：display 二值切换不可过渡，宽度可
+    expect(collapsed).toMatch(/display:\s*flex/)
+    expect(collapsed).toMatch(/width:\s*0/)
+    // 过渡期间内层内容（固定宽）由外层裁切，不随宽度挤压变形
+    expect(collapsed).toMatch(/overflow:\s*hidden/)
+    // 展开动画：宽度与边框一起过渡（ease-out，150ms）
+    expect(collapsed).toMatch(/transition:[^;]*width[^;]*0\.15s/)
+    // border-box 下收起态边框必须归零，否则残留 1px 占位竖线
+    expect(collapsed).toMatch(/border-left-width:\s*0/)
     const opened = rule('#app .vsidian-body.vsidian-sidebar-open .vsidian-sidebar')
-    expect(opened).toMatch(/display:\s*flex/)
+    expect(opened).toMatch(/width:\s*var\(--vsidian-sidebar-width,\s*280px\)/)
+    // 侧栏与主编辑区的视觉分界（用户可见的分隔线，展开态恢复）
+    expect(opened).toMatch(/border-left-width:\s*1px/)
+  })
+
+  it('侧栏内层子容器固定宽：宽度动画期间内容不被挤压', () => {
+    // 外层宽度 0↔280 过渡时，内层 toolbar/面板宿主保持目标宽——否则
+    // 内容随外层逐帧 reflow 挤压变形（展开动画的可视前提）
+    expect(rule('#app .vsidian-sidebar .vsidian-sidebar-toolbar'))
+      .toMatch(/width:\s*var\(--vsidian-sidebar-width,\s*280px\)/)
+    expect(rule('#app .vsidian-sidebar .vsidian-sidebar-panel'))
+      .toMatch(/width:\s*var\(--vsidian-sidebar-width,\s*280px\)/)
+  })
+
+  it('尊重系统减弱动画设置（prefers-reduced-motion 下禁用过渡）', () => {
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]{0,200}?\.vsidian-sidebar[\s\S]{0,120}?transition:\s*none/)
   })
 
   it('侧栏自有顶栏与主顶栏同高（对齐），面板区域弹性填充', () => {

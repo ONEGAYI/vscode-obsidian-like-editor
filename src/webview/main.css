@@ -142,9 +142,11 @@ body {
 /* ---- #53 顶栏图标化与右侧栏布局 ----
    骨架：#app > .vsidian-body（水平 flex）> .vsidian-main（主编辑区）+
    .vsidian-sidebar（右侧栏）。侧栏显隐唯一开关是 body 容器的
-   vsidian-sidebar-open 类：收起（默认）侧栏 display:none 不占位，
-   主编辑区占满全宽；展开侧栏固定宽 + 左缘分隔线，主编辑区 flex:1 收缩，
-   顶栏切换按钮（margin-left:auto）随之移向中间。
+   vsidian-sidebar-open 类：收起（默认）侧栏零宽（width:0 + 边框归零 +
+   overflow:hidden）不占位，主编辑区占满全宽；展开过渡到目标宽 + 左缘
+   分隔线，主编辑区 flex:1 收缩，顶栏切换按钮（margin-left:auto）随之
+   移向中间。宽度过渡即展开/收起动画：内层子容器固定目标宽，过渡期间
+   由外层裁切（内容不随宽度挤压变形）；prefers-reduced-motion 下禁用。
    公开变量入口（外部片段可覆盖）：--vsidian-sidebar-width（侧栏宽）/
    --vsidian-toolbar-height（两侧顶栏高度，取同一值保证对齐）。 */
 #app .vsidian-body {
@@ -161,18 +163,30 @@ body {
 }
 
 #app .vsidian-sidebar {
-  display: none;
+  display: flex;
   flex: 0 0 auto;
-  width: var(--vsidian-sidebar-width, 280px);
+  width: 0;
   box-sizing: border-box;
   flex-direction: column;
   min-width: 0;
+  overflow: hidden;
   border-left: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  border-left-width: 0;
   background-color: var(--vscode-sideBar-background, transparent);
+  transition:
+    width 0.15s ease-out,
+    border-left-width 0.15s ease-out;
 }
 
 #app .vsidian-body.vsidian-sidebar-open .vsidian-sidebar {
-  display: flex;
+  width: var(--vsidian-sidebar-width, 280px);
+  border-left-width: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #app .vsidian-sidebar {
+    transition: none;
+  }
 }
 
 /* 侧栏自有顶栏：与主编辑区顶栏同高对齐（同一高度变量），本期为空按钮
@@ -181,8 +195,9 @@ body {
   display: flex;
   align-items: center;
   flex: 0 0 auto;
-  height: var(--vsidian-toolbar-height, 30px);
+  width: var(--vsidian-sidebar-width, 280px);
   box-sizing: border-box;
+  height: var(--vsidian-toolbar-height, 30px);
   padding: 0 6px;
 }
 
@@ -201,6 +216,7 @@ body {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
+  width: var(--vsidian-sidebar-width, 280px);
   min-height: 0;
   overflow: hidden;
 }

@@ -4243,9 +4243,11 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const collapsedMainWidth = collapsed.sidebar!.mainWidthPx ?? 0
     assert(collapsedMainWidth > 0, '收起态主编辑区应有宽度')
 
-    // 展开：侧栏顶栏真实绘制于右侧空出区域，竖线变粗，主编辑区收缩
+    // 展开：侧栏顶栏真实绘制于右侧空出区域，竖线变粗，主编辑区收缩。
+    // 谓词等待动画终态（宽度过渡期间命中/宽度瞬时失真，轮询至到位）
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
-    const opened = await waitViewState('lf.md', (v) => v.sidebar?.open === true)
+    const opened = await waitViewState('lf.md', (v) => v.sidebar?.open === true &&
+      v.sidebar.sidebarToolbarPainted === true && (v.sidebar.sidebarWidthPx ?? 0) > 200)
     assert(opened.sidebar!.sidebarToolbarPainted === true,
       `展开时侧栏顶栏应实际绘制（elementFromPoint 应命中侧栏：${JSON.stringify(opened.sidebar)}）`)
     assert(Math.abs(parseFloat(opened.sidebar!.toggleBarStrokeWidth ?? 'x') - 3) < 0.01,
@@ -4271,8 +4273,11 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(afterToggle.appliedEdits === before.appliedEdits, '切换侧栏不得产生写回')
 
     // 收起回归：侧栏顶栏重新不可见、竖线回细线、名称回「展开右侧栏」
+    // （谓词等待收起动画终态：主编辑区宽度复原到基线 ±2px）
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
-    const recollapsed = await waitViewState('lf.md', (v) => v.sidebar?.open === false)
+    const recollapsed = await waitViewState('lf.md', (v) => v.sidebar?.open === false &&
+      v.sidebar.sidebarToolbarPainted === false &&
+      Math.abs((v.sidebar.mainWidthPx ?? -999) - collapsedMainWidth) < 2)
     assert(recollapsed.sidebar!.sidebarToolbarPainted === false, '收起后侧栏顶栏应不可见')
     assert(Math.abs(parseFloat(recollapsed.sidebar!.toggleBarStrokeWidth ?? 'x') - 1.5) < 0.01,
       `收起回归后图标竖线应回细线 1.5px，实际 ${String(recollapsed.sidebar!.toggleBarStrokeWidth)}`)
@@ -4296,18 +4301,21 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
     await waitViewState('untouched.md', (v) => v.sidebar?.open === true)
 
-    // 切到 reading：侧栏保持展开且同样真实绘制（两模式共用同一布局）
+    // 切到 reading：侧栏保持展开且同样真实绘制（两模式共用同一布局；
+    // 谓词含绘制命中，等侧栏展开宽度过渡完成）
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
     const readingOpen = await waitViewState('untouched.md',
-      (v) => v.viewMode === 'reading' && v.sidebar?.open === true)
+      (v) => v.viewMode === 'reading' && v.sidebar?.open === true &&
+        v.sidebar.sidebarToolbarPainted === true)
     assert(readingOpen.sidebar!.sidebarToolbarPainted === true,
       `阅读模式侧栏应同样展开绘制（${JSON.stringify(readingOpen.sidebar)}）`)
     assert((readingOpen.readingBlockCount ?? 0) > 0, '阅读模式正文应正常渲染（块数 > 0）')
 
-    // 切回 live：侧栏状态不因模式切换丢失
+    // 切回 live：侧栏状态不因模式切换丢失（谓词含绘制命中，维持终态等待）
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'live' })
     const liveOpen = await waitViewState('untouched.md',
-      (v) => v.viewMode === 'live' && v.sidebar?.open === true)
+      (v) => v.viewMode === 'live' && v.sidebar?.open === true &&
+        v.sidebar.sidebarToolbarPainted === true)
     assert(liveOpen.sidebar!.sidebarToolbarPainted === true, '切回 live 后侧栏应仍展开绘制')
 
     // 模式与侧栏切换全程零写回、零版本推进（不产生文档撤销记录）
@@ -4357,8 +4365,10 @@ export const cases: Array<[string, () => Promise<void>]> = [
       `大纲按钮可访问名称应为「大纲」，实际 ${String(collapsed.outline!.toggleAriaLabel)}`)
 
     // 展开：按钮与面板真实绘制（elementFromPoint 命中），可访问名称齐备
+    // （谓词等待展开动画终态：过渡期间面板中心点可能未入视口）
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
-    const opened = await waitViewState('outline.md', (v) => v.sidebar?.open === true)
+    const opened = await waitViewState('outline.md', (v) => v.sidebar?.open === true &&
+      v.outline?.togglePainted === true && v.outline.panelPainted === true)
     assert(opened.outline!.togglePainted === true,
       `大纲按钮应真实可见（命中失败：${JSON.stringify(opened.outline)}）`)
     assert(opened.outline!.panelPainted === true,
