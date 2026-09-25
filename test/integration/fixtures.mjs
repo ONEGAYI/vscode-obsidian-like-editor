@@ -222,6 +222,61 @@ const LINENUMBERS_DOC = [
   '',
 ].join('\n')
 
+// #54 大纲样例：跨级标题、同名标题（不丢失不合并）、ATX 全级别、Setext
+// 两级别、frontmatter 与代码围栏内伪标题（排除断言载体）
+const OUTLINE_DOC = [
+  '---',
+  'title: 大纲样例',
+  '# frontmatter 内伪标题',
+  '---',
+  '',
+  '# 文档主标题',
+  '',
+  '## 同名标题',
+  '',
+  '普通段落。',
+  '',
+  '### 三级标题',
+  '',
+  '## 同名标题',
+  '',
+  '# 跨级回一级',
+  '',
+  'Setext 一级',
+  '===========',
+  '',
+  'Setext 二级',
+  '-----------',
+  '',
+  '#### 四级标题',
+  '',
+  '##### 五级标题',
+  '',
+  '###### 六级标题',
+  '',
+  '```text',
+  '# 围栏内伪标题',
+  'Setext 伪标题',
+  '=============',
+  '```',
+  '',
+  '结尾段落。',
+  '',
+].join('\n')
+
+// #54 长大纲样例（评审修复）：101 个标题（约 22px/条 ≈ 2230px）远超任何
+// 合理窗口下的侧栏可视高度，是面板高度约束与纵向滚动的断言载体——修复
+// 前面板长到内容高度被宿主裁剪末条不可达；高度约束生效后条目还须不收缩
+// （否则内容被压扁仍不溢出）
+const OUTLINE_LONG_DOC = (() => {
+  const out = ['# 长文档主标题', '']
+  for (let i = 1; i <= 50; i++) {
+    out.push(`## 第 ${i} 章`, '', `第 ${i} 章的正文段落。`, '', `### 第 ${i} 章小节`, '', `小节 ${i} 的正文。`, '')
+  }
+  out.push('结尾段落。', '')
+  return out.join('\n')
+})()
+
 // #11 双链样例：合法四形态（按名/显式路径/别名/标题）+ 降级形态
 // （嵌入/块引用/残缺）+ 代码上下文（围栏与行内代码内不解析）
 const WIKILINKS_DOC = [
@@ -320,6 +375,8 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   writeFileSync(path.join(wsDir, 'links.md'), LINKS_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'links2.md'), LINKS_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'linenumbers.md'), LINENUMBERS_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'outline.md'), OUTLINE_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'outline-long.md'), OUTLINE_LONG_DOC, 'utf8')
   writeFileSync(path.join(wsDir, '链接目标.md'), '# 链接目标\n中文目标文档内容。\n', 'utf8')
   writeFileSync(path.join(wsDir, '无扩展名目标.md'), '# 无扩展名目标\n省略扩展名解析目标。\n', 'utf8')
   mkdirSync(path.join(wsDir, '子 目录'), { recursive: true })

@@ -12,6 +12,7 @@ import {
   chainAt,
   docInput,
   frontmatterRange,
+  headingLevelOf,
   markdownTreeParser,
   visitRange,
 } from '../../src/webview/markdownDoc'
@@ -133,5 +134,18 @@ describe('chainAt：位置处的命名节点链（包含判定）', () => {
     expect(names).not.toContain('Blockquote')
     expect(names).not.toContain('FencedCode')
     expect(names).not.toContain('ListItem')
+  })
+})
+
+describe('headingLevelOf：标题节点名 → 级别（live 装饰与大纲共用）', () => {
+  it('ATX 1–6 与 Setext 1–2 映射到对应级别，其余节点名 null', () => {
+    for (let lv = 1; lv <= 6; lv++) {
+      expect(headingLevelOf(`ATXHeading${lv}`)).toBe(lv)
+    }
+    expect(headingLevelOf('SetextHeading1')).toBe(1)
+    expect(headingLevelOf('SetextHeading2')).toBe(2)
+    for (const name of ['Paragraph', 'FencedCode', 'ATXHeading7', 'SetextHeading3', 'HeaderMark', '']) {
+      expect(headingLevelOf(name), `${name} 应判定为非标题`).toBeNull()
+    }
   })
 })

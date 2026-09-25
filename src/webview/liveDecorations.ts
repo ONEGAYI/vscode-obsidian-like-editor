@@ -12,7 +12,8 @@
 //     标记及相邻空格附近显形；任务 [x] 在标记范围外显示 checkbox widget
 //   · 内容 span：vsidian-header-{n} / vsidian-strong / vsidian-emphasis / vsidian-inline-code
 // - 间接装饰（纯视口内）→ ViewPlugin 按直接装饰集合与 visibleRanges 计算
-//   标题行强调与活动提示（不触碰 view/DOM 测量，防布局循环）
+//   光标所在标题行的活动提示（不触碰 view/DOM 测量，防布局循环）；
+//   #55 移除了视口内标题行左缘竖线，inview 类保留作 active 背景作用域
 // - 增量策略：键入路径的重建区间 = 变更行 ∪ 旧树相交装饰节点（映射后）
 //   ∪ 选区旧行/新行；结构编辑（围栏开闭、列表吸收等）经「容器分类差异
 //   探测」扩展重建范围至受影响容器边界——正确性优先，触发频率低
@@ -45,6 +46,7 @@ import {
   docInput,
   FM_SCAN_LIMIT,
   frontmatterRange,
+  headingLevelOf,
   markdownTreeParser,
   visitRange,
   type SourceRange,
@@ -441,7 +443,7 @@ function emitTableRowMarks(
   emitTablePipeMarks(out, doc, line.from)
 }
 
-/** 行是否被选区覆盖（仅用于标题行视口强调；mark 显形用 selectionTouchesRange）。 */
+/** 行是否被选区覆盖（仅用于标题行活动背景提示；mark 显形用 selectionTouchesRange）。 */
 export function isLineActive(selection: EditorSelection, doc: Text, lineNumber: number): boolean {
   for (const r of selection.ranges) {
     if (doc.lineAt(r.from).number <= lineNumber && lineNumber <= doc.lineAt(r.to).number) {
@@ -459,19 +461,6 @@ export function selectionTouchesRange(selection: EditorSelection, from: number, 
     }
   }
   return false
-}
-
-/** ATXHeading{1..6} / SetextHeading{1..2} → 级别；其余 null */
-function headingLevelOf(name: string): number | null {
-  let m = /^ATXHeading([1-6])$/.exec(name)
-  if (m) {
-    return Number(m[1])
-  }
-  m = /^SetextHeading([1-2])$/.exec(name)
-  if (m) {
-    return Number(m[1])
-  }
-  return null
 }
 
 /** 名为 name 的直接子节点（mark 查找用） */
@@ -1194,8 +1183,9 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
 
 /**
  * 间接装饰构建（纯数据输入：doc/visibleRanges/selection/直接装饰集）：
- * 视口内标题行的强调与光标所在标题行的强调提示。标题行身份来自直接装饰集
- * （树驱动），围栏内伪标题天然不参与。
+ * 视口内标题行挂 inview 类，光标所在行另加 active（行背景强调提示，
+ * CSS 见 main.css——#55 已移除左缘竖线，类不再单独绘制任何样式）。
+ * 标题行身份来自直接装饰集（树驱动），围栏内伪标题天然不参与。
  */
 export function buildViewportLiveDecorations(
   doc: Text,
