@@ -13,6 +13,7 @@
 import MarkdownIt, { type Env, type StateInline, type Token } from 'markdown-it'
 import katexPlugin from '@vscode/markdown-it-katex'
 import { MATH_CLASS_NAMES, stripInlineTexTicks } from '../shared/math'
+import { MERMAID_CLASS_NAMES, MERMAID_CODE_ATTR, MERMAID_STATE_ATTR, isMermaidInfo } from '../shared/mermaid'
 import { WIKILINK_CLASS_NAMES, parseWikilinkInner } from '../shared/wikilink'
 import { renderMathHtml } from './mathRenderCache'
 import { tableCellBreakLength } from './tableCells'
@@ -50,6 +51,30 @@ function escapeHtmlText(s: string): string {
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
+}
+
+/**
+ * Mermaid fence 渲染规则（#60）：覆盖默认 fence 规则——info 为 mermaid 的
+ * 围栏渲染为空容器 div（稳定类名 + data 属性携带转义源码 + pending 状态），
+ * 真正的渲染在块挂载钩子（mermaidRender.renderMermaidIn）里经 DOM API 完成。
+ * 设计使然不走 markdown-it 产物管线：mermaid SVG 内嵌 <style> 子元素会被
+ * sanitizeReadingDom 剥除导致配色丢失（净化层语义保持不变），容器路径由
+ * mermaid 自产 SVG + securityLevel:'strict' + CSP 兜底安全边界。
+ * 规则作用于所有层级的 fence（含列表/引用内嵌套），非 mermaid fence 走默认。
+ */
+function installMermaidFenceRenderer(md: InstanceType<typeof MarkdownIt>): void {
+  const defaultFence = md.renderer.rules.fence
+  md.renderer.rules.fence = (tokens, idx, options, env, self) => {
+    const token = tokens[idx]!
+    if (!isMermaidInfo(token.info ?? '')) {
+      return defaultFence!(tokens, idx, options, env, self)
+    }
+    // 去掉尾部换行与 live 侧围栏内容口径对齐（缓存键一致）；属性内换行
+    // 转义为 &#10;（innerHTML 解析回 \n，html 字符串本身保持单行可读）
+    const code = token.content.replace(/\n$/, '')
+    const attr = escapeHtmlText(code).replaceAll('\n', '&#10;')
+    return `<div class="${MERMAID_CLASS_NAMES.diagram}" ${MERMAID_CODE_ATTR}="${attr}" ${MERMAID_STATE_ATTR}="pending"></div>\n`
+  }
 }
 
 /**
@@ -148,6 +173,8 @@ export function createMarkdownRenderer(): InstanceType<typeof MarkdownIt> {
   // shared/math.ts 对齐）；渲染规则覆盖为带稳定类名 + 原文降级
   md.use(katexPlugin, { throwOnError: true })
   installMathRenderers(md)
+  // #60 Mermaid：fence 规则覆盖为容器输出（挂载后经 DOM API 渲染 SVG）
+  installMermaidFenceRenderer(md)
   // 编辑态把格内回车存成 br。阅读态只在表格 inline token 里重新解析
   // 无属性 br；全局 html:false 继续转义其他 HTML，代码片段由解析器保留字面值。
   md.inline.ruler.before('html_inline', 'vsidian_table_break', (state, silent) => {

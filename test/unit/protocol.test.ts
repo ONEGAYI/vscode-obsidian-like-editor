@@ -326,6 +326,58 @@ describe('isWebviewToHost', () => {
     expect(isWebviewToHost(base)).toBe(true)
   })
 
+  it('Mermaid 观测与绘制样本校验（#60）：计数/paint.mermaid 类型必须可信', () => {
+    const base = { kind: 'view.state', text: '```mermaid\nA-->B\n```', docLength: 23, lineCount: 3, renderedLines: 3 }
+    // 合法：计数非负整数、paint.mermaid 形态正确（含分态计数）
+    expect(
+      isWebviewToHost({
+        ...base,
+        liveMermaidCount: 1,
+        readingMermaidCount: 1,
+        paint: {
+          textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none',
+          darkTheme: false, caretColor: null,
+          mermaid: { visible: true, display: 'block', rendered: 1, error: 0, count: 1 },
+        },
+      }),
+    ).toBe(true)
+    // 非法：计数负数 / 非整数、paint.mermaid 字段类型与分态计数错误
+    expect(isWebviewToHost({ ...base, liveMermaidCount: -1 })).toBe(false)
+    expect(isWebviewToHost({ ...base, readingMermaidCount: 1.5 })).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        paint: {
+          textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none',
+          darkTheme: false, caretColor: null,
+          mermaid: { visible: 'true', display: 'block', rendered: 1, error: 0, count: 1 },
+        },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        paint: {
+          textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none',
+          darkTheme: false, caretColor: null,
+          mermaid: { visible: true, display: null, rendered: -1, error: 0, count: 1 },
+        },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        paint: {
+          textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none',
+          darkTheme: false, caretColor: null,
+          mermaid: { visible: true, display: 'block', rendered: 1, error: 'x', count: 1 },
+        },
+      }),
+    ).toBe(false)
+    // 缺省合法（无 mermaid 字段的旧样本）
+    expect(isWebviewToHost(base)).toBe(true)
+  })
+
   it('拒绝 null、非对象与数组', () => {
     expect(isWebviewToHost(null)).toBe(false)
     expect(isWebviewToHost(undefined)).toBe(false)

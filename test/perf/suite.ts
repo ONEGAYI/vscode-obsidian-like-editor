@@ -273,6 +273,8 @@ export async function run(): Promise<void> {
     ['imageDense', 'perf-images.md'],
     // #59 公式密集档：与图片档同构的两种视图探针（渲染缓存的宿主车道数据）
     ['mathDense', 'perf-math.md'],
+    // #60 图表密集档：懒加载/串行渲染/缓存克隆与挂载回收的宿主车道数据
+    ['mermaidDense', 'perf-mermaid.md'],
   ]) {
     const { uri, view, byteSize, openToReadyMs, openToEditableMs, openToFirstInputMs, pollIntervalMs } = await openWithTiming(file)
     const liveReport = (await vscode.commands.executeCommand(CMD.perfProbe, uri.toString(),

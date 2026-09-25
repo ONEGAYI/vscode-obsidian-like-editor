@@ -847,3 +847,51 @@ body {
   border-radius: 2px;
   padding: 0 2px;
 }
+
+/* ---- #60 Mermaid 围栏渲染（追加区：live widget 与阅读 fence 容器共用，勿混入上方段落） ---- */
+
+/* 渲染容器：块级占位（渲染前有高度语义）、水平可滚（宽图不遮挡周围文本）；
+   居中呈现与 Obsidian 的 .mermaid 对齐 */
+#app .vsidian-mermaid {
+  display: block;
+  margin: 0.75em 0;
+  overflow-x: auto;
+  text-align: center;
+}
+
+/* SVG 宽度受容器约束：图形不超出正文列宽（高度随宽等比缩放） */
+#app .vsidian-mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* 阅读块级容器（mermaid 围栏整块成块）：块级 margin 交给内层容器，
+   块元素自身只保留与相邻块的间距语义 */
+#app .vsidian-view-reading .vsidian-reading-mermaid {
+  margin: 0;
+}
+
+/* 降级态（语法/渲染失败）：错误信息 + 源码可读，浅红底标记异常，
+   不外溢邻近内容；颜色走 VSCode 主题变量保证明暗可读 */
+#app .vsidian-mermaid.vsidian-mermaid-error {
+  border-left: 2px solid var(--vscode-editorError-foreground, #f14c4c);
+  background-color: var(--vsidian-mermaid-error-background, rgba(241, 76, 76, 0.10));
+  border-radius: 4px;
+  padding: 6px 10px;
+  text-align: left;
+}
+
+#app .vsidian-mermaid .vsidian-mermaid-error-message {
+  color: var(--vscode-editorError-foreground, #f14c4c);
+  font-family: var(--vscode-ui-font-family, sans-serif);
+  font-size: 0.9em;
+  margin-bottom: 4px;
+}
+
+#app .vsidian-mermaid .vsidian-mermaid-error-source {
+  font-family: var(--vscode-editor-font-family, monospace);
+  color: var(--vscode-textPreformat-foreground, var(--vscode-editor-foreground));
+  white-space: pre-wrap;
+  margin: 0;
+  text-align: left;
+}

@@ -1,6 +1,6 @@
 # Obsidian 选择器映射表（一期稳定样式契约）
 
-状态：工单 #6 交付物，2026-09-23；#8 补 span 级映射与阅读语义标签结构（2026-09-24）；#9 补任务勾选交互类（2026-09-24）；#10 补链接/图片映射（2026-09-24）；#12 补表格映射（2026-09-24）；#11 补双链映射（2026-09-24）；#42 补实时预览表格网格入口（2026-09-24）；#59 补公式映射（2026-09-25）。依据 [ADR-0004](../adr/0004-stable-styling-contract.md)。
+状态：工单 #6 交付物，2026-09-23；#8 补 span 级映射与阅读语义标签结构（2026-09-24）；#9 补任务勾选交互类（2026-09-24）；#10 补链接/图片映射（2026-09-24）；#12 补表格映射（2026-09-24）；#11 补双链映射（2026-09-24）；#42 补实时预览表格网格入口（2026-09-24）；#59 补公式映射（2026-09-25）；#60 补 Mermaid 图表映射（2026-09-25）。依据 [ADR-0004](../adr/0004-stable-styling-contract.md)。
 
 本文记录一期已建立的稳定类名/CSS 变量入口与 Obsidian 同款选择器的核对结果，供二期自定义 CSS 片段兼容使用。**边界声明**：
 
@@ -131,6 +131,24 @@
 - 跨行 `$$` 块表由 StateField 增量维护（docChanged 时种子重扫，选区移动零成本）；跨行 replace 装饰走 StateField（CM6 约束），widget DOM 按视口惰性。
 - 阅读侧 `$$` 块独立成块（`vsidian-reading-math` 块类，挂载即渲染、卸载即释放，高度估计 1.5× 行高起步由 ResizeObserver 实测回填）。
 
+## Mermaid 图表（#60）
+
+#60 起两种视图渲染语言标记为 `mermaid` 的围栏代码块（mermaid 11.12.2 vendored 独立产物 `out/webview/mermaid.js`，存在 mermaid 围栏时按需 `<script>` 加载）。**形态声明**：info string 精确匹配 `mermaid`（trim 后全等，大小写敏感）；普通围栏与外层长围栏内的伪围栏、缩进 ≥4 的围栏不渲染；未闭合围栏降级为源码。语法/渲染失败按**错误态**降级（错误信息 + 源码可读，不吞后续块，错误结果缓存不重试）；明暗主题联动重渲染（缓存随主题清空）。围栏内链接不做跳转处理（securityLevel `strict`，显示为纯文本）。
+
+| 本项目稳定类名 | 用途 | Obsidian 对应选择器 | 核对结果 |
+| --- | --- | --- | --- |
+| `.vsidian-mermaid`（live widget 外层与阅读 fence 容器共用） | mermaid 围栏渲染容器（挂载后内含 mermaid SVG；携带 `data-vsidian-mermaid-code` 源码与 `data-vsidian-mermaid-state` 状态） | `.mermaid`（Obsidian 阅读渲染的图表容器） | 语义等价（呈现级）。断言：集成 `paint.mermaid.visible`（绘制层命中）与分态计数（`rendered` / `error`）；CSS 契约（`mermaidPaintCssContract.test.ts`）钉 `display:block` + `overflow-x:auto` 与 SVG `max-width:100%` |
+| `.vsidian-mermaid svg` | mermaid 自产 SVG（宽度受容器约束、高度等比） | `.mermaid svg` | 语义等价。已验证：浏览器回归真实渲染（CSP 复刻页面，无 unsafe-eval） |
+| `.vsidian-reading-mermaid`（阅读块级） | mermaid 围栏整块成块的块元素类（豁免 60 行大围栏切片；挂载即渲染、卸载随块释放） | `.markdown-preview-view .mermaid` 方向 | 语义等价（块级布局）。断言：集成「阅读模式 Mermaid 渲染」用例（容器计数 + 绘制层） |
+| `.vsidian-mermaid-error`（两视图共用） | 语法/渲染失败的降级态：错误信息（`.vsidian-mermaid-error-message`）+ 源码（`.vsidian-mermaid-error-source`）可读，光标进入围栏仍可编辑 | `.mermaid error` 方向 | 语义等价（降级态）。CSS 契约钉错误色变量与左对齐不外溢 |
+
+行为边界（非样式映射，随 #60 记录）：
+
+- 形态学单一事实源 `src/shared/mermaid.ts`（CommonMark 围栏状态机行扫描，含非 mermaid 围栏的嵌套抑制），阅读侧为 markdown-it fence 渲染规则——两处判定逐条对齐；已知差异（引用行 `> ```mermaid` live 显源码、阅读渲染）记录于 `docs/perf/2026-09-mermaid-rendering.md`，降级方向安全。
+- 渲染产物按源文本 LRU 缓存（64 条）；同一缓存条目插入多个容器时克隆改写全部 SVG id 与引用（文档内 id 唯一、内嵌 `<style>` 选择器不串图）。
+- SVG 经 DOM API 插入专用容器，**不经过** sanitizeReadingDom（净化层剥 `<style>` 会毁配色）——安全边界由 mermaid 自产 SVG + `securityLevel:'strict'` + webview CSP 三层兜底。
+- live 跨行 replace 装饰走 StateField（CM6 约束），围栏表增量重建以变更前最后一个已闭合围栏为顶层锚点。
+
 ## 悬浮提示等既有稳定类（沿用 #4/#5，与 Obsidian 无对应）
 
 `.vsidian-suspend-banner`（冲突暂停横幅）、`.vsidian-toolbar` 与 `.vsidian-mode-toggle`（模式切换工具栏）：本项目自有 UI，无 Obsidian 对应物，不参与兼容承诺。
@@ -154,7 +172,7 @@
 
 - 片段：`media/css-contract-probe.css`，随 webview HTML 加载（CSP `style-src` 允许的扩展资源）。仅用无视觉影响的属性（`text-decoration-color`，在无 `text-decoration-line` 时不呈现）与探针变量。#8 追加 span 级类与阅读语义标签的探针规则（`.vsidian-strong`/`.vsidian-inline-code`/`.vsidian-code-line`/`.vsidian-reading-block strong`）；#9 追加任务 checkbox 探针规则（`.vsidian-task-checkbox`/`.vsidian-reading-task-checkbox`）；#10 追加链接/图片探针规则（`.vsidian-link`/`.vsidian-reading-block a`/`.vsidian-reading-block img.vsidian-image`）；#12 追加表格探针规则（`.vsidian-table-pipe`/`.vsidian-reading-block table`）；#11 追加双链探针规则（`.vsidian-wikilink`/`.vsidian-reading-block a.vsidian-wikilink`）。
 - 观测：`view.state` 回报的 `cssProbe` 字段（`liveHeadingDecorationColor` / `readingHeadingDecorationColor` / `readingVarProbe`；#8 追加 `liveStrongDecorationColor` / `liveInlineCodeDecorationColor` / `liveCodeLineDecorationColor` / `readingStrongDecorationColor`；#9 追加 `liveTaskCheckboxDecorationColor` / `readingTaskCheckboxDecorationColor`；#10 追加 `liveLinkDecorationColor` / `readingLinkDecorationColor` / `readingImageDecorationColor`；#12 追加 `liveTablePipeDecorationColor` / `readingTableDecorationColor`；#11 追加 `liveWikilinkDecorationColor` / `readingWikilinkDecorationColor`；#59 追加 `liveMathFontFamily` / `readingMathFontFamily`——取 `.katex` 层 computed font-family，KaTeX 样式/字体管线失效时回落 body 字体），由 webview 读取目标元素 computed style 填充；目标元素不存在时为 `null`。
-- 断言：集成用例「稳定样式契约」（`test/integration/suite/cases.ts`）在真实 VSCode 1.86.2 宿主内验证两种视图的类名命中与变量管道；#12 表格断言并入「表格装饰与单元格编辑写回」「阅读视图表格」用例。#59 公式断言在「live 公式渲染与绘制层」「阅读模式公式渲染」等用例（`paint.math` 绘制层 + 字体探针）。
+- 断言：集成用例「稳定样式契约」（`test/integration/suite/cases.ts`）在真实 VSCode 1.86.2 宿主内验证两种视图的类名命中与变量管道；#12 表格断言并入「表格装饰与单元格编辑写回」「阅读视图表格」用例。#59 公式断言在「live 公式渲染与绘制层」「阅读模式公式渲染」等用例（`paint.math` 绘制层 + 字体探针）；#60 图表断言在「live Mermaid 渲染与绘制层」「阅读模式 Mermaid 渲染」等用例（`paint.mermaid` 绘制层 + 分态计数）。
 
 ## 已知不支持项（如实清单）
 

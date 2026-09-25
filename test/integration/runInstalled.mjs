@@ -17,7 +17,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { generatePerfSample, generateReadingSample } from '../perf/gen-sample.mjs'
+import { generatePerfSample, generateReadingSample, generateMermaidDenseSample } from '../perf/gen-sample.mjs'
 import { writeFixtures, LARGE_DOC_LINES } from './fixtures.mjs'
 import { buildTestHostArgs, resolveTestHostMode, runTestHost } from './testHost.mjs'
 
@@ -41,7 +41,7 @@ function resolveVsix() {
 const wsDir = mkdtempSync(path.join(tmpdir(), 'vsidian-inst-'))
 try {
   const vsix = resolveVsix()
-  writeFixtures(wsDir, { generatePerfSample, generateReadingSample })
+  writeFixtures(wsDir, { generatePerfSample, generateReadingSample, generateMermaidDenseSample })
   const vscodeExecutablePath = await downloadAndUnzipVSCode({ version: '1.86.2' })
 
   console.log(`[runInstalled] VSIX：${vsix}`)

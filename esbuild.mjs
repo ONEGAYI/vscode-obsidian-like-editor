@@ -2,6 +2,10 @@
 // - extension host 端：src/extension.ts -> out/extension.js（node18 / cjs / external vscode）
 // - webview 端：src/webview/main.ts -> out/webview/main.js（chrome118 / iife，css 随 import 打包为同名 .css）
 // - 设置页 webview 端（#33）：src/webview/settingsMain.ts -> out/webview/settings.js（同 browser/iife 形态）
+// - Mermaid 独立产物（#60）：src/webview/mermaidEntry.ts -> out/webview/mermaid.js
+//   （同 browser/iife 形态）。mermaid 不进主 bundle（约 2.7MB 会让每个 webview
+//   启动都付出解析成本），宿主在 webview HTML 注入资源 URI、webview 存在
+//   mermaid 围栏时按需 <script> 加载。
 // - 集成测试入口（仅开发构建）：test/integration/suite/index.ts -> out/test/integration/suite/index.js
 // 类型检查由 `tsc --noEmit`（npm run typecheck / compile）负责，esbuild 只做转译打包。
 //
@@ -80,6 +84,14 @@ const targets = [
     // 设置页 webview 产物（#33）：独立入口，样式经 import 产出 settings.css
     entryPoints: ['src/webview/settingsMain.ts'],
     outfile: 'out/webview/settings.js',
+    ...webviewBase,
+  },
+  {
+    // Mermaid 独立产物（#60）：经 ESM 源打包（官方 UMD 的模块作用域下
+    // 全局自赋值会落空抛错，见 mermaidEntry.ts 头注释），入口显式挂
+    // globalThis.mermaid；minify 后 2,724,795 B，与官方预压缩产物相当
+    entryPoints: ['src/webview/mermaidEntry.ts'],
+    outfile: 'out/webview/mermaid.js',
     ...webviewBase,
   },
 ]
