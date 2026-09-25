@@ -27,6 +27,7 @@ import {
   RangeSet,
   StateField,
   Text,
+  type EditorState,
   type Extension,
   type Range,
   type Transaction,
@@ -1230,7 +1231,75 @@ const inviewActiveDeco = Decoration.line({
  * 浏览器默认选区定位晚于 mousedown 的情况，空格也必须可点可编辑。 */
 const gridPointerDown = new WeakMap<EditorView, { x: number; y: number }>()
 
-/** 鼠标拖选、双击和三击都只在起始格的内容区间内定位。 */
+/**
+ * #57：把落在安全表格隐藏结构（管道 / 分隔行 / 格间空白）上的选区端点
+ * 收缩到最近的可见内容边界；端点已在可见格内容或表外文本上时返回 null。
+ * forward 表示端点相对选区另一端向前：向前取 ≤pos 的最近边界（不吞入
+ * 前方格），向后取 ≥pos 的最近边界。选区因此可以跨格、跨行与跨进表格，
+ * 而删除防护由 tableEditing 的选区级规划承担。
+ */
+export function snapGridSelectionHead(state: EditorState, pos: number, forward: boolean): number | null {
+  const field = state.field(liveDecorationsField, false)
+  if (!field) return null
+  const line = state.doc.lineAt(pos)
+  const table = chainAt(field.tree, Math.min(line.from + 1, state.doc.length))
+    .find((node) => node.name === 'Table')
+  if (!table) return null
+  // 网格行装饰存在即意味着 plan 已缓存（装饰发射与缓存同源）；未缓存视为
+  // 非网格表，不干预（视口外调用理论不可达，posAtCoords 只产生可见位置）。
+  const plan = field.gridPlans.get(table.from)
+  if (!plan) return null
+  const columns = plan.columns
+  const isDelimiter = line.number === plan.delimiterLine
+  const isContent = plan.rows.has(line.number)
+  if (!isDelimiter && !isContent) return null
+  const boundariesOf = (lineNo: number): number[] | null => {
+    const target = state.doc.line(lineNo)
+    const cells = tableRowCellsForColumns(target.text, target.from, columns)
+    return cells ? cells.flatMap((cell) => [cell.contentFrom, cell.contentTo]) : null
+  }
+  if (isContent) {
+    const cells = tableRowCellsForColumns(line.text, line.from, columns)
+    if (!cells) return null
+    // 格区间（含首尾空白/填充）归属该格：clamp 到内容区间
+    for (const cell of cells) {
+      if (pos >= cell.from && pos <= cell.to) {
+        return cell.contentFrom === cell.contentTo && cell.from < cell.to
+          ? cell.from
+          : Math.max(cell.contentFrom, Math.min(cell.contentTo, pos))
+      }
+    }
+    // 行首/行间/行尾管道：收缩到本行最近的可见内容边界
+    const boundaries = cells.flatMap((cell) => [cell.contentFrom, cell.contentTo])
+    if (forward) {
+      const before = boundaries.filter((b) => b <= pos)
+      if (before.length) return Math.max(...before)
+    } else {
+      const after = boundaries.filter((b) => b >= pos)
+      if (after.length) return Math.min(...after)
+    }
+  }
+  // 分隔行或行首管道之前：跨行取相邻内容行的末/首内容边界
+  const numbers = [...plan.rows.keys()].sort((a, b) => a - b)
+  if (forward) {
+    for (let i = numbers.length - 1; i >= 0; i--) {
+      if (numbers[i]! > line.number) continue
+      const boundaries = boundariesOf(numbers[i]!)
+      const before = boundaries?.filter((b) => b <= pos) ?? []
+      if (before.length) return Math.max(...before)
+    }
+  } else {
+    for (let i = 0; i < numbers.length; i++) {
+      if (numbers[i]! < line.number) continue
+      const boundaries = boundariesOf(numbers[i]!)
+      const after = boundaries?.filter((b) => b >= pos) ?? []
+      if (after.length) return Math.min(...after)
+    }
+  }
+  return null
+}
+
+/** 鼠标拖选可跨格延伸（#57）；双击和三击仍只在起始格的内容区间内定位。 */
 const gridCellMouseSelection = EditorView.mouseSelectionStyle.of((view, event) => {
   if (event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey) return null
   const target = event.target instanceof Element ? event.target : null
@@ -1245,16 +1314,25 @@ const gridCellMouseSelection = EditorView.mouseSelectionStyle.of((view, event) =
   // 保留的输入节点变成下一次键入文字的前置空格。
   const empty = range.contentFrom === range.contentTo && range.from < range.to
   let from = empty ? range.from : range.contentFrom, to = empty ? range.from : range.contentTo
-  const clamp = (pos: number) => Math.max(from, Math.min(to, pos))
-  const hit = (e: MouseEvent) => clamp(view.posAtCoords({ x: e.clientX, y: e.clientY }) ?? from)
+  // #57：落点在起始格内容上原样使用；越出起始格时收缩到最近的可见
+  // 内容边界（隐藏管道 / 分隔行 / 格间空白不作选区端点），表外文本原样。
+  const hit = (e: MouseEvent) => {
+    const pos = view.posAtCoords({ x: e.clientX, y: e.clientY }) ?? from
+    if (pos >= from && pos <= to) return pos
+    return snapGridSelectionHead(view.state, pos, pos > from) ?? pos
+  }
   const start = hit(event)
-  let anchor = event.shiftKey ? clamp(view.state.selection.main.anchor) : start
+  const previousAnchor = view.state.selection.main.anchor
+  let anchor = event.shiftKey
+    ? (previousAnchor >= from && previousAnchor <= to ? previousAnchor
+      : snapGridSelectionHead(view.state, previousAnchor, previousAnchor < start) ?? previousAnchor)
+    : start
   const selection = (head: number) => anchor === head
     ? EditorSelection.create([EditorSelection.cursor(head, empty ? 1 : head === to ? -1 : head === from ? 1 : 0)])
     : EditorSelection.single(anchor, head)
   const word = event.detail === 2 ? view.state.wordAt(start) : null
-  let startFrom = event.detail >= 3 ? from : word ? clamp(word.from) : start
-  let startTo = event.detail >= 3 ? to : word ? clamp(word.to) : start
+  let startFrom = event.detail >= 3 ? from : word ? Math.max(from, Math.min(to, word.from)) : start
+  let startTo = event.detail >= 3 ? to : word ? Math.max(from, Math.min(to, word.to)) : start
   gridPointerDown.set(view, { x: event.clientX, y: event.clientY })
   return {
     get(current, extend) {
@@ -1262,10 +1340,11 @@ const gridCellMouseSelection = EditorView.mouseSelectionStyle.of((view, event) =
       if (extend) return selection(end)
       if (event.detail >= 3) return EditorSelection.single(from, to)
       if (word) {
+        // 双击的起始词对齐保留；拖动侧按落点收缩（wordAt 的词不跨隐藏管道）
         const currentWord = view.state.wordAt(end)
         return end < startFrom
-          ? EditorSelection.single(startTo, clamp(currentWord?.from ?? end))
-          : EditorSelection.single(startFrom, clamp(currentWord?.to ?? end))
+          ? EditorSelection.single(startTo, currentWord?.from ?? end)
+          : EditorSelection.single(startFrom, currentWord?.to ?? end)
       }
       return selection(end)
     },

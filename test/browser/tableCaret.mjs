@@ -131,7 +131,7 @@ try {
     }
   }
   const navigationFailures = []
-  for (const scenario of ['horizontal-wrap', 'horizontal-wrap-empty', 'vertical-inside', 'vertical-outside', 'vertical-empty', 'vertical-wrapped', 'enter-cell', 'enter-empty', 'enter-body', 'enter-middle', 'enter-repeat', 'enter-code', 'enter-code-start', 'enter-code-end', 'enter-ime']) {
+  for (const scenario of ['horizontal-wrap', 'horizontal-wrap-empty', 'vertical-inside', 'vertical-outside', 'vertical-empty', 'vertical-wrapped', 'enter-cell', 'enter-empty', 'enter-body', 'enter-middle', 'enter-repeat', 'enter-code', 'enter-code-start', 'enter-code-end', 'enter-ime', 'drag-row', 'drag-column', 'drag-table-outside']) {
     const page = await browser.newPage()
     try {
       await page.setContent('<div id="app"></div>')
@@ -250,6 +250,76 @@ try {
         assert((await page.evaluate(() => window.readEditor())).head > initial.head, '软换行下移应在格内前进')
         await page.keyboard.press('ArrowUp')
         await checkCell(0, 1)
+      } else if (scenario.startsWith('drag-')) {
+        // #57：真实鼠标拖选（page.mouse）建立跨格/整表选区，再以原生按键删除。
+        const gridState = () => page.evaluate(() => ({
+          ...window.readEditor(),
+          rows: document.querySelectorAll('.vsidian-table-grid-row').length,
+          delimiterHidden: getComputedStyle(document.querySelector('.vsidian-table-grid-delimiter') ?? document.body).display === 'none',
+        }))
+        const dragTo = async (from, to) => {
+          await page.mouse.move(from.x, from.y)
+          await page.mouse.down()
+          await page.mouse.move(to.x, to.y, { steps: 6 })
+          await page.mouse.up()
+        }
+        if (scenario === 'drag-row') {
+          const a = await cell(1, 0).boundingBox()
+          const b = await cell(1, 1).boundingBox()
+          await dragTo({ x: a.x + 14, y: a.y + a.height / 2 },
+            { x: b.x + 26, y: b.y + b.height / 2 })
+          const rowAt = source.indexOf('| B1 | B2 |')
+          const sel = await gridState()
+          assert(sel.from >= rowAt + 1 && sel.from <= rowAt + 5,
+            `拖选头应落在 B1 格内: ${JSON.stringify(sel)}`)
+          assert(sel.to >= rowAt + 6 && sel.to <= rowAt + 10,
+            `拖选尾应跨到 B2 格内: ${JSON.stringify(sel)}`)
+          assert(sel.to > sel.from, '拖选选区应已建立')
+          await page.keyboard.press('Backspace')
+          const after = await gridState()
+          assert(!after.text.includes('B1') && !after.text.includes('B2'),
+            `同行跨格删除应清掉两格可见内容: ${JSON.stringify(after)}`)
+          assert(after.rows === 3 && after.delimiterHidden, '删除后网格与隐藏分隔行保持')
+          assert(after.text.includes('H1') && after.text.includes('C1') && after.text.includes('C2'),
+            '未选中的格不受影响')
+        } else if (scenario === 'drag-column') {
+          const a = await cell(1, 0).boundingBox()
+          const b = await cell(2, 0).boundingBox()
+          await dragTo({ x: a.x + 14, y: a.y + a.height / 2 },
+            { x: b.x + 26, y: b.y + b.height / 2 })
+          const bRow = source.indexOf('| B1 | B2 |')
+          const cRow = source.indexOf('| C1 | C2 |')
+          const sel = await gridState()
+          assert(sel.from >= bRow + 1 && sel.from <= bRow + 5,
+            `拖选头应落在 B1 格内: ${JSON.stringify(sel)}`)
+          assert(sel.to >= cRow + 1 && sel.to <= cRow + 5,
+            `拖选尾应跨行落到 C1 格内: ${JSON.stringify(sel)}`)
+          await page.keyboard.press('Backspace')
+          const after = await gridState()
+          assert(!after.text.includes('B1') && !after.text.includes('B2') && !after.text.includes('C1'),
+            `同列跨行删除应清掉覆盖行各格可见内容: ${JSON.stringify(after)}`)
+          assert(after.rows === 3 && after.delimiterHidden, '删除后网格与隐藏分隔行保持')
+          assert(after.text.includes('H1') && after.text.includes('H2') && after.text.includes('C2'),
+            '未选中的格不受影响')
+        } else {
+          // drag-table-outside：表外文本发起、横跨整表拖选，一次 Delete 移除整表
+          const beforeLine = page.locator('.cm-line').filter({ hasText: /^BEFORE$/ })
+          const afterLine = page.locator('.cm-line').filter({ hasText: /^AFTER$/ })
+          const a = await beforeLine.boundingBox()
+          const b = await afterLine.boundingBox()
+          await dragTo({ x: a.x + a.width - 6, y: a.y + a.height / 2 },
+            { x: b.x + 4, y: b.y + b.height / 2 })
+          const sel = await gridState()
+          assert(sel.from <= source.indexOf('H1') && sel.to >= source.indexOf('C2'),
+            `拖选应横跨整表: ${JSON.stringify(sel)}`)
+          await page.keyboard.press('Delete')
+          const state = await gridState()
+          assert(!state.text.includes('|') && !state.text.includes('---'),
+            `整表删除后不得残留表格源码: ${JSON.stringify(state)}`)
+          assert(state.text.startsWith('BEFOR') && state.text.endsWith('FTER'),
+            `表格前后正文按选区保留（选区端点所在字符按所见即所删）: ${JSON.stringify(state)}`)
+          assert(state.rows === 0, '表格 DOM 应随整块删除消失')
+        }
       } else {
         await page.locator('.cm-line').filter({ hasText: /^BEFORE$/ }).click({ position: { x: 5, y: 10 } })
         await page.keyboard.press('ArrowDown')
