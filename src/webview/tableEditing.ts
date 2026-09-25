@@ -96,7 +96,7 @@ export const tablePipeKeyHandler: Command = (view: EditorView): boolean => {
   if (changes.length === 0) {
     return false
   }
-  view.dispatch({ changes })
+  view.dispatch({ changes, userEvent: 'input.type' })
   return true
 }
 
@@ -244,7 +244,8 @@ const protectGridCellContent = EditorState.transactionFilter.of((tr) => {
   tr.changes.iterChanges((from, to, _fromB, _toB, insert) => {
     const cursor = ranges[0]!
     if (tr.isUserEvent('delete') && cursor.empty && !insert.length &&
-        ((cursor.head === cell.contentFrom && to === cursor.head && from < to) ||
+        (cell.contentFrom === cell.contentTo ||
+         (cursor.head === cell.contentFrom && to === cursor.head && from < to) ||
          (cursor.head === cell.contentTo && from === cursor.head && to > from))) {
       clipped = true
       return

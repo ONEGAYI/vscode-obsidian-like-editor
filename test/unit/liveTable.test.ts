@@ -511,7 +511,19 @@ describe('单元格编辑权威链路', () => {
     await settle()
     expect(linked.doc.getText()).toBe(TABLE_DOC.replace('苹果', ''))
     expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(3)
+    for (let i = 0; i < 3; i++) deleteCharForward(view)
+    await settle()
+    expect(linked.doc.getText()).toBe(TABLE_DOC.replace('苹果', ''))
     linked.controller.dispose()
+  })
+
+  it('从第二格扩选到前格后键入管道只替换第二格内容', () => {
+    const at = TABLE_DOC.indexOf('| 3 |') + 2
+    const view = makeEditView(TABLE_DOC, at + 1)
+    view.dispatch({ selection: EditorSelection.single(at + 1, TABLE_DOC.indexOf('苹果') + 2) })
+    expect(tablePipeKeyHandler(view)).toBe(true)
+    expect(view.state.doc.toString()).toBe(TABLE_DOC.replace('| 3 |', '| \\| |'))
+    view.destroy()
   })
 
   it.each(['backward', 'forward'] as const)('单元格边界 %s 删除不会删掉隐藏的表格标记', (direction) => {

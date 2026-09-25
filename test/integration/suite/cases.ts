@@ -1928,6 +1928,37 @@ export const cases: Array<[string, () => Promise<void>]> = [
       '重新开启行号应保留表格段首策略')
   }],
 
+  ['多表局部编辑并滚动返回后，安全表格内部行号保持隐藏', async () => {
+    const name = 'table-gutter-edit.md'
+    const source = '开头\n\n普通段落\n\n| A | B |\n| --- | --- |\n| 甲 | 乙 |\n\n' +
+      Array.from({ length: 160 }, (_, i) => `中段${i}\n`).join('') +
+      '\n| C | D |\n| --- | --- |\n| 丙 | 丁 |\n'
+    await vscode.workspace.fs.writeFile(wsUri(name), Buffer.from(source))
+    await openWithEditor(name)
+    await waitSessionReady(name)
+    const uri = wsUri(name).toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri(name))
+    const assertFirstTableNumbers = async () => {
+      const state = await waitViewState(name, (v) => v.paint?.visibleLineNumbers?.includes('5') === true)
+      assert(!state.paint!.visibleLineNumbers!.includes('6') && !state.paint!.visibleLineNumbers!.includes('7'),
+        `第一张表只应绘制段首5：${JSON.stringify(state.paint!.visibleLineNumbers)}`)
+    }
+    await assertFirstTableNumbers()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'sync.test.edit', offset: 1, text: '新' })
+    await poll('表外输入落到权威文本', () => doc.getText().startsWith('开新头') ? true : undefined)
+    await assertFirstTableNumbers()
+    const secondCell = doc.getText().indexOf('丙')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: secondCell })
+    await waitViewState(name, (v) => v.selectionOffset === secondCell)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'sync.test.edit', offset: secondCell, text: '新' })
+    await poll('第二张表输入落到权威文本', () => doc.getText().includes('新丙') ? true : undefined)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: 0 })
+    await waitViewState(name, (v) => v.selectionOffset === 0)
+    await assertFirstTableNumbers()
+  }],
+
   ['实时预览活动格保留网格与抓手，格内输入经 CM6 写回（#42）', async () => {
     await openWithEditor('table42.md')
     const beforeSession = await waitSessionReady('table42.md')

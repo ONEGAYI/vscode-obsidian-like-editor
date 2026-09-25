@@ -49,6 +49,23 @@ function gutterTexts(c: WebviewSyncController): string[] {
 }
 
 describe('默认装配与源行编号', () => {
+  it('表外普通段落和另一张表编辑后，旧网格表格仍只显示段首行号', () => {
+    const { bridge } = makeBridge()
+    const c = mount(bridge)
+    init(c, ['开头', '', '普通段落', '', '| A | B |', '| --- | --- |', '| 甲 | 乙 |', '',
+      '间隔', '', '| C | D |', '| --- | --- |', '| 丙 | 丁 |', '', '结尾'].join('\n'))
+    const expected = ['1', '2', '3', '4', '5', '8', '9', '10', '11', '14', '15']
+    expect(gutterTexts(c).filter(Boolean)).toEqual(expected)
+    c.getView()!.dispatch({ changes: { from: 1, insert: '新' } })
+    c.handleHostMessage({ kind: 'settings.changed', values: { [SHOW_LINE_NUMBERS_KEY]: false } })
+    c.handleHostMessage({ kind: 'settings.changed', values: { [SHOW_LINE_NUMBERS_KEY]: true } })
+    expect(gutterTexts(c).filter(Boolean)).toEqual(expected)
+    const at = c.getView()!.state.doc.toString().indexOf('丙')
+    c.getView()!.dispatch({ changes: { from: at, insert: '新' } })
+    expect(gutterTexts(c).filter(Boolean)).toEqual(expected)
+    c.dispose()
+  })
+
   it('安全表格只显示段首源行号，隐藏分隔行与数据行编号', () => {
     const { bridge } = makeBridge()
     const c = mount(bridge)
