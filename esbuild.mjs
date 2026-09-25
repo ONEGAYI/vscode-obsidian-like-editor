@@ -57,6 +57,9 @@ const webviewBase = {
   minify: production,
   logLevel: 'info',
   loader: { '.woff2': 'file' },
+  // 无哈希稳定命名：release.mjs 的 REQUIRED 按文件名逐个登记（哈希名不可
+  // 预知）。代价是同名资产会互相覆盖——引入新 file-loader 资产时须确认
+  // 文件名全局唯一（评审 C6 记录的约束）。
   assetNames: 'assets/[name]',
   plugins: [katexFontPlugin, katexMinJsPlugin],
 }

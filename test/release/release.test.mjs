@@ -134,6 +134,33 @@ test('VSIX 检查：仓库管理与开发文件一律拒绝', () => {
   }
 })
 
+test('VSIX 检查：out/ 未登记产物拒绝（白名单拦「多」，评审 C1）', () => {
+  for (const name of [
+    'extension/out/webview/zz_analyze.css', // 调试遗留（v0.1.0 后实测发生过）
+    'extension/out/webview/assets/KaTeX_Main-Regular.woff', // 裁剪失效的多余格式（同时被 C7 拦）
+    'extension/out/webview/vendor.js', // 未登记的新产物
+  ]) {
+    const result = inspectVsixEntries([...makeEntries(), { size: 100, name }])
+    assert.equal(result.ok, false, `${name} 应被拒绝`)
+    assert.ok(result.errors.some((e) => e.includes('未登记产物')), `${name} 的错误应标注未登记产物`)
+  }
+})
+
+test('VSIX 检查：woff/ttf 字体拒绝（字体裁剪失效防线，评审 C7）', () => {
+  for (const name of [
+    'extension/out/webview/assets/KaTeX_Main-Regular.woff',
+    'extension/out/webview/assets/KaTeX_Main-Regular.ttf',
+    'extension/media/fonts/some.ttf',
+  ]) {
+    const result = inspectVsixEntries([...makeEntries(), { size: 100, name }])
+    assert.equal(result.ok, false, `${name} 应被拒绝`)
+    assert.ok(
+      result.errors.some((e) => e.includes('woff2')),
+      `${name} 的错误应指向仅 woff2 约定`,
+    )
+  }
+})
+
 test('VSIX 检查：icon 缺失或超限报错（原图不得混入包内）', () => {
   const missing = inspectVsixEntries(makeEntries().filter((e) => !e.name.endsWith('vsidian-icon-256.png')), { iconPath: 'media/vsidian-icon-256.png' })
   assert.equal(missing.ok, false)

@@ -96,6 +96,11 @@ const FORBIDDEN_PATTERNS = [
   [/package-lock\.json$/, 'npm lockfile'],
   [/readme\.en\.md$/, '英文 README（仅 GitHub 展示）'],
   [/\.vsix$/, 'VSIX 嵌套'],
+  // 评审 C7：webview 目标 chrome118 只需 woff2——出现 woff/ttf 即字体
+  // 裁剪失效（如 katex 升级改动 CSS src 格式使裁剪正则失配），体积闸
+  // 只给警告不可靠，硬错误拦截。
+  [/\.woff$/, '非 woff2 字体（字体裁剪失效，webview 仅需 woff2）'],
+  [/\.ttf$/, 'TTF 字体（字体裁剪失效，webview 仅需 woff2）'],
 ]
 
 /** 解析 `unzip -l` 输出为条目列表（name 含 `extension/` 前缀）。 */
@@ -177,6 +182,18 @@ export function inspectVsixEntries(entries, options = {}) {
       if (!hit) errors.push('缺少 LICENSE（打包后应为 extension/LICENSE*）')
     } else if (!lowerNames.includes(`extension/${rel.toLowerCase()}`)) {
       errors.push(`缺少运行时资产 extension/${rel}`)
+    }
+  }
+
+  // out/ 白名单（评审 C1）：上面只拦「缺」，这里拦「多」——out/ 下任何
+  // 未登记文件（调试遗留、构建实验产物、裁剪失效的重复字体）一律拒绝，
+  // 避免「REQUIRED 不含即静默混入包内」（v0.1.0 后曾实测发生 out/ 杂物
+  // 混入打包输入且旧检查不拦）。新增运行时产物须同步登记 REQUIRED_EXTENSION。
+  const allowedOut = new Set(REQUIRED_EXTENSION_WITH_FONTS.map((rel) => `extension/${rel.toLowerCase()}`))
+  for (const e of entries) {
+    const lower = e.name.toLowerCase()
+    if (lower.startsWith('extension/out/') && !allowedOut.has(lower)) {
+      errors.push(`out/ 未登记产物 ${e.name}（新资产须登记 REQUIRED_EXTENSION）`)
     }
   }
 
