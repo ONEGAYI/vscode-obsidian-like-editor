@@ -4,7 +4,8 @@
 // 高亮类切换）、drop 单事务写回（一笔 edit.request + 即时大纲刷新）、
 // 无效落点拒绝（拖入自身子树无指示无写回）、Esc/pointercancel/blur/面板关闭
 // 取消与越界释放残留清理（残留会话不得把后续普通点击判为 drop）、拖拽后补发
-// click 吞噬、锚点过期防御、不可见条目（折叠/搜索过滤）
+// click 吞噬、非主键（和弦按键）不写回（仅主键释放执行 drop）、锚点过期防御、
+// 不可见条目（折叠/搜索过滤）
 // 不可拖也不构成落点、outline.test.drag 测试钩子全链路、probe 拖拽观测
 // 字段。移动计划语义在 outlineDrag.test.ts。
 import { describe, it, expect } from 'vitest'
@@ -90,16 +91,30 @@ function stubRects(parent: HTMLElement, only?: number[]): void {
 }
 
 /** 在元素/document 上派发 pointer 事件（MouseEvent 构造——本仓处理器只读
- *  坐标与 buttons；bubbles 到 document 级拖拽监听，target 链供落点命中）。
- *  buttons 缺省 1（真实拖拽期间按键恒为按下态），显式传 0 模拟已释放 */
+ *  坐标、buttons、button 与 pointerType；bubbles 到 document 级拖拽监听，
+ *  target 链供落点命中）。buttons 缺省 1（真实拖拽期间按键恒为按下态），
+ *  显式传 0 模拟已释放；init 补和弦按键场景所需的非主键 button 与鼠标
+ *  pointerType（MouseEventInit 无 pointerType 字段，实例上补——鼠标判据靠它） */
 function firePointer(
   el: Element | Document,
   type: string,
   x: number,
   y: number,
   buttons = 1,
+  init: { button?: number; pointerType?: string } = {},
 ): void {
-  el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, buttons }))
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    clientX: x,
+    clientY: y,
+    buttons,
+    button: init.button ?? 0,
+  })
+  if (init.pointerType !== undefined) {
+    Object.defineProperty(event, 'pointerType', { value: init.pointerType })
+  }
+  el.dispatchEvent(event)
 }
 
 /** 拖拽会话三步：按下 from → 超阈值移动（进入拖拽态）→ 悬停 to 的三态区域。
@@ -437,6 +452,58 @@ describe('取消路径（零写回）', () => {
     c.handleHostMessage({ kind: 'sidebar.test.click' })
     expect(viewState(c, h).outline?.draggingIndex).toBeNull()
     expect(editRequests(h)).toHaveLength(0)
+    c.dispose()
+    document.body.removeChild(parent)
+  })
+})
+
+describe('非主键（和弦按键）防写回：仅主键释放执行 drop', () => {
+  it('拖拽中非主键按下（和弦）：移动路径结束会话、指示清空、零写回', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    stubRects(parent)
+    dragTo(parent, 1, 4, 'before') // 起拖并悬停到有效落点
+    expect(viewState(c, h).outline?.draggingIndex).toBe(1)
+    // 和弦按键（左键仍按住时再按右键）不投递 pointerdown——第二个按键只报
+    // pointermove(button=2, buttons=3)，故「非主键按下即结束」必须在移动路径上
+    const toEl = items(parent)[4]!
+    const rect = toEl.getBoundingClientRect()
+    firePointer(toEl, 'pointermove', rect.left + 40, rect.top + 5, 3,
+      { button: 2, pointerType: 'mouse' })
+    const state = viewState(c, h)
+    expect(state.outline?.draggingIndex, '非主键按下应结束会话').toBeNull()
+    expect(state.outline?.dropTargetIndex).toBeNull()
+    expect(items(parent).every((el) => !el.className.includes('vsidian-outline-dragging') &&
+      !el.className.includes('vsidian-outline-drop-')), '指示类应清空').toBe(true)
+    // 随后陆续释放两个按键：都不得落成 drop 写回
+    firePointer(document, 'pointerup', rect.left + 40, rect.top + 5, 2,
+      { button: 0, pointerType: 'mouse' }) // 松左键（右键仍按住）
+    firePointer(document, 'pointerup', rect.left + 40, rect.top + 5, 0,
+      { button: 2, pointerType: 'mouse' }) // 松右键（最后一个按键）
+    expect(editRequests(h), '和弦手势不得写回').toHaveLength(0)
+    expect(c.getView()!.state.doc.toString()).toBe(DRAG_DOC)
+    c.dispose()
+    document.body.removeChild(parent)
+  })
+
+  it('会话进行中的非主键 pointerup：不收尾、零写回（纵深防线）', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    stubRects(parent)
+    dragTo(parent, 1, 4, 'before') // 有效落点（若被当作 drop 即写回）
+    expect(viewState(c, h).outline?.draggingIndex).toBe(1)
+    // 合成事件或平台差异可能送来非主键 pointerup（如右键抬起是最后一个按键：
+    // pointerup button=2, buttons=0，pointerId 与起始指针相同）——它不是主键
+    // 释放，不得收尾会话、不得按残留落点写回
+    const toEl = items(parent)[4]!
+    firePointer(toEl, 'pointerup', 240, 500, 0, { button: 2, pointerType: 'mouse' })
+    expect(editRequests(h), '非主键释放不得写回').toHaveLength(0)
+    expect(c.getView()!.state.doc.toString()).toBe(DRAG_DOC)
+    expect(viewState(c, h).outline?.draggingIndex,
+      '非主键释放不得收尾会话（主键释放仍应执行 drop）').toBe(1)
+    // 主键释放才收尾：会话未被非主键释放破坏，落点照常兑现一笔写回
+    firePointer(toEl, 'pointerup', 240, 500)
+    expect(editRequests(h), '主键释放应照常写回').toHaveLength(1)
     c.dispose()
     document.body.removeChild(parent)
   })

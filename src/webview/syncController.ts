@@ -2787,11 +2787,24 @@ export class WebviewSyncController {
    *  elementFromPoint（指针物理位置）。
    *  review-loops 第 2 轮：只认起始指针（pointerId 不符即忽略），且按键已
    *  释放（buttons=0）说明手势在 webview 之外结束——立即取消，避免纯悬停
-   *  继续推进会话、画出落点指示，或让随后的释放被当作 drop 写回 */
+   *  继续推进会话、画出落点指示，或让随后的释放被当作 drop 写回
+   *  review-loops 第 2 轮补（和弦按键）：非主键按下即结束会话。和弦按键
+   *  （左键按住时再按右键）不投递 pointerdown——浏览器只在首个按键按下时
+   *  报 pointerdown，第二个按键只报 pointermove(button=2, buttons=3)，其
+   *  释放也不是 pointerup。若左键先松，右键抬起会成为最后一个按键的真实
+   *  pointerup（button=2, buttons=0，且 pointerId 与起始指针相同），残留会话
+   *  即按残留落点写出 drop（实测一次误写回）。故该判据只能落在移动路径上；
+   *  不变式：仅主键（左键）释放执行落点写回 */
   private readonly onOutlineDragMove = (event: PointerEvent): void => {
     const drag = this.outlineDragState
     const panel = this.outlinePanelEl
     if (!drag || !panel || event.pointerId !== drag.pointerId) {
+      return
+    }
+    // 与面板 pointerdown 的启动判据同口径：作用域限鼠标（触屏/笔的接触态
+    // buttons 恒为 1，不进此分支）
+    if (event.pointerType === 'mouse' && (event.buttons & ~1) !== 0) {
+      this.cancelOutlineDrag()
       return
     }
     if (event.buttons === 0) {
@@ -2848,10 +2861,17 @@ export class WebviewSyncController {
   /** 拖拽 pointerup：有效落点执行移动计划写回（一次编辑事务）；锚点过期
    *  （拖拽期间文档被改写）放弃。收尾后吞一次补发 click。
    *  review-loops 第 2 轮：只认起始指针的释放（other pointer 的 up 不收尾，
-   *  避免「窗口外按下后拖入 webview」的异指针手势误判为 drop） */
+   *  避免「窗口外按下后拖入 webview」的异指针手势误判为 drop）
+   *  review-loops 第 2 轮补（和弦按键）：纵深防线——仅主键（左键）释放执行
+   *  drop。和弦路径下右键抬起会以起始指针的 pointerId 送来真实 pointerup
+   *  （button=2, buttons=0，见 onOutlineDragMove 的和弦守卫）；合成事件或
+   *  其他路径送来非主键释放时同样不得按残留落点写回，会话留给主键释放收尾 */
   private readonly onOutlineDragEnd = (event: PointerEvent): void => {
     const drag = this.outlineDragState
     if (!drag || event.pointerId !== drag.pointerId) {
+      return
+    }
+    if (event.pointerType === 'mouse' && event.button !== 0) {
       return
     }
     const perform = drag.moved && drag.targetIndex !== null && drag.position !== null

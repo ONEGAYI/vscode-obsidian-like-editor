@@ -2,7 +2,9 @@
 // （mouse.down/move/up）驱动拖拽——三态落点容差几何（上缘/中部/下缘）、
 // 拖拽中源条目提示、落点指示真实绘制（dropHintPainted）、drop 单笔写回
 // 全文对拍、Esc 取消零写回、无效落点（拖入自身子树）拒绝、搜索过滤隐藏
-// 条目不构成落点。与 outlineMenu.mjs 同装配模式。
+// 条目不构成落点、非主键（右键）不启动拖拽、拖拽中右键结束手势且零写回
+// （先松右键与先松左键两种释放顺序各一场景）。
+// 与 outlineMenu.mjs 同装配模式。
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -63,6 +65,18 @@ try {
     }
     return { x, y }
   }
+
+  /** 菜单观测（夹具未导出：直接读 view.state probe 与侧栏 DOM——
+   *  与 outlineMenu.mjs 的 readMenu() 同对象面，此处只取本套断言所需字段） */
+  const readMenu = () => page.evaluate(() => {
+    window.controller.handleHostMessage({ kind: 'view.state.request' })
+    const probe = [...window.sent()].reverse().find((m) => m.kind === 'view.state')
+    return {
+      open: probe?.outline?.menuOpen === true,
+      targetIndex: probe?.outline?.menuTargetIndex ?? null,
+      inDom: document.querySelector('.vsidian-outline-menu') !== null,
+    }
+  })
 
   // ---- 场景 A：三态落点容差几何（真实鼠标 + 真实布局的 25% 容差）----
   for (const [zone, cls, position] of [
@@ -219,6 +233,135 @@ try {
     assert.notEqual(after.caretLine, baseline.caretLine, 'drop 后点击应移动光标到目标标题行')
     passed++
     console.log('[拖拽回归][PASS] drop 后下一次点击仍生效（跳转与高亮）')
+  }
+
+  // ---- 场景 H：右键不启动拖拽、打开菜单（review-loops 第 2 轮补缺）----
+  {
+    // 面板 pointerdown 委托只认主键（pointerType=mouse 且 button!==0 直接
+    // 返回），右键的手势入口是 contextmenu。此前本套只驱动过主键，非主键
+    // 这条「不启动」口径没有端到端覆盖。
+    await page.evaluate((text) => window.initDrag(text), DOC) // 复位（前面场景累积改写）
+    await page.waitForTimeout(120)
+    const before = await page.evaluate(() => window.readDrag())
+    const editsBefore = await page.evaluate(() =>
+      window.sent().filter((m) => m.kind === 'edit.request').length)
+    const box = await item(1).boundingBox()
+    assert.ok(box, '右键目标条目应有布局盒')
+    await page.mouse.move(box.x + 40, box.y + box.height / 2)
+    await page.mouse.down({ button: 'right' })
+    // 按下后真实移动（横向 110px，位移远超 4px 阈值；保持抬起点仍在同一条目
+    // 行内——菜单锚定目标是抬起点下方的条目，纵向移动会改变锚定对象）
+    await page.mouse.move(box.x + 90, box.y + box.height / 2)
+    await page.mouse.move(box.x + 150, box.y + box.height / 2)
+    const held = await page.evaluate(() => window.readDrag())
+    assert.equal(held.draggingIndex, null, '右键按下后移动不得进入拖拽态')
+    assert.ok(held.itemClasses.every((c) => !c.includes('vsidian-outline-dragging') && !c.includes('vsidian-outline-drop-')),
+      `右键拖动不得出现拖拽/落点指示类（实际 ${JSON.stringify(held.itemClasses)}）`)
+    await page.mouse.up({ button: 'right' })
+    const state = await page.evaluate(() => window.readDrag())
+    assert.equal(state.draggingIndex, null, '右键手势全程不得进入拖拽态')
+    assert.ok(state.itemClasses.every((c) => !c.includes('vsidian-outline-dragging') && !c.includes('vsidian-outline-drop-')),
+      `右键手势后不得残留拖拽/落点指示类（实际 ${JSON.stringify(state.itemClasses)}）`)
+    const editsAfter = await page.evaluate(() =>
+      window.sent().filter((m) => m.kind === 'edit.request').length)
+    assert.equal(editsAfter, editsBefore, '右键手势不得产生写回（edit.request 不增）')
+    assert.equal(state.text, before.text, '右键手势不得改写文档')
+    // 菜单：contextmenu 兑现后真实打开（本装配下 Chromium 的触发时机分平台
+    // ——Windows 在抬键、Linux 在按键，断言点统一放在抬起之后以覆盖两端）
+    const menu = await readMenu()
+    assert.equal(menu.open, true, '右键抬起后菜单应打开（probe menuOpen）')
+    assert.equal(menu.inDom, true, '菜单容器应真实挂载在侧栏')
+    assert.equal(menu.targetIndex, 1, `菜单目标应为右键条目（实际 ${menu.targetIndex}）`)
+    await page.keyboard.press('Escape') // 关菜单，避免影响后续场景
+    passed++
+    console.log('[拖拽回归][PASS] 右键不启动拖拽：零指示、零写回、菜单打开')
+  }
+
+  // ---- 场景 I：拖拽中按右键结束手势、零写回（review-loops 第 2 轮补缺）----
+  {
+    // 口径：「拖拽中按右键 → 上一手势结束 → 菜单打开」且零写回。实测机制与
+    // 代码注释略有出入：Chromium 对和弦按键（已按住左键再按右键）不投递
+    // pointerdown（该次按键报为 pointermove(button=2, buttons=3)），故 document
+    // capture 入口的「按下即取消会话」在此路径不可达；会话实际由 contextmenu
+    // 抵达时取消（openOutlineMenu 内 cancelOutlineDrag）。因此「手势结束」的
+    // 断言点放在右键抬起之后——两端平台结果一致（Windows 抬起时触发
+    // contextmenu，Linux 按下时触发、会话更早取消，抬起后同为零写回）。
+    // 「先松左键」的另一半释放顺序曾按残留落点写出 drop（已修，见场景 J：
+    // 非主键按下即结束会话，「仅主键释放执行落点写回」为不变式）
+    await page.evaluate((text) => window.initDrag(text), DOC) // 复位：本场景不得有历史写回干扰
+    await page.waitForTimeout(120)
+    const editsBefore = await page.evaluate(() =>
+      window.sent().filter((m) => m.kind === 'edit.request').length)
+    const { x, y } = await dragHover(1, 4, 'middle') // 乙 → 戊（中部落点：有效目标）
+    await page.mouse.move(x, y)
+    const drag = await page.evaluate(() => window.readDrag())
+    assert.equal(drag.draggingIndex, 1, '前置条件：左键拖拽应进行中（源乙）')
+    assert.equal(drag.dropTargetIndex, 4, '前置条件：中部落点为有效目标（戊）')
+    await page.mouse.down({ button: 'right' }) // 拖拽中按右键
+    assert.equal((await page.evaluate(() => window.readDrag())).text, DOC,
+      '右键按下时刻不得写回（本地文本不变）')
+    await page.mouse.up({ button: 'right' }) // 右键手势收尾（触发 contextmenu）
+    const state = await page.evaluate(() => window.readDrag())
+    assert.equal(state.draggingIndex, null, '右键手势后拖拽会话应结束')
+    assert.ok(state.itemClasses.every((c) => !c.includes('vsidian-outline-dragging') && !c.includes('vsidian-outline-drop-')),
+      `右键手势后拖拽/落点指示类应清除（实际 ${JSON.stringify(state.itemClasses)}）`)
+    const editsAfter = await page.evaluate(() =>
+      window.sent().filter((m) => m.kind === 'edit.request').length)
+    assert.equal(editsAfter, editsBefore, '右键结束手势不得写回（edit.request 不增）')
+    assert.equal(state.text, DOC, `右键结束手势不得改写文档（实际 ${JSON.stringify(state.text)}）`)
+    const menu = await readMenu()
+    assert.equal(menu.open || menu.inDom, true, '右键结束手势后应由同一手势打开菜单')
+    await page.mouse.up() // 释放仍按住的左键（会话已结束，不再触发 drop）
+    assert.equal((await page.evaluate(() => window.readDrag())).text, DOC,
+      '左键抬起收尾仍须零写回')
+    assert.equal(await page.evaluate(() =>
+      window.sent().filter((m) => m.kind === 'edit.request').length), editsBefore,
+      '左键抬起收尾不得补一笔写回')
+    await page.keyboard.press('Escape') // 关菜单
+    passed++
+    console.log('[拖拽回归][PASS] 拖拽中按右键：手势结束、指示清除、零写回')
+  }
+
+  // ---- 场景 J：拖拽中按右键后先松左键：手势结束、零写回（review-loops 第 2 轮补：和弦按键）----
+  {
+    // 与场景 I 的另一半释放顺序。和弦按键（左键按住时再按右键）不投递
+    // pointerdown——第二个按键只报 pointermove(button=2, buttons=3)，其释放也
+    // 不是 pointerup。若「先松左键」（右键仍按住），右键抬起是最后一个按键 →
+    // 投递真实 pointerup(button=2, buttons=0)，残留会话即按残留落点写出 drop。
+    // 不变式：仅主键（左键）释放执行落点写回。
+    await page.evaluate((text) => window.initDrag(text), DOC) // 复位：本场景不得有历史写回干扰
+    await page.waitForTimeout(120)
+    const editsBefore = await page.evaluate(() =>
+      window.sent().filter((m) => m.kind === 'edit.request').length)
+    const { x, y } = await dragHover(1, 4, 'middle') // 乙 → 戊（中部落点：有效目标）
+    await page.mouse.move(x, y)
+    const drag = await page.evaluate(() => window.readDrag())
+    assert.equal(drag.draggingIndex, 1, '前置条件：左键拖拽应进行中（源乙）')
+    assert.equal(drag.dropTargetIndex, 4, '前置条件：中部落点为有效目标（戊）')
+    await page.mouse.down({ button: 'right' }) // 拖拽中按右键（和弦）
+    const chord = await page.evaluate(() => window.readDrag())
+    assert.equal(chord.draggingIndex, null,
+      '非主键按下即结束会话（和弦按键只报 pointermove，守卫须落在移动路径上）')
+    assert.ok(chord.itemClasses.every((c) => !c.includes('vsidian-outline-dragging') && !c.includes('vsidian-outline-drop-')),
+      `非主键按下后拖拽/落点指示类应清空（实际 ${JSON.stringify(chord.itemClasses)}）`)
+    await page.mouse.up() // 松左键（右键仍按住）：不得落成 drop
+    assert.equal((await page.evaluate(() => window.readDrag())).text, DOC,
+      '松左键时不得写回（会话已结束）')
+    await page.mouse.up({ button: 'right' }) // 松右键：最后一个按键的释放（真实 pointerup）
+    const state = await page.evaluate(() => window.readDrag())
+    assert.equal(state.draggingIndex, null, '手势全程结束后不得残留会话')
+    const editsAfter = await page.evaluate(() =>
+      window.sent().filter((m) => m.kind === 'edit.request').length)
+    assert.equal(editsAfter, editsBefore,
+      `和弦右键不得写回（edit.request ${editsBefore} → ${editsAfter}）`)
+    assert.equal(state.text, DOC, `和弦右键不得改写文档（实际 ${JSON.stringify(state.text)}）`)
+    const menu = await readMenu()
+    assert.equal(menu.open, true, '右键落在条目上应照常弹出菜单（probe menuOpen）')
+    assert.equal(menu.inDom, true, '菜单容器应真实挂载在侧栏')
+    assert.equal(menu.targetIndex, 4, `菜单目标应为右键命中的条目（实际 ${menu.targetIndex}）`)
+    await page.keyboard.press('Escape') // 关菜单
+    passed++
+    console.log('[拖拽回归][PASS] 拖拽中按右键后先松左键：手势结束、零写回、菜单照常打开')
   }
 
   assert.deepEqual(errors, [], '页面不得有未捕获异常')
