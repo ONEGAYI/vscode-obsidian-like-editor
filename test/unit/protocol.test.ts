@@ -403,7 +403,8 @@ describe('isHostToWebview', () => {
   it('接受合法 table.test.key，拒绝未知键名（#13 测试钩子）', () => {
     expect(isHostToWebview({ kind: 'table.test.key', key: 'tab' })).toBe(true)
     expect(isHostToWebview({ kind: 'table.test.key', key: 'shift-tab' })).toBe(true)
-    expect(isHostToWebview({ kind: 'table.test.key', key: 'enter' })).toBe(false)
+    expect(isHostToWebview({ kind: 'table.test.key', key: 'enter' })).toBe(true)
+    expect(isHostToWebview({ kind: 'table.test.key', key: 'unknown' })).toBe(false)
     expect(isHostToWebview({ kind: 'table.test.key' })).toBe(false)
   })
 

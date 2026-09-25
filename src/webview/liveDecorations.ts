@@ -56,6 +56,7 @@ import {
   parseTableDelimiter,
   splitTableRowCells,
   tableRowCellsForColumns,
+  tableCellBreaks,
   type TableAlign,
 } from './tableCells'
 
@@ -209,6 +210,16 @@ const tablePipeDeco = Decoration.mark({ class: LIVE_CLASS_NAMES.tablePipe })
 const tableEscapedPipeDeco = Decoration.mark({ class: LIVE_CLASS_NAMES.tableEscapedPipe })
 // 行尾一个 Markdown 填充空格保留文字节点供原生输入使用，但不参与可见排版。
 const tableGridPaddingDeco = Decoration.mark({ class: 'vsidian-table-grid-padding' })
+class TableCellBreakWidget extends WidgetType {
+  eq(): boolean { return true }
+  get lineBreaks(): number { return 1 }
+  toDOM(): HTMLElement {
+    const br = document.createElement('br')
+    br.className = 'vsidian-table-cell-break'
+    return br
+  }
+}
+const tableCellBreakDeco = Decoration.replace({ widget: new TableCellBreakWidget(), tableCellBreak: true })
 /** 仅无边界空白格的 IME 候选事务：源文暂变但沿用原网格装饰。 */
 export const tableCompositionPreview = Annotation.define<boolean>()
 export const tableCompositionSettled = Annotation.define<boolean>()
@@ -408,6 +419,9 @@ function emitTableRowMarks(
           ? activeEmptyTableCellDeco : emptyTableCellDeco).range(cell.from))
       if (cell.to > cell.from && doc.sliceString(cell.to - 1, cell.to) === ' ') {
         out.push(tableGridPaddingDeco.range(cell.to - 1, cell.to))
+      }
+      for (const lineBreak of tableCellBreaks(doc.sliceString(cell.from, cell.to))) {
+        out.push(tableCellBreakDeco.range(cell.from + lineBreak.from, cell.from + lineBreak.to))
       }
     }
     if (cell.contentTo > cell.contentFrom) {
@@ -1156,7 +1170,18 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
     }
     return { decos, tree, fragments: TreeFragment.addTree(tree), fm, gridPlans, compositionPreview: false }
   },
-  provide: (f) => EditorView.decorations.from(f, (s) => s.decos),
+  provide: (f) => [
+    EditorView.decorations.from(f, (s) => s.decos),
+    EditorView.atomicRanges.of((view) => {
+      const breaks: Array<Range<Decoration>> = []
+      for (const visible of view.visibleRanges) {
+        view.state.field(f).decos.between(visible.from, visible.to, (from, to, deco) => {
+          if (deco.spec.tableCellBreak) breaks.push(deco.range(from, to))
+        })
+      }
+      return Decoration.set(breaks, true)
+    }),
+  ],
 })
 
 // ---- 间接装饰（视口内纯样式） ----

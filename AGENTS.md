@@ -123,7 +123,7 @@ vsidian/
 │       ├── settingsPage.css      # 设置页样式
 │       ├── settingsPageView.ts   # 设置页 webview 视图
 │       ├── syncController.ts     # CM6 同步控制器
-│       ├── tableCells.ts         # 表格单元格拆分纯函数（#12）
+│       ├── tableCells.ts         # 表格单元格边界、换行与转义
 │       ├── tableControls.ts      # 表格可见行控件与拖动
 │       ├── tableCreate.ts        # 光标处建表规划纯函数
 │       ├── tableEditing.ts       # 表格输入钩子（#12）

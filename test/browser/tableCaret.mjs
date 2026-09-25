@@ -131,7 +131,7 @@ try {
     }
   }
   const navigationFailures = []
-  for (const scenario of ['horizontal-wrap', 'horizontal-wrap-empty', 'vertical-inside', 'vertical-outside', 'vertical-empty', 'vertical-wrapped']) {
+  for (const scenario of ['horizontal-wrap', 'horizontal-wrap-empty', 'vertical-inside', 'vertical-outside', 'vertical-empty', 'vertical-wrapped', 'enter-cell', 'enter-empty', 'enter-body', 'enter-middle', 'enter-repeat', 'enter-code', 'enter-code-start', 'enter-code-end', 'enter-ime']) {
     const page = await browser.newPage()
     try {
       await page.setContent('<div id="app"></div>')
@@ -141,6 +141,8 @@ try {
       if (scenario === 'horizontal-wrap-empty') source = source.replace('| B1 | B2 |', '| | |')
       if (scenario === 'vertical-empty') source = source.replace(' B2 ', ' ')
       if (scenario === 'vertical-wrapped') source = source.replace('H2', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+      if (scenario === 'enter-empty') source = source.replace('H2', '')
+      if (scenario.startsWith('enter-code')) source = source.replace('H2', '`H2`')
       await page.evaluate((text) => window.initTable(text), source)
       const cell = (r, c) => page.locator('.vsidian-table-grid-row').nth(r).locator('.vsidian-table-grid-cell').nth(c)
       async function checkCell(r, c) {
@@ -159,7 +161,64 @@ try {
         assert.equal(typed.text, source.slice(0, state.head) + 'x' + source.slice(state.head), '真实输入位置须与导航位置一致')
         await page.keyboard.press('Backspace')
       }
-      if (scenario.startsWith('horizontal-wrap')) {
+      if (scenario.startsWith('enter-')) {
+        const target = cell(scenario === 'enter-body' ? 1 : 0, 1)
+        await target.click()
+        if (scenario.startsWith('enter-code')) {
+          const at = source.indexOf('H2') + (scenario.endsWith('start') ? 0 : scenario.endsWith('end') ? 2 : 1)
+          await page.evaluate(offset => window.controller.handleHostMessage({ kind: 'view.locate', offset }), at)
+        }
+        if (scenario === 'enter-middle') {
+          await page.keyboard.press('Control+a')
+          await page.keyboard.press('ArrowLeft')
+          await page.keyboard.press('ArrowRight')
+        }
+        const before = await target.evaluate(() => getSelection().getRangeAt(0).getBoundingClientRect().top)
+        const breaks = scenario === 'enter-repeat' ? 2 : 1
+        for (let i = 0; i < breaks; i++) await page.keyboard.press(scenario === 'enter-body' ? 'Shift+Enter' : 'Enter')
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+        assert.equal(await page.locator('.vsidian-table-grid-row').count(), 3, '回车不能拆散表格')
+        assert.equal((await page.evaluate(() => window.readEditor())).text.split('\n').length, source.split('\n').length, '格内换行不能拆开 Markdown 表格源行')
+        const after = await target.evaluate(e => ({text:e.innerText, state:window.readEditor(), y:getSelection().getRangeAt(0).getBoundingClientRect().top, inside:e.contains(getSelection().focusNode), html:e.innerHTML, focus:getSelection().focusNode?.nodeName, offset:getSelection().focusOffset}))
+        assert(after.inside && after.y > before, `回车后原生光标必须在同格下一视觉行: ${JSON.stringify({before,after})}`)
+        assert(!after.text.includes('<br>'), '换行标记不得显示成源码')
+        const input = scenario === 'enter-ime' ? '你好' : 'next'
+        if (scenario === 'enter-ime') {
+          const cdp = await page.context().newCDPSession(page)
+          for (const text of ['ni', 'nihao']) await cdp.send('Input.imeSetComposition', { text, selectionStart: text.length, selectionEnd: text.length })
+          await cdp.send('Input.insertText', { text: input })
+        } else await page.keyboard.type(input)
+        assert((await target.innerText()).includes(input), '换行后输入仍在原格')
+        if (scenario === 'enter-cell') {
+          const secondLine = await target.evaluate(() => getSelection().getRangeAt(0).getBoundingClientRect().top)
+          await page.keyboard.press('ArrowUp')
+          const up = await target.evaluate(e => ({ inside:e.contains(getSelection().focusNode), y:getSelection().getRangeAt(0).getBoundingClientRect().top }))
+          assert(up.inside && up.y < secondLine, '格内换行后上移应返回同格上一行')
+          await page.keyboard.press('ArrowDown')
+          const down = await target.evaluate(e => ({ inside:e.contains(getSelection().focusNode), y:getSelection().getRangeAt(0).getBoundingClientRect().top }))
+          assert(down.inside && down.y > up.y, '下移应返回同格第二行')
+          await page.screenshot({ path: path.join(root, 'out/test/browser/table-enter-live.png') })
+          const saved = (await page.evaluate(() => window.readEditor())).text
+          const reopened = await browser.newPage()
+          try {
+            await reopened.setContent('<div id="app"></div>')
+            await reopened.addStyleTag({ path: bundle.replace(/\.js$/, '.css') })
+            await reopened.addScriptTag({ path: bundle })
+            await reopened.evaluate(text => {
+              window.initTable(text)
+              window.controller.handleHostMessage({ kind: 'view.mode.set', mode: 'reading' })
+            }, saved)
+            assert.equal(await reopened.locator('th').nth(1).locator('br').count(), 1, '重开阅读视图应保留格内换行')
+            assert(!(await reopened.locator('th').nth(1).innerText()).includes('<br>'), '阅读视图不显示换行源码')
+            await reopened.screenshot({ path: path.join(root, 'out/test/browser/table-enter-reading.png') })
+          } finally { await reopened.close() }
+        }
+        for (let i = 0; i < input.length + breaks; i++) await page.keyboard.press('Backspace')
+        assert.equal((await page.evaluate(() => window.readEditor())).text, source, '退格应一次删除格内换行并恢复源文')
+        await page.keyboard.press('Enter')
+        await page.keyboard.press('Backspace')
+        assert.equal((await page.evaluate(() => window.readEditor())).text, source, '直接回车再退格必须合回原行')
+      } else if (scenario.startsWith('horizontal-wrap')) {
         await cell(0, 1).click({ position: { x: 200, y: 10 } })
         await page.keyboard.press('ArrowRight')
         await checkCell(1, 0)

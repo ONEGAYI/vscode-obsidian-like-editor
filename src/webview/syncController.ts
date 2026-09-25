@@ -734,7 +734,7 @@ export class WebviewSyncController {
           this.view.contentDOM.dispatchEvent(
             new KeyboardEvent('keydown', {
               key: message.key === 'select-all' ? 'a' : message.key === 'backspace' ? 'Backspace'
-                : message.key === 'delete' ? 'Delete' : 'Tab',
+                : message.key === 'delete' ? 'Delete' : message.key === 'enter' ? 'Enter' : 'Tab',
               ctrlKey: message.key === 'select-all',
               shiftKey: message.key === 'shift-tab',
               bubbles: true,
@@ -2520,6 +2520,8 @@ export class WebviewSyncController {
         headerCellBackgrounds,
         caretDomColumn,
         caretNativeRectHeight,
+        cellBreakDisplay: view.contentDOM.querySelector('.vsidian-table-cell-break')
+          ? getComputedStyle(view.contentDOM.querySelector('.vsidian-table-cell-break')!).display : null,
         gridDisplay: gridRow ? getComputedStyle(gridRow).display : null,
         cellBorderWidth: cellStyle?.borderLeftWidth ?? null,
         rowOutlineColor: rowStyle?.outlineColor ?? null,

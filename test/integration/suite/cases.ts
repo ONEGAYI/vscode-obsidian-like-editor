@@ -293,6 +293,7 @@ interface ViewState {
       headerCellBackgrounds?: string[]
       caretDomColumn?: number | null
       caretNativeRectHeight?: number | null
+      cellBreakDisplay?: string | null
       gridDisplay: string | null
       cellBorderWidth: string | null
       rowOutlineColor: string | null
@@ -2121,6 +2122,34 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(state.paint?.table?.gridDisplay === 'grid', '跨行选择后表格仍须绘制为网格')
     const after = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
     assert(after.appliedEdits === initial.appliedEdits, '跨行选区不能改写源文')
+  }],
+
+  ['表格回车在格内换行，退格合行、保存回读与撤销保持完整表格', async () => {
+    const name = 'table-cell-enter.md'
+    const source = '| 左 | 中 | 右 |\n| --- | --- | --- |\n| 甲 | 乙 | 丙 |\n'
+    await vscode.workspace.fs.writeFile(wsUri(name), Buffer.from(source))
+    await openWithEditor(name)
+    await waitSessionReady(name)
+    const uri = wsUri(name).toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri(name))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.cellClick', rowIndex: 0, columnIndex: 1, point: 'right-edge' })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'enter' })
+    const withBreak = source.replace('中', '中<br>')
+    await poll('格内换行写回', () => doc.getText() === withBreak ? true : undefined)
+    const state = await waitViewState(name, (v) => v.text === withBreak && v.paint?.table?.cellBreakDisplay === 'inline')
+    assert(state.paint?.table?.cellVisible === true && state.paint.table.gridDisplay === 'grid', '换行后表格文字与网格须实际可见')
+    assert(state.tableGrid?.visibleRows === 2, '回车不能增加或拆散表格行')
+    assert(await doc.save(), '格内换行保存失败')
+    assert(await readDisk(name) === withBreak, '格内换行磁盘回读须保真')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'backspace' })
+    await poll('退格合行写回', () => doc.getText() === source ? true : undefined)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'enter' })
+    await poll('再次格内换行', () => doc.getText() === withBreak ? true : undefined)
+    await vscode.commands.executeCommand('undo')
+    await poll('一次撤销格内换行', () => doc.getText() === source ? true : undefined)
+    assert(await doc.save(), '恢复原表格保存失败')
+    assert(await readDisk(name) === source, '合回原行后保存不得残留换行标记')
   }],
 
   ['中格空白连续删除后再输入仍保持表头网格样式', async () => {

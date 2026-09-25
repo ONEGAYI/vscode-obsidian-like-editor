@@ -24,7 +24,7 @@ import type { SyntaxNode, Tree } from '@lezer/common'
 import type { TableEditOp } from '../shared/protocol'
 import { liveDecorationsField, LIVE_CLASS_NAMES, tableCompositionPreview } from './liveDecorations'
 import { chainAt } from './markdownDoc'
-import { needsPipeEscapeAt, parseTableDelimiter, planBlankRowCellInput, tableRowCellsForColumns } from './tableCells'
+import { needsPipeEscapeAt, parseTableDelimiter, planBlankRowCellInput, tableRowCellsForColumns, tableCellBreaks } from './tableCells'
 import { planTableEdit, planTableRowMove, tableCellNavTarget, type TableRowInfo } from './tableStructure'
 import { createTableControls } from './tableControls'
 import { planCreateTable } from './tableCreate'
@@ -382,10 +382,13 @@ const keepGridInputCaretInsideCell = EditorState.transactionFilter.of((tr) => {
   const cells = tableRowCellsForColumns(line.text, line.from, cell.cells.length)
   const column = cell.cells.findIndex((candidate) => candidate.from === cell.from)
   const target = cells?.[column]
-  if (!target || head < target.from || head > target.to ||
-      tr.newSelection.main.assoc === -1) return tr
+  if (!target || head < target.from || head > target.to) return tr
+  const afterBreak = tableCellBreaks(tr.newDoc.sliceString(target.from, target.to))
+    .some((item) => target.from + item.to === head)
+  const assoc = afterBreak ? 1 : -1
+  if (tr.newSelection.main.assoc === assoc) return tr
   return [tr, {
-    selection: EditorSelection.create([EditorSelection.cursor(head, -1)]),
+    selection: EditorSelection.create([EditorSelection.cursor(head, assoc)]),
     sequential: true,
   }]
 })
@@ -394,7 +397,7 @@ const keepGridInputCaretInsideCell = EditorState.transactionFilter.of((tr) => {
  * 复位为 0。待本轮 DOM 更新结束后重新关联当前格，避免原生 caret 跑到右列。 */
 const stabilizeGridCaretAfterInput = ViewPlugin.fromClass(class {
   update(update: ViewUpdate): void {
-    if (!update.docChanged || update.view.compositionStarted) return
+    if ((!update.docChanged && !update.selectionSet) || update.view.compositionStarted) return
     const view = update.view
     queueMicrotask(() => {
       if (view.compositionStarted) return
@@ -404,8 +407,9 @@ const stabilizeGridCaretAfterInput = ViewPlugin.fromClass(class {
       const cell = editableGridCellAt(view.state, head)
       if (!cell) return
       const atEmptyStart = cell.contentFrom === cell.contentTo && head === cell.from
-      if (!atEmptyStart && head !== cell.contentTo) return
-      const assoc = atEmptyStart ? 1 : -1
+      const afterBreak = tableCellBreaks(view.state.sliceDoc(cell.from, cell.to)).some((item) => cell.from + item.to === head)
+      if (!atEmptyStart && !afterBreak && head !== cell.contentTo) return
+      const assoc = atEmptyStart || afterBreak ? 1 : -1
       if (selection.main.assoc !== assoc) {
         view.dispatch({ selection: EditorSelection.create([EditorSelection.cursor(head, assoc)]) })
       }
@@ -418,7 +422,7 @@ const stabilizeGridCaretAfterInput = ViewPlugin.fromClass(class {
       const nativeNode = nativeSelection?.focusNode
       const nativeRect = nativeSelection?.rangeCount
         ? nativeSelection.getRangeAt(0).getBoundingClientRect() : null
-      if (nativeNode && target.contains(nativeNode) && (nativeRect?.height ?? 0) > 0) return
+      if (!afterBreak && nativeNode && target.contains(nativeNode) && (nativeRect?.height ?? 0) > 0) return
       const mapped = view.domAtPos(head, assoc)
       let textNode = mapped.node.nodeType === Node.TEXT_NODE && target.contains(mapped.node)
         ? mapped.node as globalThis.Text : null
@@ -427,13 +431,29 @@ const stabilizeGridCaretAfterInput = ViewPlugin.fromClass(class {
         const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT)
         while (walker.nextNode()) {
           const candidate = walker.currentNode as globalThis.Text
-          if (candidate.data.length > 0) textNode = candidate
+          const start = view.posAtDOM(candidate, 0)
+          if (candidate.data.length > 0 && start <= head && head <= start + candidate.data.length) {
+            textNode = candidate
+            offset = head - start
+            break
+          }
         }
-        offset = atEmptyStart ? 0 : textNode?.data.length ?? 0
       }
       if (textNode) {
         const at = Math.max(0, Math.min(offset, textNode.data.length))
         nativeSelection?.setBaseAndExtent(textNode, at, textNode, at)
+        if (afterBreak) {
+          // 换行 widget 改变行高后 CM6 会在测量阶段再次同步选区；测量结束
+          // 仍锚到实际文字节点，避免退回 br 邻接的零尺寸 widgetBuffer。
+          const node = textNode
+          view.requestMeasure({ read: () => null, write: () => {
+            if (!view.compositionStarted && document.activeElement === view.contentDOM &&
+                view.state.selection.main.empty && view.state.selection.main.head === head &&
+                target.contains(node) && view.posAtDOM(node, at) === head) {
+              window.getSelection()?.setBaseAndExtent(node, at, node, at)
+            }
+          } })
+        }
       }
     })
   }
@@ -445,6 +465,58 @@ const selectGridCell: Command = (view) => {
   if (!cell) return false
   view.dispatch({ selection: EditorSelection.single(cell.contentFrom, cell.contentTo),
     userEvent: 'select', scrollIntoView: true })
+  return true
+}
+
+/** 回车保持 Markdown 表格源行完整，并把光标移到格内下一视觉行。 */
+const insertGridCellBreak: Command = (view) => {
+  if (view.compositionStarted || view.state.selection.ranges.length !== 1) return false
+  const range = view.state.selection.main
+  const cell = editableGridCellAt(view.state, range.anchor)
+  if (!cell) return false
+  const from = Math.max(cell.from, range.from)
+  const to = Math.min(cell.to, range.to)
+  const tree = view.state.field(liveDecorationsField).tree
+  const code = chainAt(tree, from).find((node) => node.name === 'InlineCode' &&
+    node.firstChild && node.lastChild && from >= node.firstChild.to && to <= node.lastChild.from)
+  if (code?.firstChild && code.lastChild) {
+    // 换行应在代码片段外序列化；否则 <br> 会变成代码中的可见字面文本。
+    const ticks = view.state.sliceDoc(code.from, code.firstChild.to)
+    const before = view.state.sliceDoc(code.firstChild.to, from)
+    const after = view.state.sliceDoc(to, code.lastChild.from)
+    const left = before ? ticks + before + ticks : ''
+    const right = after ? ticks + after + ticks : ''
+    view.dispatch({ changes: { from: code.from, to: code.to, insert: left + '<br>' + right + (code.to === cell.to ? ' ' : '') },
+      selection: EditorSelection.create([EditorSelection.cursor(code.from + left.length + 4 + (after ? ticks.length : 0), 1)]),
+      userEvent: 'input.type', scrollIntoView: true })
+    return true
+  }
+  const padding = to === cell.to ? ' ' : ''
+  view.dispatch({ changes: { from, to, insert: '<br>' + padding },
+    selection: EditorSelection.create([EditorSelection.cursor(from + 4, 1)]),
+    userEvent: 'input.type', scrollIntoView: true })
+  return true
+}
+
+/** 代码片段被格内换行分开后，从后一段开头退格合回原片段。 */
+const deleteGridCellBreak: Command = (view) => {
+  const range = view.state.selection.main
+  if (view.compositionStarted || view.state.selection.ranges.length !== 1 || !range.empty) return false
+  const cell = editableGridCellAt(view.state, range.head)
+  if (!cell) return false
+  const tree = view.state.field(liveDecorationsField).tree
+  const code = chainAt(tree, range.head).find((node) => node.name === 'InlineCode' && node.firstChild?.to === range.head)
+  if (!code?.firstChild) return false
+  const lineBreak = tableCellBreaks(view.state.sliceDoc(cell.from, cell.to)).find((item) => cell.from + item.to === code.from)
+  if (!lineBreak) return false
+  const start = cell.from + lineBreak.from
+  const previous = chainAt(tree, start - 1).find((node) => node.name === 'InlineCode' && node.to === start)
+  const sameTicks = previous?.firstChild && previous.lastChild &&
+    view.state.sliceDoc(previous.from, previous.firstChild.to) === view.state.sliceDoc(code.from, code.firstChild.to)
+  const from = sameTicks ? previous!.lastChild!.from : start
+  const to = sameTicks ? code.firstChild.to : code.from
+  view.dispatch({ changes: { from, to },
+    selection: { anchor: sameTicks ? from : range.head - (to - from) }, userEvent: 'delete.backward' })
   return true
 }
 
@@ -769,10 +841,12 @@ export const tableEditing = [
   keepGridInputCaretInsideCell,
   stabilizeGridCaretAfterInput,
   keymap.of([
+    { key: 'Enter', run: insertGridCellBreak, shift: insertGridCellBreak },
     { key: 'ArrowLeft', run: (view) => moveAcrossGridCell(view, false) },
     { key: 'ArrowRight', run: (view) => moveAcrossGridCell(view, true) },
     { key: 'ArrowUp', run: (view) => moveVerticallyAcrossGrid(view, false) },
     { key: 'ArrowDown', run: (view) => moveVerticallyAcrossGrid(view, true) },
+    { key: 'Backspace', run: deleteGridCellBreak },
     { key: 'Backspace', run: deleteBeforeGridPadding },
   ]),
   keymap.of([{ key: 'Mod-a', run: selectGridCell }]),

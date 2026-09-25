@@ -28,6 +28,26 @@ export interface TableCellRange {
   contentTo: number
 }
 
+/** 表格格内换行的持久化形式，仅允许无属性的 br。 */
+export function tableCellBreakLength(text: string, at: number): number {
+  return /^<br[\t ]*\/?>/i.exec(text.slice(at))?.[0].length ?? 0
+}
+
+/** 行内代码与转义文本中的 br 仍为字面内容。 */
+export function tableCellBreaks(text: string): Array<{ from: number; to: number }> {
+  const code = scanCodeSpans(text)
+  const breaks: Array<{ from: number; to: number }> = []
+  for (let at = 0; at < text.length; at++) {
+    if (text[at] !== '<' || code[at] || isEscapedAt(text, at)) continue
+    const length = tableCellBreakLength(text, at)
+    if (length) {
+      breaks.push({ from: at, to: at + length })
+      at += length - 1
+    }
+  }
+  return breaks
+}
+
 /** 列对齐语义（GFM 分隔行声明） */
 export type TableAlign = 'left' | 'center' | 'right'
 

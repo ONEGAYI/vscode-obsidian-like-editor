@@ -1,7 +1,7 @@
 // 阅读视图 markdown-it 渲染层（工单 #8）：安全配置 + 源锚点 + DOM 净化。
 //
 // 安全边界（规格「不将 Markdown 原文作为可执行 HTML」）：
-// - html:false：Markdown 内联 HTML 一律转义为纯文本（不产生可执行节点）
+// - html:false：Markdown 内联 HTML 转义为纯文本；仅表格内无属性 br 作为换行处理
 // - linkify/typographer 关闭：URL 自动发现与排版替换均不启用
 // - markdown-it 默认 validateLink 拦截 javascript:/vbscript: 等危险协议
 // - sanitizeReadingDom：进入 DOM 后的防御性二次清洗（纵深防御——清洗
@@ -12,6 +12,7 @@
 // 锚点在 convertTaskItems 中按 li 首行源文计算（#9 勾选写回的定位依据）。
 import MarkdownIt, { type Env, type StateInline, type Token } from 'markdown-it'
 import { WIKILINK_CLASS_NAMES, parseWikilinkInner } from '../shared/wikilink'
+import { tableCellBreakLength } from './tableCells'
 
 /** 渲染环境：行首/行尾 offset 表（lineStarts[i]/lineEnds[i] 为第 i 行界） */
 export interface ReadingRenderEnv {
@@ -89,6 +90,25 @@ export function createMarkdownRenderer(): InstanceType<typeof MarkdownIt> {
   // #11 双链规则先于 link（[t](u)）：`[[…]]` 在 CommonMark 中只是普通文本，
   // 必须在文本规则消费前拦截
   md.inline.ruler.before('link', 'vsidian_wikilink', vsidianWikilinkInlineRule)
+  md.inline.ruler.before('html_inline', 'vsidian_table_break', (state, silent) => {
+    if (!state.env.vsidianTableCell) return false
+    const length = tableCellBreakLength(state.src, state.pos)
+    if (!length) return false
+    if (!silent) state.push('hardbreak', 'br', 0)
+    state.pos += length
+    return true
+  })
+  md.core.ruler.after('inline', 'vsidian_table_breaks', (state) => {
+    let inTable = false
+    for (const token of state.tokens) {
+      if (token.type === 'table_open') inTable = true
+      if (token.type === 'table_close') inTable = false
+      if (inTable && token.type === 'inline' && /<br/i.test(token.content)) {
+        token.children = []
+        md.inline.parse(token.content, md, { ...state.env, vsidianTableCell: true }, token.children)
+      }
+    }
+  })
   md.renderer.rules['list_item_open'] = (tokens, idx, _options, env) => {
     const map = (tokens[idx] as Token).map
     const bounds = env as unknown as ReadingRenderEnv | undefined
