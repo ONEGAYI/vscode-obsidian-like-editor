@@ -24,7 +24,7 @@
 //   （不再发送 edit.request、忽略 doc.changed）；doc.resync 兼作恢复信号
 // - seq 持久化：经 bridge.setState 保存，webview 重载（retainContextWhenHidden
 //   关闭导致的状态重建）后继续编号，宿主按 seq 幂等去重
-import { Annotation, ChangeSet, Compartment, EditorSelection, EditorState, type Extension, type Text } from '@codemirror/state'
+import { Annotation, ChangeSet, Compartment, EditorSelection, EditorState, Prec, type Extension, type Text } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { liveLineNumbers, paintedLineNumbers } from './liveLineNumbers'
 import {
@@ -68,7 +68,10 @@ import { createReadingContainer, prepareReadingImages } from './readingView'
 import { READING_MARKDOWN_CLASS_NAMES } from './readingMarkdown'
 import { resolveStaleTaskToggle } from './taskToggle'
 import { VirtualReadingView } from './readingVirtualView'
-import { blankRowInputPlan, runCreateTable, runTableEdit, tableEditing } from './tableEditing'
+import { blankRowInputPlan, runCreateTable, runTableEdit, tableEditing, tableRowsAt } from './tableEditing'
+import { selectTableRegion, tableRegionField } from './tableRegionSelection'
+import { planTableRegionReplace, type TableRegion } from './tableRegion'
+import { splitTableRowCells } from './tableCells'
 
 /** rAF 不可用环境（旧 jsdom）退化为短超时（与 readingVirtualView 同款） */
 function scheduleFrame(fn: () => void): void {
@@ -381,8 +384,9 @@ export class WebviewSyncController {
   // ---- IME 组合缓冲状态 ----
   /** 组合进行中（DOM compositionstart..compositionend） */
   private composing = false
-  /** 仅空白网格格子的组合暂缓：CM6 可更新候选，宿主只接收结束后的净变更。 */
-  private blankComposition: { startState: EditorState; changes: ChangeSet | null } | null = null
+  /** 空白格或矩形区域的组合暂缓：宿主只接收结束后的净变更。 */
+  private blankComposition: { startState: EditorState; changes: ChangeSet | null; region?: TableRegion } | null = null
+  private compositionCommittedText: string | null = null
   /** 组合期间到达、待 flush 的外部增量（按到达序） */
   private pendingExternal: BufferedIncremental[] = []
   /** 组合期间到达、待 flush 的全文消息（覆盖增量形态）。source 记录来源
@@ -915,6 +919,7 @@ export class WebviewSyncController {
           this.reassertReadingAnchor(start, 2)
         } else {
           this.modeAnchor = pos
+          if (this.view) selectTableRegion(this.view, null)
           this.view?.dispatch({
             selection: { anchor: pos },
             effects: EditorView.scrollIntoView(pos, { y: 'center' }),
@@ -1280,6 +1285,7 @@ export class WebviewSyncController {
       this.persistState()
       return
     }
+    if (this.view) selectTableRegion(this.view, null)
     if (next === 'reading') {
       // 锚点 = live 光标主位（选区最小 from）；阅读视图按当前 CM6 文本渲染
       // （含未确认输入），不依赖宿主权威。锚点随即规范化为块 start——
@@ -1884,6 +1890,7 @@ export class WebviewSyncController {
         }, 0)
       })
     } else {
+      if (this.view) selectTableRegion(this.view, null)
       this.view?.dispatch({
         selection: { anchor: cur.from, head: cur.to },
         effects: EditorView.scrollIntoView(cur.from, { y: 'center' }),
@@ -2153,8 +2160,11 @@ export class WebviewSyncController {
     if (this.blankComposition || this.viewMode !== 'live' || !this.view) return
     const state = this.view.state
     const selection = state.selection.main
-    if (!selection.empty || !blankRowInputPlan(state, selection.from, selection.to, 'x')) return
-    this.blankComposition = { startState: state, changes: null }
+    if (!selection.empty || (!blankRowInputPlan(state, selection.from, selection.to, 'x') &&
+        !state.field(tableRegionField, false))) return
+    this.blankComposition = { startState: state, changes: null,
+      region: state.field(tableRegionField, false) ?? undefined }
+    this.compositionCommittedText = null
     this.reportBlankCompositionSnapshot(true)
   }
 
@@ -2175,6 +2185,43 @@ export class WebviewSyncController {
       initial.push({ offset: from, length: to - from, text: inserted.sliceString(0, inserted.length) })
     })
     let normalized = false
+    if (pending.region) {
+      const start = pending.startState
+      const field = start.field(liveDecorationsField, false)
+      const rows = field && tableRowsAt(start, pending.region.tableFrom, field.tree)
+      const header = start.doc.lineAt(pending.region.tableFrom)
+      const lineNumber = header.number + pending.region.rowFrom + (pending.region.rowFrom > 0 ? 1 : 0)
+      const initialLine = lineNumber <= start.doc.lines ? start.doc.line(lineNumber) : null
+      const currentLine = lineNumber <= view.state.doc.lines ? view.state.doc.line(lineNumber) : null
+      const initialCell = initialLine && splitTableRowCells(initialLine.text, initialLine.from)[pending.region.columnFrom]
+      const currentCell = currentLine && splitTableRowCells(currentLine.text, currentLine.from)[pending.region.columnFrom]
+      if (rows && initialCell && currentCell) {
+        const oldContent = start.doc.sliceString(initialCell.contentFrom, initialCell.contentTo)
+        const newContent = view.state.doc.sliceString(currentCell.contentFrom, currentCell.contentTo)
+        const typed = this.compositionCommittedText ??
+          (newContent.endsWith(oldContent) ? newContent.slice(0, newContent.length - oldContent.length) : newContent)
+        const plan = typed ? planTableRegionReplace(start.doc.toString(), rows, pending.region, typed) : null
+        if (plan || !typed) {
+          const desired = plan ? [...plan.changes].reverse().reduce((doc, change) =>
+            doc.slice(0, change.from) + change.insert + doc.slice(change.to), start.doc.toString())
+            : start.doc.toString()
+          const current = view.state.doc.toString()
+          if (desired !== current) {
+            let prefix = 0
+            while (prefix < current.length && prefix < desired.length && current[prefix] === desired[prefix]) prefix++
+            let suffix = 0
+            while (suffix < current.length - prefix && suffix < desired.length - prefix &&
+              current[current.length - 1 - suffix] === desired[desired.length - 1 - suffix]) suffix++
+            view.dispatch({ changes: { from: prefix, to: current.length - suffix,
+              insert: desired.slice(prefix, desired.length - suffix) },
+              selection: { anchor: plan?.selection ?? initialCell.contentFrom },
+              annotations: tableCompositionSettled.of(true) })
+            net = pending.changes
+          }
+          normalized = true
+        }
+      }
+    }
     if (initial.length === 1 && initial[0]!.length === 0 && initial[0]!.text) {
       const edit = initial[0]!
       const plan = blankRowInputPlan(pending.startState, edit.offset, edit.offset, edit.text)
@@ -2189,6 +2236,7 @@ export class WebviewSyncController {
       }
     }
     this.blankComposition = null
+    this.compositionCommittedText = null
     const changes: SerChange[] = []
     net!.iterChanges((from, to, _fromB, _toB, inserted) => {
       changes.push({ offset: from, length: to - from, text: inserted.sliceString(0, inserted.length) })
@@ -2449,6 +2497,10 @@ export class WebviewSyncController {
     const selectedColumnCell = view.contentDOM.querySelector<HTMLElement>(
       '.vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-selected',
     )
+    const regionCells = view.contentDOM.querySelectorAll<HTMLElement>(
+      '.vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-region-cell',
+    )
+    const regionCell = regionCells[0] ?? null
     const columnFirst = view.contentDOM.querySelector<HTMLElement>(
       '.vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-first',
     )
@@ -2542,6 +2594,7 @@ export class WebviewSyncController {
     const columnStyle = selectedColumnCell ? getComputedStyle(selectedColumnCell) : null
     const columnFirstStyle = columnFirst ? getComputedStyle(columnFirst) : null
     const columnLastStyle = columnLast ? getComputedStyle(columnLast) : null
+    const regionStyle = regionCell ? getComputedStyle(regionCell) : null
     // 光标取证：本扩展未启用 drawSelection，CM6 光标即原生 caret，颜色
     // 由 baseTheme 明暗变体决定（light=black / dark=white）。darkTheme 取
     // facet 实值（jsdom 可读），caretColor 取计算值（jsdom 无 CSS 引擎为 null）
@@ -2649,6 +2702,10 @@ export class WebviewSyncController {
         columnTopBorderWidth: columnFirstStyle?.borderTopWidth ?? null,
         columnBottomBorderWidth: columnLastStyle?.borderBottomWidth ?? null,
         columnBackgroundColor: columnStyle?.backgroundColor ?? null,
+        regionCellCount: regionCells.length,
+        regionBackgroundColor: regionStyle?.backgroundColor ?? null,
+        regionTopBorderWidth: regionStyle?.borderTopWidth ?? null,
+        regionLeftBorderWidth: regionStyle?.borderLeftWidth ?? null,
       },
       math,
       mermaid,
@@ -2813,7 +2870,7 @@ export class WebviewSyncController {
         { key: 'Mod-y', run: () => this.requestHistory('redo') },
       ]),
       // IME 组合状态跟踪：compositionend 后调度缓冲 flush
-      EditorView.domEventHandlers({
+      Prec.highest(EditorView.domEventHandlers({
         compositionstart: () => {
           this.composing = true
           this.beginBlankComposition()
@@ -2822,11 +2879,12 @@ export class WebviewSyncController {
           this.composing = true
           this.beginBlankComposition()
         },
-        compositionend: () => {
+        compositionend: (event) => {
+          this.compositionCommittedText = event.data || null
           this.composing = false
           this.scheduleFlush()
         },
-      }),
+      })),
     ]
   }
 }

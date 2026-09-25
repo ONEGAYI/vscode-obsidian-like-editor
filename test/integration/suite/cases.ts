@@ -419,6 +419,10 @@ interface ViewState {
       columnTopBorderWidth: string | null
       columnBottomBorderWidth: string | null
       columnBackgroundColor: string | null
+      regionCellCount?: number
+      regionBackgroundColor?: string | null
+      regionTopBorderWidth?: string | null
+      regionLeftBorderWidth?: string | null
     }
     /** #59 公式绘制：当前激活视图内首个公式的实际可见性与计数 */
     math?: {
@@ -3257,7 +3261,8 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const uri = wsUri('table43-crlf.md').toString()
     await vscode.commands.executeCommand(CMD.postToPanel, uri,
       { kind: 'table.test.select', axis: 'row', index: 1 })
-    const row = await waitViewState('table43-crlf.md', (v) => v.paint?.table?.rowOutlineWidth != null)
+    const row = await waitViewState('table43-crlf.md', (v) =>
+      v.paint?.table?.rowOutlineWidth != null && v.paint.table.regionCellCount === 2)
     const rowPaint = row.paint!.table!
     assert(rowPaint.cellVisible === true && rowPaint.gridDisplay === 'grid',
       '选中行的表格文字仍须真实可见且保持网格布局')
@@ -3268,6 +3273,13 @@ export const cases: Array<[string, () => Promise<void>]> = [
       `选中行轮廓须比普通格线更醒目：格线=${rowPaint.cellBorderWidth}，轮廓=${rowPaint.rowOutlineWidth}`)
     assert(rowPaint.rowBackgroundColor !== null && rowPaint.rowBackgroundColor !== 'rgba(0, 0, 0, 0)',
       `选中行单元格须实际着色：${rowPaint.rowBackgroundColor}`)
+    assert(rowPaint.regionCellCount === 2, `两格矩形选区须完整绘出：${rowPaint.regionCellCount}`)
+    assert(rowPaint.regionBackgroundColor !== null && rowPaint.regionBackgroundColor !== 'transparent' &&
+      rowPaint.regionBackgroundColor !== 'rgba(0, 0, 0, 0)',
+      `矩形选区的单元格须实际着色：${rowPaint.regionBackgroundColor}`)
+    assert(Number.parseFloat(rowPaint.regionTopBorderWidth ?? '') > baseBorderWidth &&
+      Number.parseFloat(rowPaint.regionLeftBorderWidth ?? '') > baseBorderWidth,
+      `矩形外围顶/左边框须比普通格线更醒目：格线=${rowPaint.cellBorderWidth}，顶/左=${rowPaint.regionTopBorderWidth}/${rowPaint.regionLeftBorderWidth}`)
 
     await vscode.commands.executeCommand(CMD.postToPanel, uri,
       { kind: 'table.test.select', axis: 'column', index: 0 })

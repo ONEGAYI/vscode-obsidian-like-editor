@@ -16,7 +16,7 @@
 //   增删行列以单笔 CM6 事务派发 = 单笔 edit.request = 宿主撤销一次
 // - #43 悬停控件由 tableControls.ts 只按可见 DOM 行构建；拖排行的纯规划
 //   在 tableStructure.ts，松手时仍经本模块单笔 CM6 事务写回
-import { EditorSelection, EditorState, StateEffect, StateField, Transaction, type TransactionSpec } from '@codemirror/state'
+import { Annotation, EditorSelection, EditorState, StateEffect, StateField, Transaction, type TransactionSpec } from '@codemirror/state'
 import { EditorView, ViewPlugin, keymap, type ViewUpdate } from '@codemirror/view'
 import type { Command } from '@codemirror/view'
 import { deleteCharBackward } from '@codemirror/commands'
@@ -25,12 +25,15 @@ import type { TableEditOp } from '../shared/protocol'
 import { liveDecorationsField, LIVE_CLASS_NAMES, snapGridSelectionHead, tableCompositionPreview } from './liveDecorations'
 import { chainAt } from './markdownDoc'
 import { escapeCellText, needsPipeEscapeAt, parseTableDelimiter, planBlankRowCellInput, tableRowCellsForColumns, tableCellBreaks } from './tableCells'
-import { planTableEdit, planTableRowMove, tableCellNavTarget, type TableRowInfo } from './tableStructure'
+import { planTableColumnMove, planTableEdit, planTableRowMove, tableCellNavTarget, type TableRowInfo } from './tableStructure'
 import { createTableControls } from './tableControls'
 import { planCreateTable } from './tableCreate'
+import { planTableRegionDelete, planTableRegionReplace, serializeTableRegion } from './tableRegion'
+import { createTableRegionPointer, setTableRegion, tableRegionField } from './tableRegionSelection'
 
 /** 表格行身份的解析树节点名（分隔行整体是一个 TableDelimiter 节点） */
 const TABLE_LINE_NODE_NAMES = new Set(['TableHeader', 'TableRow', 'TableDelimiter'])
+const tableRegionReplacement = Annotation.define<boolean>()
 
 /** 判定 pos 所在行是否为表格行（表头/数据/分隔行；依据解析树，前序下降） */
 function isTableRowLine(state: EditorState, pos: number, tree: Tree): boolean {
@@ -471,6 +474,7 @@ const protectGridPointerSelection = EditorState.transactionFilter.of((tr) => {
  * #57：跨格 / 整表选区的删除与替换经 planGridSelectionEdit 与可见选区
  * 解耦——整表覆盖删整块，部分覆盖只删各格内容交集，隐藏结构始终保留。 */
 const protectGridCellContent = EditorState.transactionFilter.of((tr) => {
+  if (tr.annotation(tableRegionReplacement)) return tr
   if (!tr.docChanged || (!tr.isUserEvent('delete') && !tr.isUserEvent('input'))) return tr
   const ranges = tr.startState.selection.ranges
   if (ranges.length !== 1) return tr
@@ -571,6 +575,30 @@ const protectGridCellContent = EditorState.transactionFilter.of((tr) => {
     annotations: event ? Transaction.userEvent.of(event) : undefined,
     scrollIntoView: tr.scrollIntoView,
   }
+})
+
+/** 原生键入、粘贴与 IME 候选的首笔输入均替换整片格区。
+ * 后续 IME 候选只更新左上格；宿主组合缓冲将全过程合成一次写回。 */
+const replaceTableRegionInput = EditorState.transactionFilter.of((tr) => {
+  if (!tr.docChanged || !tr.isUserEvent('input') || tr.isUserEvent('input.type.compose')) return tr
+  const region = tr.startState.field(tableRegionField, false)
+  const field = tr.startState.field(liveDecorationsField, false)
+  if (!region || !field) return tr
+  const rows = tableRowsAt(tr.startState, region.tableFrom, field.tree)
+  if (!rows?.length) return tr
+  let text = ''
+  let count = 0
+  tr.changes.iterChanges((_from, _to, _fromB, _toB, inserted) => {
+    count++
+    text = inserted.toString()
+  })
+  if (count !== 1 || !text) return tr
+  const plan = planTableRegionReplace(tr.startState.doc.toString(), rows, region, text)
+  if (!plan) return tr
+  return { changes: plan.changes, selection: { anchor: plan.selection },
+    annotations: [tableRegionReplacement.of(true),
+      Transaction.userEvent.of(tr.annotation(Transaction.userEvent) ?? 'input.type')],
+    scrollIntoView: tr.scrollIntoView }
 })
 
 /** 浏览器输入默认生成 assoc=0 的光标。格尾紧邻隐藏管道时，这会把原生
@@ -851,8 +879,10 @@ function prepareGridInputPadding(view: EditorView): void {
   if (!caret.empty) return
   const cell = editableGridCellAt(view.state, caret.head)
   if (!cell || caret.head !== cell.to || (cell.to > cell.from && view.state.sliceDoc(cell.to - 1, cell.to) === ' ')) return
+  const region = view.state.field(tableRegionField, false)
   view.dispatch({ changes: { from: cell.to, insert: ' ' },
-    selection: EditorSelection.create([EditorSelection.cursor(caret.head, cell.from === cell.to ? 1 : -1)]) })
+    selection: EditorSelection.create([EditorSelection.cursor(caret.head, cell.from === cell.to ? 1 : -1)]),
+    effects: region ? setTableRegion.of(region) : undefined })
 }
 
 /** 普通键入、粘贴在空白行首笔规范化；IME 候选过程可能多次替换同一区间，
@@ -958,7 +988,7 @@ export function runCreateTable(view: EditorView): boolean {
  * 执行一次表格结构操作（增删行列；宿主 table.command 命令与测试共用）。
  * 单笔 CM6 事务（多行变更合一）→ 单笔 edit.request → 宿主撤销一次；
  * 光标落点由 planTableEdit 给出（新行首格 / 相邻行同列格）。
- * 上下文不符（表格外、删分隔行、最小表格删表头、选区中）返回 false 零变更。
+ * 上下文不符（表格外、单独删分隔行、选区中）返回 false 零变更。
  */
 export function runTableEdit(view: EditorView, op: TableEditOp): boolean {
   const sel = view.state.selection.main
@@ -1015,15 +1045,74 @@ export function runTableRowMove(view: EditorView, sourcePos: number, slot: numbe
   return true
 }
 
-const tableControls = createTableControls({ tableRowsAt, runTableEditAt, runTableRowMove })
+export function runTableColumnMove(view: EditorView, tableFrom: number, source: number, slot: number): boolean {
+  if (view.compositionStarted) return false
+  const field = view.state.field(liveDecorationsField, false)
+  if (!field) return false
+  const rows = tableRowsAt(view.state, tableFrom, field.tree)
+  if (rows?.[0]?.lineFrom !== tableFrom) return false
+  const plan = planTableColumnMove(view.state.doc.toString(), rows, source, slot)
+  if (!plan) return false
+  view.dispatch({ changes: plan.changes })
+  return true
+}
+
+const tableControls = createTableControls({ tableRowsAt, runTableEditAt, runTableRowMove, runTableColumnMove })
+
+const tableRegionPointer = createTableRegionPointer((view, pos, tree) => tableRowsAt(view.state, pos, tree))
+
+function selectedRegionRows(view: EditorView) {
+  const region = view.state.field(tableRegionField)
+  const tree = view.state.field(liveDecorationsField, false)?.tree
+  if (!region || !tree) return null
+  const rows = tableRowsAt(view.state, region.tableFrom, tree)
+  return rows?.[0]?.lineFrom === region.tableFrom ? { region, rows } : null
+}
+
+/** 空内容行首格起点退格按结构删行，单笔事务走宿主撤销链路。 */
+const deleteEmptyGridRow: Command = (view) => {
+  if (view.compositionStarted || !view.state.selection.main.empty) return false
+  const head = view.state.selection.main.head
+  const cell = editableGridCellAt(view.state, head)
+  if (!cell || cell.from !== cell.cells[0]?.from || head !== cell.contentFrom ||
+      cell.cells.some((entry) => view.state.sliceDoc(entry.contentFrom, entry.contentTo).length > 0)) return false
+  const field = view.state.field(liveDecorationsField, false)
+  const rows = field && tableRowsAt(view.state, head, field.tree)
+  if (!rows) return false
+  const plan = planTableEdit(view.state.doc.toString(), rows, head, 'deleteRow')
+  if (!plan) return false
+  view.dispatch({ changes: plan.changes, selection: { anchor: plan.selection }, scrollIntoView: true })
+  return true
+}
+
+const deleteSelectedRegion: Command = (view) => {
+  if (view.compositionStarted) return false
+  const selected = selectedRegionRows(view)
+  if (!selected) return false
+  const plan = planTableRegionDelete(view.state.doc.toString(), selected.rows, selected.region)
+  if (plan) view.dispatch({ changes: plan.changes, selection: { anchor: plan.selection }, scrollIntoView: true })
+  return true
+}
 
 /** 装配扩展：键盘编辑、导航及可见表格控件共用 CM6 文本事务 */
 export const tableEditing = [
   tableComposition,
   tableCompositionCleanup,
+  tableRegionField,
+  tableRegionPointer,
   EditorView.domEventHandlers({
+    copy: (event, view) => {
+      const selected = selectedRegionRows(view)
+      if (!selected || !event.clipboardData) return false
+      const text = serializeTableRegion(view.state.doc.toString(), selected.rows, selected.region)
+      if (text === null) return false
+      event.clipboardData.setData('text/plain', text)
+      event.preventDefault()
+      return true
+    },
     beforeinput: (event, view) => {
-      if (event.inputType === 'insertText' && !event.isComposing && !view.compositionStarted) prepareGridInputPadding(view)
+      if (event.inputType === 'insertText' && !event.isComposing && !view.compositionStarted &&
+          !view.state.field(tableRegionField)) prepareGridInputPadding(view)
     },
     compositionstart: (_event, view) => {
       // 既有文件可能含 || 零宽格。候选开始前提供文字节点，避免浏览器
@@ -1057,9 +1146,12 @@ export const tableEditing = [
   markTableCompositionInput,
   normalizeBlankRowInput,
   protectGridPointerSelection,
+  replaceTableRegionInput,
   protectGridCellContent,
   keepGridInputCaretInsideCell,
   stabilizeGridCaretAfterInput,
+  keymap.of([{ key: 'Backspace', run: deleteSelectedRegion }, { key: 'Delete', run: deleteSelectedRegion }]),
+  keymap.of([{ key: 'Backspace', run: deleteEmptyGridRow }]),
   keymap.of([
     { key: 'Enter', run: insertGridCellBreak, shift: insertGridCellBreak },
     { key: 'ArrowLeft', run: (view) => moveAcrossGridCell(view, false) },

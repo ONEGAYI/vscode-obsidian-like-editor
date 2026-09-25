@@ -8,18 +8,18 @@
 // - 插入行：数据行上方/下方插入空数据行（单元格数 = 分隔行声明的列数）；
 //   表头/分隔行上的上方/下方插入统一落到分隔行之后（表头与分隔行之间
 //   或表头上方无法插入普通数据行——GFM 结构会退化）。
-// - 删除行：数据行直接删（光标落相邻行同列格）；删表头 = 删除表头行文本，
-//   首个数据行自然升为新表头、分隔行与对齐保留；最小表格（无数据行）删
-//   表头拒绝；单独删分隔行拒绝（结构行——删除即拆表，超出本票）。
+// - 删除行：数据行直接删；删表头时首个数据行升为新表头，分隔行与对齐
+//   保留；只剩表头时删整表。单独删分隔行拒绝（删除即拆表）。
 // - 插入列：在每行（含表头/分隔/数据行）的目标列位置以最小插入法插入空
 //   单元格（分隔行插入 --- 段，对齐默认）；不重建行、既有单元格文本（含
 //   转义管道与行内代码）逐字节保留。
 // - 删除列：每行删除该列单元格及其前管道（无首边界管道时删其后管道）；
-//   分隔行的对齐段同步删除；缺该列的行不动。
+//   分隔行的对齐段同步删除；唯一列删整表，缺该列的行不动。
 // - 一切操作的变更只落在表格行区间内：表格外的文本逐字节不变。
 import { describe, it, expect } from 'vitest'
 import {
   planTableEdit,
+  planTableColumnMove,
   planTableRowMove,
   tableCellNavTarget,
   type TableRowInfo,
@@ -71,6 +71,30 @@ function apply(doc: string, changes: Array<{ from: number; to: number; insert: s
 }
 
 const at = (needle: string, from = 0): number => DOC.indexOf(needle, from)
+
+describe('最后行列删除', () => {
+  const minimal = '前\n\n| 唯一 |\n| --- |\n\n后'
+  const minimalRows = rowsOf(minimal, [2, 3], ['header', 'delimiter'])
+  it('仅剩表头时删除行移除整表和分隔行', () => {
+    const plan = planTableEdit(minimal, minimalRows, minimal.indexOf('唯一'), 'deleteRow')!
+    expect(apply(minimal, plan.changes)).toBe('前\n\n\n\n后')
+  })
+  it('仅剩一列时删除列移除整表和分隔行', () => {
+    const plan = planTableEdit(minimal, minimalRows, minimal.indexOf('唯一'), 'deleteColumn')!
+    expect(apply(minimal, plan.changes)).toBe('前\n\n\n\n后')
+  })
+})
+
+describe('插入式拖排列', () => {
+  it('末列移到最左侧时，同步移动表头、每行内容和分隔行对齐信息', () => {
+    const plan = planTableColumnMove(DOC, ROWS, 2, 0)!
+    const after = apply(DOC, plan.changes)
+    expect(after).toContain('| 备注 | 名字 | 数量 |\n| ---: | --- | :---: |')
+    expect(after).toContain('| 乙\\|丙 | `x|y` | 4 |')
+    expect(after).toMatch(/^前导段落。\n\n/)
+    expect(after).toMatch(/\n\n结尾段落。$/)
+  })
+})
 
 // ---- Tab / Shift+Tab 导航目标 ----
 
@@ -278,10 +302,10 @@ describe('planTableEdit：删除行', () => {
     expect(plan!.selection).toBe(after.indexOf('苹果'))
   })
 
-  it('最小表格删表头：拒绝（无数据行可升格，零变更）', () => {
+  it('最小表格删表头：删除整表，不遗留分隔行', () => {
     const doc = '| a | b |\n| --- | --- |\n'
     const rows = rowsOf(doc, [0, 1], ['header', 'delimiter'])
-    expect(planTableEdit(doc, rows, doc.indexOf('a'), 'deleteRow')).toBeNull()
+    expect(apply(doc, planTableEdit(doc, rows, doc.indexOf('a'), 'deleteRow')!.changes)).toBe('\n')
   })
 
   it('单独删分隔行：拒绝（结构行，删除即拆表）', () => {
@@ -396,14 +420,12 @@ describe('planTableEdit：删除列', () => {
     expect(after.split('\n')[2]).toBe('| 1 |')
   })
 
-  it('单列表删除唯一列：拒绝（返回 null，与最小表格删表头同口径）', () => {
-    // 删空唯一列会留下三行裸管道（表格解体为残缺文本），拒绝更符合
-    // 「结构行保护」的既有口径（探针实证：放行结果是 "|\n|\n|\n"）
+  it('单列表删除唯一列：移除整表与分隔行', () => {
     const doc = '| a |\n| --- |\n| b |\n'
     const rows = rowsOf(doc, [0, 1, 2], ['header', 'delimiter', 'row'])
-    expect(planTableEdit(doc, rows, doc.indexOf('a') + 1, 'deleteColumn')).toBeNull()
-    expect(planTableEdit(doc, rows, doc.indexOf('---') + 1, 'deleteColumn')).toBeNull()
-    expect(planTableEdit(doc, rows, doc.indexOf('b') + 1, 'deleteColumn')).toBeNull()
+    expect(apply(doc, planTableEdit(doc, rows, doc.indexOf('a') + 1, 'deleteColumn')!.changes)).toBe('\n')
+    expect(apply(doc, planTableEdit(doc, rows, doc.indexOf('---') + 1, 'deleteColumn')!.changes)).toBe('\n')
+    expect(apply(doc, planTableEdit(doc, rows, doc.indexOf('b') + 1, 'deleteColumn')!.changes)).toBe('\n')
   })
 })
 

@@ -6,11 +6,13 @@ import type { TableEditOp } from '../shared/protocol'
 import { liveDecorationsField } from './liveDecorations'
 import { splitTableRowCells } from './tableCells'
 import type { TableRowInfo } from './tableStructure'
+import { selectTableRegion, setTableRegion, tableRegionField } from './tableRegionSelection'
 
 interface TableControlActions {
   tableRowsAt(state: EditorState, pos: number, tree: Tree): TableRowInfo[] | null
   runTableEditAt(view: EditorView, pos: number, op: TableEditOp): boolean
   runTableRowMove(view: EditorView, sourcePos: number, slot: number): boolean
+  runTableColumnMove(view: EditorView, tableFrom: number, source: number, slot: number): boolean
 }
 
 interface VisibleGridRow {
@@ -42,8 +44,8 @@ function contentRowIndex(rows: TableRowInfo[], lineFrom: number): number {
 class TableControlsView {
   private readonly layer: HTMLDivElement
   private visible: VisibleGridRow[] = []
-  private selected: { tableFrom: number; row?: number; column?: number } | null = null
-  private dragging: { row: VisibleGridRow; x: number; y: number; slot: number | null; moved: boolean } | null = null
+  private dragging: { axis: 'row' | 'column'; tableFrom: number; source: number; sourcePos: number;
+    x: number; y: number; slot: number | null; moved: boolean; lastX: number; lastY: number } | null = null
   private scheduled = false
   private destroyed = false
   private suppressNextClick = false
@@ -58,18 +60,23 @@ class TableControlsView {
     view.scrollDOM.addEventListener('scroll', this.onScroll)
     view.contentDOM.addEventListener('pointermove', this.onHover)
     view.contentDOM.addEventListener('pointerleave', this.onLeave)
+    this.layer.addEventListener('pointermove', this.onLayerHover)
+    this.layer.addEventListener('pointerleave', this.onLeave)
+    view.dom.addEventListener('focusout', this.onFocusOut)
+    document.addEventListener('keydown', this.onKeyDown)
     this.scheduleRender()
   }
 
   update(update: ViewUpdate): void {
     if (update.docChanged) {
-      this.selected = null
       this.endDrag()
       this.rowsCache = []
       this.rowsCacheTree = null
     }
     if (update.docChanged || update.selectionSet || update.viewportChanged || update.geometryChanged) {
       this.scheduleRender()
+    } else if (update.transactions.some((tr) => tr.effects.some((effect) => effect.is(setTableRegion)))) {
+      this.applySelection()
     }
   }
 
@@ -79,10 +86,18 @@ class TableControlsView {
     this.view.scrollDOM.removeEventListener('scroll', this.onScroll)
     this.view.contentDOM.removeEventListener('pointermove', this.onHover)
     this.view.contentDOM.removeEventListener('pointerleave', this.onLeave)
+    this.layer.removeEventListener('pointermove', this.onLayerHover)
+    this.layer.removeEventListener('pointerleave', this.onLeave)
+    this.view.dom.removeEventListener('focusout', this.onFocusOut)
+    document.removeEventListener('keydown', this.onKeyDown)
     this.layer.remove()
   }
 
   private readonly onScroll = (): void => this.scheduleRender()
+  private readonly onFocusOut = (): void => this.endDrag()
+  private readonly onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape') this.endDrag()
+  }
 
   private scheduleRender(): void {
     if (this.scheduled) return
@@ -94,22 +109,44 @@ class TableControlsView {
   }
 
   private readonly onHover = (event: PointerEvent): void => {
-    if (this.dragging) {
-      return
-    }
+    if (this.dragging) return
     const row = (event.target as Element).closest?.('.vsidian-table-grid-row')
     const hovered = this.visible.find((item) => item.element === row)
+    const cell = (event.target as Element).closest?.('.vsidian-table-grid-cell')
+    const column = hovered && cell
+      ? [...hovered.element.querySelectorAll(':scope > .vsidian-table-grid-cell')].indexOf(cell) : -1
     for (const item of this.visible) {
       item.handle.classList.toggle('vsidian-table-control-hover', item.element === row)
     }
-    for (const button of this.layer.querySelectorAll<HTMLButtonElement>(
-      '.vsidian-table-insert-row, .vsidian-table-insert-column, .vsidian-table-column-handle')) {
-      button.classList.toggle('vsidian-table-control-hover',
-        hovered !== undefined && button.dataset['tableFrom'] === String(hovered.tableFrom))
+    for (const button of this.layer.querySelectorAll<HTMLButtonElement>('.vsidian-table-column-handle')) {
+      button.classList.toggle('vsidian-table-control-hover', hovered !== undefined &&
+        button.dataset['tableFrom'] === String(hovered.tableFrom) && button.dataset['column'] === String(column))
+    }
+    for (const button of this.layer.querySelectorAll<HTMLButtonElement>('.vsidian-table-insert-row, .vsidian-table-insert-column')) {
+      const tableFrom = Number(button.dataset['tableFrom'])
+      const group = this.visible.filter((item) => item.tableFrom === tableFrom)
+      if (!group.length) continue
+      const first = group[0]!.element.getBoundingClientRect()
+      const last = group[group.length - 1]!.element.getBoundingClientRect()
+      const near = button.classList.contains('vsidian-table-insert-row')
+        ? event.clientX >= first.left && event.clientX <= first.right &&
+          Math.abs(event.clientY - last.bottom) <= 12
+        : event.clientY >= first.top && event.clientY <= last.bottom &&
+          Math.abs(event.clientX - first.right) <= 12
+      button.classList.toggle('vsidian-table-control-hover', near)
     }
   }
 
-  private readonly onLeave = (): void => {
+  private readonly onLayerHover = (event: PointerEvent): void => {
+    const button = (event.target as Element).closest?.('button')
+    if (button?.classList.contains('vsidian-table-insert-row') ||
+        button?.classList.contains('vsidian-table-insert-column')) {
+      button.classList.add('vsidian-table-control-hover')
+    }
+  }
+
+  private readonly onLeave = (event: PointerEvent): void => {
+    if ((event.relatedTarget as Element | null)?.closest?.('.vsidian-table-insert-row, .vsidian-table-insert-column')) return
     this.layer.querySelectorAll('.vsidian-table-control-hover').forEach((button) =>
       button.classList.remove('vsidian-table-control-hover'))
   }
@@ -173,27 +210,25 @@ class TableControlsView {
       }
       const rect = element.getBoundingClientRect()
       const top = rect.top - editorRect.top
-      // 行抓手留在行号栏外：原来的正文左侧 24px 会覆盖段首行号。
-      const gutter = this.view.dom.querySelector<HTMLElement>('.cm-gutters')
-      const handleLeft = (gutter?.getBoundingClientRect().left ?? rect.left) - editorRect.left - 12
+      const handleLeft = rect.left - editorRect.left - 9
       const handle = this.makeButton('vsidian-table-row-handle', `选择或拖动第 ${index + 1} 行`,
         handleLeft, top + rect.height / 2, () => {
           if (this.suppressNextClick) { this.suppressNextClick = false; return }
-          this.selected = { tableFrom: rows[0]!.lineFrom, row: lineFrom }
+          const columns = splitTableRowCells(this.view.state.doc.lineAt(rows[0]!.lineFrom).text,
+            rows[0]!.lineFrom).length
+          this.view.focus()
+          selectTableRegion(this.view, { tableFrom: rows[0]!.lineFrom, rowFrom: index,
+            rowTo: index, columnFrom: 0, columnTo: columns - 1 })
           this.applySelection()
         })
       handle.textContent = '⠿'
+      handle.dataset['tableFrom'] = String(rows[0]!.lineFrom)
       const item: VisibleGridRow = { element, lineFrom, index, tableFrom: rows[0]!.lineFrom, rows, handle }
       handle.addEventListener('pointerdown', (event) => {
         event.preventDefault()
         event.stopPropagation()
-        if (this.destroyed || !this.layer.contains(handle) || this.view.compositionStarted) {
-          return
-        }
-        this.dragging = { row: item, x: event.clientX, y: event.clientY, slot: null, moved: false }
-        document.addEventListener('pointermove', this.onDragMove)
-        document.addEventListener('pointerup', this.onDragEnd)
-        document.addEventListener('pointercancel', this.onDragCancel)
+        if (this.destroyed || !this.layer.contains(handle) || this.view.compositionStarted) return
+        this.startDrag('row', item.tableFrom, item.index, item.lineFrom, event)
       })
       this.visible.push(item)
     }
@@ -211,15 +246,28 @@ class TableControlsView {
         const cells = [...anchor.element.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')]
         cells.forEach((cell, column) => {
           const cellRect = cell.getBoundingClientRect()
-          const button = this.makeButton('vsidian-table-column-handle', `选择第 ${column + 1} 列`,
-            cellRect.left - editorRect.left + cellRect.width / 2, rect.top - editorRect.top - 10,
-            () => { this.selected = { tableFrom: anchor.tableFrom, column }; this.applySelection() })
-          button.textContent = '•'
+          const button = this.makeButton('vsidian-table-column-handle', `选择或拖动第 ${column + 1} 列`,
+            cellRect.left - editorRect.left + cellRect.width / 2, rect.top - editorRect.top - 9,
+            () => {
+              if (this.suppressNextClick) { this.suppressNextClick = false; return }
+              this.view.focus()
+              selectTableRegion(this.view, { tableFrom: anchor.tableFrom, rowFrom: 0,
+                rowTo: anchor.rows.length - 2, columnFrom: column, columnTo: column })
+              this.applySelection()
+            })
+          button.textContent = '⠿'
           button.dataset['tableFrom'] = String(anchor.tableFrom)
+          button.dataset['column'] = String(column)
+          button.addEventListener('pointerdown', (event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            if (this.destroyed || !this.layer.contains(button) || this.view.compositionStarted) return
+            this.startDrag('column', anchor.tableFrom, column, anchor.lineFrom, event)
+          })
         })
         const lastVisible = group[group.length - 1]!.element.getBoundingClientRect()
         const insertCol = this.makeButton('vsidian-table-insert-column', '在右侧新增列',
-          rect.right - editorRect.left + 10, (rect.top + lastVisible.bottom) / 2 - editorRect.top, () => {
+          rect.right - editorRect.left + 6, (rect.top + lastVisible.bottom) / 2 - editorRect.top, () => {
             // 可见锚点只负责几何定位；结构命令始终取真实表头末列。
             const line = this.view.state.doc.lineAt(anchor.rows[0]!.lineFrom)
             const last = splitTableRowCells(line.text, line.from).at(-1)
@@ -227,6 +275,7 @@ class TableControlsView {
           })
         insertCol.textContent = '+'
         insertCol.dataset['tableFrom'] = String(anchor.tableFrom)
+        insertCol.style.height = `${lastVisible.bottom - rect.top}px`
       }
       const tableRows = group[0]!.rows
       const lastLineFrom = tableRows[tableRows.length > 2 ? tableRows.length - 1 : 0]!.lineFrom
@@ -234,20 +283,27 @@ class TableControlsView {
       if (last) {
         const rect = last.element.getBoundingClientRect()
         const addRow = this.makeButton('vsidian-table-insert-row', '在表格底部新增行',
-          rect.left - editorRect.left + rect.width / 2, rect.bottom - editorRect.top + 10,
+          rect.left - editorRect.left + rect.width / 2, rect.bottom - editorRect.top + 6,
           () => { this.actions.runTableEditAt(this.view, last.lineFrom, 'insertRowBelow') })
         addRow.textContent = '+'
         addRow.dataset['tableFrom'] = String(last.tableFrom)
+        addRow.style.width = `${rect.width}px`
       }
     }
     this.applySelection()
+    if (this.dragging?.moved) this.paintDrag(this.dragging.lastX, this.dragging.lastY)
   }
 
   private applySelection(): void {
+    const selected = this.view.state.field(tableRegionField, false)
     for (const item of this.visible) {
-      const rowSelected = this.selected?.tableFrom === item.tableFrom && this.selected.row === item.lineFrom
+      const columns = item.element.querySelectorAll(':scope > .vsidian-table-grid-cell').length
+      const rowSelected = selected?.tableFrom === item.tableFrom && selected.rowFrom === item.index &&
+        selected.rowTo === item.index && selected.columnFrom === 0 && selected.columnTo === columns - 1
       item.element.classList.toggle('vsidian-table-row-selected', rowSelected)
-      const column = this.selected?.tableFrom === item.tableFrom ? this.selected.column : undefined
+      const column = selected?.tableFrom === item.tableFrom && selected.rowFrom === 0 &&
+        selected.rowTo === item.rows.length - 2 && selected.columnFrom === selected.columnTo
+        ? selected.columnFrom : undefined
       item.element.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell').forEach((cell, index) => {
         const active = column === index
         cell.classList.toggle('vsidian-table-column-selected', active)
@@ -257,27 +313,85 @@ class TableControlsView {
     }
   }
 
-  private readonly onDragMove = (event: PointerEvent): void => {
+  private startDrag(axis: 'row' | 'column', tableFrom: number, source: number,
+    sourcePos: number, event: PointerEvent): void {
+    this.endDrag()
+    this.dragging = { axis, tableFrom, source, sourcePos, x: event.clientX, y: event.clientY,
+      lastX: event.clientX, lastY: event.clientY, slot: null, moved: false }
+    document.addEventListener('pointermove', this.onDragMove)
+    document.addEventListener('pointerup', this.onDragEnd)
+    document.addEventListener('pointercancel', this.onDragCancel)
+  }
+
+  private clearDragPaint(): void {
+    for (const item of this.visible) {
+      item.element.classList.remove('vsidian-table-dragging', 'vsidian-table-drop-before', 'vsidian-table-drop-after')
+      item.element.querySelectorAll('.vsidian-table-column-drop-before, .vsidian-table-column-drop-after')
+        .forEach((cell) => cell.classList.remove('vsidian-table-column-drop-before', 'vsidian-table-column-drop-after'))
+    }
+  }
+
+  private paintDrag(x: number, y: number): void {
     const drag = this.dragging
     if (!drag) return
-    if (!drag.moved && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 4) return
-    drag.moved = true
-    for (const item of this.visible) {
-      item.element.classList.remove('vsidian-table-drop-before', 'vsidian-table-drop-after')
-      item.element.classList.toggle('vsidian-table-dragging', item === drag.row)
-    }
-    const targetElement = (event.target as Element).closest?.('.vsidian-table-grid-row')
-      ?? document.elementFromPoint?.(event.clientX, event.clientY)?.closest('.vsidian-table-grid-row')
-    const target = this.visible.find((item) => item.element === targetElement &&
-      item.tableFrom === drag.row.tableFrom)
-    if (!target) {
+    this.clearDragPaint()
+    const group = this.visible.filter((item) => item.tableFrom === drag.tableFrom)
+    if (!group.length) { drag.slot = null; return }
+    const first = group[0]!.element.getBoundingClientRect()
+    const last = group[group.length - 1]!.element.getBoundingClientRect()
+    if (drag.axis === 'row' ? y < first.top - 12 || y > last.bottom + 12
+      : x < first.left - 12 || x > first.right + 12 || y < first.top - 16 || y > last.bottom + 12) {
       drag.slot = null
       return
     }
-    const rect = target.element.getBoundingClientRect()
-    const after = event.clientY >= rect.top + rect.height / 2
-    drag.slot = target.index + (after ? 1 : 0)
-    target.element.classList.add(after ? 'vsidian-table-drop-after' : 'vsidian-table-drop-before')
+    const hit = document.elementFromPoint(x, y)
+    const control = hit?.closest<HTMLElement>('[data-table-from]')
+    if (control?.dataset['tableFrom'] && Number(control.dataset['tableFrom']) !== drag.tableFrom) {
+      drag.slot = null
+      return
+    }
+    const hitRow = hit?.closest<HTMLElement>('.vsidian-table-grid-row')
+    if (hitRow && this.visible.some((item) => item.element === hitRow && item.tableFrom !== drag.tableFrom)) {
+      drag.slot = null
+      return
+    }
+    if (drag.axis === 'row') {
+      const target = group.find((item) => {
+        const rect = item.element.getBoundingClientRect()
+        return y < rect.top + rect.height / 2
+      }) ?? group[group.length - 1]!
+      const rect = target.element.getBoundingClientRect()
+      const after = y >= rect.top + rect.height / 2
+      drag.slot = target.index + (after ? 1 : 0)
+      target.element.classList.add(after ? 'vsidian-table-drop-after' : 'vsidian-table-drop-before')
+      group.find((item) => item.index === drag.source)?.element.classList.add('vsidian-table-dragging')
+    } else {
+      const anchor = group.find((item) => item.index === 0) ?? group[0]!
+      const cells = [...anchor.element.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')]
+      const target = cells.findIndex((cell) => {
+        const rect = cell.getBoundingClientRect()
+        return x < rect.left + rect.width / 2
+      })
+      const col = target < 0 ? cells.length - 1 : target
+      if (col < 0) { drag.slot = null; return }
+      const rect = cells[col]!.getBoundingClientRect()
+      const after = x >= rect.left + rect.width / 2
+      drag.slot = col + (after ? 1 : 0)
+      for (const item of group) {
+        item.element.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')[col]
+          ?.classList.add(after ? 'vsidian-table-column-drop-after' : 'vsidian-table-column-drop-before')
+      }
+    }
+  }
+
+  private readonly onDragMove = (event: PointerEvent): void => {
+    const drag = this.dragging
+    if (!drag) return
+    drag.lastX = event.clientX
+    drag.lastY = event.clientY
+    if (!drag.moved && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 4) return
+    drag.moved = true
+    this.paintDrag(event.clientX, event.clientY)
   }
 
   private readonly onDragEnd = (): void => {
@@ -287,7 +401,8 @@ class TableControlsView {
       this.suppressNextClick = true
       // 浏览器可能在 pointerup 后补发 click；只吞这一次，随后立即恢复抓手点击。
       setTimeout(() => { this.suppressNextClick = false }, 0)
-      this.actions.runTableRowMove(this.view, drag.row.lineFrom, drag.slot)
+      if (drag.axis === 'row') this.actions.runTableRowMove(this.view, drag.sourcePos, drag.slot)
+      else this.actions.runTableColumnMove(this.view, drag.tableFrom, drag.source, drag.slot)
     }
   }
   private readonly onDragCancel = (): void => this.endDrag()
@@ -296,9 +411,7 @@ class TableControlsView {
     document.removeEventListener('pointermove', this.onDragMove)
     document.removeEventListener('pointerup', this.onDragEnd)
     document.removeEventListener('pointercancel', this.onDragCancel)
-    for (const item of this.visible) {
-      item.element.classList.remove('vsidian-table-dragging', 'vsidian-table-drop-before', 'vsidian-table-drop-after')
-    }
+    this.clearDragPaint()
     this.dragging = null
   }
 }

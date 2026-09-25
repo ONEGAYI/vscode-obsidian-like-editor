@@ -157,7 +157,7 @@ try {
     }
   }
   const navigationFailures = []
-  for (const scenario of ['horizontal-wrap', 'horizontal-wrap-empty', 'vertical-inside', 'vertical-outside', 'vertical-empty', 'vertical-wrapped', 'enter-cell', 'enter-empty', 'enter-body', 'enter-middle', 'enter-repeat', 'enter-code', 'enter-code-start', 'enter-code-end', 'enter-ime', 'drag-row', 'drag-column', 'drag-table-outside']) {
+  for (const scenario of ['horizontal-wrap', 'horizontal-wrap-empty', 'vertical-inside', 'vertical-outside', 'vertical-empty', 'vertical-wrapped', 'enter-cell', 'enter-empty', 'enter-body', 'enter-middle', 'enter-repeat', 'enter-code', 'enter-code-start', 'enter-code-end', 'enter-ime', 'drag-row', 'drag-column', 'region-copy', 'region-exit-outside', 'region-type', 'region-paste', 'region-ime', 'region-zero-width', 'region-zero-width-ime', 'region-padded-drag', 'header-clear', 'empty-row-backspace', 'handle-row', 'handle-column', 'handle-cross-row', 'handle-cross-column', 'handle-hover', 'drag-table-outside']) {
     const page = await browser.newPage()
     try {
       await page.setContent('<div id="app"></div>')
@@ -167,10 +167,28 @@ try {
       if (scenario === 'horizontal-wrap-empty') source = source.replace('| B1 | B2 |', '| | |')
       if (scenario === 'vertical-empty') source = source.replace(' B2 ', ' ')
       if (scenario === 'vertical-wrapped') source = source.replace('H2', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+      if (scenario === 'empty-row-backspace') source = source.replace('| B1 | B2 |', '|  |  |')
+      if (scenario === 'header-clear') source = source.replace('| H1 | H2 |', '| H1 |  |')
+      if (scenario === 'handle-column') source = source.replace('| --- | --- |', '| :--- | ---: |')
+      if (scenario.startsWith('region-zero-width')) source = 'BEFORE\n\n|H1|H2|\n|---|---|\n||B2|\n|C1|C2|\n\nAFTER'
+      if (scenario === 'region-padded-drag') source = 'BEFORE\n\n|H1|H2|\n|---|---|\n| |B2|\n|C1|C2|\n\nAFTER'
+      if (scenario.startsWith('handle-cross-')) source += '\n\n| X1 | X2 |\n| --- | --- |\n| Y1 | Y2 |'
       if (scenario === 'enter-empty') source = source.replace('H2', '')
       if (scenario.startsWith('enter-code')) source = source.replace('H2', '`H2`')
+      if (scenario === 'region-copy') {
+        source = 'BEFORE\n\n| 水果 | 数量 | 单价 |\n| --- | --- | --- |\n| 苹果 | 3 | 5.5 |\n| 香蕉 | 5 | 2.8 |\n| 樱桃 | 12 | 18.0 |\n\nAFTER'
+        await page.addStyleTag({ content: ':root { color-scheme: dark; --vscode-editor-background: #1e2229; --vscode-editor-foreground: #d4d4d4; --vscode-panel-border: #4b525a; --vscode-focusBorder: #77b8da; } #app { background:#1e2229; color:#d4d4d4; font-family: sans-serif; font-size: 17px; }' })
+      }
       await page.evaluate((text) => window.initTable(text), source)
       const cell = (r, c) => page.locator('.vsidian-table-grid-row').nth(r).locator('.vsidian-table-grid-cell').nth(c)
+      const captureTable = async (name) => {
+        const first = await page.locator('.vsidian-table-grid-row').first().boundingBox()
+        const last = await page.locator('.vsidian-table-grid-row').last().boundingBox()
+        await page.screenshot({ path: path.join(root, 'out/test/browser', name), clip: {
+          x: Math.max(0, first.x - 28), y: Math.max(0, first.y - 28),
+          width: first.width + 58, height: last.y + last.height - first.y + 58,
+        } })
+      }
       async function checkCell(r, c) {
         const state = await page.evaluate(({ r, c }) => {
           const target = document.querySelectorAll('.vsidian-table-grid-row')[r].querySelectorAll('.vsidian-table-grid-cell')[c]
@@ -187,7 +205,131 @@ try {
         assert.equal(typed.text, source.slice(0, state.head) + 'x' + source.slice(state.head), '真实输入位置须与导航位置一致')
         await page.keyboard.press('Backspace')
       }
-      if (scenario.startsWith('enter-')) {
+      if (scenario === 'region-padded-drag') {
+        const a = await cell(1, 0).boundingBox()
+        const b = await cell(2, 1).boundingBox()
+        await page.mouse.move(a.x + 4, a.y + a.height / 2)
+        await page.mouse.down()
+        await page.mouse.move(b.x + 14, b.y + b.height / 2, { steps: 6 })
+        await page.mouse.up()
+        assert.equal(await page.locator('.vsidian-table-region-cell').count(), 4,
+          '空白首格拖选到对角格仍须形成四格矩形')
+      } else if (scenario.startsWith('region-zero-width')) {
+        await page.locator('.vsidian-table-row-handle').nth(1).click()
+        const selected = await page.evaluate(() => ({ ...window.readEditor(),
+          region: document.querySelectorAll('.vsidian-table-region-cell').length,
+          row: document.querySelectorAll('.vsidian-table-row-selected').length,
+          focused: document.activeElement?.className }))
+        assert.equal(selected.region, 2, `零宽行把手须选整行: ${JSON.stringify(selected)}`)
+        await page.evaluate(() => window.controller.getView().focus())
+        if (scenario === 'region-zero-width') await page.keyboard.type('X')
+        else {
+          const cdp = await page.context().newCDPSession(page)
+          for (const text of ['ni', 'nihao']) await cdp.send('Input.imeSetComposition',
+            { text, selectionStart: text.length, selectionEnd: text.length })
+          await cdp.send('Input.insertText', { text: '你好' })
+          await page.waitForTimeout(30)
+        }
+        const actual = (await page.evaluate(() => window.readEditor())).text
+        assert(actual.includes(scenario === 'region-zero-width' ? '|X| |' : '|你好| |') && !actual.includes('B2'),
+          `零宽首格整行区域输入须清邻格并保留列数: ${actual}`)
+      } else if (['region-type', 'region-paste', 'region-ime'].includes(scenario)) {
+        const a = await cell(1, 0).boundingBox()
+        const b = await cell(2, 1).boundingBox()
+        await page.mouse.move(a.x + 14, a.y + a.height / 2)
+        await page.mouse.down()
+        await page.mouse.move(b.x + 26, b.y + b.height / 2, { steps: 6 })
+        await page.mouse.up()
+        assert.equal(await page.locator('.vsidian-table-region-cell').count(), 4)
+        if (scenario === 'region-type') await page.keyboard.type('X')
+        else if (scenario === 'region-paste') await page.evaluate(() => {
+          const data = new DataTransfer()
+          data.setData('text/plain', '中|文\n第二行')
+          document.querySelector('.cm-content').dispatchEvent(new ClipboardEvent('paste',
+            { clipboardData: data, bubbles: true, cancelable: true }))
+        })
+        else {
+          const cdp = await page.context().newCDPSession(page)
+          for (const text of ['ni', 'nihao']) await cdp.send('Input.imeSetComposition',
+            { text, selectionStart: text.length, selectionEnd: text.length })
+          await cdp.send('Input.insertText', { text: '你好' })
+          await page.waitForTimeout(30)
+        }
+        const actual = (await page.evaluate(() => window.readEditor())).text
+        assert(!actual.includes('B1') && !actual.includes('B2') && !actual.includes('C1') && !actual.includes('C2'),
+          `${scenario} 须清除矩形所有旧格内容: ${actual}`)
+        assert(actual.includes(scenario === 'region-type' ? '| X |  |'
+          : scenario === 'region-paste' ? '| 中\\|文<br>第二行 |  |' : '| 你好 |  |'),
+        `${scenario} 新内容应仅落左上格: ${actual}`)
+        assert.equal(await page.locator('.vsidian-table-grid-row').count(), 3, '替换区域不得删除表格结构')
+      } else if (scenario === 'handle-cross-row' || scenario === 'handle-cross-column') {
+        const selector = scenario === 'handle-cross-row' ? '.vsidian-table-row-handle' : '.vsidian-table-column-handle'
+        const from = await page.locator(selector).nth(scenario === 'handle-cross-row' ? 1 : 0).boundingBox()
+        const to = await page.locator(selector).nth(scenario === 'handle-cross-row' ? 4 : 3).boundingBox()
+        await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
+        await page.mouse.down()
+        await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 10 })
+        await page.mouse.up()
+        assert.equal((await page.evaluate(() => window.readEditor())).text, source,
+          '把手落到另一张表格时不得修改源表格')
+      } else if (scenario === 'handle-row') {
+        const from = await page.locator('.vsidian-table-row-handle').nth(2).boundingBox()
+        const to = await page.locator('.vsidian-table-row-handle').nth(0).boundingBox()
+        await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
+        await page.mouse.down()
+        await page.mouse.move(from.x + from.width / 2, to.y + 2, { steps: 8 })
+        assert(await page.locator('.vsidian-table-drop-before').count() > 0, '沿左侧把手栏拖动须绘出插入线')
+        await page.mouse.up()
+        assert((await page.evaluate(() => window.readEditor())).text.includes('| C1 | C2 |\n| --- | --- |\n| H1 | H2 |'),
+          '数据行移到顶部后须升为表头，原表头成为数据行')
+      } else if (scenario === 'handle-column') {
+        const from = await page.locator('.vsidian-table-column-handle').nth(1).boundingBox()
+        const to = await page.locator('.vsidian-table-column-handle').nth(0).boundingBox()
+        await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
+        await page.mouse.down()
+        await page.mouse.move(to.x + 2, from.y + from.height / 2, { steps: 8 })
+        assert(await page.locator('.vsidian-table-column-drop-before').count() > 0, '沿上方把手栏拖动须绘出列插入线')
+        await page.mouse.up()
+        const text = (await page.evaluate(() => window.readEditor())).text
+        assert(text.includes('| H2 | H1 |\n| ---: | :--- |\n| B2 | B1 |'), `列拖排须连对齐信息一同移动: ${text}`)
+      } else if (scenario === 'handle-hover') {
+        const band = page.locator('.vsidian-table-insert-row')
+        const rect = await cell(2, 0).boundingBox()
+        const opacity = () => band.evaluate(e => getComputedStyle(e).opacity)
+        assert.equal(await opacity(), '0', '新增行带平时不可见')
+        await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height - 2)
+        assert.equal(await opacity(), '1', '靠近表格底边新增行带出现')
+        await captureTable('table-add-row-band.png')
+        const bandRect = await band.boundingBox()
+        await page.mouse.move(bandRect.x + bandRect.width / 2, bandRect.y + bandRect.height / 2)
+        assert.equal(await opacity(), '1', '移入新增带不得闪退')
+        await page.mouse.move(600, 400)
+        assert.equal(await opacity(), '0', '离开表格后新增带隐藏')
+        const right = await cell(1, 1).boundingBox()
+        await page.mouse.move(right.x + right.width - 2, right.y + right.height / 2)
+        const colBand = page.locator('.vsidian-table-insert-column')
+        assert.equal(await colBand.evaluate(e => getComputedStyle(e).opacity), '1', '靠近右边新增列带出现')
+        await captureTable('table-add-column-band.png')
+        const header = await cell(0, 0).boundingBox()
+        await page.mouse.move(header.x + header.width / 2, header.y + header.height / 2)
+        await captureTable('table-edge-handles.png')
+      } else if (scenario === 'header-clear') {
+        await cell(0, 0).click()
+        await page.keyboard.press('Control+a')
+        await page.keyboard.press('Backspace')
+        assert.equal(await page.locator('.vsidian-table-grid-row').count(), 3, '清空唯一有字表头格仍须保留可编辑网格')
+        await page.keyboard.type('新')
+        assert((await page.evaluate(() => window.readEditor())).text.includes('新'), '全空表头后应能继续输入')
+      } else if (scenario === 'empty-row-backspace') {
+        await cell(1, 0).click()
+        await page.evaluate(offset => {
+          window.controller.handleHostMessage({ kind: 'view.locate', offset })
+          window.controller.getView().focus()
+        }, source.indexOf('|  |  |') + 3)
+        await page.keyboard.press('Backspace')
+        assert.equal((await page.evaluate(() => window.readEditor())).text,
+          source.replace('|  |  |\n', ''), '空行首格起点退格应删整行且保留正文')
+      } else if (scenario.startsWith('enter-')) {
         const target = cell(scenario === 'enter-body' ? 1 : 0, 1)
         await target.click()
         if (scenario.startsWith('enter-code')) {
@@ -276,7 +418,7 @@ try {
         assert((await page.evaluate(() => window.readEditor())).head > initial.head, '软换行下移应在格内前进')
         await page.keyboard.press('ArrowUp')
         await checkCell(0, 1)
-      } else if (scenario.startsWith('drag-')) {
+      } else if (scenario.startsWith('drag-') || scenario.startsWith('region-')) {
         // #57：真实鼠标拖选（page.mouse）建立跨格/整表选区，再以原生按键删除。
         const gridState = () => page.evaluate(() => ({
           ...window.readEditor(),
@@ -294,18 +436,12 @@ try {
           const b = await cell(1, 1).boundingBox()
           await dragTo({ x: a.x + 14, y: a.y + a.height / 2 },
             { x: b.x + 26, y: b.y + b.height / 2 })
-          const rowAt = source.indexOf('| B1 | B2 |')
-          const sel = await gridState()
-          assert(sel.from >= rowAt + 1 && sel.from <= rowAt + 5,
-            `拖选头应落在 B1 格内: ${JSON.stringify(sel)}`)
-          assert(sel.to >= rowAt + 6 && sel.to <= rowAt + 10,
-            `拖选尾应跨到 B2 格内: ${JSON.stringify(sel)}`)
-          assert(sel.to > sel.from, '拖选选区应已建立')
+          assert.equal(await page.locator('.vsidian-table-region-cell').count(), 2, '同行两格应整格高亮')
           await page.keyboard.press('Backspace')
           const after = await gridState()
           assert(!after.text.includes('B1') && !after.text.includes('B2'),
-            `同行跨格删除应清掉两格可见内容: ${JSON.stringify(after)}`)
-          assert(after.rows === 3 && after.delimiterHidden, '删除后网格与隐藏分隔行保持')
+            `完整数据行选区应删除该行: ${JSON.stringify(after)}`)
+          assert(after.rows === 2 && after.delimiterHidden, '删除完整行后网格与隐藏分隔行保持')
           assert(after.text.includes('H1') && after.text.includes('C1') && after.text.includes('C2'),
             '未选中的格不受影响')
         } else if (scenario === 'drag-column') {
@@ -313,20 +449,51 @@ try {
           const b = await cell(2, 0).boundingBox()
           await dragTo({ x: a.x + 14, y: a.y + a.height / 2 },
             { x: b.x + 26, y: b.y + b.height / 2 })
-          const bRow = source.indexOf('| B1 | B2 |')
-          const cRow = source.indexOf('| C1 | C2 |')
-          const sel = await gridState()
-          assert(sel.from >= bRow + 1 && sel.from <= bRow + 5,
-            `拖选头应落在 B1 格内: ${JSON.stringify(sel)}`)
-          assert(sel.to >= cRow + 1 && sel.to <= cRow + 5,
-            `拖选尾应跨行落到 C1 格内: ${JSON.stringify(sel)}`)
+          assert.equal(await page.locator('.vsidian-table-region-cell').count(), 2, '同列两格应整格高亮')
           await page.keyboard.press('Backspace')
           const after = await gridState()
-          assert(!after.text.includes('B1') && !after.text.includes('B2') && !after.text.includes('C1'),
-            `同列跨行删除应清掉覆盖行各格可见内容: ${JSON.stringify(after)}`)
+          assert(!after.text.includes('B1') && !after.text.includes('C1'),
+            `同列跨行删除应只清掉覆盖格: ${JSON.stringify(after)}`)
           assert(after.rows === 3 && after.delimiterHidden, '删除后网格与隐藏分隔行保持')
-          assert(after.text.includes('H1') && after.text.includes('H2') && after.text.includes('C2'),
+          assert(after.text.includes('H1') && after.text.includes('H2') && after.text.includes('B2') && after.text.includes('C2'),
             '未选中的格不受影响')
+        } else if (scenario === 'region-copy') {
+          const a = await cell(2, 1).boundingBox()
+          const b = await cell(3, 2).boundingBox()
+          await dragTo({ x: a.x + 14, y: a.y + a.height / 2 },
+            { x: b.x + 26, y: b.y + b.height / 2 })
+          const paint = await page.evaluate(() => {
+            const selected = [...document.querySelectorAll('.vsidian-table-region-cell')]
+            return selected.map(e => ({ background: getComputedStyle(e).backgroundColor,
+              left: getComputedStyle(e).borderLeftColor, right: getComputedStyle(e).borderRightColor }))
+          })
+          assert.equal(paint.length, 4, `2×2 应高亮四格: ${JSON.stringify(paint)}`)
+          assert(paint.every(p => p.background !== 'rgba(0, 0, 0, 0)'), `格区背景须实际绘出: ${JSON.stringify(paint)}`)
+          assert.equal(await cell(2, 0).evaluate(e => e.classList.contains('vsidian-table-region-cell')), false,
+            '矩形外的第一列不得高亮')
+          assert.equal(await page.evaluate(() => getSelection()?.toString()), '', '跨格选区不得残留原生逐字蓝色选区')
+          await captureTable('table-region-2x2.png')
+          await page.evaluate(() => document.addEventListener('copy', event => {
+            window.__copiedTable = event.clipboardData?.getData('text/plain')
+          }))
+          await page.keyboard.press('Control+c')
+          assert.equal(await page.evaluate(() => window.__copiedTable),
+            '| 5 | 2.8 |\n| --- | --- |\n| 12 | 18.0 |', '复制的纯文本必须是独立 Markdown 表格')
+        } else if (scenario === 'region-exit-outside') {
+          const a = await cell(1, 0).boundingBox()
+          const b = await cell(2, 1).boundingBox()
+          const outside = await page.locator('.cm-line').filter({ hasText: /^AFTER$/ }).boundingBox()
+          await page.mouse.move(a.x + 14, a.y + a.height / 2)
+          await page.mouse.down()
+          await page.mouse.move(b.x + 26, b.y + b.height / 2, { steps: 4 })
+          assert.equal(await page.locator('.vsidian-table-region-cell').count(), 4)
+          await page.mouse.move(outside.x + 10, outside.y + outside.height / 2, { steps: 4 })
+          await page.mouse.up()
+          assert.equal(await page.locator('.vsidian-table-region-cell').count(), 0,
+            '拖出表格进入正文须退出矩形选区')
+          const sel = await gridState()
+          assert(sel.to > sel.from && sel.to >= source.indexOf('AFTER'),
+            `拖入正文后须恢复普通文本选区: ${JSON.stringify(sel)}`)
         } else {
           // drag-table-outside：表外文本发起、横跨整表拖选，一次 Delete 移除整表
           const beforeLine = page.locator('.cm-line').filter({ hasText: /^BEFORE$/ })

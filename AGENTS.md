@@ -4,7 +4,9 @@ VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 
 > 当前状态：**MVP 主要功能已实施，整体验收未结**。双视图编辑器、增量写回、任务、链接与图片、双链、表格和查找已落地；#32 统一两模式基础排版基线，#33 独立设置页，#34 实时预览源文件行号（设置页可开关）；#38 落地标题栏三态切换（实时预览 → 阅读 → 源码编辑器循环）、`.md` 默认编辑器接管、全局模式记忆（globalState）与 diff 语境防御；#45 后台集成宿主、#44 IME 同步修复、#42/#43 表格网格与控件。二期联合分支（#57/#59/#60）落地渲染能力：#57 表格跨格选择与整表选区删除（选区可见范围与删除作用域解耦），#59 公式渲染（KaTeX 本地打包，live 双通道装饰 + 阅读渲染，LRU 缓存与可读降级），#60 Mermaid 围栏双模式渲染（独立产物按需懒加载、视口挂载/卸载、主题联动）；随附 5 轮审查修复循环与发布闸双向加固（out/ 白名单、woff/ttf 禁令）。#21–#25、#28、#30 跟进规格票验收缺口，#26–#27 等人工与跨环境事项仍按验证清单跟进。
 >
-> 自动化套件为 1115 项 Vitest 单测、25 项 node --test 契约测试、47 项原生浏览器输入回归（表格拖选/公式输入/Mermaid CSP 复刻页），以及开发态与 VSIX 安装态共用的 113 项真实 VSCode 1.86.2 宿主集成用例（另有空窗口激活实测路径）。单元格删除边界、跨行拖选标记保护、中格退格后的网格绘制、Tab 可见行导航、格内粘贴换行、多表行号、中文候选写回、跨格选区/整表删除、公式与 Mermaid 的绘制层断言（KaTeX 字体探针、`paint.math`/`paint.mermaid`）均有回归保护，执行记录见人工验证清单；这不代表真实 IME、物理鼠标和视觉效果已由用户验收。发布基建（双语 README、CHANGELOG、VSIX 体积闸、发布脚本与 CI 自动发布）已落地，见「打包与发布」。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能数据与待验项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 和 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
+> 自动化套件为 1134 项 Vitest 单测、25 项 node --test 契约测试、62 项原生浏览器输入回归（表格拖选/公式输入/Mermaid CSP 复刻页），以及开发态与 VSIX 安装态共用的 113 项真实 VSCode 1.86.2 宿主集成用例（另有空窗口激活实测路径）。单元格删除边界、跨行拖选标记保护、中格退格后的网格绘制、Tab 可见行导航、格内粘贴换行、多表行号、中文候选写回、跨格选区/整表删除、公式与 Mermaid 的绘制层断言（KaTeX 字体探针、`paint.math`/`paint.mermaid`）均有回归保护，执行记录见人工验证清单；这不代表真实 IME、物理鼠标和视觉效果已由用户验收。发布基建（双语 README、CHANGELOG、VSIX 体积闸、发布脚本与 CI 自动发布）已落地，见「打包与发布」。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能数据与待验项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 和 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
+>
+> 表格首轮交互未通过用户验收。本工作树按 [#72 规格](docs/specs/table-interaction-rework.md) 与 #73–#75 重做：统一矩形格区、高亮和 Markdown 复制；满行满列结构删除、表头晋升与末行删尽；边沿悬停新增、点阵把手选择及插入式行列拖排。编译、完整单测、62 项浏览器回归及开发态／安装态各 113 项宿主集成已通过，包含零宽格 IME、过期选区清理、跨表无效拖动及格区绘制断言。安装态首轮出现一次 Mermaid 可见性断言失败，同包复跑未复现，详见人工验证清单；用户复验仍待完成。
 
 ## 约定
 
@@ -92,9 +94,10 @@ vsidian/
 │   │   ├── obsidian-live-preview-editor.md # Obsidian 技术栈与选型调研
 │   │   └── obsidian-viewport-rendering.md  # 视口渲染性能补充调研
 │   └── specs/    # 产品规格
-│       ├── manual-verification.md # 人工验证清单
-│       ├── mvp-issues.md          # MVP GitHub Issue 索引
-│       └── mvp.md                 # MVP 规格主文档
+│       ├── manual-verification.md      # 人工验证清单
+│       ├── mvp-issues.md               # MVP GitHub Issue 索引
+│       ├── mvp.md                      # MVP 规格主文档
+│       └── table-interaction-rework.md # 表格交互重做规格
 ├── esbuild.mjs            # esbuild 多产物构建脚本
 ├── LICENSE                # MIT 许可证全文
 ├── media/                 # 随扩展打包的静态资源
@@ -128,37 +131,39 @@ vsidian/
 │   │   ├── settings.ts      # 设置定义与读写纯逻辑
 │   │   └── wikilink.ts      # 双链形态学单一事实源（#11）
 │   └── webview/     # webview 端实现
-│       ├── css.d.ts              # CSS 导入类型声明
-│       ├── findSession.ts        # 查找匹配纯函数（#14）
-│       ├── imageResource.ts      # 图片资源状态机（#10）
-│       ├── liveDecorations.ts    # 语法树驱动 Live 装饰（#8）
-│       ├── liveLineNumbers.ts    # 表格段首行号与绘制探针
-│       ├── liveLinks.ts          # live 链接装饰与跳转（#10）
-│       ├── liveMath.ts           # 行内与块级公式 live 装饰（#59）
-│       ├── liveMermaid.ts        # Mermaid live 装饰（#60）
-│       ├── main.css              # webview 全局布局样式
-│       ├── main.ts               # webview 启动入口
-│       ├── markdownDoc.ts        # Markdown 文档工具与树查询
-│       ├── mathRenderCache.ts    # KaTeX 渲染 LRU 缓存共享模块
-│       ├── mermaidEntry.ts       # Mermaid 独立产物入口（#60）
-│       ├── mermaidRender.ts      # Mermaid 渲染管线（#60）
-│       ├── perfProbe.ts          # webview 性能探针（#5）
-│       ├── readingBlocks.ts      # markdown-it 阅读块切分
-│       ├── readingMarkdown.ts    # markdown-it 安全渲染层
-│       ├── readingProbe.ts       # 阅读视图性能探针
-│       ├── readingView.ts        # 阅读视图 DOM 构建与锚点定位
-│       ├── readingViewport.ts    # 阅读视口挂载窗口纯函数
-│       ├── readingVirtualView.ts # 阅读视图虚拟化装配层
-│       ├── settingsMain.ts       # 设置页 webview 入口
-│       ├── settingsPage.css      # 设置页样式
-│       ├── settingsPageView.ts   # 设置页 webview 视图
-│       ├── syncController.ts     # CM6 同步控制器
-│       ├── tableCells.ts         # 表格单元格边界、换行与转义
-│       ├── tableControls.ts      # 表格可见行控件与拖动
-│       ├── tableCreate.ts        # 光标处建表规划纯函数
-│       ├── tableEditing.ts       # 表格输入钩子（#12）
-│       ├── tableStructure.ts     # 表格导航与增删行列纯函数（#13）
-│       └── taskToggle.ts         # 任务勾选解析纯函数（#9）
+│       ├── css.d.ts                # CSS 导入类型声明
+│       ├── findSession.ts          # 查找匹配纯函数（#14）
+│       ├── imageResource.ts        # 图片资源状态机（#10）
+│       ├── liveDecorations.ts      # 语法树驱动 Live 装饰（#8）
+│       ├── liveLineNumbers.ts      # 表格段首行号与绘制探针
+│       ├── liveLinks.ts            # live 链接装饰与跳转（#10）
+│       ├── liveMath.ts             # 行内与块级公式 live 装饰（#59）
+│       ├── liveMermaid.ts          # Mermaid live 装饰（#60）
+│       ├── main.css                # webview 全局布局样式
+│       ├── main.ts                 # webview 启动入口
+│       ├── markdownDoc.ts          # Markdown 文档工具与树查询
+│       ├── mathRenderCache.ts      # KaTeX 渲染 LRU 缓存共享模块
+│       ├── mermaidEntry.ts         # Mermaid 独立产物入口（#60）
+│       ├── mermaidRender.ts        # Mermaid 渲染管线（#60）
+│       ├── perfProbe.ts            # webview 性能探针（#5）
+│       ├── readingBlocks.ts        # markdown-it 阅读块切分
+│       ├── readingMarkdown.ts      # markdown-it 安全渲染层
+│       ├── readingProbe.ts         # 阅读视图性能探针
+│       ├── readingView.ts          # 阅读视图 DOM 构建与锚点定位
+│       ├── readingViewport.ts      # 阅读视口挂载窗口纯函数
+│       ├── readingVirtualView.ts   # 阅读视图虚拟化装配层
+│       ├── settingsMain.ts         # 设置页 webview 入口
+│       ├── settingsPage.css        # 设置页样式
+│       ├── settingsPageView.ts     # 设置页 webview 视图
+│       ├── syncController.ts       # CM6 同步控制器
+│       ├── tableCells.ts           # 表格单元格边界、换行与转义
+│       ├── tableControls.ts        # 表格可见行控件与拖动
+│       ├── tableCreate.ts          # 光标处建表规划纯函数
+│       ├── tableEditing.ts         # 表格输入钩子（#12）
+│       ├── tableRegion.ts          # 表格矩形选区与结构规划
+│       ├── tableRegionSelection.ts # 表格格区状态与指针绘制
+│       ├── tableStructure.ts       # 表格导航与增删行列纯函数（#13）
+│       └── taskToggle.ts           # 任务勾选解析纯函数（#9）
 ├── test/                  # 测试根
 │   ├── browser/     # 浏览器原生输入回归
 │   │   ├── tableCaret.mjs       # 表格原生键盘与IME回归
@@ -228,6 +233,8 @@ vsidian/
 │       ├── tableCreate.test.ts             # 建表与本地化契约测试
 │       ├── tableOps.test.ts                # 表格导航与结构命令链路契约（#13）
 │       ├── tablePaintCssContract.test.ts   # 表格绘制样式契约测试
+│       ├── tableRegion.test.ts             # 矩形格区与编辑契约测试
+│       ├── tableRegionCssContract.test.ts  # 格区与悬停控件样式契约
 │       ├── tableStructure.test.ts          # 表格结构操作纯函数契约（#13）
 │       ├── taskInteraction.test.ts         # 任务勾选交互契约测试（#9）
 │       ├── taskToggle.test.ts              # 任务勾选解析纯函数契约测试

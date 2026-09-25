@@ -449,6 +449,10 @@ export interface PaintProbe {
     columnTopBorderWidth: string | null
     columnBottomBorderWidth: string | null
     columnBackgroundColor: string | null
+    regionCellCount?: number
+    regionBackgroundColor?: string | null
+    regionTopBorderWidth?: string | null
+    regionLeftBorderWidth?: string | null
   }
   /** #59 公式绘制：当前激活视图内首个公式的实际可见性与计数。
    *  jsdom 无布局（rect 恒 0），visible 恒 false，只作真宿主集成断言依据；
@@ -667,7 +671,11 @@ function isPaintProbe(v: unknown): v is PaintProbe {
       isNullOrString(v.table.columnRightBorderWidth) &&
       isNullOrString(v.table.columnTopBorderWidth) &&
       isNullOrString(v.table.columnBottomBorderWidth) &&
-      isNullOrString(v.table.columnBackgroundColor)
+      isNullOrString(v.table.columnBackgroundColor) &&
+      (v.table.regionCellCount === undefined || isNonNegativeInt(v.table.regionCellCount)) &&
+      (v.table.regionBackgroundColor === undefined || isNullOrString(v.table.regionBackgroundColor)) &&
+      (v.table.regionTopBorderWidth === undefined || isNullOrString(v.table.regionTopBorderWidth)) &&
+      (v.table.regionLeftBorderWidth === undefined || isNullOrString(v.table.regionLeftBorderWidth))
     )) &&
     (v.math === undefined || (
       isObject(v.math) &&

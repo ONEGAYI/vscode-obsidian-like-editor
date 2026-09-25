@@ -404,6 +404,27 @@ body {
   background: var(--vsidian-table-background, rgba(128, 128, 128, 0.1));
 }
 
+/* 矩形格区：只强调外轮廓，内部沿用表格网格线。 */
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-region-cell {
+  background: color-mix(in srgb, var(--vscode-focusBorder, #7ab0d0) 14%, transparent);
+}
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-region-top {
+  border-top: 2px solid var(--vscode-focusBorder, #7ab0d0);
+}
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-region-bottom {
+  border-bottom: 2px solid var(--vscode-focusBorder, #7ab0d0);
+}
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-region-left {
+  border-left: 2px solid var(--vscode-focusBorder, #7ab0d0);
+}
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-region-right {
+  border-right: 2px solid var(--vscode-focusBorder, #7ab0d0);
+}
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-region-top.vsidian-table-region-left { border-top-left-radius: 6px; }
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-region-top.vsidian-table-region-right { border-top-right-radius: 6px; }
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-region-bottom.vsidian-table-region-left { border-bottom-left-radius: 6px; }
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-region-bottom.vsidian-table-region-right { border-bottom-right-radius: 6px; }
+
 #app .cm-editor .cm-scroller .vsidian-table-grid-align-left { text-align: left; }
 #app .cm-editor .cm-scroller .vsidian-table-grid-align-center { text-align: center; }
 #app .cm-editor .cm-scroller .vsidian-table-grid-align-right { text-align: right; }
@@ -454,6 +475,25 @@ body {
   cursor: grab;
   font-size: 16px;
   line-height: 20px;
+  color: var(--vscode-descriptionForeground, #8195a1);
+  background: transparent;
+}
+
+#app .cm-editor .vsidian-table-controls .vsidian-table-column-handle {
+  cursor: grab;
+  font-size: 16px;
+  line-height: 20px;
+  color: var(--vscode-descriptionForeground, #8195a1);
+  background: transparent;
+}
+
+#app .cm-editor .vsidian-table-controls button.vsidian-table-row-handle.vsidian-table-control-hover,
+#app .cm-editor .vsidian-table-controls button.vsidian-table-column-handle.vsidian-table-control-hover,
+#app .cm-editor .vsidian-table-controls button.vsidian-table-row-handle:hover,
+#app .cm-editor .vsidian-table-controls button.vsidian-table-row-handle:focus-visible,
+#app .cm-editor .vsidian-table-controls button.vsidian-table-column-handle:hover,
+#app .cm-editor .vsidian-table-controls button.vsidian-table-column-handle:focus-visible {
+  background: transparent;
 }
 
 #app .cm-editor .vsidian-table-controls .vsidian-table-row-handle:active {
@@ -464,8 +504,11 @@ body {
 #app .cm-editor .vsidian-table-controls .vsidian-table-insert-column {
   color: var(--vscode-textLink-foreground, #8abce2);
   font-size: 18px;
-  line-height: 20px;
+  line-height: 12px;
 }
+
+#app .cm-editor .vsidian-table-controls .vsidian-table-insert-row { height: 12px; }
+#app .cm-editor .vsidian-table-controls .vsidian-table-insert-column { width: 12px; }
 
 #app .cm-editor .cm-scroller .vsidian-table-grid-row.vsidian-table-row-selected {
   border-radius: 6px;
@@ -508,6 +551,13 @@ body {
 
 #app .cm-editor .cm-scroller .vsidian-table-grid-row.vsidian-table-drop-after {
   box-shadow: inset 0 -3px 0 var(--vscode-focusBorder, #7ab0d0);
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-drop-before {
+  border-left: 3px solid var(--vscode-focusBorder, #7ab0d0);
+}
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-drop-after {
+  border-right: 3px solid var(--vscode-focusBorder, #7ab0d0);
 }
 
 /* 表头单元格内容强调 */
