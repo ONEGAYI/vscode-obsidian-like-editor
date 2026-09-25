@@ -256,7 +256,26 @@ describe('复制五项（经宿主剪贴板消息桥）', () => {
     openAndClick(parent, 0, 'copyLink')
     expect(h.sent).toContainEqual({
       kind: 'clipboard.write',
-      linkHeading: { docUri: DOC_URI, heading: '重点 标题' },
+      linkHeading: { docUri: DOC_URI, heading: '**重点** 标题' },
+    })
+  })
+
+  it('复制标题链接的片段是标题原文（含标记）：与宿主按字面匹配的定位口径一致', () => {
+    // 契约：linkHeading.heading = 大纲条目原文（OutlineItem.text），不是剥标记
+    // 可见文本——宿主 findHeadingOffset 按 ATX 原文比较，两侧口径必须同源，
+    // 否则含标记的标题复制出的链接必然定位落空（review-loops 第 2 轮）。
+    // 剥标记文本只用于「复制标题」（copyHeading，纯文本场景）。
+    const h = makeBridge()
+    const { parent } = mountMenu(h, '# 用 **重点** 说明\n\n## 纯文本标题\n')
+    openAndClick(parent, 0, 'copyLink')
+    expect(h.sent).toContainEqual({
+      kind: 'clipboard.write',
+      linkHeading: { docUri: DOC_URI, heading: '用 **重点** 说明' },
+    })
+    openAndClick(parent, 1, 'copyLink')
+    expect(h.sent).toContainEqual({
+      kind: 'clipboard.write',
+      linkHeading: { docUri: DOC_URI, heading: '纯文本标题' },
     })
   })
 
@@ -423,6 +442,21 @@ describe('重命名（行内编辑态：编辑原文、标记是资产）', () =
     expect(c.getView()!.state.doc.toString()).not.toContain('## 外部已变')
     expect(h.sent.filter((m) => m.kind === 'edit.request')).toHaveLength(0)
     expect(viewState(c, h).outline?.renamingIndex).toBe(null)
+  })
+
+  it('重命名期间同内容全文重置（宿主 resync 重发同一文本）：提交不放弃', () => {
+    // review-loops 第 2 轮：全文重置会换 Text 实例（内容逐字节相同），
+    // 行号并未过期——锚点判据须「同一实例 ∨ 内容等价」，否则用户输入被
+    // 静默丢弃（旧实现只认实例同一性）
+    const h = makeBridge()
+    const { c, parent } = mountMenu(h)
+    const input = startRename(parent, 1)
+    input.value = '同内容重置后改名'
+    c.handleHostMessage({ kind: 'doc.resync', version: 2, text: MENU_DOC })
+    h.sent.length = 0 // 重置自身的本地上报不属于被测对象
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(c.getView()!.state.doc.toString()).toContain('## 同内容重置后改名')
+    expect(h.sent.filter((m) => m.kind === 'edit.request')).toHaveLength(1)
   })
 
   it('输入框键盘事件不冒泡成正文快捷键、点击不触发跳转', () => {

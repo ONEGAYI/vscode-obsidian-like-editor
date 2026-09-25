@@ -50,17 +50,29 @@ export interface OutlineSearchFilter {
 /** 折叠 plainText 并记录偏移映射（review-loops A2：toLowerCase 对个别
  *  字符变长，如 İ → i+U+0307，折叠串上 indexOf 的偏移不等于原串偏移）。
  *  map[j] = 折叠串第 j 位对应的原串起始索引；末位哨兵 = 原串长度 */
-function foldWithMap(s: string): { folded: string; map: number[] } {
+/** 折叠文本 + 折叠码元 → 原串坐标映射（review-loops 第 2 轮）：
+ *  - 按**码点**折叠（`for (const ch of s)`）：逐 UTF-16 码元折叠会拆开代理对，
+ *    非 BMP 字母（如 U+10400/U+10428）的大小写映射丢失、搜索失效；
+ *  - `start[k]`/`end[k]` 是折叠串第 k 个码元所属原串字符的 [起, 止) 区间：
+ *    末端取「所属字符的终点」而非「下一字符的起点」——命中末端落在折叠展开
+ *    的字符内部时区间才不被截短，整个命中落在展开内部时也不为零宽；
+ *  - 单字符折叠为多码元时（İ → i+U+0307）各码元同属该字符 */
+function foldText(s: string): { folded: string; start: number[]; end: number[] } {
   let folded = ''
-  const map: number[] = []
-  for (let i = 0; i < s.length; i++) {
-    for (const ch of s[i]!.toLowerCase()) {
-      map.push(i)
-      folded += ch
+  const start: number[] = []
+  const end: number[] = []
+  let i = 0
+  for (const ch of s) {
+    const lower = ch.toLowerCase()
+    // 表按 UTF-16 码元建（needle.length 与 indexOf 都是码元口径）
+    for (let u = 0; u < lower.length; u++) {
+      start.push(i)
+      end.push(i + ch.length)
     }
+    folded += lower
+    i += ch.length
   }
-  map.push(s.length)
-  return { folded, map }
+  return { folded, start, end }
 }
 
 /**
@@ -78,11 +90,11 @@ export function outlineSearchFilter(items: readonly SearchableItem[], query: str
   }
   const needle = query.toLowerCase()
   for (let i = 0; i < n; i++) {
-    const { folded, map } = foldWithMap(items[i]!.plainText)
+    const { folded, start, end } = foldText(items[i]!.plainText)
     let at = folded.indexOf(needle)
     while (at !== -1) {
       // 折叠区间 [at, at+len) 经映射回原串坐标（mark 高亮的真实区间）
-      ranges[i]!.push({ start: map[at]!, end: map[at + needle.length]! })
+      ranges[i]!.push({ start: start[at]!, end: end[at + needle.length - 1]! })
       at = folded.indexOf(needle, at + needle.length)
     }
     if (ranges[i]!.length > 0) {

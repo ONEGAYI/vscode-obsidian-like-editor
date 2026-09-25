@@ -35,7 +35,7 @@
 import type { Text } from '@codemirror/state'
 import type { SerChange } from '../shared/protocol'
 import type { OutlineItem } from './outline'
-import { outlineAtxLine, outlineHeadingSpan, outlineSectionLineRange, outlineSubtreeIndices } from './outlineSection'
+import { outlineAtxLine, outlineHeadingPrefix, outlineHeadingSpan, outlineSectionLineRange, outlineSubtreeIndices } from './outlineSection'
 
 /** 三态落点：目标之前/之后/内部（内部 = 成为目标最后子级） */
 export type OutlineDropPosition = 'before' | 'after' | 'inside'
@@ -146,7 +146,9 @@ export function outlineMovePlan(
     if (at < 0 || end > moved.length || at >= end) {
       continue // 防御（标题区不在段内——锚点已对齐时不可达）
     }
-    moved = moved.slice(0, at) + outlineAtxLine(item.level + levelDelta, item.text) + moved.slice(end)
+    moved = moved.slice(0, at) +
+      outlineHeadingPrefix(doc, item) + outlineAtxLine(item.level + levelDelta, item.text) +
+      moved.slice(end)
   }
   // 尾换行补齐只在插入点后有后续内容时发生（合并替换的文末段保持原样，
   // 不为文档凭空补尾换行）；插入点前一字符非 \n 且非文档起点时前置换行

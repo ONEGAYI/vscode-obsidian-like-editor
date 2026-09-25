@@ -78,6 +78,23 @@ export function outlineSiblingIndices(items: readonly SectionItem[], index: numb
 /** 控制域行范围条目形状（行号必需） */
 type RangedItem = Pick<OutlineItem, 'level' | 'line'>
 
+/** 写回计划的约定判据：变更段按 offset 升序且互不重叠（可相邻）。CM6
+ *  ChangeSet 对乱序/重叠段不报错而是 flush 合成，会静默错位写入权威文档
+ *  ——全部计划生成端（调级/重命名/删除/拖拽搬移）都必须满足；写回前用它
+ *  兜底断言（review-loops C3，第 2 轮抽成纯函数以便直接单测） */
+export function outlineChangesOrdered(
+  changes: readonly { offset: number; length: number }[],
+): boolean {
+  for (let i = 1; i < changes.length; i++) {
+    const prev = changes[i - 1]!
+    const cur = changes[i]!
+    if (cur.offset < prev.offset + prev.length) {
+      return false
+    }
+  }
+  return true
+}
+
 /** 控制域行范围（1 基含端）：startLine = 标题起始行；endLine = 下一个
  *  level≤自身 标题行前一行，无后继时文末兜底（totalLines）。
  *  Setext 条目的 startLine 是内容首行（与 OutlineItem.line 同口径）。
@@ -90,13 +107,18 @@ export function outlineSectionLineRange(
   if (index < 0 || index >= items.length) {
     return null
   }
+  const startLine = items[index]!.line
+  if (startLine > totalLines) {
+    return null // 陈旧条目（行号越出文档）：不做几何推断
+  }
   const level = items[index]!.level
   for (let i = index + 1; i < items.length; i++) {
     if (items[i]!.level <= level) {
-      return { startLine: items[index]!.line, endLine: Math.max(items[index]!.line, items[i]!.line - 1) }
+      const endLine = Math.min(Math.max(startLine, items[i]!.line - 1), totalLines)
+      return { startLine, endLine }
     }
   }
-  return { startLine: items[index]!.line, endLine: Math.max(items[index]!.line, totalLines) }
+  return { startLine, endLine: totalLines }
 }
 
 /** ATX 行文本：`#`.repeat(level) + 空格 + 原文（含行内标记，资产不丢） */
@@ -104,31 +126,60 @@ export function outlineAtxLine(level: number, text: string): string {
   return `${'#'.repeat(Math.max(1, Math.min(6, level)))} ${text}`
 }
 
-/** 标题行文本是否 ATX 形态（#{1,6} + 空白；非标题行不会到达——调用方传
- *  的是 OutlineItem.line 所在行，extractOutline 只产真标题） */
+/** 容器标记链（块引用/列表标记，可嵌套；不含行首缩进）：`> # T` 的 `> `、
+ *  `- # T` 的 `- `。写操作只替换标题文字，容器结构原样保留 */
+const CONTAINER_PREFIX_RE = /^(?:(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+))*/
+
+/** 行文本拆成「容器标记链 + 余下内容」（标记链可为空串；余下内容仍含缩进
+ *  ——缩进不参与容器一致性判定，`标题\n  ===` 仍是同一容器的 Setext） */
+export function outlineSplitContainerPrefix(text: string): { prefix: string; rest: string } {
+  const prefix = CONTAINER_PREFIX_RE.exec(text)?.[0] ?? ''
+  return { prefix, rest: text.slice(prefix.length) }
+}
+
+/** 标题行的行首前缀（缩进 + 容器标记链）：写回时原样保留容器结构 */
+export function outlineHeadingPrefix(doc: Text, item: { line: number }): string {
+  const line = doc.line(Math.min(Math.max(1, item.line), doc.lines))
+  const text = doc.sliceString(line.from, line.to)
+  return text.slice(0, text.length - outlineSplitContainerPrefix(text).rest.trimStart().length)
+}
+
+/** 标题行文本是否 ATX 形态（容器标记链之后 `#{1,6}` + 空白；非标题行不会
+ *  到达——调用方传的是 OutlineItem.line 所在行，extractOutline 只产真标题。
+ *  review-loops 第 2 轮：按容器标记链之后的内容判定——`> # T` / `   # T` /
+ *  `- # T` 都是 ATX 标题，此前按列 0 判定会让它们落入 Setext 扫描） */
 function isAtxLine(lineText: string): boolean {
-  return /^#{1,6}([ \t]|$)/.test(lineText)
+  return /^#{1,6}([ \t]|$)/.test(outlineSplitContainerPrefix(lineText).rest.trimStart())
 }
 
 /** 标题区 doc 偏移 [from, to)：ATX = 单行；Setext = 内容行（可多行）+
- *  下划线行。下划线紧随内容行（CommonMark：之间不可有空行），扫描遇
- *  空行或文档尾停止——真标题（extractOutline 只产真标题）必在停止前
- *  命中，无行数上限（review-loops A1：8 行截断使超长 Setext 的写操作
- *  落入单行回退，产生幻影标题）。行号取自条目 */
+ *  下划线行。下划线紧随内容行（CommonMark：之间不可有空行），扫描遇空行
+ *  （含仅空白行）或容器标记链变化即停止——`> T` 之后的裸 `---` 是主题分隔线
+ *  而非该标题下划线（容器不同），据此不再吞并后续正文。真标题
+ *  （extractOutline 只产真标题）必在停止前命中，无行数上限（review-loops
+ *  A1：8 行截断使超长 Setext 的写操作落入单行回退，产生幻影标题）。
+ *  行号取自条目 */
 export function outlineHeadingSpan(doc: Text, item: RewritableItem): { from: number; to: number } {
   const startLine = Math.min(Math.max(1, item.line), doc.lines)
   const start = doc.line(startLine)
-  if (isAtxLine(doc.sliceString(start.from, start.to))) {
+  const startText = doc.sliceString(start.from, start.to)
+  if (isAtxLine(startText)) {
     return { from: start.from, to: start.to }
   }
-  // Setext：向下逐行找下划线行（内容行可多行；空行后不再是本标题内容）
+  const prefix = outlineSplitContainerPrefix(startText).prefix
+  // Setext：向下逐行找同容器的下划线行（内容行可多行；下划线缩进 ≤3 空格
+  // 属行内缩进，trim 后判定）
   for (let n = startLine + 1; n <= doc.lines; n++) {
     const line = doc.line(n)
-    const text = doc.sliceString(line.from, line.to)
-    if (text === '') {
-      break // 空行：合法 Setext 下划线不会出现在空行之后（异常输入防御）
+    const next = outlineSplitContainerPrefix(doc.sliceString(line.from, line.to))
+    if (next.rest.trim() === '') {
+      break // 空行 / 仅空白行：合法 Setext 下划线不会出现在空行之后
     }
-    if (/^[=]+\s*$/.test(text) || /^-+\s*$/.test(text)) {
+    if (next.prefix !== prefix) {
+      break // 容器标记链变化：本标题段已结束（后续 `---` 属分隔线/其他块）
+    }
+    const body = next.rest.trim()
+    if (/^[=]+$/.test(body) || /^-+$/.test(body)) {
       return { from: start.from, to: line.to }
     }
   }
@@ -155,7 +206,11 @@ export function outlineLevelChanges(
       continue // 边界钳制：该条不动（子树内其余照常）
     }
     const span = outlineHeadingSpan(doc, item)
-    changes.push({ offset: span.from, length: span.to - span.from, text: outlineAtxLine(level, item.text) })
+    changes.push({
+      offset: span.from,
+      length: span.to - span.from,
+      text: outlineHeadingPrefix(doc, item) + outlineAtxLine(level, item.text),
+    })
   }
   if (changes.length === 0) {
     return null
@@ -164,8 +219,8 @@ export function outlineLevelChanges(
   return changes
 }
 
-/** 重命名变更：整标题区替换为同级别 ATX 行（原文可含行内标记）。
- *  越界返回 null */
+/** 重命名变更：整标题区替换为同级别 ATX 行（原文可含行内标记；容器前缀
+ *  如 `> `/`- ` 原样保留）。越界返回 null */
 export function outlineRenameChange(
   doc: Text,
   items: readonly OutlineItem[],
@@ -177,7 +232,11 @@ export function outlineRenameChange(
   }
   const item = items[index]!
   const span = outlineHeadingSpan(doc, item)
-  return { offset: span.from, length: span.to - span.from, text: outlineAtxLine(item.level, newText) }
+  return {
+    offset: span.from,
+    length: span.to - span.from,
+    text: outlineHeadingPrefix(doc, item) + outlineAtxLine(item.level, newText),
+  }
 }
 
 /** 删除整控制域变更：标题行 + 内容直到下一同级/更浅标题行前（文末兜底）。

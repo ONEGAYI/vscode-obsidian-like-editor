@@ -47,6 +47,16 @@ Object.assign(window, {
   },
   controller,
   readDrag,
+  /** 跳转观测（review-loops 第 2 轮：drop 后的下一次点击必须仍然生效） */
+  readJump() {
+    const view = controller.getView()!
+    const head = view.state.selection.main.head
+    const items = [...document.querySelectorAll<HTMLElement>('.vsidian-outline-item')]
+    return {
+      caretLine: view.state.doc.lineAt(head).number,
+      locatedIndex: items.findIndex((el) => el.classList.contains('vsidian-outline-located')),
+    }
+  },
   /** 宿主消息通道（测试钩子与真实点击同一委托） */
   post(msg: Record<string, unknown>) {
     controller.handleHostMessage(msg)

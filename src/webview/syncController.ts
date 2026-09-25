@@ -106,6 +106,7 @@ import {
   outlineStructuralExpand,
 } from './outlineMenu'
 import {
+  outlineChangesOrdered,
   outlineCopyText,
   outlineDeleteChange,
   outlineLevelChanges,
@@ -471,6 +472,9 @@ export class WebviewSyncController {
   private outlineDragState: {
     fromIndex: number
     doc: Text
+    /** 起始指针 id（review-loops 第 2 轮：会话只由该指针的移动/释放驱动，
+     *  多指针与「窗口外按下后拖入」的异指针事件既不推进也不收尾） */
+    pointerId: number
     startX: number
     startY: number
     moved: boolean
@@ -790,7 +794,7 @@ export class WebviewSyncController {
     this.outlineRenameIndex = null
     this.outlineRenameDoc = null
     // #70：拖拽会话随卸载退出（document 监听一并摘除）
-    document.removeEventListener('pointerdown', this.outlineResidueCleanup, true)
+    document.removeEventListener('pointerdown', this.outlinePointerdownEntry, true)
     this.cancelOutlineDrag()
     this.sidebarEl?.remove()
     this.sidebarEl = undefined
@@ -2111,12 +2115,12 @@ export class WebviewSyncController {
     // 条目 DOM 重建不丢监听）。位移超 4px 才进入拖拽态（点击/箭头操作不受
     // 扰动）；启动即记 doc 锚点快照并校准数据（条目索引与文档坐标对齐）。
     // 命中隐藏条目不启动（折叠遮蔽/搜索过滤的条目不可拖）
-    // review-loops R2：残留会话清理挂 document capture 层，而非本面板委托。
-    // 越界释放（up 不送达 webview）留下的会话，危害面是整个 webview 文档——
-    // 任何 pointerup 都会走到 onOutlineDragEnd，按残留落点写回；而新会话只
-    // 可能由面板内 pointerdown 启动。capture 先于本委托兑现，清理后本次按下
-    // 照常启动新会话
-    document.addEventListener('pointerdown', this.outlineResidueCleanup, true)
+    // review-loops 第 2 轮：按下入口清理挂 document capture 层，而非本面板
+    // 委托。吞噬标志与残留会话的危害面都是整个 webview 文档——任何 pointerup
+    // 都会走到 onOutlineDragEnd 按残留落点写回，任何 click 都可能被残留的
+    // 吞噬标志吞掉；而新会话只可能由面板内 pointerdown 启动。capture 先于
+    // 本委托兑现，清理后本次按下照常启动新会话
+    document.addEventListener('pointerdown', this.outlinePointerdownEntry, true)
     panel.addEventListener('pointerdown', (event) => {
       if (this.view === undefined) {
         return
@@ -2145,6 +2149,7 @@ export class WebviewSyncController {
       this.outlineDragState = {
         fromIndex: index,
         doc: this.view.state.doc,
+        pointerId: event.pointerId,
         startX: event.clientX,
         startY: event.clientY,
         moved: false,
@@ -2615,10 +2620,13 @@ export class WebviewSyncController {
       return
     }
     if (command === 'copyLink') {
-      // `[[笔记名#标题]]` 的拼接在宿主侧（docUri 取笔记名；标题 = plainText）
+      // `[[笔记名#标题]]` 的拼接在宿主侧（docUri 取笔记名）。标题取条目原文
+      // （OutlineItem.text，含行内标记）——宿主 findHeadingOffset 按标题行
+      // 字面文本比较，两侧口径同源才能定位回原标题；剥标记可见文本只用于
+      // 「复制标题」（copyHeading，纯文本场景）
       this.bridge.postMessage({
         kind: 'clipboard.write',
-        linkHeading: { docUri: this.docUri, heading: this.outlineItems[index]!.plainText },
+        linkHeading: { docUri: this.docUri, heading: this.outlineItems[index]!.text },
       })
       return
     }
@@ -2644,16 +2652,15 @@ export class WebviewSyncController {
     // review-loops C3：「升序互不重叠」是全部大纲写计划生成端的约定，但
     // CM6 ChangeSet 对乱序/重叠段不报错而是 flush 合成（静默错位写入权威
     // 文档）——运行时断言兜底：违例放弃并留诊断（与 confirmSentTxn 的
-    // 显式排序同根约束）
-    for (let i = 1; i < changes.length; i++) {
-      const prev = changes[i - 1]!
-      const cur = changes[i]!
-      if (cur.offset < prev.offset + prev.length) {
-        console.error(
-          `[vsidian] 大纲写回变更段违例（升序互不重叠）：[${prev.offset}, ${prev.offset + prev.length}) 与 [${cur.offset}, ${cur.offset + cur.length}) 重叠/乱序，放弃写回`,
-        )
-        return
-      }
+    // 显式排序同根约束）。判据抽成纯函数以便直接单测（review-loops 第 2 轮）
+    if (!outlineChangesOrdered(changes)) {
+      console.error(
+        `[vsidian] 大纲写回变更段违例（升序互不重叠）：${JSON.stringify(changes)}，放弃写回`,
+      )
+      // 放弃路径也要回到展示态：调用方（重命名提交）已清编辑态状态，
+      // 条目 DOM 里的 input 若不重建会卡在编辑态（review-loops 第 2 轮）
+      this.rebuildOutlineItemsDom()
+      return
     }
     try {
       view.dispatch({
@@ -2663,6 +2670,7 @@ export class WebviewSyncController {
       // review-loops C6：越界坐标等异常若逃逸只在监听器里静默吞掉——
       // 留诊断线索（大纲与正文不同步时可定位）
       console.error('[vsidian] 大纲写回 dispatch 失败（变更段与当前文档不匹配）', error)
+      this.rebuildOutlineItemsDom()
       return
     }
     this.outlineEnsureFresh()
@@ -2721,9 +2729,14 @@ export class WebviewSyncController {
     const view = this.view
     // 锚点防御（review-loops C1，与菜单/拖拽同口径）：重命名打开期间文档
     // 被改写（同文件多面板/git checkout 等）则行号过期，提交会改写错误
-    // 行——放弃提交视作取消（零写回）
+    // 行——放弃提交视作取消（零写回）。第 2 轮：**内容等价**（doc.eq）的
+    // 全文重置（宿主 resync/init 重发同一文本）行号并不过期，不得误放弃
     const docAnchored = view !== undefined && this.outlineRenameDoc !== null &&
-      view.state.doc === this.outlineRenameDoc
+      (view.state.doc === this.outlineRenameDoc || view.state.doc.eq(this.outlineRenameDoc))
+    // 放弃要留痕：输入被丢弃且零写回，无诊断时用户无从判断为何没生效
+    if (commit && item && newText !== item.text && !docAnchored) {
+      console.warn('[vsidian] 大纲重命名放弃：编辑期间文档已被改写（行号锚点过期）')
+    }
     this.outlineRenameDoc = null
     if (commit && input && item && view && newText !== item.text && docAnchored) {
       const change = outlineRenameChange(view.state.doc, this.outlineItems, index, newText)
@@ -2743,12 +2756,16 @@ export class WebviewSyncController {
     this.finishOutlineRename(false)
   }
 
-  /** 重建条目 DOM（重命名取消后恢复展示态；与 ensureFresh 的重建同构） */
+  /** 重建条目 DOM（重命名取消后恢复展示态；与 ensureFresh 的重建同构）。
+   *  review-loops 第 2 轮：重建即取消拖拽会话——条目 DOM 被替换后 dragging
+   *  提示与 hintEl 都指向脱挂节点，会话继续存活会留下「指示消失但拖拽仍在」
+   *  的失同步态（与 ensureFresh changed 分支同口径） */
   private rebuildOutlineItemsDom(): void {
     const panel = this.outlinePanelEl
     if (!panel) {
       return
     }
+    this.cancelOutlineDrag()
     renderOutlineItems(panel, this.outlineItems, this.outlineFacts.hasChildren)
     this.applyOutlineCollapseDom()
     this.applyOutlineHighlight()
@@ -2767,11 +2784,18 @@ export class WebviewSyncController {
 
   /** 拖拽 pointermove：超阈值进入拖拽态；计算落点并施加指示类。
    *  命中目标优先取事件目标链（合成事件路径），真实布局回退
-   *  elementFromPoint（指针物理位置） */
+   *  elementFromPoint（指针物理位置）。
+   *  review-loops 第 2 轮：只认起始指针（pointerId 不符即忽略），且按键已
+   *  释放（buttons=0）说明手势在 webview 之外结束——立即取消，避免纯悬停
+   *  继续推进会话、画出落点指示，或让随后的释放被当作 drop 写回 */
   private readonly onOutlineDragMove = (event: PointerEvent): void => {
     const drag = this.outlineDragState
     const panel = this.outlinePanelEl
-    if (!drag || !panel) {
+    if (!drag || !panel || event.pointerId !== drag.pointerId) {
+      return
+    }
+    if (event.buttons === 0) {
+      this.cancelOutlineDrag()
       return
     }
     if (!drag.moved) {
@@ -2822,10 +2846,12 @@ export class WebviewSyncController {
   }
 
   /** 拖拽 pointerup：有效落点执行移动计划写回（一次编辑事务）；锚点过期
-   *  （拖拽期间文档被改写）放弃。收尾后吞一次补发 click */
-  private readonly onOutlineDragEnd = (): void => {
+   *  （拖拽期间文档被改写）放弃。收尾后吞一次补发 click。
+   *  review-loops 第 2 轮：只认起始指针的释放（other pointer 的 up 不收尾，
+   *  避免「窗口外按下后拖入 webview」的异指针手势误判为 drop） */
+  private readonly onOutlineDragEnd = (event: PointerEvent): void => {
     const drag = this.outlineDragState
-    if (!drag) {
+    if (!drag || event.pointerId !== drag.pointerId) {
       return
     }
     const perform = drag.moved && drag.targetIndex !== null && drag.position !== null
@@ -2851,12 +2877,17 @@ export class WebviewSyncController {
     this.cancelOutlineDrag()
   }
 
-  /** 残留拖拽会话清理（document capture pointerdown）：越界释放（up 不送达
-   *  webview，如释放在窗口原生 chrome／另一窗口）留下的会话，任意一次新
-   *  按下都证明该手势已结束——不论落在面板、编辑器还是阅读区，先清残留，
-   *  避免紧随其后的 pointerup 被残留会话判为 drop 写回。次指针（非 primary，
-   *  如多点触控第二指）跳过，不误杀进行中的拖拽 */
-  private readonly outlineResidueCleanup = (event: PointerEvent): void => {
+  /** 大纲按下入口清理（document capture pointerdown）：
+   *  - 复位拖拽吞噬标志：drop 收尾置位的「吞一次浏览器补发 click」标志只在
+   *    补发 click 抵达时解除，而写回会在 pointerup 处理内同步重建条目 DOM
+   *    ——补发 click 不送达时标志残留，会吞掉用户下一次真实点击（review-loops
+   *    第 2 轮：真实鼠标实测 drop 后 flag 仍为 true 且下一次点击被吞）。任何
+   *    按下都先复位；补发 click 恒在本次按下之后，故「只吞一次」口径不变
+   *  - 清理残留拖拽会话：越界释放（up 不送达 webview，如释放在窗口原生
+   *    chrome／另一窗口）留下的会话，任意一次新按下都证明该手势已结束
+   *  次指针（非 primary，如多点触控第二指）跳过第二条，不误杀进行中的拖拽 */
+  private readonly outlinePointerdownEntry = (event: PointerEvent): void => {
+    this.outlineSuppressClick = false
     if (event.isPrimary === false || !this.outlineDragState) {
       return
     }
@@ -2870,8 +2901,9 @@ export class WebviewSyncController {
     }
   }
 
-  /** 结束拖拽会话（幂等）：摘除 document/window 监听、释放指针捕获、
-   *  清指示类与状态 */
+  /** 结束拖拽会话（幂等）：摘除 document/window 监听、清指示类与状态
+   *  （指针捕获只用于折叠滑块行，拖拽链路不经 capture——setPointerCapture
+   *  会劫走条目内折叠箭头的 click，浏览器回归实证后已回退） */
   private cancelOutlineDrag(): void {
     const drag = this.outlineDragState
     if (!drag) {
@@ -2930,8 +2962,11 @@ export class WebviewSyncController {
     const yRatio = position === 'before' ? 0.12 : position === 'after' ? 0.88 : 0.5
     const y = toRect.top + toRect.height * yRatio
     const fire = (type: string, target: Element, x: number, yy: number): void => {
+      // 会话校验（review-loops 第 2 轮）读 pointerId 与 buttons：合成事件按
+      // 真实指针形态构造——同一指针 id，移动期间按键为按下态、释放为 0
       target.dispatchEvent(new MouseEvent(type, {
         bubbles: true, cancelable: true, clientX: x, clientY: yy,
+        buttons: type === 'pointerup' ? 0 : 1,
       }))
     }
     fire('pointerdown', fromEl, fromRect.left + 20, fromRect.top + fromRect.height / 2)
@@ -3130,6 +3165,9 @@ export class WebviewSyncController {
    *  → 折叠/过滤 hidden 类与「无匹配」占位 → 高亮代表重施加。
    *  搜索关闭时清缓存并重渲染（去掉 mark），回放的展开集已就位 */
   private applyOutlineSearch(): void {
+    // review-loops 第 2 轮：条目 DOM 重建即取消拖拽会话（同 ensureFresh
+    // changed 分支口径）——重建后 dragging 提示与 hintEl 均指向脱挂节点
+    this.cancelOutlineDrag()
     if (!this.outlineSearchActive()) {
       this.outlineSearchState = null
       if (this.outlinePanelEl) {

@@ -175,3 +175,33 @@ describe('命中区间的折叠映射（review-loops A2）', () => {
     expect(r.ranges[0]).toEqual([{ start: 5, end: 12 }])
   })
 })
+
+// ---- review-loops 第 2 轮：折叠映射的端点与非 BMP 折叠口径 ----
+
+describe('折叠映射的端点与非 BMP（review-loops 第 2 轮）', () => {
+  const mk = (text: string) => ({ level: 1, text, plainText: text })
+
+  it('命中整体落在折叠展开的字符内：区间为原串单字符（不得零宽）', () => {
+    // 旧实现 end 取「下一个原串字符的起点」→ [0,0) 零宽 → 该条目命中却无高亮
+    const r = outlineSearchFilter([mk('İB')], 'i')
+    expect(r.matchedIndices).toEqual([0])
+    expect(r.ranges[0]).toEqual([{ start: 0, end: 1 }])
+  })
+
+  it('命中末端落在折叠展开的字符内：区间含该字符（不被截短）', () => {
+    // 'xİ' 查 'xi'：折叠串 'xi̇' 命中 [0,2)，末字符 İ 折叠为两码元
+    const r = outlineSearchFilter([mk('xİ')], 'xi')
+    expect(r.ranges[0]).toEqual([{ start: 0, end: 2 }])
+    const mid = outlineSearchFilter([mk('aİb')], 'ai')
+    expect(mid.ranges[0]).toEqual([{ start: 0, end: 2 }])
+  })
+
+  it('非 BMP 字母（代理对）按码点折叠：大小写搜索仍命中', () => {
+    // 𐐀 = U+10400（Deseret 大写）→ 小写 U+10428；逐 UTF-16 码元折叠会拆开代理对
+    const r = outlineSearchFilter([mk('𐐀A')], '𐐀')
+    expect(r.matchedIndices).toEqual([0])
+    expect(r.ranges[0]).toEqual([{ start: 0, end: 2 }]) // 代理对占两码元
+    const lower = outlineSearchFilter([mk('𐐨A')], '𐐀')
+    expect(lower.matchedIndices).toEqual([0])
+  })
+})

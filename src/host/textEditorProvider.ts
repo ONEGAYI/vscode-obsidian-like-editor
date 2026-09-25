@@ -169,10 +169,14 @@ export function outlineNoteNameOf(docUri: string): string {
   }
 }
 
-/** 标题进 wikilink 的内联转义（review-loops B2）：`]` 截断链接、`|` 切
- *  别名、`#` 开子锚点——不转义则粘贴产物解析错位 */
-export function outlineEscapeHeadingLink(heading: string): string {
-  return heading.replace(/]/g, '\\]').replace(/\|/g, '\\|').replace(/#/g, '\\#')
+/** 标题进 wikilink 的文本：原样拼接，不做反斜杠转义（review-loops 第 2 轮）。
+ *  双链形态学（src/shared/wikilink.ts）不认 `\]`/`\|`/`\#`——转义后要么仍切
+ *  别名（`\|`），要么整条不命中（`]` 触发扫描守卫、`#` 触发标题内禁字符），
+ *  转义只是凭空多出反斜杠；Obsidian 同样没有 wikilink 内的转义语法。故标题
+ *  含 `]`/`|`/`#`/`^` 时链接无法表达该标题，属形态学已知限制（构造时不做
+ *  无效改写，限制见人工验证清单） */
+function outlineLinkHeading(heading: string): string {
+  return heading
 }
 
 /** 链接目标解析上下文（宿主文件系统语义：扩展宿主进程的平台即工作区
@@ -721,13 +725,13 @@ export function createTextEditorProvider(
         // #69 剪贴板端口：webview 无 navigator.clipboard 权限面，经宿主
         // env.clipboard.writeText。标题链接变体在此拼 `[[笔记名#标题]]`——
         // 笔记名 = docUri 文件名去扩展名（Obsidian 语义），标题为 webview
-        // 上报的剥标记可见文本
+        // 上报的条目原文（含行内标记，与 findHeadingOffset 的字面比较同源）
         writeClipboard: (text: string) => {
           void vscode.env.clipboard.writeText(text)
         },
         writeHeadingLinkClipboard: (docUri: string, heading: string) => {
           void vscode.env.clipboard.writeText(
-            `[[${outlineNoteNameOf(docUri)}#${outlineEscapeHeadingLink(heading)}]]`,
+            `[[${outlineNoteNameOf(docUri)}#${outlineLinkHeading(heading)}]]`,
           )
         },
       })

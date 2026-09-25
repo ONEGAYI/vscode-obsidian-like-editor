@@ -342,7 +342,12 @@ export function migrateOutlineExpanded(
   const diff = outlineDiff(prev, next)
   if (diff === null) {
     // 熔断回退（review-loops C2）：放弃迁移，按回退档位取精确集——
-    // 视图状态重置优于 webview 卡死；调用方传当前档位以贴近用户意图
+    // 视图状态重置优于 webview 卡死；调用方传当前档位以贴近用户意图。
+    // 留一行诊断（review-loops 第 2 轮）：这是用户可见的折叠状态重置，
+    // 无日志时用户与维护者都无从判断成因
+    console.info(
+      `[vsidian] 大纲标题序列变化超过迁移上限（编辑距离 > ${OUTLINE_DIFF_LIMIT}）：折叠状态回退到当前档位集`,
+    )
     return outlineExpandSetForLevel(next, fallbackLevel)
   }
   const { map, autoExpand } = diff

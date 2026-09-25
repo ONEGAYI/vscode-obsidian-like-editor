@@ -188,6 +188,39 @@ try {
     console.log('[拖拽回归][PASS] 搜索态拖拽：写回正确、过滤态存活重算')
   }
 
+  // ---- 场景 G：drop 之后的下一次点击仍须生效（review-loops 第 2 轮）----
+  {
+    // 吞掉「浏览器补发 click」的标志只在补发 click 抵达时解除，而写回会在
+    // pointerup 处理内同步重建条目 DOM——补发 click 不送达时标志残留，吞掉
+    // 用户下一次真实点击（跳转/折叠箭头都失效）。人工清单 A30.7 承诺
+    // 「拖拽完成后立即单击另一条目——正常跳转」。
+    // 夹具无宿主回执：第 2 笔起的写回会因累积「未确认」偏移被判冲突（本地
+    // 仍生效、出站变 conflict.report）。此处重新 init 复位，使本次 drop 走
+    // 真实 edit.request 路径
+    await page.evaluate((text) => window.initDrag(text), DOC)
+    await page.waitForTimeout(120)
+    await item(0).click() // 基线：点击生效后的高亮与光标
+    const baseline = await page.evaluate(() => window.readJump())
+    assert.equal(baseline.locatedIndex, 0, `基线点击应高亮第 1 条（实际 ${baseline.locatedIndex}）`)
+    const editsBefore = await page.evaluate(() =>
+      window.sent().filter((m) => m.kind === 'edit.request').length)
+    const { x, y } = await dragHover(4, 0, 'top') // 末条 → 首条之前（真实写回一笔）
+    await page.mouse.move(x, y)
+    await page.mouse.up()
+    const editsAfter = await page.evaluate(() =>
+      window.sent().filter((m) => m.kind === 'edit.request').length)
+    assert.equal(editsAfter, editsBefore + 1,
+      `前置条件：该拖拽应恰写回一笔（实际 ${editsBefore} → ${editsAfter}）`)
+    await page.waitForTimeout(300) // 等写回后的去抖重建落定
+    await item(2).click() // drop 之后第一次点击：必须生效
+    const after = await page.evaluate(() => window.readJump())
+    assert.equal(after.locatedIndex, 2,
+      `drop 后第一次点击就应跳转并高亮该条（实际 ${after.locatedIndex}——吞噬标志残留）`)
+    assert.notEqual(after.caretLine, baseline.caretLine, 'drop 后点击应移动光标到目标标题行')
+    passed++
+    console.log('[拖拽回归][PASS] drop 后下一次点击仍生效（跳转与高亮）')
+  }
+
   assert.deepEqual(errors, [], '页面不得有未捕获异常')
   await page.close()
 } finally {

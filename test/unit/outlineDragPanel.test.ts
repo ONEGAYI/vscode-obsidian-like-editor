@@ -90,9 +90,16 @@ function stubRects(parent: HTMLElement, only?: number[]): void {
 }
 
 /** 在元素/document 上派发 pointer 事件（MouseEvent 构造——本仓处理器只读
- *  坐标；bubbles 到 document 级拖拽监听，target 链供落点命中） */
-function firePointer(el: Element | Document, type: string, x: number, y: number): void {
-  el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y }))
+ *  坐标与 buttons；bubbles 到 document 级拖拽监听，target 链供落点命中）。
+ *  buttons 缺省 1（真实拖拽期间按键恒为按下态），显式传 0 模拟已释放 */
+function firePointer(
+  el: Element | Document,
+  type: string,
+  x: number,
+  y: number,
+  buttons = 1,
+): void {
+  el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, buttons }))
 }
 
 /** 拖拽会话三步：按下 from → 超阈值移动（进入拖拽态）→ 悬停 to 的三态区域。
@@ -333,6 +340,52 @@ describe('取消路径（零写回）', () => {
     firePointer(el, 'pointermove', rect.left + 20, rect.top + 30)
     expect(viewState(c, h).outline?.draggingIndex).toBe(1)
     document.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
+    c.dispose()
+    document.body.removeChild(parent)
+  })
+
+  it('会话只由起始指针驱动：按键已释放（buttons=0）的移动自取消，不推进落点', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    stubRects(parent)
+    dragTo(parent, 1, 4, 'before') // 正常拖拽态：源条目已弱化、落点已指示
+    expect(viewState(c, h).outline?.draggingIndex).toBe(1)
+    // 越界释放（up 不送达）后指针回到 webview 内：无按键即证明手势已结束，
+    // 不应继续推进会话（否则纯悬停会画出插入线，且释放会被当作 drop）
+    const toEl = items(parent)[4]!
+    const rect = toEl.getBoundingClientRect()
+    firePointer(toEl, 'pointermove', rect.left + 40, rect.top + 35, 0)
+    const state = viewState(c, h)
+    expect(state.outline?.draggingIndex, '无按键移动应结束会话').toBeNull()
+    expect(state.outline?.dropTargetIndex).toBeNull()
+    expect(items(parent).every((el) => !el.className.includes('vsidian-outline-drop-') &&
+      !el.className.includes('vsidian-outline-dragging'))).toBe(true)
+    // 非起始指针的移动同样不推进（多指针防御）
+    const from = items(parent)[1]!
+    const fromRect = from.getBoundingClientRect()
+    firePointer(from, 'pointerdown', fromRect.left + 20, fromRect.top + 20)
+    firePointer(from, 'pointermove', fromRect.left + 20, fromRect.top + 30)
+    expect(viewState(c, h).outline?.draggingIndex).toBe(1)
+    c.dispose()
+    document.body.removeChild(parent)
+  })
+
+  it('条目 DOM 重建路径取消会话：搜索过滤重建后拖拽不残留（review-loops 第 2 轮）', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    stubRects(parent)
+    dragTo(parent, 1, 4, 'before')
+    expect(viewState(c, h).outline?.draggingIndex).toBe(1)
+    // 搜索输入触发条目整体重渲染：旧条目（含源条目提示与落点指示）被替换，
+    // 会话若存活会让 hintEl 指向脱挂节点、状态与画面不一致
+    c.handleHostMessage({ kind: 'outline.test.searchInput', text: '戊' })
+    const state = viewState(c, h)
+    expect(state.outline?.draggingIndex, '重建后会话应已取消').toBeNull()
+    expect(items(parent).every((el) => !el.className.includes('vsidian-outline-dragging') &&
+      !el.className.includes('vsidian-outline-drop-'))).toBe(true)
+    // 随后的释放不得写回（会话已取消；残留会按旧落点写回）
+    firePointer(document, 'pointerup', 240, 500)
+    expect(editRequests(h)).toHaveLength(0)
     c.dispose()
     document.body.removeChild(parent)
   })

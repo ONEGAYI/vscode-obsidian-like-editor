@@ -115,9 +115,15 @@ describe('单行无换行文档（末尾无 \\n，mvp.md 文档样例清单）',
 // ---- review-loops C7：大纲式多段搬移变更在 CRLF 文档上的转换不变式 ----
 
 describe('大纲多段搬移的 CRLF 转换不变式（review-loops C7）', () => {
-  // 模拟拖拽产出的两段变更：删除「乙段」+ 在丙标题前插入（文本含多行 \n）
+  // 模拟拖拽产出的两段变更：把「乙段」（标题行 + 内容行）搬到甲段之前
   const host = '# 甲\r\n甲内容\r\n## 乙\r\n乙内容\r\n# 丙\r\n丙内容\r\n'
   const lf = host.replace(/\r\n/g, '\n')
+  // LF 坐标：'# 甲\n甲内容\n' = 8 字符（标题行含空格、内容行各按 UTF-16 计），
+  // 故乙段 '## 乙\n乙内容\n' = [8, 17)，甲段之前为 offset 0——与拖拽搬移同形
+  const lfChanges = [
+    { offset: 0, length: 0, text: '## 乙\n乙内容\n' },
+    { offset: 8, length: 9, text: '' },
+  ]
   const applyText = (text: string, changes: ReadonlyArray<{ offset: number; length: number; text: string }>): string => {
     let out = text
     for (let i = changes.length - 1; i >= 0; i--) {
@@ -127,26 +133,34 @@ describe('大纲多段搬移的 CRLF 转换不变式（review-loops C7）', () =
     return out
   }
 
-  it('LF 域应用后转 CRLF == 宿主域直接应用（两域等价）', () => {
+  it('LF 域应用后转 CRLF == 宿主域直接应用（两域等价，结果为真实搬移）', () => {
     const c = new NewlineCoordinator(host)
     expect(c.isCrlfDoc).toBe(true)
-    // LF 坐标：'## 乙\n乙内容\n' 段 [10, 23)，插入到 '# 丙' 前（offset 23）
-    const lfChanges = [
-      { offset: 10, length: 13, text: '' },
-      { offset: 23, length: 0, text: '## 乙\n乙内容\n' },
-    ]
     const hostChanges = c.lfChangesToHost(lfChanges)
     const lfAfter = applyText(lf, lfChanges)
     const hostAfter = applyText(host, hostChanges)
+    expect(lfAfter).toBe('## 乙\n乙内容\n# 甲\n甲内容\n# 丙\n丙内容\n')
     expect(hostAfter).toBe(lfAfter.replace(/\n/g, '\r\n'))
   })
 
   it('升序不重叠在宿主域保持（大纲写回约束跨域不破）', () => {
     const c = new NewlineCoordinator(host)
-    const hostChanges = c.lfChangesToHost([
-      { offset: 10, length: 13, text: '' },
-      { offset: 23, length: 0, text: '## 乙\n乙内容\n' },
-    ])
+    const hostChanges = c.lfChangesToHost(lfChanges)
     expect(hostChanges[0]!.offset + hostChanges[0]!.length).toBeLessThanOrEqual(hostChanges[1]!.offset)
+  })
+
+  it('先插入多行文本、其后更靠后的变更仍按变更前坐标解析（映射表不被本次插入污染）', () => {
+    const c = new NewlineCoordinator(host)
+    // 变更集是**变更前**坐标：首笔插入的多行文本新增 CRLF，不影响后续变更
+    // 的映射（映射按变更前 crlfPositions 建表；改为增量表时此例会报警）
+    const withInsert = [
+      { offset: 0, length: 0, text: '# 序\n序内容\n' },
+      { offset: 8, length: 9, text: '' },
+    ]
+    const hostChanges = c.lfChangesToHost(withInsert)
+    const lfAfter = applyText(lf, withInsert)
+    const hostAfter = applyText(host, hostChanges)
+    expect(hostAfter).toBe(lfAfter.replace(/\n/g, '\r\n'))
+    expect(hostAfter).toBe('# 序\r\n序内容\r\n# 甲\r\n甲内容\r\n# 丙\r\n丙内容\r\n')
   })
 })
