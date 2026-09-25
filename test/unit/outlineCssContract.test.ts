@@ -165,3 +165,19 @@ describe('主题色同源（#65：大纲层级与正文标题引用同一变量�
     }
   })
 })
+
+describe('常驻高亮横条（#66）', () => {
+  it('located 条目半透明背景横条：类切换是唯一差异来源，颜色跟随 VSCode 变量', () => {
+    // 用户看到的东西（AGENTS 视觉层断言）：半透明覆盖横条——非 located
+    // 条目无背景规则，两态差异唯一来源是本规则；样式失效时无横条可被
+    // 集成 computed 断言捕获。回退值为半透明 rgba（无变量主题下仍可见）
+    const located = rule('.vsidian-sidebar .vsidian-outline-item.vsidian-outline-located')
+    expect(located).toMatch(/background:\s*var\(--vscode-list-hoverBackground,\s*rgba\(/)
+    expect(located).toMatch(/border-radius:\s*4px/)
+  })
+
+  it('非 located 条目无背景：基础条目规则不含 background（高亮不透底）', () => {
+    const item = rule('.vsidian-sidebar .vsidian-outline-item')
+    expect(item).not.toMatch(/background/)
+  })
+})

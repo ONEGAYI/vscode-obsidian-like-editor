@@ -18,7 +18,8 @@
 // 装饰同边界）。标记区间（spans）落在剥标记可见文本（plainText）坐标
 // 上，供渲染与搜索/无障碍口径复用；text 保留原文（重命名等编辑场景）。
 //
-// 本期边界：只展示标题顺序与层级；点击跳转、折叠、当前标题高亮不在范围。
+// 本期（#66 起）：条目可点击跳转与常驻高亮（交互装配在 syncController，
+// 经面板容器的事件委托——条目 DOM 重建不丢监听）；折叠与搜索不在范围。
 import type { Text } from '@codemirror/state'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import type { OutlineSpanInfo, OutlineSpanKind } from '../shared/protocol'
@@ -64,6 +65,8 @@ export const OUTLINE_CLASS_NAMES = {
     code: 'vsidian-outline-code',
     strike: 'vsidian-outline-strike',
   } as const,
+  /** #66 当前控制域条目的常驻高亮类（半透明横条的唯一差异来源） */
+  located: 'vsidian-outline-located',
 } as const
 
 /** 大纲面板可访问名称（按钮 aria-label 与面板 aria-label 共用文案） */

@@ -398,6 +398,16 @@ body {
   font-size: var(--vsidian-outline-font-size, 12px);
 }
 
+/* #66 常驻高亮横条：当前控制域条目（视口顶部行向上最近标题）的半透明
+   覆盖背景。类切换（vsidian-outline-located）是两态差异唯一来源——非
+   located 条目无背景规则；颜色跟随 VSCode 变量（无变量主题回退半透明
+   灰），样式失效时无横条可被 computed 断言捕获。这是常亮位置指示器，
+   非滚动瞬时反馈 */
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-located {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.14));
+  border-radius: 4px;
+}
+
 /* 侧栏顶栏按钮（#54「大纲」）：与主编辑区顶栏图标按钮同形态（透明底、
    悬停高亮跟随 VSCode 变量）。active 态背景高亮的唯一来源是
    outline-active 类规则（非 active 时透明底，两态差异可被集成 computed

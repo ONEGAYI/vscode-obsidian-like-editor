@@ -71,6 +71,7 @@ import {
   outlineItemsEqual,
   renderOutlineItems,
 } from './outline'
+import { locateOutlineIndex } from './outlineLocate'
 import { resolveStaleTaskToggle } from './taskToggle'
 import { VirtualReadingView } from './readingVirtualView'
 import { blankRowInputPlan, runCreateTable, runTableEdit, tableEditing } from './tableEditing'
@@ -83,6 +84,14 @@ function scheduleFrame(fn: () => void): void {
     setTimeout(fn, 16)
   }
 }
+
+/** #66 高亮重算去抖（ms）：滚动事件驱动，轻于 250ms 数据刷新链路（只做
+ *  定位纯函数 + 一次类切换，不解析文档） */
+const OUTLINE_HIGHLIGHT_DEBOUNCE_MS = 100
+
+/** #66 防抖动护栏超时（ms）：跳转程序性滚动后一直无滚动事件到达时的
+ *  兜底释放（正常路径由首个滚动事件释放） */
+const OUTLINE_JUMP_GUARD_MS = 1000
 
 
 /** webview 与宿主的通信通道（由 acquireVsCodeApi 适配） */
@@ -353,6 +362,16 @@ export class WebviewSyncController {
    *  连续输入只在停顿 250ms 后解析一次——节流（定时器不重置）会让连续
    *  输入每 250ms 解析一次，不是注释声称的语义） */
   private outlineTimer: ReturnType<typeof setTimeout> | undefined
+  /** #66 当前控制域条目索引（视口顶部行向上最近标题；null = 无标题、
+   *  首标题之前或无布局环境） */
+  private outlineLocatedIndex: number | null = null
+  /** 滚动驱动的高亮重算去抖句柄（100ms 尾随：只做定位 + 类切换，轻于
+   *  250ms 的数据解析链路） */
+  private outlineHighlightTimer: ReturnType<typeof setTimeout> | undefined
+  /** #66 防抖动护栏挂起中（跳转程序性滚动期间，滚动联动被吞） */
+  private outlineJumpGuarded = false
+  /** 护栏超时释放句柄（首个滚动事件先到则取消） */
+  private outlineJumpGuardTimer: ReturnType<typeof setTimeout> | undefined
 
   // ---- 查找会话状态（#14）----
   /** 查找是纯只读视图状态：不写 TextDocument、不入撤销栈、零出站消息。
@@ -484,7 +503,7 @@ export class WebviewSyncController {
     })
     // 阅读滚动更新锚点（用户滚动即改变"当前位置"语义；短文档滚不动时
     // 锚点保持进入/定位时的值——视口读取无法表达目标，modeAnchor 是权威）。
-    // 同一事件驱动 #7 的窗口重算（rAF 合帧）
+    // 同一事件驱动 #7 的窗口重算（rAF 合帧）与 #66 的大纲高亮联动
     this.readingContainer.addEventListener('scroll', () => {
       const container = this.readingContainer
       const view = this.readingView
@@ -497,6 +516,7 @@ export class WebviewSyncController {
         }
       }
       view?.handleScroll()
+      this.onOutlineScrollSignal()
     })
     // 任务勾选（#9）：阅读模式除任务勾选外只读——checkbox 点击经容器事件
     // 委托处理（虚拟化下元素按需创建/回收，不做逐元素监听）。
@@ -603,6 +623,10 @@ export class WebviewSyncController {
       parent: this.liveWrapper,
       state: EditorState.create({ doc: '', extensions: this.extensions() }),
     })
+    // #66 大纲高亮联动：live 视口滚动（用户与程序性同源）驱动当前控制域
+    // 重算。监听器挂在 view 自身的 scrollDOM 上——dispose 时整棵 view.dom
+    // 随 destroy 移除，无需单独解绑
+    this.view.scrollDOM.addEventListener('scroll', () => this.onOutlineScrollSignal())
     this.hostDarkApplied = isVscodeDarkBody()
     this.applyModeDom(this.viewMode)
     this.bridge.postMessage({ kind: 'ready' })
@@ -618,6 +642,12 @@ export class WebviewSyncController {
       this.flushTimer = undefined
     }
     this.cancelOutlineRefresh()
+    this.cancelOutlineHighlightUpdate()
+    if (this.outlineJumpGuardTimer !== undefined) {
+      clearTimeout(this.outlineJumpGuardTimer)
+      this.outlineJumpGuardTimer = undefined
+    }
+    this.outlineJumpGuarded = false
     this.hostThemeObserver?.disconnect()
     this.hostThemeObserver = undefined
     if (this.docKeydown) {
@@ -816,6 +846,14 @@ export class WebviewSyncController {
         this.outlineToggleBtn?.click()
         break
       }
+      case 'outline.test.itemClick': {
+        // 测试钩子（#66）：点击第 index 个真实大纲条目，驱动与用户点击
+        // 同一面板委托处理器（纯视图跳转，零写回）
+        const nodes = this.outlinePanelEl
+          ?.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)
+        nodes?.[message.index]?.click()
+        break
+      }
       case 'table.test.key': {
         // 测试钩子：向真实编辑器派发 keydown，走用户按键的同一 keymap 链路。
         if (this.view) {
@@ -975,22 +1013,7 @@ export class WebviewSyncController {
       case 'view.locate': {
         // 定位（#10 查找/跳转入口）：光标移到源 offset；reading 滚动到块。
         // 纯视图操作——事务不带 changes，不产生编辑历史
-        const pos = this.clampToDoc(message.offset)
-        if (this.viewMode === 'reading' && this.readingView) {
-          const start = this.readingView.anchorStartFor(pos) ?? pos
-          this.modeAnchor = start
-          this.readingView.scrollToSrcStart(start)
-          // 定位意图重申（#11 起，#14 findLocate 同款机制）：屏外定位的滚动
-          // 事件在挂载窗口重算（rAF）之前同步读取视口锚点，瞬态值不得覆盖
-          // 定位目标——帧+宏任务后重申（同一窗口内的用户滚动会被覆盖）
-          this.reassertReadingAnchor(start, 2)
-        } else {
-          this.modeAnchor = pos
-          this.view?.dispatch({
-            selection: { anchor: pos },
-            effects: EditorView.scrollIntoView(pos, { y: 'center' }),
-          })
-        }
+        this.locateOffset(message.offset)
         break
       }
       case 'reading.perf': {
@@ -1357,6 +1380,9 @@ export class WebviewSyncController {
         this.modeAnchor = start
         this.readingView.scrollToSrcStart(start)
       }
+      // #66：模式切换即时重算（reading 以视口顶块锚点换算；切换引发的
+      // 滚动属程序性但目标即当前锚点，重算结果稳定，去抖吸收余波）
+      this.updateOutlineLocated()
       // 查找会话跨模式保活（#14）：当前匹配位置经源位置锚点映射到新视图
       if (this.findOpen) {
         this.findEnsureFresh()
@@ -1380,6 +1406,8 @@ export class WebviewSyncController {
       selection: { anchor: pos },
       effects: EditorView.scrollIntoView(pos, { y: 'center' }),
     })
+    // #66：模式切换即时重算（live 以已渲染行的首可见行换算）
+    this.updateOutlineLocated()
     // 查找会话跨模式保活（#14）：选区恢复到当前匹配（非仅块首）
     if (this.findOpen) {
       this.findEnsureFresh()
@@ -1464,6 +1492,55 @@ export class WebviewSyncController {
 
   private clampToDoc(offset: number): number {
     return Math.max(0, Math.min(offset, this.view?.state.doc.length ?? 0))
+  }
+
+  /**
+   * 定位执行（#10 view.locate 宿主消息与 #66 大纲点击共用同一实现）：
+   * 光标移到源 offset；reading 滚动到锚点块。纯视图操作——事务不带
+   * changes，不产生编辑历史。#66 起：程序性滚动前置防抖动护栏（过渡期
+   * 中间态视口不参与高亮计算），并以目标位置所在行即时落位常驻高亮
+   * （不等滚动事件——被点击条目就是目标控制域）。
+   */
+  private locateOffset(offset: number): void {
+    const pos = this.clampToDoc(offset)
+    this.suspendOutlineLinking()
+    if (this.viewMode === 'reading' && this.readingView) {
+      const start = this.readingView.anchorStartFor(pos) ?? pos
+      this.modeAnchor = start
+      this.readingView.scrollToSrcStart(start)
+      // 定位意图重申（#11 起，#14 findLocate 同款机制）：屏外定位的滚动
+      // 事件在挂载窗口重算（rAF）之前同步读取视口锚点，瞬态值不得覆盖
+      // 定位目标——帧+宏任务后重申（同一窗口内的用户滚动会被覆盖）
+      this.reassertReadingAnchor(start, 2)
+    } else {
+      this.modeAnchor = pos
+      // 聚焦编辑器（#66，QO「jump + 聚焦」语义）：未聚焦时 CM6 不把选区
+      // 同步到 DOM Selection，用户看不到光标落位；点击大纲即完成导航，
+      // 焦点归还正文（继续输入/滚动）
+      this.view?.focus()
+      this.view?.dispatch({
+        selection: { anchor: pos },
+        effects: EditorView.scrollIntoView(pos, { y: 'center' }),
+      })
+    }
+    const doc = this.view?.state.doc
+    this.outlineLocatedIndex = doc
+      ? locateOutlineIndex(this.outlineItems, doc.lineAt(pos).number)
+      : null
+    this.applyOutlineHighlight()
+  }
+
+  /** #66 大纲条目点击跳转：标题行号 → 源 offset（doc.line(n).from）后走
+   *  locateOffset 双模式路径。行号为条目渲染时刻的值（大纲 250ms 去抖
+   *  窗口内的编辑存在滞后可能，与点击时的可见条目一致） */
+  private outlineJumpToItem(index: number): void {
+    const view = this.view
+    const item = this.outlineItems[index]
+    if (!view || !item) {
+      return
+    }
+    const line = Math.min(Math.max(1, item.line), view.state.doc.lines)
+    this.locateOffset(view.state.doc.line(line).from)
   }
 
   /**
@@ -1763,6 +1840,22 @@ export class WebviewSyncController {
     // #54 大纲按钮：侧栏顶栏当前唯一一项（点击切换对应面板的显隐）
     const { toggle, panel } = buildOutlineDom()
     toggle.addEventListener('click', () => this.toggleOutline())
+    // #66 条目点击跳转：面板容器事件委托（renderOutlineItems 重建条目
+    // DOM 不丢监听；条目 DOM 与 outlineItems 同序渲染，DOM 序号即数据
+    // 索引）。点击 = 纯视图定位（零写回、零出站、不入撤销栈）
+    panel.addEventListener('click', (event) => {
+      const target = event.target as HTMLElement | null
+      const item = target?.closest?.(`.${OUTLINE_CLASS_NAMES.item}`)
+      if (!(item instanceof HTMLElement) || !panel.contains(item)) {
+        return
+      }
+      const index = Array.from(
+        panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`),
+      ).indexOf(item)
+      if (index >= 0) {
+        this.outlineJumpToItem(index)
+      }
+    })
     this.outlineToggleBtn = toggle
     this.outlinePanelEl = panel
     actions.appendChild(toggle)
@@ -1784,6 +1877,7 @@ export class WebviewSyncController {
       this.outlineEnsureFresh()
     } else if (!this.sidebarOpen) {
       this.cancelOutlineRefresh()
+      this.cancelOutlineHighlightUpdate()
     }
   }
 
@@ -1816,6 +1910,7 @@ export class WebviewSyncController {
       this.outlineEnsureFresh()
     } else {
       this.cancelOutlineRefresh()
+      this.cancelOutlineHighlightUpdate()
     }
   }
 
@@ -1881,6 +1976,124 @@ export class WebviewSyncController {
     this.outlineItems = items
     if (changed && this.outlinePanelEl) {
       renderOutlineItems(this.outlinePanelEl, items)
+    }
+    // #66：文档变化后行号随编辑漂移（序列未变也可能），统一重算并重施加
+    // 高亮——重建路径丢了类、未重建路径行号变了也要重定位控制域
+    this.updateOutlineLocated()
+  }
+
+  // ---- 大纲定位与常驻高亮（#66）----
+  // 当前控制域 = 视口顶部行向上最近的标题（locateOutlineIndex 单一事实源）。
+  // 高亮是常亮位置指示器（半透明横条），不是滚动瞬时反馈：跳转即时落位、
+  // 滚动去抖重算（100ms，轻于 250ms 数据链路）、模式切换即时重算；跳转的
+  // 程序性滚动经防抖动护栏挂起联动（QO startJumping 同款语义：首个滚动
+  // 事件被吞并释放，或超时释放），过渡期中间态不反向改写高亮。
+
+  /** 滚动信号入口（live scrollDOM 与 reading 容器共用）：护栏挂起时吞掉
+   *  首个滚动事件并释放（跳转程序性滚动的产物不触发重算）；否则去抖调度 */
+  private onOutlineScrollSignal(): void {
+    if (this.outlineJumpGuarded) {
+      this.outlineJumpGuarded = false
+      if (this.outlineJumpGuardTimer !== undefined) {
+        clearTimeout(this.outlineJumpGuardTimer)
+        this.outlineJumpGuardTimer = undefined
+      }
+      return
+    }
+    this.scheduleOutlineHighlightUpdate()
+  }
+
+  /** 程序性滚动（跳转/定位）前挂起滚动联动：1 秒超时兜底释放（正常路径
+   *  由首个滚动事件释放——被吞的那次就是程序性滚动本身） */
+  private suspendOutlineLinking(): void {
+    this.outlineJumpGuarded = true
+    if (this.outlineJumpGuardTimer !== undefined) {
+      clearTimeout(this.outlineJumpGuardTimer)
+    }
+    this.outlineJumpGuardTimer = setTimeout(() => {
+      this.outlineJumpGuardTimer = undefined
+      this.outlineJumpGuarded = false
+    }, OUTLINE_JUMP_GUARD_MS)
+  }
+
+  /** 取消未决的高亮去抖回调（面板不可见/销毁路径；迟到回调只在隐藏面板
+   *  上做无谓重算——重开有 ensureFresh 校准兜底） */
+  private cancelOutlineHighlightUpdate(): void {
+    if (this.outlineHighlightTimer !== undefined) {
+      clearTimeout(this.outlineHighlightTimer)
+      this.outlineHighlightTimer = undefined
+    }
+  }
+
+  /** 滚动驱动的高亮重算调度：仅面板可见时开启（不可见面板不伴随滚动
+   *  做无谓计算），100ms 尾随去抖（定时器随事件重置，连续滚动只在
+   *  停顿后重算一次） */
+  private scheduleOutlineHighlightUpdate(): void {
+    if (!this.outlineVisible()) {
+      return
+    }
+    if (this.outlineHighlightTimer !== undefined) {
+      clearTimeout(this.outlineHighlightTimer)
+    }
+    this.outlineHighlightTimer = setTimeout(() => {
+      this.outlineHighlightTimer = undefined
+      if (this.outlineJumpGuarded) {
+        return // 护栏挂起：迟到回调不重算（挂起期间的高亮由跳转直接落位）
+      }
+      this.updateOutlineLocated()
+    }, OUTLINE_HIGHLIGHT_DEBOUNCE_MS)
+  }
+
+  /** 重算当前控制域并施加高亮（同步即时路径：模式切换、文档校准、跳转） */
+  private updateOutlineLocated(): void {
+    const line = this.outlineViewportTopLine()
+    this.outlineLocatedIndex = line === null ? null : locateOutlineIndex(this.outlineItems, line)
+    this.applyOutlineHighlight()
+  }
+
+  /** 视口顶部行（1 基）按模式分流：live 在已渲染行 DOM 里找首个底边越过
+   *  视口顶的行，经 posAtDOM（文档结构映射，不依赖 viewState 的视口元
+   *  数据——其更新依赖 IntersectionObserver 驱动的 measure 循环）换算
+   *  行号；reading 以视口顶块锚点（源 start）换算行号（与 reading 自身
+   *  滚动锚点同源）。无布局环境（jsdom，矩形全 0）或无已渲染行返回 null */
+  private outlineViewportTopLine(): number | null {
+    const view = this.view
+    if (!view) {
+      return null
+    }
+    if (this.viewMode === 'reading') {
+      const anchor = this.readingView?.currentAnchor() ?? null
+      if (anchor === null) {
+        return null
+      }
+      return view.state.doc.lineAt(this.clampToDoc(anchor)).number
+    }
+    const scrollerTop = view.scrollDOM.getBoundingClientRect().top
+    const lines = view.contentDOM.querySelectorAll('.cm-line')
+    for (const line of lines) {
+      const rect = line.getBoundingClientRect()
+      if (rect.height > 0 && rect.bottom > scrollerTop + 0.5) {
+        try {
+          return view.state.doc.lineAt(view.posAtDOM(line, 0)).number
+        } catch {
+          return null
+        }
+      }
+    }
+    return null
+  }
+
+  /** 把 locatedIndex 施加到面板条目（DOM 与 outlineItems 同序渲染的不变
+   *  式下按序号 toggle；toggle 幂等，未变化条目零 DOM 写入） */
+  private applyOutlineHighlight(): void {
+    const panel = this.outlinePanelEl
+    if (!panel) {
+      return
+    }
+    let index = 0
+    for (const el of panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)) {
+      el.classList.toggle(OUTLINE_CLASS_NAMES.located, index === this.outlineLocatedIndex)
+      index += 1
     }
   }
   // ---- 查找会话（#14）----
@@ -2944,6 +3157,43 @@ export class WebviewSyncController {
       toggleAriaLabel: this.outlineToggleBtn?.getAttribute('aria-label') ?? null,
       panelAriaLabel: this.outlinePanelEl?.getAttribute('aria-label') ?? null,
       style: outlineStyle(),
+      // #66 常驻高亮观测：located 索引/文字 + 绘制层证据（中心点命中 +
+      // computed 背景非全透明；jsdom 无布局恒 false，真宿主断言见集成）
+      locatedItemIndex: this.outlineLocatedIndex,
+      locatedText: this.outlineLocatedIndex !== null
+        ? this.outlineItems[this.outlineLocatedIndex]?.text ?? null
+        : null,
+      locatedPainted: this.collectOutlineLocatedPainted(),
+    }
+  }
+
+  /** #66 located 条目的绘制层证据：中心点 elementFromPoint 命中自身
+   *  （真实布局与显隐规则生效）且 computed background-color 非全透明
+   *  （半透明横条规则生效——样式失效时无背景可读）。条目在面板滚动区
+   *  可视范围外时命中失败（本票不滚动面板，#67 的「高亮行滚进可视区」
+   *  落地后此口径仍成立） */
+  private collectOutlineLocatedPainted(): boolean {
+    const panel = this.outlinePanelEl
+    const idx = this.outlineLocatedIndex
+    if (!panel || idx === null) {
+      return false
+    }
+    const el = panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)[idx]
+    if (!el || !hitPaintedElement(el, el)) {
+      return false
+    }
+    try {
+      const bg = getComputedStyle(el).backgroundColor
+      if (bg === '' || bg === 'transparent') {
+        return false
+      }
+      const rgb = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)/.exec(bg)
+      if (!rgb) {
+        return false // 异常形态保守视为未绘制
+      }
+      return rgb[4] === undefined || Number.parseFloat(rgb[4]!) > 0
+    } catch {
+      return false
     }
   }
 
