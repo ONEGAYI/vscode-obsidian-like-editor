@@ -2,8 +2,9 @@
 // 大纲拖拽排序交互契约（#70）：面板 pointerdown 委托启动拖拽（锚点快照 +
 // 数据校准）、超阈值进入拖拽态（源条目弱化）、三态落点指示（插入线/包裹
 // 高亮类切换）、drop 单事务写回（一笔 edit.request + 即时大纲刷新）、
-// 无效落点拒绝（拖入自身子树无指示无写回）、Esc/pointercancel/面板关闭
-// 取消、拖拽后补发 click 吞噬、锚点过期防御、不可见条目（折叠/搜索过滤）
+// 无效落点拒绝（拖入自身子树无指示无写回）、Esc/pointercancel/blur/面板关闭
+// 取消与越界释放残留清理（残留会话不得把后续普通点击判为 drop）、拖拽后补发
+// click 吞噬、锚点过期防御、不可见条目（折叠/搜索过滤）
 // 不可拖也不构成落点、outline.test.drag 测试钩子全链路、probe 拖拽观测
 // 字段。移动计划语义在 outlineDrag.test.ts。
 import { describe, it, expect } from 'vitest'
@@ -332,6 +333,28 @@ describe('取消路径（零写回）', () => {
     firePointer(el, 'pointermove', rect.left + 20, rect.top + 30)
     expect(viewState(c, h).outline?.draggingIndex).toBe(1)
     document.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
+    c.dispose()
+    document.body.removeChild(parent)
+  })
+
+  it('越界释放残留会话：面板外（编辑器区）普通点击不得被误判为 drop', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    stubRects(parent)
+    dragTo(parent, 1, 4, 'before') // 起拖并悬停到有效落点
+    expect(viewState(c, h).outline?.draggingIndex).toBe(1)
+    // 越界释放：指针在 webview 之外松开，webview 文档收不到这次 pointerup
+    // （真宿主对应窗口原生 chrome／另一窗口释放；浏览器隐式捕获只保证同窗口
+    // 跨帧送达，见 test/browser/outlineDragBoundary.mjs）——会话就此残留
+    // 用户回到 webview，在编辑器区（不在大纲面板内）点一下
+    const editor = document.createElement('div')
+    document.body.appendChild(editor)
+    firePointer(editor, 'pointerdown', 500, 500)
+    firePointer(editor, 'pointerup', 500, 500)
+    expect(viewState(c, h).outline?.draggingIndex, '面板外按下应清残留').toBeNull()
+    expect(editRequests(h), '面板外点击不得被残留会话判为 drop').toHaveLength(0)
+    expect(c.getView()!.state.doc.toString()).toBe(DRAG_DOC)
+    document.body.removeChild(editor)
     c.dispose()
     document.body.removeChild(parent)
   })

@@ -790,6 +790,7 @@ export class WebviewSyncController {
     this.outlineRenameIndex = null
     this.outlineRenameDoc = null
     // #70：拖拽会话随卸载退出（document 监听一并摘除）
+    document.removeEventListener('pointerdown', this.outlineResidueCleanup, true)
     this.cancelOutlineDrag()
     this.sidebarEl?.remove()
     this.sidebarEl = undefined
@@ -2110,13 +2111,13 @@ export class WebviewSyncController {
     // 条目 DOM 重建不丢监听）。位移超 4px 才进入拖拽态（点击/箭头操作不受
     // 扰动）；启动即记 doc 锚点快照并校准数据（条目索引与文档坐标对齐）。
     // 命中隐藏条目不启动（折叠遮蔽/搜索过滤的条目不可拖）
+    // review-loops R2：残留会话清理挂 document capture 层，而非本面板委托。
+    // 越界释放（up 不送达 webview）留下的会话，危害面是整个 webview 文档——
+    // 任何 pointerup 都会走到 onOutlineDragEnd，按残留落点写回；而新会话只
+    // 可能由面板内 pointerdown 启动。capture 先于本委托兑现，清理后本次按下
+    // 照常启动新会话
+    document.addEventListener('pointerdown', this.outlineResidueCleanup, true)
     panel.addEventListener('pointerdown', (event) => {
-      // review-loops B1：上次拖拽越出 webview 释放（up 不送达）的残留会话
-      // 在此清理——残留的 pointerup 监听若不清，下次文档内释放会被误判
-      // 为 drop 写回；先摘监听再正常处理本次按下（新会话由本次启动）
-      if (this.outlineDragState) {
-        this.cancelOutlineDrag()
-      }
       if (this.view === undefined) {
         return
       }
@@ -2847,6 +2848,18 @@ export class WebviewSyncController {
 
   /** pointercancel（系统手势接管等）：视作取消，零写回 */
   private readonly onOutlineDragCancel = (): void => {
+    this.cancelOutlineDrag()
+  }
+
+  /** 残留拖拽会话清理（document capture pointerdown）：越界释放（up 不送达
+   *  webview，如释放在窗口原生 chrome／另一窗口）留下的会话，任意一次新
+   *  按下都证明该手势已结束——不论落在面板、编辑器还是阅读区，先清残留，
+   *  避免紧随其后的 pointerup 被残留会话判为 drop 写回。次指针（非 primary，
+   *  如多点触控第二指）跳过，不误杀进行中的拖拽 */
+  private readonly outlineResidueCleanup = (event: PointerEvent): void => {
+    if (event.isPrimary === false || !this.outlineDragState) {
+      return
+    }
     this.cancelOutlineDrag()
   }
 
