@@ -349,6 +349,12 @@ describe('右键菜单浮层（#69）', () => {
     expect(danger).toMatch(/color:\s*var\(--vscode-errorForeground/)
   })
 
+  it('子菜单指示箭头（cue）：右移留隙并弱化（有子菜单父项的可读暗示）', () => {
+    const cue = rule('.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-cue')
+    expect(cue).toMatch(/margin-left:\s*1\.5em/)
+    expect(cue).toMatch(/opacity:\s*0\.7/)
+  })
+
   it('级联子菜单默认隐藏，父项 hover/focus-within 展开（CSS 显隐唯一开关）', () => {
     const hidden = rule('.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-submenu')
     expect(hidden).toMatch(/display:\s*none/)

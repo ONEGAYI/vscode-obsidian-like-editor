@@ -2,9 +2,9 @@
 
 VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 
-> 当前状态：**MVP 主要功能已实施，整体验收未结**。双视图编辑器、增量写回、任务、链接与图片、双链、表格和查找已落地；#32 统一两模式基础排版基线，#33 独立设置页，#34 实时预览源文件行号（设置页可开关）；#38 落地标题栏三态切换（实时预览 → 阅读 → 源码编辑器循环）、`.md` 默认编辑器接管、全局模式记忆（globalState）与 diff 语境防御；本联合分支整合 #45 后台集成宿主、#44 IME 同步修复、#42 表格逐格编辑网格、#43 表格控件与拖排和双语建表命令；#52–#55 联合分支落地兜底确认权威版本推导（旁观面板不再丢暂存增量）、顶栏齿轮入口与右侧栏布局、右侧栏大纲面板、标题左缘竖线移除。#21–#25、#28、#30 跟进规格票验收缺口，#26–#27 等人工与跨环境事项仍按验证清单跟进。
+> 当前状态：**MVP 主要功能已实施，整体验收未结；二期大纲面板已实施待验收**。双视图编辑器、增量写回、任务、链接与图片、双链、表格和查找已落地；#32 统一两模式基础排版基线，#33 独立设置页，#34 实时预览源文件行号（设置页可开关）；#38 落地标题栏三态切换（实时预览 → 阅读 → 源码编辑器循环）、`.md` 默认编辑器接管、全局模式记忆（globalState）与 diff 语境防御；本联合分支整合 #45 后台集成宿主、#44 IME 同步修复、#42 表格逐格编辑网格、#43 表格控件与拖排和双语建表命令；#52–#55 联合分支落地兜底确认权威版本推导（旁观面板不再丢暂存增量）、顶栏齿轮入口与右侧栏布局、右侧栏大纲面板、标题左缘竖线移除。**#65–#70 联合分支落地大纲面板二期**：行内样式透传与主题色同源（设计哲学见「约定」节）、点击跳转与常驻控制域高亮、六档折叠滑块与手动折叠（滚动自动展开）、工具条（跳末/重置/搜索）、右键菜单（结构命令/五项复制/调级/重命名/删除）、拖拽排序（控制域原子搬移，单事务撤销）——写操作走既有 edit.request 管线，控制域边界纯函数为右键与拖拽共用单一事实源。#21–#25、#28、#30 跟进规格票验收缺口，#26–#27 等人工与跨环境事项仍按验证清单跟进。
 >
-> 自动化套件为 1033 项 Vitest 单测、21 项 node --test 契约测试（集成启动器 11 + 发布脚本 10）、31 项原生浏览器输入回归，以及开发态与 VSIX 安装态共用的 107 项真实 VSCode 1.86.2 宿主集成用例（另有空窗口激活实测路径）。单元格删除边界、跨行拖选标记保护、中格退格后的网格绘制、Tab 可见行导航、格内粘贴换行、多表行号、中文候选写回、侧栏两态绘制与大纲层级保真（含伪标题排除、长大纲可滚动、图标尺寸与去抖取消路径）均有回归保护，执行记录见人工验证清单；这不代表真实 IME、物理鼠标和视觉效果已由用户验收。发布基建（双语 README、CHANGELOG、VSIX 体积闸、发布脚本与 CI 自动发布）已落地，见「打包与发布」。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能数据与待验项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 和 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
+> 自动化套件为 1345 项 Vitest 单测、21 项 node --test 契约测试（集成启动器 11 + 发布脚本 10）、64 项原生浏览器输入回归（表格 31 + 大纲跳转/折叠/搜索/菜单/拖拽 33），以及开发态与 VSIX 安装态共用的 118 项真实 VSCode 1.86.2 宿主集成用例（另有空窗口激活实测路径）。单元格删除边界、跨行拖选标记保护、中格退格后的网格绘制、Tab 可见行导航、格内粘贴换行、多表行号、中文候选写回、侧栏两态绘制与大纲层级保真（含伪标题排除、长大纲可滚动、图标尺寸与去抖取消路径），以及大纲二期的透传绘制证据、档位语义、折叠迁移存活、快照回放、写回零误伤（字节级不变式）与单事务撤销均有回归保护，执行记录见人工验证清单；这不代表真实 IME、物理鼠标和视觉效果已由用户验收。发布基建（双语 README、CHANGELOG、VSIX 体积闸、发布脚本与 CI 自动发布）已落地，见「打包与发布」。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能数据与待验项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 和 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
 
 ## 约定
 
@@ -135,6 +135,12 @@ vsidian/
 │       ├── main.ts               # webview 启动入口
 │       ├── markdownDoc.ts        # Markdown 文档工具与树查询
 │       ├── outline.ts            # 大纲全文解析与面板装配
+│       ├── outlineCollapse.ts    # 大纲折叠状态机纯函数
+│       ├── outlineDrag.ts        # 大纲拖拽移动计划纯函数
+│       ├── outlineLocate.ts      # 大纲定位纯函数
+│       ├── outlineMenu.ts        # 大纲右键菜单模型纯逻辑
+│       ├── outlineSearch.ts      # 大纲标题搜索纯函数
+│       ├── outlineSection.ts     # 大纲控制域纯函数
 │       ├── perfProbe.ts          # webview 性能探针（#5）
 │       ├── readingBlocks.ts      # markdown-it 阅读块切分
 │       ├── readingMarkdown.ts    # markdown-it 安全渲染层
@@ -154,8 +160,18 @@ vsidian/
 │       └── taskToggle.ts         # 任务勾选解析纯函数（#9）
 ├── test/                  # 测试根
 │   ├── browser/     # 浏览器原生输入回归
-│   │   ├── tableCaret.mjs       # 表格原生键盘与IME回归
-│   │   └── tableCaretFixture.ts # 原生输入测试生产控制器装配
+│   │   ├── outlineCollapse.mjs       # 大纲折叠原生浏览器回归
+│   │   ├── outlineCollapseFixture.ts # 折叠回归生产控制器装配
+│   │   ├── outlineDrag.mjs           # 大纲拖拽原生浏览器回归
+│   │   ├── outlineDragFixture.ts     # 拖拽回归生产控制器装配
+│   │   ├── outlineJump.mjs           # 大纲跳转原生浏览器回归
+│   │   ├── outlineJumpFixture.ts     # 跳转回归生产控制器装配
+│   │   ├── outlineMenu.mjs           # 大纲菜单原生浏览器回归
+│   │   ├── outlineMenuFixture.ts     # 菜单回归生产控制器装配
+│   │   ├── outlineSearch.mjs         # 大纲搜索原生浏览器回归
+│   │   ├── outlineSearchFixture.ts   # 搜索回归生产控制器装配
+│   │   ├── tableCaret.mjs            # 表格原生键盘与IME回归
+│   │   └── tableCaretFixture.ts      # 原生输入测试生产控制器装配
 │   ├── integration/ # 真宿主集成测试
 │   │   ├── fixtures.mjs              # 集成测试 fixture 单一事实源
 │   │   ├── hiddenDesktop.ps1         # Windows 独立桌面启动器
@@ -196,8 +212,18 @@ vsidian/
 │       ├── markdownDoc.test.ts              # 文档工具契约测试
 │       ├── newline.test.ts                  # 换行协调契约
 │       ├── outline.test.ts                  # 大纲标题提取契约测试
+│       ├── outlineCollapse.test.ts          # 大纲折叠状态机契约测试
 │       ├── outlineCssContract.test.ts       # 大纲绘制样式契约测试
+│       ├── outlineDrag.test.ts              # 大纲拖拽计划契约测试
+│       ├── outlineDragPanel.test.ts         # 大纲拖拽面板交互契约测试
+│       ├── outlineJump.test.ts              # 大纲跳转与高亮契约测试
+│       ├── outlineLocate.test.ts            # 大纲定位纯函数契约测试
+│       ├── outlineMenu.test.ts              # 大纲菜单模型契约测试
+│       ├── outlineMenuPanel.test.ts         # 大纲菜单面板交互契约测试
 │       ├── outlinePanel.test.ts             # 大纲面板交互契约测试
+│       ├── outlineSearch.test.ts            # 大纲搜索纯函数契约测试
+│       ├── outlineSearchPanel.test.ts       # 大纲搜索面板交互契约测试
+│       ├── outlineSection.test.ts           # 大纲控制域契约测试
 │       ├── perfProbe.test.ts                # 性能探针契约测试
 │       ├── protocol.test.ts                 # 消息协议校验契约
 │       ├── readingBlocks.test.ts            # 阅读块切分契约测试
