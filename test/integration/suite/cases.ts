@@ -5017,4 +5017,45 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await waitViewState('code-card.md', (v) =>
       v.paint?.code?.headerCount === 4 && (v.paint.code.tokenCount ?? 0) > 0)
   }],
+
+  ['阅读模式代码块卡片：卡片/行号/高亮/复制/折叠与观感契约（#84）', async () => {
+    await openWithEditor('code-card.md')
+    await waitSessionReady('code-card.md')
+    const uri = wsUri('code-card.md').toString()
+    const diskBefore = await readDisk('code-card.md')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    // 4 张卡片头部绘制；行结构 = 内容行（js 4 + text/裸/zzz 各 1 = 7 行）
+    const reading = await waitViewState('code-card.md', (v) =>
+      v.viewMode === 'reading' && v.paint?.code?.headerCount === 4, 0, 60000)
+    assert(reading.paint?.code?.visible === true, '阅读卡片头部应真实绘制（rect + elementFromPoint）')
+    assert(reading.paint?.code?.label === 'JavaScript',
+      `阅读首块标签应为 JavaScript，实际 ${String(reading.paint?.code?.label)}`)
+    const ln = reading.paint?.code?.lineNumberTexts
+    assert(Array.isArray(ln) && ln.slice(0, 4).join(',') === '1,2,3,4',
+      `阅读 js 块卡内行号应为 1..4，实际 ${JSON.stringify(ln)}`)
+    assert((reading.paint?.code?.tokenCount ?? 0) > 0, '阅读侧应有 tok 着色（与 Live 同词表）')
+    assert((reading.paint?.code?.copyCount ?? 0) === 4, '阅读侧复制按钮在场')
+    assert((reading.paint?.code?.cardLineCount ?? 0) === 7,
+      `阅读行结构应为 7 个内容行，实际 ${reading.paint?.code?.cardLineCount}`)
+    // 复制：点击 text 块（第 2 张）→ 宿主剪贴板收到代码体（与 Live 同通道）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'codecard.test.copy', index: 1,
+    })
+    await poll('阅读复制进剪贴板', async () => {
+      const text = await vscode.env.clipboard.readText()
+      return text === 'hello' ? true : undefined
+    })
+    // 折叠：收起 text 块 → 行消失（7→6）、头部保留；再点展开恢复
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'codecard.test.fold', index: 1,
+    })
+    await waitViewState('code-card.md', (v) =>
+      v.paint?.code?.foldedCount === 1 && v.paint.code.cardLineCount === 6, 0, 60000)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'codecard.test.fold', index: 1,
+    })
+    await waitViewState('code-card.md', (v) =>
+      v.paint?.code?.foldedCount === 0 && v.paint.code.cardLineCount === 7, 0, 60000)
+    assert(await readDisk('code-card.md') === diskBefore, '阅读卡片交互不得改写源文')
+  }],
 ]

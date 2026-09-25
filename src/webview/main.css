@@ -449,7 +449,7 @@ body {
   border-bottom-right-radius: 6px;
 }
 
-#app .cm-editor .cm-scroller .vsidian-code-card-header {
+#app .vsidian-code-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -463,12 +463,12 @@ body {
   user-select: none;
 }
 
-#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-header-label {
+#app .vsidian-code-card-header .vsidian-code-card-header-label {
   font-weight: 600;
   font-size: var(--vscode-font-size, 13px);
 }
 
-#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-header-actions {
+#app .vsidian-code-card-header .vsidian-code-card-header-actions {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -476,7 +476,7 @@ body {
 
 /* 卡内行号（#80）：代码行行首右对齐数字，颜色与文档行号槽同源；与文档
    行号槽两列并存（读图结论），user-select:none 且点击穿透编辑器 */
-#app .cm-editor .cm-scroller .vsidian-code-card-linenumber {
+#app .vsidian-code-card-linenumber {
   display: inline-block;
   min-width: 2ch;
   text-align: right;
@@ -487,7 +487,7 @@ body {
 
 /* 复制按钮（#81）：悬停卡片显现（focus-visible 键盘可达）；编辑态按钮
    不发射（非 CSS 隐藏）；✓ 反馈本地切换约 1.2s */
-#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-copy {
+#app .vsidian-code-card-header .vsidian-code-card-copy {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -505,37 +505,37 @@ body {
   transition: opacity 0.12s ease;
 }
 
-#app .cm-editor .cm-scroller .vsidian-code-card-header:hover .vsidian-code-card-copy,
-#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-copy:focus-visible {
+#app .vsidian-code-card-header:hover .vsidian-code-card-copy,
+#app .vsidian-code-card-header .vsidian-code-card-copy:focus-visible {
   opacity: 1;
   visibility: visible;
 }
 
-#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-copy:hover {
+#app .vsidian-code-card-header .vsidian-code-card-copy:hover {
   background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
 }
 
-#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-copy .vsidian-code-card-copy-icon-check {
+#app .vsidian-code-card-header .vsidian-code-card-copy .vsidian-code-card-copy-icon-check {
   display: none;
 }
 
-#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-copy-done .vsidian-code-card-copy-icon-copy {
+#app .vsidian-code-card-header .vsidian-code-card-copy-done .vsidian-code-card-copy-icon-copy {
   display: none;
 }
 
-#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-copy-done .vsidian-code-card-copy-icon-check {
+#app .vsidian-code-card-header .vsidian-code-card-copy-done .vsidian-code-card-copy-icon-check {
   display: inline-flex;
   color: var(--vscode-testing-iconPassed, #73c991);
 }
 
-#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-copy-done {
+#app .vsidian-code-card-header .vsidian-code-card-copy-done {
   opacity: 1;
   visibility: visible;
 }
 
 /* 折叠 chevron（#82）：两态常驻（透明度低于复制按钮的常态呈现），收起态
    转向 -90°；头部横带在收起时同时承担卡片底边（补底边圆角与底部分隔线去除） */
-#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-fold {
+#app .vsidian-code-card-header .vsidian-code-card-fold {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -551,22 +551,22 @@ body {
   opacity: 0.7;
 }
 
-#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-fold:hover,
-#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-fold:focus-visible {
+#app .vsidian-code-card-header .vsidian-code-card-fold:hover,
+#app .vsidian-code-card-header .vsidian-code-card-fold:focus-visible {
   background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
   opacity: 1;
 }
 
-#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-fold svg {
+#app .vsidian-code-card-header .vsidian-code-card-fold svg {
   transition: transform 0.12s ease;
 }
 
-#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-fold-collapsed svg {
+#app .vsidian-code-card-header .vsidian-code-card-fold-collapsed svg {
   transform: rotate(-90deg);
 }
 
 /* 收起态头部自身成为卡片底边：补底边圆角，分隔线弱化 */
-#app .cm-editor .cm-scroller .vsidian-code-card-header:has(> .vsidian-code-card-header-actions > .vsidian-code-card-fold-collapsed) {
+#app .vsidian-code-card-header:has(> .vsidian-code-card-header-actions > .vsidian-code-card-fold-collapsed) {
   border-radius: 6px;
   border-bottom-color: transparent;
 }
@@ -1382,3 +1382,27 @@ body.vscode-dark #app .tok-variableName2,
 body.vscode-dark #app .tok-propertyName { color: #9cdcfe; }
 body.vscode-dark #app .tok-operator { color: #d4d4d4; }
 body.vscode-dark #app .tok-invalid { color: #f44747; text-decoration-color: #f44747; }
+
+/* ---- 阅读视图代码块卡片（#84）----
+   与 Live 同类名（头部/行号/复制/折叠/徽标/tok 走上文泛化规则）；此处
+   补块级外壳：卡片底色与圆角、pre 融入卡片、行结构与收起态。 */
+#app .vsidian-view-reading .vsidian-reading-block.vsidian-reading-code-card {
+  background-color: var(--vsidian-code-card-background, rgba(128, 128, 128, 0.12));
+  border-radius: 6px;
+}
+
+#app .vsidian-view-reading .vsidian-reading-block.vsidian-reading-code-card > pre {
+  margin: 0;
+  border-radius: 0 0 6px 6px;
+  background-color: transparent;
+}
+
+#app .vsidian-view-reading .vsidian-reading-block.vsidian-reading-code-card .vsidian-reading-code-line {
+  display: block;
+  min-height: 1.5em;
+}
+
+/* 收起态：代码体隐藏，仅留头部横带（视图态，不持久化） */
+#app .vsidian-view-reading .vsidian-reading-block.vsidian-code-card-folded > pre {
+  display: none;
+}

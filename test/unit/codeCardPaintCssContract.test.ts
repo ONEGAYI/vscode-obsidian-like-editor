@@ -33,7 +33,7 @@ describe('代码块卡片 CSS 契约（#79）', () => {
   })
 
   it('头部横带：flex 布局、顶边圆角、底部分隔线、底色同源', () => {
-    const header = rule('#app .cm-editor .cm-scroller .vsidian-code-card-header')
+    const header = rule('#app .vsidian-code-card-header')
     expect(header).toMatch(/display:\s*flex/)
     expect(header).toMatch(/border-radius:\s*6px 6px 0 0/)
     expect(header).toMatch(/border-bottom:\s*1px solid var\(--vscode-editorGroup-border/)
@@ -41,14 +41,14 @@ describe('代码块卡片 CSS 契约（#79）', () => {
   })
 
   it('语言标签加粗；按钮区内联排布（#81 复用容器）', () => {
-    expect(rule('#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-header-label'))
+    expect(rule('#app .vsidian-code-card-header .vsidian-code-card-header-label'))
       .toMatch(/font-weight:\s*600/)
-    expect(rule('#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-header-actions'))
+    expect(rule('#app .vsidian-code-card-header .vsidian-code-card-header-actions'))
       .toMatch(/display:\s*inline-flex/)
   })
 
   it('卡内行号：右对齐、颜色与文档行号槽同源、禁选（#80）', () => {
-    const ln = rule('#app .cm-editor .cm-scroller .vsidian-code-card-linenumber')
+    const ln = rule('#app .vsidian-code-card-linenumber')
     expect(ln).toMatch(/display:\s*inline-block/)
     expect(ln).toMatch(/text-align:\s*right/)
     expect(ln).toMatch(/color:\s*var\(--vscode-editorLineNumber-foreground/)
@@ -56,7 +56,7 @@ describe('代码块卡片 CSS 契约（#79）', () => {
   })
 
   it('复制按钮：悬停卡片显现、✓ 反馈态切换图标（#81）', () => {
-    const btn = rule('#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-copy')
+    const btn = rule('#app .vsidian-code-card-header .vsidian-code-card-copy')
     expect(btn).toMatch(/opacity:\s*0/)
     // 悬停/focus 显现规则（组选择器，hover 段在块中部）
     const reveal = (css.match(/[^{}]+\{[^{}]*\}/g) ?? []).filter((b) =>
@@ -64,19 +64,19 @@ describe('代码块卡片 CSS 契约（#79）', () => {
       /opacity:\s*1/.test(b.split('{')[1] ?? ''))
     expect(reveal, '悬停显现规则（opacity 0→1）应存在').toHaveLength(1)
     expect(
-      rule('#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-copy-done .vsidian-code-card-copy-icon-check'),
+      rule('#app .vsidian-code-card-header .vsidian-code-card-copy-done .vsidian-code-card-copy-icon-check'),
     ).toMatch(/display:\s*inline-flex/)
   })
 
   it('折叠 chevron：常驻可见、收起态转向 -90°、收起时头部补底边圆角（#82）', () => {
-    const chevron = rule('#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-fold')
+    const chevron = rule('#app .vsidian-code-card-header .vsidian-code-card-fold')
     expect(chevron).toMatch(/display:\s*inline-flex/)
     expect(chevron).not.toMatch(/visibility:\s*hidden/)
     expect(
-      rule('#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-fold-collapsed svg'),
+      rule('#app .vsidian-code-card-header .vsidian-code-card-fold-collapsed svg'),
     ).toMatch(/transform:\s*rotate\(-90deg\)/)
     expect(
-      rule('#app .cm-editor .cm-scroller .vsidian-code-card-header:has(> .vsidian-code-card-header-actions > .vsidian-code-card-fold-collapsed)'),
+      rule('#app .vsidian-code-card-header:has(> .vsidian-code-card-header-actions > .vsidian-code-card-fold-collapsed)'),
     ).toMatch(/border-radius:\s*6px/)
   })
 

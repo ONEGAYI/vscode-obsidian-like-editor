@@ -195,21 +195,26 @@ export class CodeCardHeaderWidget extends WidgetType {
     div.setAttribute('data-vsidian-code-lang', this.languageId ?? '')
     const label = document.createElement('span')
     label.className = CODE_CARD_CLASS_NAMES.headerLabel
-    const icon = this.languageId ? CODE_LANG_ICONS[this.languageId] : undefined
-    if (icon) {
-      const badge = document.createElement('span')
-      badge.className = CODE_CARD_CLASS_NAMES.headerIcon
-      badge.textContent = icon.text
-      badge.style.color = icon.color
-      badge.setAttribute('aria-hidden', 'true')
-      label.appendChild(badge)
-    }
+    appendLanguageBadge(label, this.languageId)
     label.appendChild(document.createTextNode(this.label))
     const actions = document.createElement('span')
     actions.className = CODE_CARD_CLASS_NAMES.headerActions
-    actions.appendChild(buildFoldButton(this.folded))
+    actions.appendChild(buildFoldButton(this.folded, () => {
+      // findFromDOM 只认携带 cmTile 的节点（本版本 CM6 的 Tile.get 语义）：
+      // 按钮是头部 widget 子孙无标记，须从头部根查找；块 widget 的 posAtDOM
+      // 即其挂点位置 = 围栏起始 offset
+      const view = EditorView.findFromDOM(div)
+      if (view) {
+        view.dispatch({ effects: codeCardFoldToggle.of(view.posAtDOM(div)) })
+      }
+    }))
     if (this.copy) {
-      actions.appendChild(buildCopyButton(this.code))
+      actions.appendChild(buildCopyButton(this.code, (code) => {
+        const view = EditorView.findFromDOM(div)
+        if (view) {
+          view.dispatch({ effects: codeCardCopyRequest.of(code) })
+        }
+      }))
     }
     div.append(label, actions)
     return div
@@ -220,38 +225,30 @@ export class CodeCardHeaderWidget extends WidgetType {
   }
 }
 
-/** 折叠 chevron（#82）：两态常驻（收起态转向）；点击派发零写回折叠切换
- *  effect（携带围栏起始位置）。mousedown 阻断 CM6 落位（同复制按钮）。 */
-function buildFoldButton(folded: boolean): HTMLButtonElement {
-  const btn = document.createElement('button')
-  btn.type = 'button'
-  btn.className = folded
-    ? `${CODE_CARD_CLASS_NAMES.fold} ${CODE_CARD_CLASS_NAMES.foldCollapsed}`
-    : CODE_CARD_CLASS_NAMES.fold
-  btn.setAttribute('aria-label', folded ? '展开代码块' : '折叠代码块')
-  btn.setAttribute('aria-expanded', folded ? 'false' : 'true')
-  btn.title = folded ? '展开代码块' : '折叠代码块'
-  btn.innerHTML =
-    '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" ' +
-    'stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"></path></svg>'
-  btn.addEventListener('mousedown', (event) => {
-    event.preventDefault()
-  })
-  btn.addEventListener('click', () => {
-    const root = btn.closest(`.${CODE_CARD_CLASS_NAMES.header}`) as HTMLElement | null
-    const view = root ? EditorView.findFromDOM(root) : EditorView.findFromDOM(btn)
-    if (view) {
-      // 块 widget 的 posAtDOM 即其挂点位置 = 围栏起始 offset
-      const pos = view.posAtDOM(root ?? btn)
-      view.dispatch({ effects: codeCardFoldToggle.of(pos) })
-    }
-  })
-  return btn
+/**
+ * 语言徽标追加到给定容器（#83，live 头部与阅读卡片共用）：等宽缩写 +
+ * 品牌近似色。v1 为字形徽标（非矢量 logo 集），升级属后续决策。
+ */
+export function appendLanguageBadge(target: HTMLElement, languageId: string | null): void {
+  const icon = languageId ? CODE_LANG_ICONS[languageId] : undefined
+  if (!icon) {
+    return
+  }
+  const badge = document.createElement('span')
+  badge.className = CODE_CARD_CLASS_NAMES.headerIcon
+  badge.textContent = icon.text
+  badge.style.color = icon.color
+  badge.setAttribute('aria-hidden', 'true')
+  target.appendChild(badge)
 }
 
-/** 复制按钮 DOM（#81）：悬停显现由 CSS 承担；点击派发零写回 effect，
- *  ✓ 反馈本地切换（约 1.2s 后复原）。mousedown 阻断 CM6 的点击落位。 */
-function buildCopyButton(code: string): HTMLButtonElement {
+/**
+ * 复制按钮 DOM（#81，live 头部与阅读卡片共用）：悬停显现由 CSS 承担，
+ * 点击经回调执行（live 派发零写回 effect、阅读直连出站）；✓ 反馈本地
+ * 切换（约 1.2s 后复原）。mousedown 阻断 CM6 的点击落位（live 块 widget
+ * 场景；阅读侧无副作用）。
+ */
+export function buildCopyButton(code: string, onCopy: (code: string) => void): HTMLButtonElement {
   const btn = document.createElement('button')
   btn.type = 'button'
   btn.className = CODE_CARD_CLASS_NAMES.copy
@@ -272,21 +269,37 @@ function buildCopyButton(code: string): HTMLButtonElement {
     '<path d="M3.5 8.5l3 3 6-7"></path></svg>'
   btn.append(copyIcon, checkIcon)
   btn.addEventListener('mousedown', (event) => {
-    // 头部是块 widget，落位点会进围栏区间（切编辑态撤走按钮）——阻断落位
     event.preventDefault()
   })
   btn.addEventListener('click', () => {
-    // findFromDOM 只认携带 cmTile 的节点（本版本 CM6 的 Tile.get 语义）：
-    // 按钮自身是头部 widget 的子孙、无标记，须从头部根节点查找
-    const root = btn.closest(`.${CODE_CARD_CLASS_NAMES.header}`) as HTMLElement | null
-    const view = root ? EditorView.findFromDOM(root) : EditorView.findFromDOM(btn)
-    if (view) {
-      view.dispatch({ effects: codeCardCopyRequest.of(code) })
-    }
+    onCopy(code)
     btn.classList.add(CODE_CARD_CLASS_NAMES.copyDone)
     setTimeout(() => {
       btn.classList.remove(CODE_CARD_CLASS_NAMES.copyDone)
     }, 1200)
+  })
+  return btn
+}
+
+/** 折叠 chevron（#82，live 头部与阅读卡片共用）：两态常驻（收起态转向）；
+ *  点击经回调执行（live 派发零写回折叠切换 effect、阅读切折叠集）。 */
+export function buildFoldButton(folded: boolean, onToggle: () => void): HTMLButtonElement {
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.className = folded
+    ? `${CODE_CARD_CLASS_NAMES.fold} ${CODE_CARD_CLASS_NAMES.foldCollapsed}`
+    : CODE_CARD_CLASS_NAMES.fold
+  btn.setAttribute('aria-label', folded ? '展开代码块' : '折叠代码块')
+  btn.setAttribute('aria-expanded', folded ? 'false' : 'true')
+  btn.title = folded ? '展开代码块' : '折叠代码块'
+  btn.innerHTML =
+    '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" ' +
+    'stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"></path></svg>'
+  btn.addEventListener('mousedown', (event) => {
+    event.preventDefault()
+  })
+  btn.addEventListener('click', () => {
+    onToggle()
   })
   return btn
 }

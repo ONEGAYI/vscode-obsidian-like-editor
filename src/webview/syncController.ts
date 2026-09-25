@@ -28,6 +28,7 @@ import { Annotation, ChangeSet, Compartment, EditorSelection, EditorState, Prec,
 import { EditorView, keymap } from '@codemirror/view'
 import { liveLineNumbers, paintedLineNumbers } from './liveLineNumbers'
 import { CODE_CARD_CLASS_NAMES, codeCardConfigFacet, codeCardCopyRequest, codeCardFoldField, liveCodeCard, type CodeCardConfig } from './liveCodeCard'
+import { decorateReadingCodeCard, isReadingCodeBlock } from './readingCodeCard'
 import {
   isHostToWebview,
   type CssProbeReport,
@@ -415,6 +416,10 @@ export class WebviewSyncController {
   /** 卡片扩展的运行时配置通道（extensions 装配点） */
   private readonly codeCardCompartment = new Compartment()
 
+  /** #84 阅读侧折叠集合：键 = 块 data-vsidian-src-start（视图态，不持久化；
+   *  块卸载重挂载后经此恢复收起形态） */
+  private readonly readingCodeFold = new Set<number>()
+
   // ---- 宿主主题明暗自适应（不硬编码 dark，也不硬编码颜色）----
   /** CM6 明暗声明通道：跟随 webview body 的主题 class（vscode-dark 等），
    *  激活 baseTheme 内建变体（light: caret black / dark: caret white 等），
@@ -515,6 +520,8 @@ export class WebviewSyncController {
           prepareReadingImages(el, this.images)
         }
         renderMermaidIn(el)
+        // #84 阅读代码块卡片：挂载即增强（幂等；mermaid 块类不同不命中）
+        this.decorateReadingCodeCardBlock(el)
       },
       onBlockUnmounted: (el) => this.images?.detachWithin(el),
     })
@@ -1415,6 +1422,8 @@ export class WebviewSyncController {
     }
     if (this.view) selectTableRegion(this.view, null)
     if (next === 'reading') {
+      // #84 切回阅读模式：已挂载块补卡片增强（常驻块不经挂载钩子）
+      this.decorateMountedReadingCodeCards()
       // 锚点 = live 光标主位（选区最小 from）；阅读视图按当前 CM6 文本渲染
       // （含未确认输入），不依赖宿主权威。锚点随即规范化为块 start——
       // 短文档滚动无法表达目标时 modeAnchor 仍是权威锚点
@@ -2713,6 +2722,48 @@ export class WebviewSyncController {
     this.view?.dispatch({
       effects: this.codeCardCompartment.reconfigure(this.codeCardExtension()),
     })
+    // #84 阅读侧同步刷新已挂载的代码块卡片（Live 侧经 facet 热重配）
+    if (this.viewMode === 'reading') {
+      this.decorateMountedReadingCodeCards()
+    }
+  }
+
+  /** #84 增强单个阅读代码块（挂载钩子与重装饰共用入口） */
+  private decorateReadingCodeCardBlock(block: HTMLElement): void {
+    if (!isReadingCodeBlock(block)) {
+      return
+    }
+    const srcStart = Number(block.dataset['vsidianSrcStart'] ?? '-1')
+    decorateReadingCodeCard(block, {
+      config: this.codeCardConfig,
+      folded: this.readingCodeFold.has(srcStart),
+      onCopy: (code) => this.postCodeCopy(code),
+      onFoldToggle: () => {
+        if (!this.readingCodeFold.delete(srcStart)) {
+          this.readingCodeFold.add(srcStart)
+        }
+        this.decorateReadingCodeCardBlock(block)
+      },
+    })
+  }
+
+  /** #84 刷新全部已挂载阅读块的卡片形态（设置变更/切回阅读模式） */
+  private decorateMountedReadingCodeCards(): void {
+    this.readingContainer
+      ?.querySelectorAll<HTMLElement>('.vsidian-reading-block')
+      .forEach((el) => this.decorateReadingCodeCardBlock(el))
+  }
+
+  /** #81/#84 复制出站（Live effect 转发与阅读直连共用） */
+  private postCodeCopy(text: string): void {
+    if (this.sessionId) {
+      this.bridge.postMessage({
+        kind: 'codeblock.copy',
+        sessionId: this.sessionId,
+        docUri: this.docUri,
+        text,
+      })
+    }
   }
 
   /** 卡片扩展装配（#79–#82）：facet + 折叠状态 + 装饰 StateField + 复制
@@ -2726,13 +2777,8 @@ export class WebviewSyncController {
       EditorView.updateListener.of((update) => {
         for (const tr of update.transactions) {
           for (const eff of tr.effects) {
-            if (eff.is(codeCardCopyRequest) && this.sessionId) {
-              this.bridge.postMessage({
-                kind: 'codeblock.copy',
-                sessionId: this.sessionId,
-                docUri: this.docUri,
-                text: eff.value,
-              })
+            if (eff.is(codeCardCopyRequest)) {
+              this.postCodeCopy(eff.value)
             }
           }
         }
