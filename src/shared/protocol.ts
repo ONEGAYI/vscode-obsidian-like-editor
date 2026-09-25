@@ -597,7 +597,7 @@ export interface OutlineProbe {
   /** 大纲按钮图标 computed 宽度 px（预期 16px：选择器写错或样式失效时
    *  SVG 回退默认尺寸溢出按钮盒，可测出死选择器回归） */
   toggleIconSizePx: number | null
-  /** 大纲面板 scrollHeight px（内容总高；无布局为 null） */
+  /** 大纲面板 scrollHeight px（内容总高；无布局环境为 0 或 null） */
   panelScrollHeightPx: number | null
   /** 大纲面板 clientHeight px（可视高；scrollHeight > clientHeight 即
    *  面板高度被宿主约束且内容溢出——overflow-y:auto 由此激活滚动） */

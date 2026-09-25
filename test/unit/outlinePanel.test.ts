@@ -237,6 +237,56 @@ describe('编辑后大纲随当前文本更新（含未保存编辑）', () => {
     }
   })
 
+  it('去抖窗口内关闭大纲面板：pending 回调被取消，不刷新隐藏面板', () => {
+    // 面板隐藏路径契约：toggleOutline 关闭分支取消未决定时器——此前迟到
+    // 回调会在 display:none 面板上做无谓解析与 DOM 重建（重开有校准兜底）。
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const h = makeBridge()
+      const { c, parent } = mountOutline(h)
+      openSidebar(c)
+      const d = outlineDom(parent)
+      // 可见面板输入新标题，进入去抖窗口（100ms < 250ms 未触发）
+      const doc = c.getView()!.state.doc
+      c.getView()!.dispatch({ changes: { from: doc.length, insert: '## 关闭后标题\n' } })
+      vi.advanceTimersByTime(100)
+      expect(d.itemTexts()).not.toContain('关闭后标题')
+      // 关闭面板 → pending 回调取消 → 推进超窗也不刷新
+      d.toggle!.click()
+      expect(d.sidebar.classList.contains('vsidian-outline-active')).toBe(false)
+      vi.advanceTimersByTime(400)
+      expect(d.itemTexts(), '回调应被取消，隐藏面板不得重建').not.toContain('关闭后标题')
+      // 重开面板：展开校准兜底，数据回到新鲜
+      d.toggle!.click()
+      expect(d.itemTexts()).toContain('关闭后标题')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('去抖窗口内收起侧栏：pending 回调同样被取消', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const h = makeBridge()
+      const { c, parent } = mountOutline(h)
+      openSidebar(c)
+      const d = outlineDom(parent)
+      const doc = c.getView()!.state.doc
+      c.getView()!.dispatch({ changes: { from: doc.length, insert: '## 收起后标题\n' } })
+      vi.advanceTimersByTime(100)
+      expect(d.itemTexts()).not.toContain('收起后标题')
+      // 收起侧栏（面板随侧栏不可见）→ pending 回调取消
+      c.handleHostMessage({ kind: 'sidebar.test.click' })
+      vi.advanceTimersByTime(400)
+      expect(d.itemTexts(), '回调应被取消，隐藏面板不得重建').not.toContain('收起后标题')
+      // 重新展开：校准兜底刷新
+      openSidebar(c)
+      expect(d.itemTexts()).toContain('收起后标题')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('修改既有标题文字后，大纲对应条目更新', () => {
     const h = makeBridge()
     const { c, parent } = mountOutline(h)

@@ -616,10 +616,7 @@ export class WebviewSyncController {
       clearTimeout(this.flushTimer)
       this.flushTimer = undefined
     }
-    if (this.outlineTimer !== undefined) {
-      clearTimeout(this.outlineTimer)
-      this.outlineTimer = undefined
-    }
+    this.cancelOutlineRefresh()
     this.hostThemeObserver?.disconnect()
     this.hostThemeObserver = undefined
     if (this.docKeydown) {
@@ -1784,6 +1781,8 @@ export class WebviewSyncController {
     // 展开即见大纲：面板从不可见到可见，数据可能滞后（收起期间无刷新调度）
     if (this.sidebarOpen && this.outlineActive) {
       this.outlineEnsureFresh()
+    } else if (!this.sidebarOpen) {
+      this.cancelOutlineRefresh()
     }
   }
 
@@ -1814,6 +1813,8 @@ export class WebviewSyncController {
     this.applyOutlineDom()
     if (this.outlineActive) {
       this.outlineEnsureFresh()
+    } else {
+      this.cancelOutlineRefresh()
     }
   }
 
@@ -1831,6 +1832,15 @@ export class WebviewSyncController {
    *  view.state 回报前的即时校准兜底） */
   private outlineVisible(): boolean {
     return this.sidebarOpen && this.outlineActive
+  }
+
+  /** 取消未决的去抖回调：面板已不可见（侧栏收起或面板关闭）时，迟到触发
+   *  只会在隐藏面板上做无谓解析与 DOM 重建——重开路径有校准兜底 */
+  private cancelOutlineRefresh(): void {
+    if (this.outlineTimer !== undefined) {
+      clearTimeout(this.outlineTimer)
+      this.outlineTimer = undefined
+    }
   }
 
   /** 文档变化后的去抖刷新调度：仅可见时开启，避免不可见面板伴随每次按键
@@ -2856,8 +2866,8 @@ export class WebviewSyncController {
    * 生效（display:none/零尺寸时命中失败），DOM 存在性探不出样式失效。
    * 图标尺寸与滚动几何为 computed/布局度量（长面板裁剪时中心点在宿主外、
    * 命中失败，scrollHeight > clientHeight 证明高度约束生效）。jsdom 无布局
-   * 与 CSS 引擎：命中恒 false、度量容错为 null，名称在未装配时为 null，
-   * 真宿主断言见集成。
+   * 与 CSS 引擎：命中恒 false、几何度量透传 0、图标尺寸容错为 null，名称
+   * 在未装配时为 null，真宿主断言见集成。
    */
   private collectOutline(): OutlineProbe {
     this.outlineEnsureFresh()
