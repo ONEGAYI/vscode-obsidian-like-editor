@@ -14,7 +14,7 @@ const browser = await chromium.launch({ headless: true,
   channel: process.env.VSIDIAN_TEST_BROWSER_CHANNEL || undefined })
 let passed = 0
 try {
-  for (const row of [0, 1]) for (const mode of ['english', 'ime']) {
+  for (const row of process.argv.includes('--navigation-only') ? [] : [0, 1]) for (const mode of ['english', 'ime']) {
     for (const deletion of ['backspace', 'delete', 'selection', 'empty-source']) {
       const page = await browser.newPage()
       const errors = []
@@ -130,5 +130,84 @@ try {
       } finally { await page.close() }
     }
   }
+  const navigationFailures = []
+  for (const scenario of ['horizontal-wrap', 'horizontal-wrap-empty', 'vertical-inside', 'vertical-outside', 'vertical-empty', 'vertical-wrapped']) {
+    const page = await browser.newPage()
+    try {
+      await page.setContent('<div id="app"></div>')
+      await page.addStyleTag({ path: bundle.replace(/\.js$/, '.css') })
+      await page.addScriptTag({ path: bundle })
+      let source = 'BEFORE\n\n| H1 | H2 |\n| --- | --- |\n| B1 | B2 |\n| C1 | C2 |\n\nAFTER'
+      if (scenario === 'horizontal-wrap-empty') source = source.replace('| B1 | B2 |', '| | |')
+      if (scenario === 'vertical-empty') source = source.replace(' B2 ', ' ')
+      if (scenario === 'vertical-wrapped') source = source.replace('H2', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+      await page.evaluate((text) => window.initTable(text), source)
+      const cell = (r, c) => page.locator('.vsidian-table-grid-row').nth(r).locator('.vsidian-table-grid-cell').nth(c)
+      async function checkCell(r, c) {
+        const state = await page.evaluate(({ r, c }) => {
+          const target = document.querySelectorAll('.vsidian-table-grid-row')[r].querySelectorAll('.vsidian-table-grid-cell')[c]
+          const sel = getSelection()
+          const rect = sel?.rangeCount ? sel.getRangeAt(0).getBoundingClientRect() : null
+          const box = target.getBoundingClientRect()
+          return { ...window.readEditor(), inside: target.contains(sel?.focusNode), painted: !!rect && rect.height > 0 &&
+            rect.x >= box.left && rect.x < box.right && rect.y >= box.top && rect.y < box.bottom }
+        }, { r, c })
+        assert(state.inside && state.painted, `${scenario} 光标应在 ${r}/${c}: ${JSON.stringify(state)}`)
+        assert.equal(state.text, source, '方向键不得修改源文')
+        await page.keyboard.type('x')
+        const typed = await page.evaluate(() => window.readEditor())
+        assert.equal(typed.text, source.slice(0, state.head) + 'x' + source.slice(state.head), '真实输入位置须与导航位置一致')
+        await page.keyboard.press('Backspace')
+      }
+      if (scenario.startsWith('horizontal-wrap')) {
+        await cell(0, 1).click({ position: { x: 200, y: 10 } })
+        await page.keyboard.press('ArrowRight')
+        await checkCell(1, 0)
+        await page.keyboard.press('ArrowLeft')
+        await checkCell(0, 1)
+      } else if (scenario === 'vertical-inside' || scenario === 'vertical-empty') {
+        await cell(0, 1).click()
+        await page.keyboard.press('ArrowDown')
+        await checkCell(1, 1)
+        await page.keyboard.press('ArrowDown')
+        await checkCell(2, 1)
+        await page.keyboard.press('ArrowUp')
+        await checkCell(1, 1)
+        await page.keyboard.press('ArrowUp')
+        await checkCell(0, 1)
+        await page.keyboard.press('ArrowUp')
+        assert.equal((await page.evaluate(() => window.readEditor())).line, 2, '表头上移退出到表格前一行')
+        await cell(2, 0).click()
+        await page.keyboard.press('ArrowDown')
+        assert.equal((await page.evaluate(() => window.readEditor())).line, 7, '末行下移退出到表格后一行')
+      } else if (scenario === 'vertical-wrapped') {
+        await page.addStyleTag({ content: '#app .cm-editor .cm-scroller .vsidian-table-grid-row { width: 160px }' })
+        await cell(0, 1).click({ position: { x: 12, y: 8 } })
+        await page.keyboard.press('Control+a')
+        await page.keyboard.press('ArrowLeft')
+        const initial = await page.evaluate(() => window.readEditor())
+        await page.keyboard.press('ArrowDown')
+        await checkCell(0, 1)
+        assert((await page.evaluate(() => window.readEditor())).head > initial.head, '软换行下移应在格内前进')
+        await page.keyboard.press('ArrowUp')
+        await checkCell(0, 1)
+      } else {
+        await page.locator('.cm-line').filter({ hasText: /^BEFORE$/ }).click({ position: { x: 5, y: 10 } })
+        await page.keyboard.press('ArrowDown')
+        await page.keyboard.press('ArrowDown')
+        await checkCell(0, 0)
+        await page.locator('.cm-line').filter({ hasText: /^AFTER$/ }).click({ position: { x: 5, y: 10 } })
+        await page.keyboard.press('ArrowUp')
+        await page.keyboard.press('ArrowUp')
+        await checkCell(2, 0)
+      }
+      passed++
+      console.log(`[原生输入][PASS] ${scenario}`)
+    } catch (error) {
+      navigationFailures.push(error)
+      console.error(`[原生输入][FAIL] ${scenario}: ${error.message}`)
+    } finally { await page.close() }
+  }
+  if (navigationFailures.length) throw new AggregateError(navigationFailures, '表格方向键导航回归失败')
   console.log(`[原生输入] ${passed} 项通过`)
 } finally { await browser.close() }

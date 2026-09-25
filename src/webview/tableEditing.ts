@@ -402,9 +402,12 @@ const stabilizeGridCaretAfterInput = ViewPlugin.fromClass(class {
       if (selection.ranges.length !== 1 || !selection.main.empty) return
       const head = selection.main.head
       const cell = editableGridCellAt(view.state, head)
-      if (!cell || head !== cell.contentTo) return
-      if (selection.main.assoc !== -1) {
-        view.dispatch({ selection: EditorSelection.create([EditorSelection.cursor(head, -1)]) })
+      if (!cell) return
+      const atEmptyStart = cell.contentFrom === cell.contentTo && head === cell.from
+      if (!atEmptyStart && head !== cell.contentTo) return
+      const assoc = atEmptyStart ? 1 : -1
+      if (selection.main.assoc !== assoc) {
+        view.dispatch({ selection: EditorSelection.create([EditorSelection.cursor(head, assoc)]) })
       }
       const column = cell.cells.findIndex((candidate) => candidate.from === cell.from)
       const row = [...view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')]
@@ -416,7 +419,7 @@ const stabilizeGridCaretAfterInput = ViewPlugin.fromClass(class {
       const nativeRect = nativeSelection?.rangeCount
         ? nativeSelection.getRangeAt(0).getBoundingClientRect() : null
       if (nativeNode && target.contains(nativeNode) && (nativeRect?.height ?? 0) > 0) return
-      const mapped = view.domAtPos(head, -1)
+      const mapped = view.domAtPos(head, assoc)
       let textNode = mapped.node.nodeType === Node.TEXT_NODE && target.contains(mapped.node)
         ? mapped.node as globalThis.Text : null
       let offset = mapped.offset
@@ -426,7 +429,7 @@ const stabilizeGridCaretAfterInput = ViewPlugin.fromClass(class {
           const candidate = walker.currentNode as globalThis.Text
           if (candidate.data.length > 0) textNode = candidate
         }
-        offset = textNode?.data.length ?? 0
+        offset = atEmptyStart ? 0 : textNode?.data.length ?? 0
       }
       if (textNode) {
         const at = Math.max(0, Math.min(offset, textNode.data.length))
@@ -453,7 +456,7 @@ function moveAcrossGridCell(view: EditorView, forward: boolean): boolean {
   if (!cell) return false
   const end = cell.to > cell.from && view.state.sliceDoc(cell.to - 1, cell.to) === ' ' ? cell.to - 1 : cell.to
   if (forward ? head < end : head > cell.contentFrom) return false
-  const target = navTargetsOf(view, forward)?.[0]
+  const target = navTargetsOf(view, forward, true)?.[0]
   if (target === undefined) return true
   const next = editableGridCellAt(view.state, target)
   if (!next) return false
@@ -463,6 +466,84 @@ function moveAcrossGridCell(view: EditorView, forward: boolean): boolean {
   view.dispatch({ selection: EditorSelection.create([EditorSelection.cursor(at, empty || forward ? 1 : -1)]),
     scrollIntoView: true, userEvent: 'select' })
   return true
+}
+
+/** 网格视觉行不等于 CM6 源行：上下导航按内容行定位，绕过隐藏分隔行。 */
+function moveVerticallyAcrossGrid(view: EditorView, forward: boolean): boolean {
+  const state = view.state
+  const range = state.selection.main
+  if (view.compositionStarted || state.selection.ranges.length !== 1 || !range.empty) return false
+  const field = state.field(liveDecorationsField, false)
+  if (!field) return false
+  const cell = editableGridCellAt(state, range.head)
+  const direction = forward ? 1 : -1
+  const line = state.doc.lineAt(range.head)
+  const nativeSelection = view.contentDOM.ownerDocument.getSelection()
+  const nativeRect = nativeSelection?.rangeCount && nativeSelection.focusNode &&
+    view.contentDOM.contains(nativeSelection.focusNode) &&
+    view.posAtDOM(nativeSelection.focusNode, nativeSelection.focusOffset) === range.head
+    ? nativeSelection.getRangeAt(0).getBoundingClientRect() : null
+  const origin = nativeRect && nativeRect.height > 0 ? nativeRect : view.coordsAtPos(range.head, range.assoc || 1)
+  const contentLeft = view.contentDOM.getBoundingClientRect().left
+  const goal = range.goalColumn ?? ((origin?.left ?? contentLeft) - contentLeft)
+  const select = (at: number, assoc: number) => {
+    view.dispatch({ selection: EditorSelection.create([EditorSelection.cursor(at, assoc, undefined, goal)]),
+      scrollIntoView: true, userEvent: 'select' })
+    return true
+  }
+  if (cell) {
+    // CM6 的源行测量会将 CSS grid 看成一个块；格内软换行用浏览器文字
+    // 命中定位，但仅接受仍落在当前格、且确实前进一个视觉行的结果。
+    const visual = origin ? view.contentDOM.ownerDocument.caretRangeFromPoint?.(
+      contentLeft + goal, (origin.top + origin.bottom) / 2 + direction * view.defaultLineHeight) : null
+    if (visual && view.contentDOM.contains(visual.startContainer)) {
+      const at = view.posAtDOM(visual.startContainer, visual.startOffset)
+      const rect = view.coordsAtPos(at, forward ? 1 : -1) ?? visual.getBoundingClientRect()
+      if (at !== range.head && at >= cell.contentFrom && at <= cell.contentTo && origin && rect.bottom > rect.top &&
+          (forward ? rect.top > origin.top + 1 : rect.top < origin.top - 1)) {
+        return select(at, forward ? 1 : -1)
+      }
+    }
+    const rows = tableRowsAt(state, range.head, field.tree)
+    if (!rows) return false
+    const visible = rows.filter((row) => row.kind !== 'delimiter')
+    const index = visible.findIndex((row) => row.lineFrom === line.from)
+    const nextRow = visible[index + direction]
+    if (!nextRow) {
+      const boundary = forward ? rows[rows.length - 1]!.lineFrom : rows[0]!.lineFrom
+      const outsideNumber = state.doc.lineAt(boundary).number + direction
+      if (outsideNumber < 1 || outsideNumber > state.doc.lines) return true
+      const outside = state.doc.line(outsideNumber)
+      return select(outside.from + Math.min(Math.max(0, range.head - cell.contentFrom), outside.length), 1)
+    }
+    const cells = tableRowCellsForColumns(state.sliceDoc(nextRow.lineFrom, nextRow.lineTo), nextRow.lineFrom, cell.cells.length)
+    const column = cell.cells.findIndex((entry) => entry.from === cell.from)
+    const next = cells?.[column]
+    if (!next || !editableGridCellAt(state, next.from)) return false
+    const empty = next.contentFrom === next.contentTo
+    const at = empty ? next.from : Math.min(next.contentTo, next.contentFrom + Math.max(0, range.head - cell.contentFrom))
+    return select(at, empty || at === next.contentFrom ? 1 : -1)
+  }
+  // 表格外仅接管紧邻可见网格的那一步；普通段落导航保持原有行为。
+  const nextNumber = line.number + direction
+  if (nextNumber < 1 || nextNumber > state.doc.lines) return false
+  const nextLine = state.doc.line(nextNumber)
+  const first = editableGridCellAt(state, nextLine.from)
+  if (!first) return false
+  const rowDOM = [...view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')]
+    .find((row) => view.posAtDOM(row, 0) === nextLine.from)
+  const domCells = rowDOM?.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')
+  const x = contentLeft + goal
+  let column = 0
+  if (domCells) {
+    while (column + 1 < domCells.length && x >= domCells[column]!.getBoundingClientRect().right) column++
+  }
+  const next = first.cells[column]!
+  const empty = next.contentFrom === next.contentTo
+  const rect = domCells?.[column]?.getBoundingClientRect()
+  const hit = rect ? view.posAtCoords({ x, y: forward ? rect.top + 5 : rect.bottom - 5 }) : null
+  const at = empty ? next.from : Math.max(next.contentFrom, Math.min(next.contentTo, hit ?? next.contentFrom))
+  return select(at, empty || at === next.contentFrom ? 1 : -1)
 }
 /** 退格直接删除可见内容，不先消耗透明填充。 */
 const deleteBeforeGridPadding: Command = (view) => {
@@ -507,7 +588,7 @@ const normalizeBlankRowInput = EditorState.transactionFilter.of((tr) => {
 })
 
 /** 导航前置解析：全部 range（须为空光标）都在表格单元格序列上时返回目标数组 */
-function navTargetsOf(view: EditorView, forward: boolean): number[] | null {
+function navTargetsOf(view: EditorView, forward: boolean, visibleOnly = false): number[] | null {
   if (view.compositionStarted) {
     return null // IME 组合中不劫持 Tab（组合文本由既有链路上屏）
   }
@@ -525,7 +606,15 @@ function navTargetsOf(view: EditorView, forward: boolean): number[] | null {
     if (!rows) {
       return null
     }
-    const target = tableCellNavTarget(state.doc.toString(), rows, range.from, forward)
+    const source = state.doc.toString()
+    let target = tableCellNavTarget(source, rows, range.from, forward)
+    if (visibleOnly && target !== null) {
+      const delimiter = rows.find((row) => row.kind === 'delimiter' && target! >= row.lineFrom && target! <= row.lineTo)
+      if (delimiter) {
+        // 保留声明行的列数信息供纯空白行解析，但不让光标停在声明行内。
+        target = tableCellNavTarget(source, rows, forward ? delimiter.lineTo : delimiter.lineFrom, forward)
+      }
+    }
     if (target === null) {
       return null // 边界（首行首格回退/末行末格前进）与非表格上下文：交默认
     }
@@ -682,6 +771,8 @@ export const tableEditing = [
   keymap.of([
     { key: 'ArrowLeft', run: (view) => moveAcrossGridCell(view, false) },
     { key: 'ArrowRight', run: (view) => moveAcrossGridCell(view, true) },
+    { key: 'ArrowUp', run: (view) => moveVerticallyAcrossGrid(view, false) },
+    { key: 'ArrowDown', run: (view) => moveVerticallyAcrossGrid(view, true) },
     { key: 'Backspace', run: deleteBeforeGridPadding },
   ]),
   keymap.of([{ key: 'Mod-a', run: selectGridCell }]),
