@@ -12,6 +12,7 @@ import { Text } from '@codemirror/state'
 import { extractOutline } from '../../src/webview/outline'
 import {
   outlineAtxLine,
+  outlineChangesOrdered,
   outlineCopyText,
   outlineDeleteChange,
   outlineHeadingSpan,
@@ -422,5 +423,132 @@ describe('超长 Setext 标题的标题区几何（review-loops A1）', () => {
     const doc = Text.of(['段落甲', '', '===', '后续'])
     const span = outlineHeadingSpan(doc, { level: 1, text: '段落甲', plainText: '段落甲', line: 1 })
     expect(span).toEqual({ from: 0, to: doc.line(1).to })
+  })
+})
+
+// ---- review-loops 第 2 轮：容器内 / 缩进标题的标题区几何（写操作不得越过标题区） ----
+
+describe('容器内 / 缩进标题的标题区几何（review-loops 第 2 轮）', () => {
+  /** 重命名后的文档文本（断言对象是用户看到的文档文本，不是 span 数值） */
+  const renameTo = (docText: string, index: number, newText: string): string => {
+    const doc = Text.of(docText.split('\n'))
+    const items = extractOutline(doc)
+    const change = outlineRenameChange(doc, items, index, newText)
+    expect(change, `条目 ${index} 应有重命名变更`).not.toBeNull()
+    return applyChanges(docText, [change!])
+  }
+
+  it('块引用内标题 + 下方 --- 分隔线：只重写标题行，分隔线与正文不动', () => {
+    // 旧实现按列 0 判 ATX → `> # 引用标题` 判否 → 进入 Setext 扫描 → 命中
+    // 下方 `---` → span 覆盖两行 → 重命名把分隔线一并删除（数据丢失）
+    expect(renameTo('> # 引用标题\n---\n正文', 0, '新名')).toBe('> # 新名\n---\n正文')
+  })
+
+  it('缩进 1–3 空格的 ATX 标题 + 下方 ---：缩进与分隔线均保留', () => {
+    expect(renameTo('   # 缩进标题\n---\n正文', 0, '新名')).toBe('   # 新名\n---\n正文')
+  })
+
+  it('缩进标题 + 多行正文 + 远距 ---：正文与分隔线全保留（旧实现整段吞并）', () => {
+    const body = ['正文一', '正文二', '正文三', '正文四'].join('\n')
+    expect(renameTo(`   # 缩进标题\n${body}\n---\n尾`, 0, '新名'))
+      .toBe(`   # 新名\n${body}\n---\n尾`)
+  })
+
+  it('缩进的 Setext 下划线（≤3 空格）仍属标题区：重命名不残留下划线行', () => {
+    // 旧实现下划线正则锚定列 0 → 未命中 → 单行回退 → 留下 `  ===` 幻影行
+    expect(renameTo('标题\n  ===\n正文', 0, '新名')).toBe('# 新名\n正文')
+  })
+
+  it('块引用内的 Setext 标题：整标题区替换，容器前缀保留', () => {
+    expect(renameTo('> 引用标题\n> ===\n> 正文', 0, '新名')).toBe('> # 新名\n> 正文')
+  })
+
+  it('调级同样只动标题区（缩进标题 + 远距 --- 的正文与分隔线保留）', () => {
+    const text = '   # 缩进标题\n正文一\n正文二\n---\n尾'
+    const doc = Text.of(text.split('\n'))
+    const items = extractOutline(doc)
+    const changes = outlineLevelChanges(doc, items, 0, 1, false)!
+    expect(applyChanges(text, changes)).toBe('   ## 缩进标题\n正文一\n正文二\n---\n尾')
+  })
+
+  it('防御语义：容器前缀不一致时 Setext 扫描即停（手写条目的异常输入）', () => {
+    // 该形态不经 extractOutline 产出（`> 段落` 非标题），仅作行号漂移防御
+    const doc = Text.of(['> 段落', '---', '后续'])
+    const span = outlineHeadingSpan(doc, { level: 1, text: '段落', plainText: '段落', line: 1 })
+    expect(span).toEqual({ from: 0, to: doc.line(1).to })
+  })
+})
+
+// ---- review-loops 第 2 轮 R2-7：写回变更段的顺序断言（applyOutlineEdits 兜底） ----
+
+describe('写回变更段顺序断言：升序互不重叠、允许相邻（review-loops 第 2 轮 R2-7）', () => {
+  // 为何允许相邻：判据只拦「会让 CM6 ChangeSet flush 合成」的输入——重叠段
+  // 与乱序段会让写入结果与计划错位（静默错位写权威文档）；而首尾相接的两段
+  // （前段 end === 后段 offset）是合法输入，一次事务按段序落位不产生歧义，
+  // 拖拽搬移的「删源段 + 在插入点放搬移段」正是此形态（接缝处相邻）。
+  // 零长插入（length 0）的合法性同样只在接缝处：与紧邻段相接合法，落在
+  // 前段区间内（前段未结束）则与真重叠同类，判否。
+  it('空数组：无相邻对可查，恒为真（写回侧另有 empty 早退）', () => {
+    expect(outlineChangesOrdered([])).toBe(true)
+  })
+
+  it('单段：无配对可查，恒为真（含零长插入单段）', () => {
+    expect(outlineChangesOrdered([{ offset: 0, length: 3 }])).toBe(true)
+    expect(outlineChangesOrdered([{ offset: 10, length: 0 }])).toBe(true)
+  })
+
+  it('相邻段通过：前段 end === 后段 offset；多段连续相接同样通过', () => {
+    expect(outlineChangesOrdered([{ offset: 0, length: 3 }, { offset: 3, length: 2 }])).toBe(true)
+    expect(outlineChangesOrdered([
+      { offset: 0, length: 3 },
+      { offset: 3, length: 2 },
+      { offset: 5, length: 1 },
+    ])).toBe(true)
+  })
+
+  it('零长插入与后续段相邻通过（插入点正好是后段起点）', () => {
+    expect(outlineChangesOrdered([
+      { offset: 5, length: 0 },
+      { offset: 5, length: 2 },
+    ])).toBe(true)
+  })
+
+  it('真重叠拒绝：前段未结束即开始后段', () => {
+    expect(outlineChangesOrdered([
+      { offset: 0, length: 3 },
+      { offset: 2, length: 4 },
+    ])).toBe(false)
+  })
+
+  it('零长插入落在前段区间内同样拒绝（零长只在接缝处合法）', () => {
+    expect(outlineChangesOrdered([
+      { offset: 0, length: 5 },
+      { offset: 3, length: 0 },
+    ])).toBe(false)
+    // 同点插入（offset 相同、前段有长度）：仍在前段区间内，同判否
+    expect(outlineChangesOrdered([
+      { offset: 10, length: 2 },
+      { offset: 10, length: 0 },
+    ])).toBe(false)
+  })
+
+  it('乱序拒绝：后段 offset 小于前段', () => {
+    expect(outlineChangesOrdered([
+      { offset: 10, length: 2 },
+      { offset: 5, length: 1 },
+    ])).toBe(false)
+    expect(outlineChangesOrdered([
+      { offset: 0, length: 1 },
+      { offset: 1, length: 1 },
+      { offset: 0, length: 1 },
+    ])).toBe(false)
+  })
+
+  it('违例出现在末对时同样拒绝（逐对扫描，而非只看首对）', () => {
+    expect(outlineChangesOrdered([
+      { offset: 0, length: 2 },
+      { offset: 2, length: 2 },
+      { offset: 3, length: 1 },
+    ])).toBe(false)
   })
 })

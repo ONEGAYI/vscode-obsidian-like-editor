@@ -5035,7 +5035,8 @@ export const cases: Array<[string, () => Promise<void>]> = [
   ['大纲复制五项经宿主剪贴板：端到端读写对拍（#69）', async () => {
     // 断言口径：复制走 webview→宿主 clipboard.write 消息桥，宿主
     // env.clipboard.writeText 写入系统剪贴板——集成侧以 readText 读回对拍
-    // （端到端：webview 载荷计算 → 消息桥 → 宿主拼接 → 剪贴板全程真实）
+    // （端到端：webview 载荷计算 → 消息桥 → 宿主拼接 → 剪贴板全程真实）；
+    // 标题链接另做「复制 → 注入定位」往返对拍（链路见下段注释）
     await openWithEditor('outline-menu.md')
     await waitSessionReady('outline-menu.md')
     const uri = wsUri('outline-menu.md').toString()
@@ -5055,12 +5056,94 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(await copy(1, 'copySiblings') === '加粗 Alpha\nBeta', '兄弟复制为同父全部标题逐行')
     // 标题和子标题（Alpha 子树 = Alpha、Alpha 子）
     assert(await copy(1, 'copyChildren') === '加粗 Alpha\nAlpha 子', '子标题复制含后代')
-    // 标题链接（宿主拼 [[笔记名#标题]]：笔记名 = 文件名去扩展名、标题 plainText）
-    assert(await copy(1, 'copyLink') === '[[outline-menu#加粗 Alpha]]', '标题链接格式 Obsidian 同款')
+    // 标题链接（宿主拼 [[笔记名#标题]]：笔记名 = 文件名去扩展名；标题取条目
+    // 原文（含 **加粗** 等行内标记）——宿主 findHeadingOffset 按 ATX 标题行
+    // 字面文本比较，两侧口径同源才能定位回原标题；剥标记文本只服务「复制
+    // 标题」纯文本场景，写进链接必然定位落空（review-loops 第 2 轮）
+    const markedLink = await copy(1, 'copyLink')
+    assert(markedLink === '[[outline-menu#**加粗** Alpha]]',
+      `含标记标题的链接应为标题原文，实际 ${markedLink}`)
+    // 纯文本标题链接（Beta，index 3）：无标记可剥，原文 == 可见文本，一期口径不变
+    const plainLink = await copy(3, 'copyLink')
+    assert(plainLink === '[[outline-menu#Beta]]', `纯文本标题链接应不变，实际 ${plainLink}`)
+    // Setext 标题链接（index 5）：同样取原文（其不能定位属一期已知限制，见下方往返断言）
+    const setextLink = await copy(5, 'copyLink')
+    assert(setextLink === '[[outline-menu#Setext 标题]]',
+      `Setext 标题链接应为标题原文，实际 ${setextLink}`)
     // 该段内容（整控制域源文含标题行，标记原样）
     assert(await copy(3, 'copySection') === '## Beta\n\nBeta 内容。\n\n#### Beta 深\n\n深内容。', '该段内容为整控制域源文')
     // Setext 标题的复制（plainText）
     assert(await copy(5, 'copyHeading') === 'Setext 标题', 'Setext 标题复制为可见文本')
+
+    // ---- 端到端往返：复制出的链接能否定位回原标题（#69 写入端 × #11 读回端） ----
+    // 剪贴板文本 → 剥 [[ ]] 得注入目标 → injectWikilink（与真实 webview 消息
+    // 同一校验与处理入口）→ 宿主解析/定位 → 日志 locate + 面板实际落点对拍。
+    // 这是本用例的核心契约：读取端按标题行字面文本比较，故写入端必须上报条目
+    // 原文；剥标记口径下含标记标题的链接必然 locate=none（修复前实测形态）
+    const fixtureText = await readDisk('outline-menu.md')
+    /** 标题行在全文中的行首 offset（LF 系；整行全等匹配，避免子串误命中） */
+    const headingOffsetOf = (lineText: string): number => {
+      let offset = 0
+      for (const line of fixtureText.split('\n')) {
+        if (line.replace(/\r$/, '') === lineText) {
+          return offset
+        }
+        offset += line.length + 1
+      }
+      throw new Error(`fixture 中不存在该标题行：${lineText}`)
+    }
+    const roundTrip = async (link: string, headingLine: string): Promise<void> => {
+      assert(link.startsWith('[[outline-menu#') && link.endsWith(']]'),
+        `标题链接形态应为 [[outline-menu#…]]，实际 ${link}`)
+      const heading = headingLine.replace(/^#+ /, '')
+      await injectWikilink(uri, link.slice(2, -2))
+      const log = await waitWikilinkLog(uri, (e) => e.kind === 'wikilink-doc' && e.heading === heading)
+      assert(log.locate !== 'none',
+        `复制出的链接应定位回原标题「${heading}」，实际 locate=${String(log.locate)}`)
+      assert(log.path === wsUri('outline-menu.md').fsPath,
+        `定位目标应为 outline-menu.md，实际 ${String(log.path)}`)
+      const offset = headingOffsetOf(headingLine)
+      if (log.locate === 'custom-panel') {
+        // 目标（outline-menu.md）即本面板自身：宿主 reveal 面板后发 view.locate，
+        // live 态光标落标题行首——面板侧可见落点，不只看日志
+        const view = await waitViewState('outline-menu.md', (v) => v.selectionOffset === offset)
+        assert(view.selectionOffset === offset,
+          `面板光标应落标题行首 offset ${offset}，实际 ${view.selectionOffset}`)
+      } else {
+        // 目标面为文本编辑器：以标题行 selection reveal。此处目标恒为本面板
+        // 自身，该分支用于让落点断言不硬编码定位面（按日志回报的实际面取证据）
+        const editor = await poll('标题跳转落到文本编辑器', () =>
+          vscode.window.activeTextEditor?.document.uri.toString() === wsUri('outline-menu.md').toString()
+            ? vscode.window.activeTextEditor
+            : undefined)
+        const line = editor.document.lineAt(editor.selection.active).text
+        assert(line === headingLine, `文本编辑器 selection 应在标题行「${headingLine}」，实际「${line}」`)
+      }
+    }
+    // 含标记标题（index 1）：写入端原文 → 读回端字面匹配原文，本轮修复的回归钉子
+    await roundTrip(markedLink, '## **加粗** Alpha')
+    // 纯文本标题（index 3）：原文 == 可见文本，两侧口径本来就一致（防误伤）
+    await roundTrip(plainLink, '## Beta')
+    // Setext 标题（index 5）：一期标题匹配规则明示「仅 ATX 标题行」（钉在
+    // test/unit/wikilinkTarget.test.ts），其链接不能定位——已知限制，显式钉住
+    // 而非静默略过
+    await injectWikilink(uri, setextLink.slice(2, -2))
+    const setextLog = await waitWikilinkLog(uri,
+      (e) => e.kind === 'wikilink-doc' && e.heading === 'Setext 标题')
+    assert(setextLog.locate === 'none',
+      `一期已知限制：Setext 标题链接不定位（findHeadingOffset 仅认 ATX 标题行），实际 locate=${String(setextLog.locate)}`)
+    // 不定位 = 面板光标停在上一跳落点（settle 窗等可能的定位消息到达后复查）
+    const betaOffset = headingOffsetOf('## Beta')
+    await new Promise((r) => setTimeout(r, 200))
+    const settled = await waitViewState('outline-menu.md')
+    assert(settled.selectionOffset === betaOffset,
+      `Setext 链接不应移动光标（应保持 ${betaOffset}），实际 ${settled.selectionOffset}`)
+
+    // 形态学已知限制（不另造 fixture）：标题含「] | # ^」时 wikilink 无法表达该
+    // 标题——「]」触发扫描守卫、「|」切别名、「#」二次分割标题、「^」按块引用降级
+    // （见 src/shared/wikilink.ts 与 outlineLinkHeading 注释）。此类标题的链接既
+    // 不保证可表达也不保证可定位，属一期已知边界，本用例不覆盖。
+
     // 收起侧栏收尾
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
     await waitViewState('outline-menu.md', (v) => v.sidebar?.open === false)

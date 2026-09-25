@@ -732,7 +732,11 @@ body {
    - drop-before / drop-after：目标条目上/下缘插入线（inset box-shadow，
      不占布局空间、不与 located 背景冲突），颜色跟随 VSCode 焦点变量
    - drop-inside：目标包裹高亮（outline 内缩一圈 + 半透明背景，与 located
-     同变量族）——「放入成为子标题」的视觉区分 */
+     同变量族）——「放入成为子标题」的视觉区分
+   拖拽入口是鼠标专用（review-loops 第 2 轮披露）：触屏按住条目会被浏览器
+   接管为滚动并派发 pointercancel，会话按取消处理（零写回）。此处刻意不加
+   touch-action: none——该声明会让整个大纲面板失去触屏滚动，而面板滚动是
+   面板的核心可用性；触屏排序当前不支持（限制见人工验证清单） */
 .vsidian-sidebar .vsidian-outline-item.vsidian-outline-dragging {
   opacity: 0.45;
 }

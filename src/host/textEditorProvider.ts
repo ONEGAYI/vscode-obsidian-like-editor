@@ -158,7 +158,12 @@ function imageResourceRoot(document: vscode.TextDocument): vscode.Uri {
 }
 
 /** #69 笔记名（标题链接 `[[笔记名#标题]]` 的锚）：docUri 字符串 → 文件名
- *  去扩展名（Obsidian 语义：不含路径不含 .md）。URI 解析失败回退原文 */
+ *  去扩展名（Obsidian 语义：不含路径不含 .md）。URI 解析失败回退原文。
+ *  review-loops 第 2 轮披露：笔记名不做转义（理由与标题侧 outlineLinkHeading
+ *  同口径——形态学不认 `\]`/`\|`/`\#`，转义是空操作），故文件名含 `|`/`]`/`#`
+ *  时该链接无法表达这个目标：`|` 被当作别名分隔符（链接静默指向按名解析出的
+ *  另一笔记）、`]` 提前闭合、`#` 起标题分隔段。属 wikilink 形态学已知限制，
+ *  与标题侧同口径（限制见人工验证清单） */
 export function outlineNoteNameOf(docUri: string): string {
   try {
     const fsPath = vscode.Uri.parse(docUri).fsPath
