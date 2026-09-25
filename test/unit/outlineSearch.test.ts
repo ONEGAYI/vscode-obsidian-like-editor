@@ -205,3 +205,79 @@ describe('折叠映射的端点与非 BMP（review-loops 第 2 轮）', () => {
     expect(lower.matchedIndices).toEqual([0])
   })
 })
+
+// ---- review-loops 第 3 轮：折叠与索引映射改按整串折叠结果建表 ----
+//
+// 待测口径：`folded = s.toLowerCase()` **一次算出**（不是逐字符拼出来的），
+// 查询侧 needle 是整串 `query.toLowerCase()`；两侧同坐标系才谈得上等价。
+// 反例是希腊文的上下文相关映射——终写 sigma：U+03A3 GREEK CAPITAL LETTER
+// SIGMA 在词尾折成 U+03C2（ς，GREEK SMALL LETTER FINAL SIGMA），在字中折成
+// U+03C3（σ）。逐字符折叠没有上下文，Σ 一律折成 σ：
+//
+//   'ΟΔΟΣ'.toLowerCase() = 'οδος'（终写 ς），逐字符拼接 = 'οδοσ'（普通 σ）
+//
+// 旧实现按逐字符结果建索引 → needle 'οδος' 在该坐标系里不存在 → 把标题原文
+// 直接粘贴进搜索框检索不到（条目被过滤，不只是高亮丢失）。
+//
+// 上下文相关映射的枚举结论（一次性探针，非本套件常驻）：对 U+0000–U+10FFFF
+// 逐码点 × 63 组前后文（前文 '', 'A', 'a', ' ', 'Α', 'Σ', 'İ', U+0301, '-'
+// × 后文 '', 'A', 'a', ' ', '!', U+0301, '.'）比对「整串折叠 vs 逐字符拼接」，
+// 默认（非 locale）toLowerCase 下**只有 U+03A3** 两者不等；且全部候选中
+// 逐字符折叠长度与整串折叠的分段长度一致（无长度歧义，故分段可沿用逐字符
+// 折叠的长度，内容取整串结果——见 outlineSearch.ts 的 foldText）。
+// 其他候选（İ U+0130 折两码元、Deseret U+10400 代理对）两侧一致，见上两块。
+
+describe('整串折叠口径：上下文相关映射（review-loops 第 3 轮）', () => {
+  const mk = (text: string) => ({ level: 1, text, plainText: text })
+
+  it('终写 sigma：标题原文粘贴即命中（ΟΔΟΣ 以 Σ 收尾）', () => {
+    // 旧口径：folded='οδοσ' 而 needle='οδος'（终写 ς）→ indexOf 落空，matchedIndices 空
+    const r = outlineSearchFilter([mk('ΟΔΟΣ')], 'ΟΔΟΣ')
+    expect(r.matchedIndices).toEqual([0])
+    expect(r.noMatch).toBe(false)
+    // 高亮区间落在原文坐标：四个字母各占一码元，整词 [0,4)
+    expect(r.ranges[0]).toEqual([{ start: 0, end: 4 }])
+  })
+
+  it('终写 sigma：整串小写查询同样命中，区间同原文坐标', () => {
+    const r = outlineSearchFilter([mk('ΟΔΟΣ')], 'οδος')
+    expect(r.matchedIndices).toEqual([0])
+    expect(r.ranges[0]).toEqual([{ start: 0, end: 4 }])
+  })
+
+  it('混合上下文：首字母 sigma 折普通 σ、末位折终写 ς（ΣΟΦΟΣ）', () => {
+    // 'ΣΟΦΟΣ'.toLowerCase() = 'σοφος'：首位 Σ 后随字母 → σ，末位无后继字母 → ς
+    const r = outlineSearchFilter([mk('ΣΟΦΟΣ')], 'σοφος')
+    expect(r.matchedIndices).toEqual([0])
+    expect(r.ranges[0]).toEqual([{ start: 0, end: 5 }])
+  })
+
+  it('混合上下文：ΟΔΟΣ 加粗 命中前段并高亮（Σ 后随空格仍是终写）', () => {
+    const items = [mk('ΟΔΟΣ 加粗')]
+    const pasted = outlineSearchFilter(items, 'ΟΔΟΣ')
+    expect(pasted.matchedIndices).toEqual([0])
+    expect(pasted.ranges[0]).toEqual([{ start: 0, end: 4 }]) // 只高亮前四个字母
+    const lower = outlineSearchFilter(items, 'οδος')
+    expect(lower.matchedIndices).toEqual([0])
+    expect(lower.ranges[0]).toEqual([{ start: 0, end: 4 }])
+  })
+
+  it('多处终写 sigma 命中：各区间落在原文对应 Σ 上（含中间 Σ 的普通 σ）', () => {
+    // 'ΣΣ ΣΣ'.toLowerCase() = 'σς σς'（首位 σ、次位 ς，第二组同构）
+    const r = outlineSearchFilter([mk('ΣΣ ΣΣ')], 'ΣΣ')
+    expect(r.matchedIndices).toEqual([0])
+    expect(r.ranges[0]).toEqual([
+      { start: 0, end: 2 },
+      { start: 3, end: 5 },
+    ])
+  })
+
+  it('口径边界：普通 σ 收尾的查询不匹配终写 ς 的标题（两侧同为整串折叠）', () => {
+    // 'οδοσ'.toLowerCase() = 'οδοσ'，与标题折叠 'οδος'（末位 U+03C2）不同码点。
+    // 这是「两侧都按整串折叠」的直接推论：标题侧不做上下文无关归一，故查
+    // 「ΟΔΟΣ」请用标题原文或其整串小写；本模块不引入 normalize/Segmenter 层。
+    const r = outlineSearchFilter([mk('ΟΔΟΣ')], 'οδοσ')
+    expect(r.matchedIndices).toEqual([])
+    expect(r.noMatch).toBe(true)
+  })
+})

@@ -4,7 +4,9 @@
 //
 // 1. 匹配对象是剥标记可见文本（plainText——`**粗体**` 输「粗体」命中，
 //    与渲染/无障碍口径同源，见 outline.ts 的 PlainTextCollector）；不做
-//    正则，两侧 toLowerCase 后 indexOf 子串判定。
+//    正则，两侧 toLowerCase 后 indexOf 子串判定。两侧都是**整串**口径
+//    （标题侧 `plainText.toLowerCase()` 一次算出、查询侧 `query.toLowerCase()`），
+//    对上下文相关的大小写映射才等价——见 foldText 注释的终写 sigma。
 //
 // 2. 保留口径：命中条目 + 其全部祖先（匹配路径）保留，其余隐藏——
 //    祖先链由 outlineCollapse 的栈算法父子结构派生（跨级自然挂靠）。
@@ -47,30 +49,49 @@ export interface OutlineSearchFilter {
   noMatch: boolean
 }
 
-/** 折叠 plainText 并记录偏移映射（review-loops A2：toLowerCase 对个别
- *  字符变长，如 İ → i+U+0307，折叠串上 indexOf 的偏移不等于原串偏移）。
- *  map[j] = 折叠串第 j 位对应的原串起始索引；末位哨兵 = 原串长度 */
-/** 折叠文本 + 折叠码元 → 原串坐标映射（review-loops 第 2 轮）：
- *  - 按**码点**折叠（`for (const ch of s)`）：逐 UTF-16 码元折叠会拆开代理对，
- *    非 BMP 字母（如 U+10400/U+10428）的大小写映射丢失、搜索失效；
- *  - `start[k]`/`end[k]` 是折叠串第 k 个码元所属原串字符的 [起, 止) 区间：
+/** 折叠文本 + 折叠码元 → 原串坐标映射（review-loops 第 3 轮：整串折叠口径）。
+ *
+ *  - **内容取整串折叠**：`s.toLowerCase()` 一次算出。默认（非 locale）大小写
+ *    映射含上下文相关规则，逐字符折叠与整串折叠**不等价**——希腊文终写 sigma
+ *    （U+03A3 GREEK CAPITAL LETTER SIGMA 在词尾折 U+03C2 ς、在字中折 U+03C3 σ）：
+ *    'ΟΔΟΣ' 整串得 'οδος'、逐字符拼接得 'οδοσ'。查询侧 needle 是整串
+ *    `query.toLowerCase()`，标题侧只有同用整串结果才与它同处一个坐标系
+ *    （旧实现按逐字符结果建索引 → 标题原文直接粘贴进搜索框检索落空，条目被过滤）。
+ *  - **分段长度取逐字符折叠**：上下文规则只改内容不改长度（'ΟΔΟΣ' 两侧都是 4
+ *    码元；对 U+0000–U+10FFFF 逐码点 × 63 组前后文（9 前文 × 7 后文）枚举，
+ *    默认 toLowerCase 下只有 U+03A3 整串 ≠ 逐字符、且无长度歧义），故长度是
+ *    这里唯一能逐字符拿到的量，分段与整串结果逐段对齐。
+ *  - `start[k]`/`end[k]` 是折叠串第 k 码元所属原串字符的 [起, 止) 区间：
  *    末端取「所属字符的终点」而非「下一字符的起点」——命中末端落在折叠展开
- *    的字符内部时区间才不被截短，整个命中落在展开内部时也不为零宽；
- *  - 单字符折叠为多码元时（İ → i+U+0307）各码元同属该字符 */
+ *    的字符内部时区间才不被截短，整个命中落在展开内部时也不为零宽。
+ *  - 单字符折多码元时（İ → i+U+0307）各码元同属该字符；非 BMP 字母按**码点**
+ *    折叠（`for…of` 遍历，代理对整体折：U+10400 → U+10428），逐 UTF-16 码元
+ *    折叠会拆开代理对、丢掉大小写映射。 */
 function foldText(s: string): { folded: string; start: number[]; end: number[] } {
-  let folded = ''
+  const folded = s.toLowerCase()
   const start: number[] = []
   const end: number[] = []
-  let i = 0
+  let i = 0 // 原串码元游标
+  let k = 0 // 折叠串码元游标（start/end 的下标）
+  let lastStart = 0
   for (const ch of s) {
-    const lower = ch.toLowerCase()
-    // 表按 UTF-16 码元建（needle.length 与 indexOf 都是码元口径）
-    for (let u = 0; u < lower.length; u++) {
+    // 逐字符折叠长度即该字符在整串折叠里的码元数；以 folded 余量为上限只是
+    // 防御未知映射规则（默认映射下恒不触发），保证映射不越出 folded
+    const take = Math.min(ch.toLowerCase().length, folded.length - k)
+    for (let u = 0; u < take; u++) {
       start.push(i)
       end.push(i + ch.length)
     }
-    folded += lower
+    k += take
+    lastStart = i
     i += ch.length
+  }
+  // 防御：逐字符长度之和短于整串折叠时（默认映射下不存在），余下码元归最后
+  // 一个原串字符——start/end 长度恒等于 folded.length，区间不越出原串
+  while (k < folded.length) {
+    start.push(lastStart)
+    end.push(s.length)
+    k++
   }
   return { folded, start, end }
 }
