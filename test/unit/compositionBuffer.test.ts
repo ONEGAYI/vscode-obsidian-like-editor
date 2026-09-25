@@ -421,6 +421,60 @@ describe('B-1：暂停 + 组合中收到 doc.resync 的恢复', () => {
   })
 })
 
+describe('#49：组合期间暂缓输入不逐笔上报全文快照', () => {
+  // 契约：IME 候选更新从第二笔起必然触碰未确认区间进入暂缓分支（deferredLocal），
+  // 旧实现每笔立即 reportConflictSnapshot——1 MB 文档组合输入时每个候选
+  // 更新触发一次全文 postMessage 与序列化，大文档下开销放大。放宽为：
+  // 组合期间（composing）暂缓集累积不上报；组合结束 flush 后经
+  // sendDeferredLocal 以单笔 edit.request 出站，文本进入宿主权威文档，
+  // 取回语义由 VSCode 文本管线兜底。丢失窗口仅限组合进行中（候选未上屏）
+  // 快速关闭/断连，与 VSCode 原生编辑器同类行为一致。非组合暂缓态
+  // （冲突触碰、暂停态）保持逐笔快照不放宽（守卫见 suspendResume.test.ts）。
+  it('组合中触碰未确认区间的多笔候选更新不发 conflict.report，flush 滞留时也不补发', async () => {
+    const { bridge, sent } = makeBridge()
+    const c = mount(bridge)
+    init(c, 'abcdef', 1)
+    const view = c.getView()!
+    // 在途未确认 A（seq=1 已发未 ack）：组合候选将落在其插入内容内
+    view.dispatch({ changes: { from: 0, insert: 'ZZ' } })
+    startComposition(c)
+    // 组合候选第一笔：插入点落在 A 的未确认插入内容内 → 暂缓分支
+    view.dispatch({ changes: { from: 1, insert: '拼' }, userEvent: 'input.type.compose' })
+    expect(view.state.doc.toString()).toBe('Z拼Zabcdef')
+    // 候选更新（替换上一候选）：仍暂缓累积，不逐笔上报全文
+    view.dispatch({ changes: { from: 1, to: 2, insert: '拼音' }, userEvent: 'input.type.compose' })
+    expect(view.state.doc.toString()).toBe('Z拼音Zabcdef')
+    expect(sent.filter((m) => m.kind === 'conflict.report')).toHaveLength(0)
+    endComposition(c)
+    await waitFlush()
+    // flush 后 deferredLocal 因在途 A 未 ack 滞留：无暂停、无新输入，不补发快照
+    expect(sent.filter((m) => m.kind === 'conflict.report')).toHaveLength(0)
+  })
+
+  it('组合结束后 deferredLocal 经 edit.request 单笔发出（ack 后无快照，取回语义恢复）', async () => {
+    const { bridge, sent } = makeBridge()
+    const c = mount(bridge)
+    init(c, 'abcdef', 1)
+    const view = c.getView()!
+    view.dispatch({ changes: { from: 0, insert: 'ZZ' } })
+    startComposition(c)
+    view.dispatch({ changes: { from: 1, insert: '拼' }, userEvent: 'input.type.compose' })
+    endComposition(c)
+    await waitFlush()
+    // 在途 A ack：flush 滞留的暂缓集以单笔 edit.request 发出（净变更进入
+    // 宿主权威文档，VSCode 文本管线兜底），全程无 conflict.report
+    c.handleHostMessage({ kind: 'edit.ack', seq: 1, ok: true, version: 2 })
+    const reqs = sent.filter((m): m is Extract<WebviewToHost, { kind: 'edit.request' }> =>
+      m.kind === 'edit.request')
+    expect(reqs).toHaveLength(2)
+    expect(reqs[1]).toMatchObject({
+      baseVersion: 2,
+      changes: [{ offset: 1, length: 0, text: '拼' }],
+    })
+    expect(sent.filter((m) => m.kind === 'conflict.report')).toHaveLength(0)
+  })
+})
+
 describe('组合中收到模式切换指令（view.mode.set，#38 标题栏三态）', () => {
   // 契约：IME 组合未上屏时点击标题栏按钮切换视图——切换是纯视图操作
   // （不 dispatch 文本变更），不得打断组合缓冲链路：组合结束后组合文本
