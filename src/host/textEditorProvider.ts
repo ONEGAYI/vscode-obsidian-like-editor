@@ -1454,6 +1454,14 @@ function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): st
   const styleUri = webview.asWebviewUri(
     vscode.Uri.joinPath(extensionUri, 'out', 'webview', 'main.css'),
   )
+  // #60 Mermaid 独立产物：约 2.7MB 不进主 bundle（避免每个 webview 启动都
+  // 付出解析成本），webview 侧按需懒加载。webview 无法自行构造
+  // asWebviewUri 前缀（cspSource 为宿主私有随机 origin），经此 nonce 内联
+  // 脚本把资源 URI 写入全局变量（改动面最小的 URI 传递机制——无需扩协议
+  // 消息；CSP script-src 的 nonce 分支放行该内联脚本）
+  const mermaidUri = webview.asWebviewUri(
+    vscode.Uri.joinPath(extensionUri, 'out', 'webview', 'mermaid.js'),
+  ).toString()
   // 稳定样式契约内部测试片段（#6）：验证外部样式表可经稳定类名/变量
   // 定位两种视图；一期不提供用户 CSS 加载（见 docs/design/obsidian-selector-map.md）
   const probeCssUri = webview.asWebviewUri(
@@ -1484,6 +1492,7 @@ function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): st
 </head>
 <body>
 <div id="app"></div>
+<script nonce="${nonce}">window.__vsidianMermaidUri = "${mermaidUri}";</script>
 <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`

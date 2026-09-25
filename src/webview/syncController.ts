@@ -58,6 +58,9 @@ import { liveDecorationsField, livePreviewDecorations, LIVE_CLASS_NAMES, tableCo
 import { createLinkInteractions, WIKILINK_CLASS_NAMES } from './liveLinks'
 import { liveMath } from './liveMath'
 import { MATH_CLASS_NAMES } from '../shared/math'
+import { liveMermaid } from './liveMermaid'
+import { renderMermaidIn, setMermaidDarkTheme } from './mermaidRender'
+import { MERMAID_CLASS_NAMES, MERMAID_STATE_ATTR } from '../shared/mermaid'
 import { ImageResourceManager } from './imageResource'
 import { runPerfProbe } from './perfProbe'
 import { runReadingPerfProbe } from './readingProbe'
@@ -435,7 +438,13 @@ export class WebviewSyncController {
     })
     this.readingView = new VirtualReadingView(this.readingContainer, {
       // #10 图片生命周期：块挂载预备装载，卸载释放（src 清空、条目回收）
-      onBlockMounted: (el) => this.images && prepareReadingImages(el, this.images),
+      // #60 Mermaid：挂载即渲染 pending 容器（DOM 随块卸载 el.remove 释放）
+      onBlockMounted: (el) => {
+        if (this.images) {
+          prepareReadingImages(el, this.images)
+        }
+        renderMermaidIn(el)
+      },
       onBlockUnmounted: (el) => this.images?.detachWithin(el),
     })
     // 阅读滚动更新锚点（用户滚动即改变"当前位置"语义；短文档滚不动时
@@ -1111,6 +1120,13 @@ export class WebviewSyncController {
         : 0,
       readingMathCount: readingActive
         ? this.readingContainer!.querySelectorAll(`.${MATH_CLASS_NAMES.math}, .${MATH_CLASS_NAMES.mathError}`).length
+        : 0,
+      // #60 Mermaid 观测（live：视口内渲染 widget/降级容器；reading：挂载块内）
+      liveMermaidCount: content
+        ? content.querySelectorAll(`.${MERMAID_CLASS_NAMES.diagram}`).length
+        : 0,
+      readingMermaidCount: readingActive
+        ? this.readingContainer!.querySelectorAll(`.${MERMAID_CLASS_NAMES.diagram}`).length
         : 0,
       readingLinkCount: readingActive
         ? this.readingContainer!.querySelectorAll('a').length
@@ -2568,6 +2584,44 @@ export class WebviewSyncController {
             : 0,
         }
       : undefined
+    // #60 Mermaid 绘制探针：按当前激活视图取图表容器（分态计数）；
+    // 可见性优先取已渲染 SVG 的 rect + elementFromPoint 命中（错误降级
+    // 容器同样可命中——可见 ≠ 语法有效，语义由 rendered/error 分开断言）
+    const mermaidScope = this.viewMode === 'reading' ? this.readingContainer : view.contentDOM
+    const mermaidEl = mermaidScope?.querySelector<HTMLElement>(
+      `.${MERMAID_CLASS_NAMES.diagram}`,
+    ) ?? null
+    const mermaidSvg = mermaidEl?.querySelector('svg') ?? mermaidEl
+    let mermaidVisible = false
+    let mermaidDisplay: string | null = null
+    if (mermaidEl) {
+      mermaidDisplay = getComputedStyle(mermaidEl).display
+      try {
+        const rect = mermaidSvg!.getBoundingClientRect()
+        if (rect.width > 0 && rect.height > 0) {
+          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+          if (hit && mermaidEl.contains(hit)) {
+            mermaidVisible = true
+          }
+        }
+      } catch {
+        // jsdom 无布局与 elementFromPoint；真宿主才能证明实际可见。
+      }
+    }
+    const mermaidCounts = mermaidScope
+      ? {
+          rendered: mermaidScope.querySelectorAll(
+            `.${MERMAID_CLASS_NAMES.diagram}[${MERMAID_STATE_ATTR}="rendered"]`,
+          ).length,
+          error: mermaidScope.querySelectorAll(
+            `.${MERMAID_CLASS_NAMES.diagram}[${MERMAID_STATE_ATTR}="error"]`,
+          ).length,
+          count: mermaidScope.querySelectorAll(`.${MERMAID_CLASS_NAMES.diagram}`).length,
+        }
+      : { rendered: 0, error: 0, count: 0 }
+    const mermaid = mermaidEl
+      ? { visible: mermaidVisible, display: mermaidDisplay, ...mermaidCounts }
+      : undefined
     return {
       textVisible,
       scrollerDisplay: view.scrollDOM ? getComputedStyle(view.scrollDOM).display : null,
@@ -2597,6 +2651,7 @@ export class WebviewSyncController {
         columnBackgroundColor: columnStyle?.backgroundColor ?? null,
       },
       math,
+      mermaid,
     }
   }
 
@@ -2640,13 +2695,15 @@ export class WebviewSyncController {
     }
   }
 
-  /** 宿主明暗主题跟随：body class 变化时热重配 dark 声明（等值跳过） */
+  /** 宿主明暗主题跟随：body class 变化时热重配 dark 声明（等值跳过）；
+   *  #60：Mermaid 主题联动（缓存清空 + 在文档容器重渲染，等值跳过） */
   private applyHostTheme(): void {
     const dark = isVscodeDarkBody()
     if (dark === this.hostDarkApplied || !this.view) {
       return
     }
     this.hostDarkApplied = dark
+    setMermaidDarkTheme(dark)
     this.view.dispatch({
       effects: this.darkCompartment.reconfigure(EditorView.darkTheme.of(dark)),
     })
@@ -2697,6 +2754,9 @@ export class WebviewSyncController {
       // #59 公式：跨行块表（StateField 增量）+ 视口装饰（光标进入显源码、
       // 离开恢复 KaTeX 排版；渲染与装饰实例均按源文缓存）
       liveMath,
+      // #60 Mermaid：围栏表 + 跨行块 replace 装饰（光标进入围栏显源码、
+      // 离开恢复渲染图；渲染容器与阅读侧共用 mermaidRender 管线）
+      liveMermaid,
       // 表格单元格输入钩子（#12）：表格行内键入 | 转义写回 \|；
       // 编辑面即 CM6 源文本行，同步链路复用本控制器的标准出站路径
       tableEditing,

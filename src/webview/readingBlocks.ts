@@ -19,6 +19,7 @@
 //   渲染——保留原文的局部源码降级，不触发整篇改写
 import { frontmatterRange } from './markdownDoc'
 import { maskCodeSpanPipes } from './tableCells'
+import { isMermaidInfo } from '../shared/mermaid'
 import {
   buildLineBounds,
   createMarkdownRenderer,
@@ -27,7 +28,8 @@ import {
 } from './readingMarkdown'
 import type { Env, Token } from 'markdown-it'
 
-/** 阅读块种类（#8：完整 Markdown 语义；#12 表格独立成块；#59 公式块） */
+/** 阅读块种类（#8：完整 Markdown 语义；#12 表格独立成块；#59 公式块；
+ *  #60 Mermaid 围栏整块成块） */
 export type ReadingBlockKind =
   | 'frontmatter'
   | 'heading'
@@ -38,6 +40,7 @@ export type ReadingBlockKind =
   | 'hr'
   | 'table'
   | 'math'
+  | 'mermaid'
 
 /** 一个阅读块：源文本的 [start, end) 区间、渲染身份与内部 HTML */
 export interface ReadingBlock {
@@ -220,6 +223,12 @@ function pushBlock(
   const end = env.lineEnds[endLine] ?? Math.max(start, text.length - 1)
 
   if (opener.type === 'fence') {
+    // #60：mermaid 围栏整块成块（html 为挂载后渲染的容器，见 fence 渲染
+    // 规则）——豁免 60 行切片（大图不得拆碎）与代码块语义
+    if (isMermaidInfo(opener.info ?? '')) {
+      blocks.push({ kind: 'mermaid', start, end, html: renderTokenHtml(md, group, env) })
+      return
+    }
     const fenceLines = endLine - startLine + 1
     if (fenceLines > FENCE_CHUNK_LINES) {
       // 按行细分：每片 ≤ FENCE_CHUNK_LINES 行；首片含开围栏行、末片含闭围栏行
