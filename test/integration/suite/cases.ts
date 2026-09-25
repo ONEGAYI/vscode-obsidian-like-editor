@@ -764,17 +764,27 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const modeText = (await vscode.workspace.openTextDocument(wsUri('mode.md'))).getText()
 
     // 并存一个原生 .md 标签并使其活动（syntax 面板变非活动）：
-    // 非活动面板保留自身状态可查询
+    // 非活动面板保留自身状态可查询。retainContextWhenHidden 关闭，tab
+    // 不可见期间 webview 可能被卸载（view.state.request 无人应答），
+    // 故先在面板可见时让宿主模式缓存就位，变非活动后以宿主缓存为
+    // 观测面断言保留（CI 慢环境的 Linux 宿主曾因该竞速必超时）
+    await waitViewState('syntax.md', (v) => v.viewMode === 'live')
     const modeDoc = await vscode.workspace.openTextDocument(wsUri('mode.md'))
     await vscode.window.showTextDocument(modeDoc)
     await waitActiveTextEditor('mode.md')
-    const keptLive = await waitViewState('syntax.md', (v) => v.viewMode === 'live')
-    assert(keptLive.viewMode === 'live', '非活动的 syntax 面板应保留自身状态')
+    const keptLive = (await vscode.commands.executeCommand(
+      CMD.viewStateCache, syntaxUri,
+    )) as { found: boolean; viewMode?: string }
+    assert(keptLive.found && keptLive.viewMode === 'live', '非活动的 syntax 面板应保留自身状态')
 
     // 重显 syntax 面板使其活动（openWith 对已开面板是重显，不新建 tab），
-    // toReading 只作用于 syntax；原生 mode 标签不受影响
+    // toReading 只作用于 syntax；原生 mode 标签不受影响。不可见期间面板
+    // 可能经卸载重载：先以 0 轮探针（纯往返，不动文档）等待 webview 恢复
+    // 响应再下发模式命令，避免命令发给重载中的 webview 而丢失
     await vscode.commands.executeCommand('vscode.openWith', wsUri('syntax.md'), VIEW_TYPE)
     await waitActiveCustomTab('syntax.md')
+    await vscode.commands.executeCommand(
+      CMD.perfProbe, syntaxUri, { typingRounds: 0, scrollRounds: 0 })
     await vscode.commands.executeCommand('onegayi.vsidian.mode.toReading', wsUri('syntax.md'))
     await waitViewState('syntax.md', (v) => v.viewMode === 'reading')
     const backToMode = await vscode.window.showTextDocument(modeDoc)
