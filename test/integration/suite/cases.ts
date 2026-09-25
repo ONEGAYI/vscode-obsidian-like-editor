@@ -439,9 +439,25 @@ interface ViewState {
     toggleIconSizePx: number | null
     panelScrollHeightPx: number | null
     panelClientHeightPx: number | null
-    items: Array<{ level: number; text: string; line: number }>
+    /** #65：items 含 plainText（剥标记可见文本）与 spans（白名单标记区间） */
+    items: Array<{
+      level: number
+      text: string
+      plainText: string
+      spans: Array<{ kind: string; start: number; end: number }>
+      line: number
+    }>
     toggleAriaLabel: string | null
     panelAriaLabel: string | null
+    /** #65 样式透传绘制证据（computed；jsdom 无 CSS 引擎时字段为 null） */
+    style?: {
+      itemFontWeight: string | null
+      strongFontWeight: string | null
+      codeFontFamily: string | null
+      itemFontFamily: string | null
+      itemColor: string | null
+      headingColor: string | null
+    }
   }
 }
 
@@ -4539,5 +4555,65 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // 收起侧栏收尾
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
     await waitViewState('outline-long.md', (v) => v.sidebar?.open === false)
+  }],
+
+  ['大纲条目行内样式透传与主题色同源：标记渲染、字重与颜色绘制证据（#65）', async () => {
+    // 绘制层断言口径（视觉层断言必查）：outline.style 经 computed style 读取
+    // 条目与标记 span 的字重/字体族/颜色——CSS 注入失效（如 CSP 拦截）或
+    // 选择器写错时取不到目标元素或值退化，数据层 plainText/spans 对拍源文档
+    // 标题结构。fixture 见 fixtures.mjs 的 OUTLINE_STYLE_DOC。
+    await openWithEditor('outline-style.md')
+    await waitSessionReady('outline-style.md')
+    const uri = wsUri('outline-style.md').toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    const opened = await waitViewState('outline-style.md',
+      (v) => v.sidebar?.open === true && v.outline?.panelPainted === true && v.outline?.style !== undefined)
+
+    // 数据层：plainText 剥标记、白名单 spans 结构、原文保留、双链/链接纯文本
+    const expected: Array<[number, string, string, Array<{ kind: string; start: number; end: number }>, number]> = [
+      [1, '**重点** 结论', '重点 结论', [{ kind: 'strong', start: 0, end: 2 }], 1],
+      [2, '*斜体* 与 `代码`', '斜体 与 代码',
+        [{ kind: 'emphasis', start: 0, end: 2 }, { kind: 'code', start: 5, end: 7 }], 2],
+      [3, '~~删除线~~ 与 [[目标笔记|显示别名]]', '删除线 与 显示别名',
+        [{ kind: 'strike', start: 0, end: 3 }], 3],
+      [4, '[链接文字](https://example.com) 尾注', '链接文字 尾注', [], 4],
+      [5, '***粗斜*** 与普通', '粗斜 与普通',
+        [{ kind: 'emphasis', start: 0, end: 2 }, { kind: 'strong', start: 0, end: 2 }], 5],
+    ]
+    const items = opened.outline!.items
+    assert(items.length === expected.length,
+      `大纲条目数应为 ${expected.length}，实际 ${items.length}：${JSON.stringify(items)}`)
+    for (let i = 0; i < expected.length; i++) {
+      const [level, text, plainText, spans, line] = expected[i]!
+      assert(items[i]!.level === level && items[i]!.text === text && items[i]!.line === line,
+        `大纲第 ${i + 1} 项基础字段应为 [${level}, ${text}, ${line}]，实际 ${JSON.stringify(items[i])}`)
+      assert(items[i]!.plainText === plainText,
+        `第 ${i + 1} 项 plainText 应为 ${plainText}（标记字符不得透出），实际 ${JSON.stringify(items[i]!.plainText)}`)
+      assert(JSON.stringify(items[i]!.spans) === JSON.stringify(spans),
+        `第 ${i + 1} 项 spans 应为 ${JSON.stringify(spans)}，实际 ${JSON.stringify(items[i]!.spans)}`)
+    }
+
+    // 绘制层：条目常规字重（不继承标题级别加粗）与显式粗体段加重的对照
+    const style = opened.outline!.style!
+    const isRegular = (v: string | null) => v === '400' || v === 'normal'
+    const isBold = (v: string | null) => v === '700' || v === 'bold'
+    assert(style.itemFontWeight !== null, '条目 computed 字重应可读（面板已绘制且有条目）')
+    assert(isRegular(style.itemFontWeight),
+      `大纲条目应为常规字重（400/normal，不继承标题级别加粗），实际 ${style.itemFontWeight}`)
+    assert(isBold(style.strongFontWeight),
+      `显式 **粗体** 段应加重（700/bold），实际 ${String(style.strongFontWeight)}`)
+    assert(style.codeFontFamily !== null && style.itemFontFamily !== null,
+      '行内代码与条目的 computed 字体族应可读')
+
+    // 主题色同源：大纲条目与正文标题引用同一变量族，当前主题下解析同值；
+    // 大纲侧脱钩（改引别的变量/硬编码）时两值分叉，断言即失败
+    assert(style.itemColor !== null && style.headingColor !== null,
+      '条目与正文标题 computed 颜色应可读（两侧均有绘制内容）')
+    assert(style.itemColor === style.headingColor,
+      `大纲条目与正文标题应引用同一层级色变量族（同值），条目=${style.itemColor}，标题=${style.headingColor}`)
+
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-style.md', (v) => v.sidebar?.open === false)
   }],
 ]

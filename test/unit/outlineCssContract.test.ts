@@ -109,3 +109,59 @@ describe('侧栏顶栏按钮（#54）', () => {
     expect(active).toMatch(/background:\s*var\(--vscode-toolbar-hoverBackground/)
   })
 })
+
+// ---- #65 行内样式透传：字重语义与主题色同源 ----
+
+describe('大纲条目字重语义（#65：只认显式标记）', () => {
+  it('条目一律常规字重（不继承标题级别加粗），CSS 钉住', () => {
+    const item = rule('.vsidian-sidebar .vsidian-outline-item')
+    expect(item).toMatch(/font-weight:\s*400/)
+  })
+
+  it('仅显式粗体段加重：strong span 字重 700', () => {
+    expect(rule('.vsidian-sidebar .vsidian-outline-item .vsidian-outline-strong'))
+      .toMatch(/font-weight:\s*700/)
+  })
+
+  it('斜体/行内代码/删除线的透传呈现规则', () => {
+    expect(rule('.vsidian-sidebar .vsidian-outline-item .vsidian-outline-emphasis'))
+      .toMatch(/font-style:\s*italic/)
+    const code = rule('.vsidian-sidebar .vsidian-outline-item .vsidian-outline-code')
+    expect(code).toMatch(/font-family:\s*var\(--vscode-editor-font-family/)
+    expect(code).toMatch(/background-color:\s*var\(--vsidian-live-code-background/)
+    expect(rule('.vsidian-sidebar .vsidian-outline-item .vsidian-outline-strike'))
+      .toMatch(/text-decoration:\s*line-through/)
+  })
+})
+
+describe('主题色同源（#65：大纲层级与正文标题引用同一变量族）', () => {
+  it('#app 定义标题层级色变量族 1–6（当前默认前景色，主题分级仅改此处）', () => {
+    for (let n = 1; n <= 6; n++) {
+      expect(css, `--vsidian-heading-color-${n} 应定义于 #app`).toMatch(
+        new RegExp(`--vsidian-heading-color-${n}:\\s*var\\(--vscode-editor-foreground\\)`),
+      )
+    }
+  })
+
+  it('live 标题行级与大纲条目级引用同一变量（一处定义两处生效）', () => {
+    for (let n = 1; n <= 6; n++) {
+      const live = rule(`#app .cm-editor .cm-scroller .vsidian-heading-line-${n}`)
+      expect(live, `live 标题 ${n} 级应引用层级色变量`).toMatch(
+        new RegExp(`color:\\s*var\\(--vsidian-heading-color-${n}\\)`),
+      )
+      const outline = rule(`.vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-${n}`)
+      expect(outline, `大纲条目 ${n} 级应引用层级色变量`).toMatch(
+        new RegExp(`color:\\s*var\\(--vsidian-heading-color-${n}\\)`),
+      )
+    }
+  })
+
+  it('阅读标题块级同引变量族（正文两模式同源）', () => {
+    for (let n = 1; n <= 6; n++) {
+      const reading = rule(`#app .vsidian-view-reading .vsidian-reading-heading-${n}`)
+      expect(reading, `阅读标题 ${n} 级应引用层级色变量`).toMatch(
+        new RegExp(`color:\\s*var\\(--vsidian-heading-color-${n}\\)`),
+      )
+    }
+  })
+})

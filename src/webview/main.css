@@ -35,6 +35,16 @@ body {
   --vsidian-content-padding-inline: 24px;
   /* 行号列与正文的固定间距：响应 VSCode UI 字号（界面元素大小） */
   --vsidian-ln-gap: calc(var(--vscode-font-size, 13px) * 2);
+  /* ---- #65 标题层级色变量族：正文标题（live 行级 / 阅读块级）与大纲条目
+     共用同一变量族（结构装饰与正文主题同源，不做读值复制）。当前主题无
+     分级着色（各级同默认前景色）；未来主题分级着色仅改此族定义，一处
+     定义三处生效。变量引用关系由 outlineCssContract 契约测试钉住 */
+  --vsidian-heading-color-1: var(--vscode-editor-foreground);
+  --vsidian-heading-color-2: var(--vscode-editor-foreground);
+  --vsidian-heading-color-3: var(--vscode-editor-foreground);
+  --vsidian-heading-color-4: var(--vscode-editor-foreground);
+  --vsidian-heading-color-5: var(--vscode-editor-foreground);
+  --vsidian-heading-color-6: var(--vscode-editor-foreground);
 }
 
 #app .cm-editor {
@@ -103,12 +113,12 @@ body {
   color: var(--vscode-editor-foreground);
 }
 
-#app .cm-editor .cm-scroller .vsidian-heading-line-1 { font-size: 1.55em; }
-#app .cm-editor .cm-scroller .vsidian-heading-line-2 { font-size: 1.35em; }
-#app .cm-editor .cm-scroller .vsidian-heading-line-3 { font-size: 1.2em; }
-#app .cm-editor .cm-scroller .vsidian-heading-line-4 { font-size: 1.1em; }
-#app .cm-editor .cm-scroller .vsidian-heading-line-5 { font-size: 1em; }
-#app .cm-editor .cm-scroller .vsidian-heading-line-6 { font-size: 1em; }
+#app .cm-editor .cm-scroller .vsidian-heading-line-1 { font-size: 1.55em; color: var(--vsidian-heading-color-1); }
+#app .cm-editor .cm-scroller .vsidian-heading-line-2 { font-size: 1.35em; color: var(--vsidian-heading-color-2); }
+#app .cm-editor .cm-scroller .vsidian-heading-line-3 { font-size: 1.2em; color: var(--vsidian-heading-color-3); }
+#app .cm-editor .cm-scroller .vsidian-heading-line-4 { font-size: 1.1em; color: var(--vsidian-heading-color-4); }
+#app .cm-editor .cm-scroller .vsidian-heading-line-5 { font-size: 1em; color: var(--vsidian-heading-color-5); }
+#app .cm-editor .cm-scroller .vsidian-heading-line-6 { font-size: 1em; color: var(--vsidian-heading-color-6); }
 
 /* ---- 编辑器铬件明暗主题（CSP 修复后 baseTheme 复活的配套）----
    光标与选区颜色不在此覆盖：syncController 以 darkCompartment 声明
@@ -314,6 +324,10 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   color: inherit;
+  /* #65 字重语义：条目一律常规字重（不继承标题级别的结构性加粗；正文
+     标题行是 600——大纲侧显式钉 400 防意外继承），仅显式 **粗体** 段经
+     下方的 strong 规则加重 */
+  font-weight: 400;
   font-size: var(--vsidian-outline-font-size, 12px);
   line-height: 22px;
   cursor: default;
@@ -322,26 +336,59 @@ body {
 
 .vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-1 {
   padding-inline-start: 0;
+  /* #65 主题色同源：层级颜色引用正文标题的同一变量族（默认前景色），
+     主题分级着色一处定义两处生效 */
+  color: var(--vsidian-heading-color-1);
 }
 
 .vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-2 {
   padding-inline-start: 10px;
+  color: var(--vsidian-heading-color-2);
 }
 
 .vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-3 {
   padding-inline-start: 20px;
+  color: var(--vsidian-heading-color-3);
 }
 
 .vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-4 {
   padding-inline-start: 30px;
+  color: var(--vsidian-heading-color-4);
 }
 
 .vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-5 {
   padding-inline-start: 40px;
+  color: var(--vsidian-heading-color-5);
 }
 
 .vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-6 {
   padding-inline-start: 50px;
+  color: var(--vsidian-heading-color-6);
+}
+
+/* ---- #65 行内样式透传：白名单标记的条目内呈现 ----
+   语义元素（strong/em/code/del）+ 稳定类名双入口（样式与断言的锚点；
+   Obsidian 无对应选择器，本项目自有命名空间，见选择器映射表）。强调语义
+   只认显式标记：strong 700 与条目 400 的对照是用户可见差异；行内代码
+   背景与 live 侧 .vsidian-inline-code 同源变量（--vsidian-live-code-background）。
+   双链/链接为纯文本（无 a 元素），不在此设链接样式 */
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-strong {
+  font-weight: 700;
+}
+
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-emphasis {
+  font-style: italic;
+}
+
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  background-color: var(--vsidian-live-code-background, rgba(128, 128, 128, 0.14));
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-strike {
+  text-decoration: line-through;
 }
 
 /* 空态占位：无标题文档的弱化反馈（保持面板可读内容与高度语义） */
@@ -791,12 +838,12 @@ body {
   max-width: var(--vsidian-reading-max-width);
 }
 
-#app .vsidian-view-reading .vsidian-reading-heading-1 { font-size: 1.55em; font-weight: 600; margin: 0.6em 0 0.4em; }
-#app .vsidian-view-reading .vsidian-reading-heading-2 { font-size: 1.35em; font-weight: 600; margin: 0.6em 0 0.4em; }
-#app .vsidian-view-reading .vsidian-reading-heading-3 { font-size: 1.2em; font-weight: 600; margin: 0.6em 0 0.4em; }
-#app .vsidian-view-reading .vsidian-reading-heading-4 { font-size: 1.1em; font-weight: 600; margin: 0.6em 0 0.4em; }
-#app .vsidian-view-reading .vsidian-reading-heading-5 { font-size: 1em; font-weight: 600; margin: 0.6em 0 0.4em; }
-#app .vsidian-view-reading .vsidian-reading-heading-6 { font-size: 1em; font-weight: 600; margin: 0.6em 0 0.4em; }
+#app .vsidian-view-reading .vsidian-reading-heading-1 { font-size: 1.55em; font-weight: 600; margin: 0.6em 0 0.4em; color: var(--vsidian-heading-color-1); }
+#app .vsidian-view-reading .vsidian-reading-heading-2 { font-size: 1.35em; font-weight: 600; margin: 0.6em 0 0.4em; color: var(--vsidian-heading-color-2); }
+#app .vsidian-view-reading .vsidian-reading-heading-3 { font-size: 1.2em; font-weight: 600; margin: 0.6em 0 0.4em; color: var(--vsidian-heading-color-3); }
+#app .vsidian-view-reading .vsidian-reading-heading-4 { font-size: 1.1em; font-weight: 600; margin: 0.6em 0 0.4em; color: var(--vsidian-heading-color-4); }
+#app .vsidian-view-reading .vsidian-reading-heading-5 { font-size: 1em; font-weight: 600; margin: 0.6em 0 0.4em; color: var(--vsidian-heading-color-5); }
+#app .vsidian-view-reading .vsidian-reading-heading-6 { font-size: 1em; font-weight: 600; margin: 0.6em 0 0.4em; color: var(--vsidian-heading-color-6); }
 
 /* markdown-it 的语义标题保留在块内；字号与间距由阅读块统一控制，
    避免浏览器 h1..h6 默认样式再次放大字号和上下留白。 */
