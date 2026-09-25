@@ -322,6 +322,9 @@ describe('isWebviewToHost', () => {
           ],
           toggleAriaLabel: '大纲',
           panelAriaLabel: '大纲',
+          locatedItemIndex: 1,
+          locatedText: '',
+          locatedPainted: true,
         },
       }),
     ).toBe(true)
@@ -338,6 +341,9 @@ describe('isWebviewToHost', () => {
           items: [],
           toggleAriaLabel: null,
           panelAriaLabel: null,
+          locatedItemIndex: null,
+          locatedText: null,
+          locatedPainted: false,
         },
       }),
     ).toBe(true)
@@ -386,10 +392,41 @@ describe('isWebviewToHost', () => {
     expect(isWebviewToHost(base)).toBe(true)
   })
 
+  it('view.state 的 outline 观测（#66）：located 字段非法拒绝', () => {
+    const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
+    const legal = {
+      active: true,
+      togglePainted: false,
+      panelPainted: false,
+      toggleIconSizePx: null,
+      panelScrollHeightPx: null,
+      panelClientHeightPx: null,
+      items: [] as unknown[],
+      toggleAriaLabel: null,
+      panelAriaLabel: null,
+    }
+    // locatedItemIndex：null 或非负整数（负数、小数、字符串拒绝）
+    expect(isWebviewToHost({ ...base, outline: { ...legal, locatedItemIndex: -1, locatedText: null, locatedPainted: false } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, locatedItemIndex: 1.5, locatedText: null, locatedPainted: false } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, locatedItemIndex: '0', locatedText: null, locatedPainted: false } })).toBe(false)
+    // locatedText：字符串或 null；locatedPainted：布尔
+    expect(isWebviewToHost({ ...base, outline: { ...legal, locatedItemIndex: 0, locatedText: 7, locatedPainted: false } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, locatedItemIndex: 0, locatedText: null, locatedPainted: 1 } })).toBe(false)
+  })
+
   it('outline.test.click 测试钩子消息校验（#54）', () => {
     expect(isHostToWebview({ kind: 'outline.test.click' })).toBe(true)
     expect(isHostToWebview({ kind: 'outline.test.click', extra: 1 })).toBe(true)
     expect(isHostToWebview({ kind: 'outline.test.clickx' })).toBe(false)
+  })
+
+  it('outline.test.itemClick 测试钩子消息校验（#66）：非负整数 index', () => {
+    expect(isHostToWebview({ kind: 'outline.test.itemClick', index: 0 })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.itemClick', index: 12, extra: 1 })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.itemClick', index: -1 })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.itemClick', index: 1.5 })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.itemClick', index: '0' })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.itemClick' })).toBe(false)
   })
 
   it('表格绘制样本校验：可见性和边框计算值类型必须可信', () => {
