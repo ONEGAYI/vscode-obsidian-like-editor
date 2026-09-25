@@ -8,7 +8,11 @@
 // 不可见条目（折叠/搜索过滤）
 // 不可拖也不构成落点、outline.test.drag 测试钩子全链路、probe 拖拽观测
 // 字段。移动计划语义在 outlineDrag.test.ts。
-import { describe, it, expect } from 'vitest'
+// review-loops 第 3 轮补：按键门控只按 button/buttons 位掩码、不限指针类型
+// （笔 barrel/eraser 同守）、面板委托的主指针（isPrimary）守卫、drop 锚点判据
+// 与重命名同为「实例或内容等价」（resync 重发同内容不丢弃）、重命名编辑态随
+// 条目重建放弃时留日志、写回兜底分支重建条目重放搜索高亮（mark 不丢）。
+import { describe, it, expect, vi } from 'vitest'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
 import type { WebviewToHost } from '../../src/shared/protocol'
 
@@ -91,17 +95,18 @@ function stubRects(parent: HTMLElement, only?: number[]): void {
 }
 
 /** 在元素/document 上派发 pointer 事件（MouseEvent 构造——本仓处理器只读
- *  坐标、buttons、button 与 pointerType；bubbles 到 document 级拖拽监听，
- *  target 链供落点命中）。buttons 缺省 1（真实拖拽期间按键恒为按下态），
- *  显式传 0 模拟已释放；init 补和弦按键场景所需的非主键 button 与鼠标
- *  pointerType（MouseEventInit 无 pointerType 字段，实例上补——鼠标判据靠它） */
+ *  坐标、buttons、button、pointerType、pointerId 与 isPrimary；bubbles 到
+ *  document 级拖拽监听，target 链供落点命中）。buttons 缺省 1（真实拖拽期间
+ *  按键恒为按下态），显式传 0 模拟已释放；init 补和弦/笔/触屏场景所需的
+ *  非主键 button、指针类型、指针 id 与主指针标志（MouseEventInit 无这些
+ *  字段，实例上补——按键掩码判据之外的观测面靠它们） */
 function firePointer(
   el: Element | Document,
   type: string,
   x: number,
   y: number,
   buttons = 1,
-  init: { button?: number; pointerType?: string } = {},
+  init: { button?: number; pointerType?: string; pointerId?: number; isPrimary?: boolean } = {},
 ): void {
   const event = new MouseEvent(type, {
     bubbles: true,
@@ -113,6 +118,12 @@ function firePointer(
   })
   if (init.pointerType !== undefined) {
     Object.defineProperty(event, 'pointerType', { value: init.pointerType })
+  }
+  if (init.pointerId !== undefined) {
+    Object.defineProperty(event, 'pointerId', { value: init.pointerId })
+  }
+  if (init.isPrimary !== undefined) {
+    Object.defineProperty(event, 'isPrimary', { value: init.isPrimary })
   }
   el.dispatchEvent(event)
 }
@@ -427,21 +438,31 @@ describe('取消路径（零写回）', () => {
     document.body.removeChild(parent)
   })
 
-  it('拖拽期间文档被外部改写：drop 放弃（锚点过期防御）', () => {
+  it('拖拽期间文档被外部改写：drop 放弃（锚点过期防御）且留 console.warn 诊断', () => {
     const h = makeBridge()
     const { c, parent } = mountDrag(h)
     stubRects(parent)
-    dragTo(parent, 1, 4, 'before')
-    c.handleHostMessage({
-      kind: 'doc.changed',
-      version: 2,
-      origin: 'external',
-      changes: [{ offset: 0, length: 0, text: '外部批注\n\n' }],
-    })
-    firePointer(items(parent)[4]!, 'pointerup', 240, 500)
-    expect(editRequests(h), '锚点过期后 drop 不得写回（外部变更坐标已失效）').toHaveLength(0)
-    c.dispose()
-    document.body.removeChild(parent)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      dragTo(parent, 1, 4, 'before')
+      c.handleHostMessage({
+        kind: 'doc.changed',
+        version: 2,
+        origin: 'external',
+        changes: [{ offset: 0, length: 0, text: '外部批注\n\n' }],
+      })
+      firePointer(items(parent)[4]!, 'pointerup', 240, 500)
+      expect(editRequests(h), '锚点过期后 drop 不得写回（外部变更坐标已失效）').toHaveLength(0)
+      // 放弃必须留痕（与重命名提交路径同口径）：否则用户只看到「拖了没反应」
+      expect(
+        warn.mock.calls.map((args) => String(args[0])).some((t) => t.includes('大纲拖拽放弃')),
+        `放弃路径应留 console.warn（实际 ${JSON.stringify(warn.mock.calls)}）`,
+      ).toBe(true)
+    } finally {
+      warn.mockRestore()
+      c.dispose()
+      document.body.removeChild(parent)
+    }
   })
 
   it('侧栏收起时拖拽会话退出（面板不可见，落点失去意义）', () => {
@@ -593,5 +614,336 @@ describe('outline.test.drag 测试钩子（宿主注入通道，真实事件序�
     expect(editRequests(h)).toHaveLength(0)
     c.dispose()
     document.body.removeChild(parent)
+  })
+})
+
+// review-loops 第 3 轮：按键门控原以 pointerType==='mouse' 为前提，笔（pen）的
+// barrel 键据此绕过全部三处守卫——与第 2 轮修掉的鼠标和弦缺陷同一失效模式。
+// 判据改为只按 button/buttons 位掩码：接触态（触屏实测 button=0/buttons=1；
+// 笔按 W3C 位掩码同值）照常可用，eraser/barrel（按 W3C 位掩码 button=2/5）
+// 不启动，接触期间的侧键（buttons 含非 bit0 位）结束会话。合成事件按这些
+// 取值构造（按键语义的事实源是 W3C Pointer Events；触屏取值由浏览器回归
+// 场景 K 实测钉住）。
+describe('按键门控只按 button/buttons 位掩码、不限指针类型（笔同守）', () => {
+  it('笔 barrel 按下（button=2/buttons=2）不启动会话：无指示、零写回', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    stubRects(parent)
+    const els = items(parent)
+    const fromRect = els[1]!.getBoundingClientRect()
+    const toRect = els[4]!.getBoundingClientRect()
+    // 笔悬停按侧键：button=2、buttons=2（W3C Pointer Events 的笔按键语义）
+    firePointer(els[1]!, 'pointerdown', fromRect.left + 20, fromRect.top + 20, 2,
+      { button: 2, pointerType: 'pen' })
+    firePointer(els[1]!, 'pointermove', fromRect.left + 20, fromRect.top + 30, 2,
+      { button: -1, pointerType: 'pen' })
+    firePointer(els[4]!, 'pointermove', toRect.left + 40, toRect.top + 5, 2,
+      { button: -1, pointerType: 'pen' })
+    const state = viewState(c, h)
+    expect(state.outline?.draggingIndex, 'barrel 按下不得启动拖拽会话').toBeNull()
+    expect(state.outline?.dropTargetIndex).toBeNull()
+    expect(items(parent).every((el) => !el.className.includes('vsidian-outline-dragging') &&
+      !el.className.includes('vsidian-outline-drop-')), '不得出现拖拽/落点指示类').toBe(true)
+    // 释放（barrel 抬起：button=2、buttons=0）同样不得落成写回
+    firePointer(document, 'pointerup', toRect.left + 40, toRect.top + 5, 0,
+      { button: 2, pointerType: 'pen' })
+    expect(editRequests(h), 'barrel 手势零写回').toHaveLength(0)
+    expect(c.getView()!.state.doc.toString()).toBe(DRAG_DOC)
+    c.dispose()
+    document.body.removeChild(parent)
+  })
+
+  it('拖拽中笔 barrel 落下（接触+侧键 buttons=3）结束会话：指示清空、零写回', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    stubRects(parent)
+    const els = items(parent)
+    const fromRect = els[1]!.getBoundingClientRect()
+    const toRect = els[4]!.getBoundingClientRect()
+    // 笔接触起拖（button=0/buttons=1）：与鼠标同路，照常进入拖拽态并悬停到有效落点
+    firePointer(els[1]!, 'pointerdown', fromRect.left + 20, fromRect.top + 20, 1,
+      { button: 0, pointerType: 'pen' })
+    firePointer(els[1]!, 'pointermove', fromRect.left + 20, fromRect.top + 30, 1,
+      { button: -1, pointerType: 'pen' })
+    firePointer(els[4]!, 'pointermove', toRect.left + 40, toRect.top + 5, 1,
+      { button: -1, pointerType: 'pen' })
+    const hovered = viewState(c, h)
+    expect(hovered.outline?.draggingIndex, '前置条件：笔接触拖拽应在拖拽态').toBe(1)
+    expect(hovered.outline?.dropTargetIndex).toBe(4)
+    // 侧键在接触期间落下：buttons=3（bit0 接触 + bit1 侧键）——非接触按键的
+    // 位落下即证明手势意图已变，会话按移动路径守卫结束（与鼠标和弦同口径）
+    firePointer(els[4]!, 'pointermove', toRect.left + 40, toRect.top + 5, 3,
+      { button: -1, pointerType: 'pen' })
+    const state = viewState(c, h)
+    expect(state.outline?.draggingIndex, 'barrel 落下应结束会话').toBeNull()
+    expect(state.outline?.dropTargetIndex).toBeNull()
+    expect(items(parent).every((el) => !el.className.includes('vsidian-outline-dragging') &&
+      !el.className.includes('vsidian-outline-drop-')), '指示类应清空').toBe(true)
+    firePointer(document, 'pointerup', toRect.left + 40, toRect.top + 5, 0,
+      { button: 2, pointerType: 'pen' })
+    expect(editRequests(h), 'barrel 落下后不得按残留落点写回').toHaveLength(0)
+    expect(c.getView()!.state.doc.toString()).toBe(DRAG_DOC)
+    c.dispose()
+    document.body.removeChild(parent)
+  })
+
+  it('笔接触拖拽（button=0/buttons=1）照常写回一笔（掩码判据不误伤笔）', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    stubRects(parent)
+    const els = items(parent)
+    const fromRect = els[2]!.getBoundingClientRect()
+    const toRect = els[4]!.getBoundingClientRect()
+    firePointer(els[2]!, 'pointerdown', fromRect.left + 20, fromRect.top + 20, 1,
+      { button: 0, pointerType: 'pen' })
+    firePointer(els[2]!, 'pointermove', fromRect.left + 20, fromRect.top + 30, 1,
+      { button: -1, pointerType: 'pen' })
+    firePointer(els[4]!, 'pointermove', toRect.left + 40, toRect.top + 5, 1,
+      { button: -1, pointerType: 'pen' })
+    expect(viewState(c, h).outline?.draggingIndex).toBe(2)
+    firePointer(els[4]!, 'pointerup', toRect.left + 40, toRect.top + 5, 0,
+      { button: 0, pointerType: 'pen' })
+    expect(editRequests(h), '笔接触拖拽应与鼠标同路写回一笔').toHaveLength(1)
+    expect(c.getView()!.state.doc.toString()).toBe(
+      '# 甲\n甲内容\n## 乙\n乙内容\n## 丙\n丙内容\n# 丁\n丁内容\n# 戊\n戊内容',
+    )
+    c.dispose()
+    document.body.removeChild(parent)
+  })
+
+  it('会话进行中笔 barrel 释放（pointerup button=2）：不收尾、零写回（纵深防线）', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    stubRects(parent)
+    const els = items(parent)
+    const fromRect = els[1]!.getBoundingClientRect()
+    const toRect = els[4]!.getBoundingClientRect()
+    firePointer(els[1]!, 'pointerdown', fromRect.left + 20, fromRect.top + 20, 1,
+      { button: 0, pointerType: 'pen' })
+    firePointer(els[1]!, 'pointermove', fromRect.left + 20, fromRect.top + 30, 1,
+      { button: -1, pointerType: 'pen' })
+    firePointer(els[4]!, 'pointermove', toRect.left + 40, toRect.top + 5, 1,
+      { button: -1, pointerType: 'pen' })
+    expect(viewState(c, h).outline?.draggingIndex).toBe(1)
+    // barrel 抬起是最后一个按键的释放：真实 pointerup(button=2, buttons=0)，
+    // pointerId 与起始指针相同——它不是主键释放，不得收尾会话/不得写回
+    firePointer(els[4]!, 'pointerup', toRect.left + 40, toRect.top + 5, 0,
+      { button: 2, pointerType: 'pen' })
+    expect(editRequests(h), '非主键（barrel）释放不得写回').toHaveLength(0)
+    expect(c.getView()!.state.doc.toString()).toBe(DRAG_DOC)
+    expect(viewState(c, h).outline?.draggingIndex,
+      'barrel 释放不得收尾会话（主键释放仍应执行 drop）').toBe(1)
+    firePointer(els[4]!, 'pointerup', toRect.left + 40, toRect.top + 5, 0,
+      { button: 0, pointerType: 'pen' })
+    expect(editRequests(h), '主键释放应照常写回').toHaveLength(1)
+    c.dispose()
+    document.body.removeChild(parent)
+  })
+})
+
+// review-loops 第 3 轮：面板 pointerdown 委托缺 isPrimary 守卫——触屏第二指
+// 落在条目上会直接新建会话、覆盖起始指针的会话（document capture 层的残留
+// 清理早有同口径守卫，面板委托没有）。口径：次指针不启动、不推进、不收尾。
+describe('面板委托的主指针守卫：次指针不启动、不覆盖进行中的会话', () => {
+  it('次指针（isPrimary=false）落在条目上：会话不被覆盖、零写回', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    stubRects(parent)
+    const els = items(parent)
+    const fromRect = els[2]!.getBoundingClientRect()
+    const toRect = els[4]!.getBoundingClientRect()
+    // 第一指（pointerId 1）：丁(2) 起拖 → 悬停 戊(4) 上缘
+    firePointer(els[2]!, 'pointerdown', fromRect.left + 20, fromRect.top + 20, 1,
+      { button: 0, pointerType: 'touch', pointerId: 1 })
+    firePointer(els[2]!, 'pointermove', fromRect.left + 20, fromRect.top + 30, 1,
+      { button: -1, pointerType: 'touch', pointerId: 1 })
+    firePointer(els[4]!, 'pointermove', toRect.left + 40, toRect.top + 5, 1,
+      { button: -1, pointerType: 'touch', pointerId: 1 })
+    const started = viewState(c, h)
+    expect(started.outline?.draggingIndex, '前置条件：第一指拖拽应在拖拽态').toBe(2)
+    expect(started.outline?.dropPosition).toBe('before')
+    // 第二指（pointerId 2，isPrimary=false）落在另一条目（甲）上：不得新建
+    // 会话覆盖第一指——否则落点与源条目全部改属第二指，第一指的悬停指示脱挂
+    firePointer(els[0]!, 'pointerdown', fromRect.left + 20, 100, 1,
+      { button: 0, pointerType: 'touch', pointerId: 2, isPrimary: false })
+    const afterSecondDown = viewState(c, h)
+    expect(afterSecondDown.outline?.draggingIndex, '次指针不得覆盖进行中的会话').toBe(2)
+    expect(afterSecondDown.outline?.dropTargetIndex, '落点仍归第一指').toBe(4)
+    expect(afterSecondDown.outline?.dropPosition).toBe('before')
+    // 次指针的移动与释放既不推进也不收尾（pointerId 不同，非本会话指针）
+    firePointer(els[3]!, 'pointermove', 240, 320, 1,
+      { button: -1, pointerType: 'touch', pointerId: 2, isPrimary: false })
+    firePointer(document, 'pointerup', 240, 320, 0,
+      { button: 0, pointerType: 'touch', pointerId: 2, isPrimary: false })
+    const afterSecondUp = viewState(c, h)
+    expect(afterSecondUp.outline?.draggingIndex).toBe(2)
+    expect(afterSecondUp.outline?.dropTargetIndex).toBe(4)
+    expect(editRequests(h), '次指针的移动/释放不得写回').toHaveLength(0)
+    // 第一指释放才收尾：写回须以第一指的源（丁 → 戊 前）兑现一笔
+    firePointer(document, 'pointerup', toRect.left + 40, toRect.top + 5, 0,
+      { button: 0, pointerType: 'touch', pointerId: 1 })
+    expect(editRequests(h), '第一指释放应兑现一笔写回').toHaveLength(1)
+    expect(c.getView()!.state.doc.toString()).toBe(
+      '# 甲\n甲内容\n## 乙\n乙内容\n## 丙\n丙内容\n# 丁\n丁内容\n# 戊\n戊内容',
+    )
+    c.dispose()
+    document.body.removeChild(parent)
+  })
+
+  it('主指针（isPrimary=true）与缺省（undefined）都照常启动会话', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    stubRects(parent)
+    const els = items(parent)
+    const rect = els[1]!.getBoundingClientRect()
+    firePointer(els[1]!, 'pointerdown', rect.left + 20, rect.top + 20, 1,
+      { button: 0, pointerType: 'touch', pointerId: 3, isPrimary: true })
+    firePointer(els[1]!, 'pointermove', rect.left + 20, rect.top + 30, 1,
+      { button: -1, pointerType: 'touch', pointerId: 3, isPrimary: true })
+    expect(viewState(c, h).outline?.draggingIndex, '主指针照常启动会话').toBe(1)
+    firePointer(document, 'pointerup', rect.left + 20, rect.top + 30, 0,
+      { button: 0, pointerType: 'touch', pointerId: 3, isPrimary: true })
+    // 缺省（MouseEvent 合成路径没有 isPrimary，undefined !== false）：既有
+    // 全部用例同路，此处显式钉一次「判据只排除显式 false」
+    firePointer(els[1]!, 'pointerdown', rect.left + 20, rect.top + 20)
+    firePointer(els[1]!, 'pointermove', rect.left + 20, rect.top + 30)
+    expect(viewState(c, h).outline?.draggingIndex, 'isPrimary 缺省照常启动会话').toBe(1)
+    firePointer(document, 'pointerup', rect.left + 20, rect.top + 30)
+    c.dispose()
+    document.body.removeChild(parent)
+  })
+})
+
+describe('drop 锚点判据与重命名同口径（内容等价的重发实例不丢弃拖拽）', () => {
+  it('宿主 resync 重发同一内容（新 Text 实例）：drop 照常写回', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    stubRects(parent)
+    dragTo(parent, 2, 4, 'before') // 丁 → 戊 前（落点有效）
+    const before = c.getView()!.state.doc
+    // 宿主 resync 全文重发：内容逐字相同而 Text 实例换代（第 2 轮 commit
+    // 记载的真实路径：行号未过期，旧判据却会静默丢弃用户拖拽）
+    c.handleHostMessage({ kind: 'doc.resync', version: 7, text: DRAG_DOC })
+    const after = c.getView()!.state.doc
+    expect(after === before, '前置条件：resync 应换 Text 实例').toBe(false)
+    expect(after.eq(before), '前置条件：resync 内容应等价').toBe(true)
+    firePointer(items(parent)[4]!, 'pointerup', 240, 500)
+    expect(editRequests(h), '实例换代但内容等价：drop 不得被静默丢弃').toHaveLength(1)
+    expect(c.getView()!.state.doc.toString()).toBe(
+      '# 甲\n甲内容\n## 乙\n乙内容\n## 丙\n丙内容\n# 丁\n丁内容\n# 戊\n戊内容',
+    )
+    c.dispose()
+    document.body.removeChild(parent)
+  })
+})
+
+describe('重命名编辑态随条目重建被放弃时留日志（放弃行为不变）', () => {
+  it('外部改写触发条目重建：编辑态退出且留 console.warn', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    stubRects(parent)
+    c.handleHostMessage({ kind: 'outline.test.contextMenu', index: 1 })
+    c.handleHostMessage({ kind: 'outline.test.menuClick', command: 'rename' })
+    expect(
+      parent.querySelector('.vsidian-outline-rename-input'),
+      '前置条件：重命名输入框应进入编辑态',
+    ).not.toBeNull()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      // 外部改写插入新标题：序列变化 → 去抖 250ms 到期后条目重建
+      c.handleHostMessage({
+        kind: 'doc.changed',
+        version: 9,
+        origin: 'external',
+        changes: [{ offset: 0, length: 0, text: '# 新增\n' }],
+      })
+      vi.advanceTimersByTime(300)
+      expect(viewState(c, h).outline?.renamingIndex, '放弃行为不变：编辑态退出').toBeNull()
+      expect(parent.querySelector('.vsidian-outline-rename-input'), '输入框随重建消失').toBeNull()
+      // 输入被丢弃且零写回：无诊断时用户无从判断为何没生效（提交路径同口径）
+      expect(
+        warn.mock.calls.map((args) => String(args[0])).some((t) => t.includes('重命名编辑态')),
+        `编辑态被放弃应留 console.warn（实际 ${JSON.stringify(warn.mock.calls)}）`,
+      ).toBe(true)
+    } finally {
+      vi.useRealTimers()
+      warn.mockRestore()
+      c.dispose()
+      document.body.removeChild(parent)
+    }
+  })
+})
+
+// review-loops 第 3 轮：applyOutlineEdits 的两个兜底分支（顺序断言失败 /
+// dispatch 异常）原先调不带 hits 的 rebuildOutlineItemsDom——过滤仍在（hidden
+// 按搜索态施加）而 mark 高亮消失，与搜索态重建路径（applyOutlineSearch 带
+// ranges）不同口径。两分支都只由防御性断言触发（「升序互不重叠」是全部计划
+// 生成端的约定，公开链路产不出违例变更段），故此处白盒直调写回入口驱动。
+describe('写回兜底分支重建条目须重放搜索高亮（#68 mark 不丢）', () => {
+  const HIT_CLASS = 'vsidian-outline-search-hit'
+  const hitsIn = (parent: HTMLElement): number => parent.querySelectorAll(`.${HIT_CLASS}`).length
+
+  /** 白盒直调私有写回入口（类型上以结构断言表达——这些分支公开 API 不可达） */
+  function driveFallbackEdits(
+    c: WebviewSyncController,
+    changes: ReadonlyArray<{ offset: number; length: number; text: string }>,
+  ): void {
+    ;(c as unknown as {
+      applyOutlineEdits(ch: ReadonlyArray<{ offset: number; length: number; text: string }>): void
+    }).applyOutlineEdits(changes)
+  }
+
+  it('顺序断言失败分支：条目重建后 mark 与过滤态一并保持', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    stubRects(parent)
+    c.handleHostMessage({ kind: 'outline.test.searchInput', text: '戊' })
+    expect(hitsIn(parent), '前置条件：搜索态应有命中高亮').toBe(1)
+    expect(items(parent)[1]!.classList.contains('vsidian-outline-hidden'),
+      '前置条件：非命中条目被过滤').toBe(true)
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      driveFallbackEdits(c, [
+        { offset: 20, length: 0, text: 'X' }, // 乱序（offset 递减）：顺序断言拒绝
+        { offset: 5, length: 0, text: 'Y' },
+      ])
+      expect(
+        errors.mock.calls.map((args) => String(args[0])).some((t) => t.includes('变更段违例')),
+        '前置条件：应走顺序断言放弃分支',
+      ).toBe(true)
+      expect(hitsIn(parent), '兜底重建后搜索高亮应重放（mark 不丢）').toBe(1)
+      expect(items(parent)[1]!.classList.contains('vsidian-outline-hidden'), '过滤态保持').toBe(true)
+      expect(items(parent)[4]!.classList.contains('vsidian-outline-hidden')).toBe(false)
+      expect(c.getView()!.state.doc.toString(), '放弃分支零写回').toBe(DRAG_DOC)
+    } finally {
+      errors.mockRestore()
+      c.dispose()
+      document.body.removeChild(parent)
+    }
+  })
+
+  it('dispatch 异常兜底分支：越界坐标重建后 mark 与过滤态一并保持', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    stubRects(parent)
+    c.handleHostMessage({ kind: 'outline.test.searchInput', text: '戊' })
+    expect(hitsIn(parent), '前置条件：搜索态应有命中高亮').toBe(1)
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      // 越界坐标（单段升序，过顺序断言）：CM6 ChangeSet 构造抛错 → 兜底重建
+      driveFallbackEdits(c, [{ offset: DRAG_DOC.length + 50, length: 0, text: 'X' }])
+      expect(
+        errors.mock.calls.map((args) => String(args[0])).some((t) => t.includes('dispatch 失败')),
+        '前置条件：应走 dispatch 异常兜底分支',
+      ).toBe(true)
+      expect(hitsIn(parent), '兜底重建后搜索高亮应重放（mark 不丢）').toBe(1)
+      expect(items(parent)[1]!.classList.contains('vsidian-outline-hidden'), '过滤态保持').toBe(true)
+      expect(c.getView()!.state.doc.toString(), '异常分支不得改写文档').toBe(DRAG_DOC)
+    } finally {
+      errors.mockRestore()
+      c.dispose()
+      document.body.removeChild(parent)
+    }
   })
 })

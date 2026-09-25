@@ -4,6 +4,9 @@
 // 全文对拍、Esc 取消零写回、无效落点（拖入自身子树）拒绝、搜索过滤隐藏
 // 条目不构成落点、非主键（右键）不启动拖拽、拖拽中右键结束手势且零写回
 // （先松右键与先松左键两种释放顺序各一场景）。
+// 场景 K（review-loops 第 3 轮补）走 CDP 触摸仿真：触屏拖拽被浏览器接管为
+// 面板滚动、零写回、无拖拽指示——触摸路径此前无覆盖；它是覆盖性回归，不是
+// 某次修复的红绿证据（按键掩码判据的红绿证据在单测 outlineDragPanel.test.ts）。
 // 与 outlineMenu.mjs 同装配模式。
 import assert from 'node:assert/strict'
 import path from 'node:path'
@@ -362,6 +365,102 @@ try {
     await page.keyboard.press('Escape') // 关菜单
     passed++
     console.log('[拖拽回归][PASS] 拖拽中按右键后先松左键：手势结束、零写回、菜单照常打开')
+  }
+
+  // ---- 场景 K：触屏拖拽被浏览器接管为面板滚动：零写回、无拖拽指示 ----
+  // 覆盖性回归（review-loops 第 3 轮补）：触摸路径此前从未进过本套件。touch
+  // 指针的取值口径（接触 pointerdown button=0/buttons=1、移动 button=-1）由
+  // 本场景实测记录并断言；拖拽语义未在 touch-action 上作声明，故浏览器把
+  // 纵向移动接管为面板滚动、随后投递 pointercancel（buttons=0），会话按取消
+  // 处理、零写回。与 ①/②/③ 无因果关系——不是修复的红绿证据。
+  {
+    // 40 条标题（每条一行）：面板高度被侧栏钳制，内容总高溢出 → 可滚动
+    const TOUCH_DOC = Array.from({ length: 40 }, (_v, i) => `# 标题${i + 1}\n正文${i + 1}`).join('\n')
+    const context = await browser.newContext({ viewport: { width: 1000, height: 560 }, hasTouch: true })
+    const touchPage = await context.newPage()
+    const touchErrors = []
+    touchPage.on('pageerror', (error) => touchErrors.push(error.message))
+    try {
+      await touchPage.setContent('<div id="app"></div>')
+      await touchPage.addStyleTag({ content: 'html, body { margin: 0; height: 100%; }' })
+      await touchPage.addStyleTag({ path: bundle.replace(/\.js$/, '.css') })
+      await touchPage.addScriptTag({ path: bundle })
+      await touchPage.evaluate((text) => window.initDrag(text), TOUCH_DOC)
+      await touchPage.evaluate(() => window.controller.handleHostMessage({ kind: 'sidebar.test.click' }))
+      await touchPage.locator('.vsidian-outline-item').first().waitFor()
+      await touchPage.waitForTimeout(120)
+      // 触摸指针事件实录（capture 层，含后续 pointercancel）：断言用户摸得到
+      // 的输入口径，并在日志里留下实测取值
+      await touchPage.evaluate(() => {
+        window.__touchLog = []
+        for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel']) {
+          document.addEventListener(type, (e) => window.__touchLog.push({
+            type: e.type, pointerType: e.pointerType, button: e.button,
+            buttons: e.buttons, isPrimary: e.isPrimary,
+          }), true)
+        }
+      })
+      const panelBefore = await touchPage.evaluate(() => {
+        const panel = document.querySelector('.vsidian-outline-panel')
+        return { scrollTop: panel.scrollTop, scrollHeight: panel.scrollHeight, clientHeight: panel.clientHeight }
+      })
+      assert.ok(panelBefore.scrollHeight > panelBefore.clientHeight,
+        `前置条件：面板应可滚动（实际 scrollHeight=${panelBefore.scrollHeight} clientHeight=${panelBefore.clientHeight}）`)
+      const box = await touchPage.locator('.vsidian-outline-item').nth(1).boundingBox()
+      assert.ok(box, '触摸拖拽源条目应有布局盒')
+      const x = box.x + 60
+      const yStart = box.y + box.height / 2
+      const cdp = await context.newCDPSession(touchPage)
+      await cdp.send('Input.dispatchTouchEvent', {
+        type: 'touchStart', touchPoints: [{ x, y: yStart }],
+      })
+      for (let step = 1; step <= 8; step++) {
+        await cdp.send('Input.dispatchTouchEvent', {
+          type: 'touchMove', touchPoints: [{ x, y: yStart - step * 28 }],
+        })
+        await touchPage.waitForTimeout(16)
+      }
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+      // 同步点：等浏览器的手势接管落定（pointercancel 抵达即会话已按取消
+      // 处理），避免「接管尚未投递」的时序竞态。超时不吞失败——断言照旧按
+      // 真实状态判定，失败信息里的实录可定位时序
+      await touchPage.waitForFunction(
+        () => window.__touchLog.some((e) => e.type === 'pointercancel'), null, { timeout: 2000 },
+      ).catch(() => {})
+      await touchPage.waitForTimeout(80)
+      const log = await touchPage.evaluate(() => window.__touchLog)
+      const panelAfter = await touchPage.evaluate(() => {
+        const panel = document.querySelector('.vsidian-outline-panel')
+        return { scrollTop: panel.scrollTop }
+      })
+      const state = await touchPage.evaluate(() => window.readDrag())
+      const edits = await touchPage.evaluate(() => window.sent().filter((m) => m.kind === 'edit.request'))
+      // 浏览器接管为滚动：面板滚动位置前移（触摸移动不落成拖拽）
+      assert.ok(panelAfter.scrollTop > panelBefore.scrollTop,
+        `触摸拖拽应被接管为面板滚动（scrollTop ${panelBefore.scrollTop} → ${panelAfter.scrollTop}）`)
+      // 触摸指针口径（实测）：接触态 button=0；移动的 button=-1、buttons=1
+      // 只含 bit0——按掩码判据换算不结束会话，会话由 pointercancel 收掉
+      const down = log.find((e) => e.type === 'pointerdown')
+      const cancel = log.find((e) => e.type === 'pointercancel')
+      assert.ok(down && down.pointerType === 'touch' && down.button === 0,
+        `触屏 pointerdown 应为 touch/button=0（实际 ${JSON.stringify(down)}）`)
+      assert.ok(cancel && cancel.buttons === 0,
+        `浏览器接管后应投递 pointercancel(buttons=0)（实际 ${JSON.stringify(cancel)}）`)
+      // 零写回、无残留拖拽态与指示类、文档逐字不变
+      assert.equal(edits.length, 0, `触摸手势不得产生写回（实际 ${edits.length} 笔）`)
+      assert.equal(state.draggingIndex, null, '触摸手势结束后不得残留拖拽态')
+      assert.equal(state.dropTargetIndex, null, '触摸手势不得留下落点')
+      assert.ok(state.itemClasses.every((c) => !c.includes('vsidian-outline-dragging') &&
+        !c.includes('vsidian-outline-drop-')),
+      `触摸手势后不得残留拖拽/落点指示类（实际 ${JSON.stringify(state.itemClasses)}）`)
+      assert.equal(state.text, TOUCH_DOC, `触摸手势不得改写文档（实际 ${JSON.stringify(state.text.slice(0, 60))}…）`)
+      assert.deepEqual(touchErrors, [], '触摸页不得有未捕获异常')
+      passed++
+      console.log(`[拖拽回归][PASS] 触屏拖拽被接管为滚动：scrollTop ${panelBefore.scrollTop} → ${panelAfter.scrollTop}、`
+        + `零写回、无指示（触及事件实录 ${JSON.stringify(log)}）`)
+    } finally {
+      await context.close()
+    }
   }
 
   assert.deepEqual(errors, [], '页面不得有未捕获异常')

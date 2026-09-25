@@ -2125,8 +2125,17 @@ export class WebviewSyncController {
       if (this.view === undefined) {
         return
       }
-      if (event.pointerType === 'mouse' && event.button !== 0) {
-        return // 仅主键拖拽；右键走 contextmenu
+      // 主指针守卫：次指针（多点触控第二指起，isPrimary=false）只作无效
+      // 输入丢弃——否则第二指落在条目上会直接新建会话、覆盖起始指针的
+      // 会话（与 document capture 层的残留清理同口径）
+      if (event.isPrimary === false) {
+        return
+      }
+      // 启动判据只看按键位掩码、不限指针类型：触屏接触态 button=0（浏览器
+      // 回归实测），照常启动；鼠标右/中键与笔 eraser/barrel（button≥1，按
+      // W3C 位掩码）落不进拖拽入口——右键手势走 contextmenu
+      if (event.button !== 0) {
+        return
       }
       const target = event.target as HTMLElement | null
       const itemEl = target?.closest?.(`.${OUTLINE_CLASS_NAMES.item}`)
@@ -2383,6 +2392,11 @@ export class WebviewSyncController {
       // #69：条目 DOM 重建使菜单锚点与重命名编辑态过期——先关闭再重建
       // （重命名提交路径已在 finishOutlineRename 先清状态，此处无重入）
       this.closeOutlineMenu()
+      // review-loops 第 3 轮：编辑态被重建丢弃要留痕（与提交路径同口径）
+      // ——输入框随重建消失且零写回，无诊断时用户无从判断为何没生效
+      if (this.outlineRenameIndex !== null) {
+        console.warn('[vsidian] 大纲重命名放弃：文档外部改写，重命名编辑态随条目重建退出')
+      }
       this.outlineRenameIndex = null
       this.outlineRenameDoc = null
       // #70：条目 DOM 重建使拖拽锚点与落点指示过期——取消拖拽（零写回；
@@ -2759,14 +2773,19 @@ export class WebviewSyncController {
   /** 重建条目 DOM（重命名取消后恢复展示态；与 ensureFresh 的重建同构）。
    *  review-loops 第 2 轮：重建即取消拖拽会话——条目 DOM 被替换后 dragging
    *  提示与 hintEl 都指向脱挂节点，会话继续存活会留下「指示消失但拖拽仍在」
-   *  的失同步态（与 ensureFresh changed 分支同口径） */
+   *  的失同步态（与 ensureFresh changed 分支同口径）
+   *  review-loops 第 3 轮：搜索态下重建必须重放命中高亮——命中区间取自
+   *  outlineSearchState 缓存（与条目序列同一次计算、同长对齐），只是把
+   *  同一次渲染补上 hits 参数：不追加第二次重建，也不走 applyOutlineSearch
+   *  （那里会重算过滤并再渲染一遍），无递归风险 */
   private rebuildOutlineItemsDom(): void {
     const panel = this.outlinePanelEl
     if (!panel) {
       return
     }
     this.cancelOutlineDrag()
-    renderOutlineItems(panel, this.outlineItems, this.outlineFacts.hasChildren)
+    renderOutlineItems(panel, this.outlineItems, this.outlineFacts.hasChildren,
+      this.outlineSearchState?.ranges)
     this.applyOutlineCollapseDom()
     this.applyOutlineHighlight()
   }
@@ -2794,16 +2813,22 @@ export class WebviewSyncController {
    *  释放也不是 pointerup。若左键先松，右键抬起会成为最后一个按键的真实
    *  pointerup（button=2, buttons=0，且 pointerId 与起始指针相同），残留会话
    *  即按残留落点写出 drop（实测一次误写回）。故该判据只能落在移动路径上；
-   *  不变式：仅主键（左键）释放执行落点写回 */
+   *  不变式：仅主键（左键）释放执行落点写回
+   *  review-loops 第 3 轮：判据只按 buttons 位掩码、不限指针类型——按 W3C
+   *  位掩码，笔的 barrel 键是 bit1（按下 button=2/buttons=2，接触期间按下则
+   *  buttons=3），旧判据以 pointerType==='mouse' 为前提，笔据此绕过守卫
+   *  （同第 2 轮鼠标和弦的失效模式换输入类别）。接触态的 buttons 只含 bit0
+   *  （触屏实测 pointermove buttons=1；笔接触态按 W3C 同为 1），按掩码换算
+   *  不进此分支 */
   private readonly onOutlineDragMove = (event: PointerEvent): void => {
     const drag = this.outlineDragState
     const panel = this.outlinePanelEl
     if (!drag || !panel || event.pointerId !== drag.pointerId) {
       return
     }
-    // 与面板 pointerdown 的启动判据同口径：作用域限鼠标（触屏/笔的接触态
-    // buttons 恒为 1，不进此分支）
-    if (event.pointerType === 'mouse' && (event.buttons & ~1) !== 0) {
+    // bit0（接触/左键）之外的任一位落下（鼠标右/中键、笔 barrel）即证明
+    // 手势意图已变：结束会话（与面板 pointerdown 的启动判据同口径）
+    if ((event.buttons & ~1) !== 0) {
       this.cancelOutlineDrag()
       return
     }
@@ -2865,13 +2890,17 @@ export class WebviewSyncController {
    *  review-loops 第 2 轮补（和弦按键）：纵深防线——仅主键（左键）释放执行
    *  drop。和弦路径下右键抬起会以起始指针的 pointerId 送来真实 pointerup
    *  （button=2, buttons=0，见 onOutlineDragMove 的和弦守卫）；合成事件或
-   *  其他路径送来非主键释放时同样不得按残留落点写回，会话留给主键释放收尾 */
+   *  其他路径送来非主键释放时同样不得按残留落点写回，会话留给主键释放收尾
+   *  review-loops 第 3 轮：判据只按 button、不限指针类型——笔的 barrel 键
+   *  释放同样是 button=2（同上，旧判据的 mouse 前提会放它过闸） */
   private readonly onOutlineDragEnd = (event: PointerEvent): void => {
     const drag = this.outlineDragState
     if (!drag || event.pointerId !== drag.pointerId) {
       return
     }
-    if (event.pointerType === 'mouse' && event.button !== 0) {
+    // 仅主键（button=0）释放收尾：非主键释放（鼠标右/中键、笔 barrel）既不
+    // 收尾也不写回（与移动路径守卫同口径）
+    if (event.button !== 0) {
       return
     }
     const perform = drag.moved && drag.targetIndex !== null && drag.position !== null
@@ -2881,12 +2910,16 @@ export class WebviewSyncController {
       return
     }
     this.outlineSuppressClick = true
-    const view = this.view
-    // 锚点防御（#69 菜单同思路）：拖拽期间 doc 已变则索引与坐标失效
-    if (!view || view.state.doc !== snapshot) {
+    // 锚点防御（#69 菜单同思路；第 3 轮与重命名提交路径同口径）：拖拽期间
+    // doc 被改写则索引与坐标失效；但**内容等价**的全文重置（宿主 resync/init
+    // 重发同一文本）只是换了 Text 实例、行号并未过期，不得误放弃。放弃留痕
+    // （与重命名同口径），否则用户只看到「拖了没反应」
+    const doc = this.view?.state.doc
+    if (!doc || (doc !== snapshot && !doc.eq(snapshot))) {
+      console.warn('[vsidian] 大纲拖拽放弃：编辑期间文档已被改写（锚点过期）')
       return
     }
-    const plan = outlineMovePlan(view.state.doc, this.outlineItems, fromIndex, targetIndex!, position!)
+    const plan = outlineMovePlan(doc, this.outlineItems, fromIndex, targetIndex!, position!)
     if (plan) {
       this.applyOutlineEdits(plan.changes) // 内部 ensureFresh 即时刷新大纲
     }
