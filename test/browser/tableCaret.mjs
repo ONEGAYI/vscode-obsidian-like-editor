@@ -440,3 +440,250 @@ try {
   if (navigationFailures.length) throw new AggregateError(navigationFailures, '表格方向键导航回归失败')
   console.log(`[原生输入] ${passed} 项通过`)
 } finally { await browser.close() }
+
+// ---- #60 Mermaid 渲染回归（文件末尾追加段；独立浏览器实例 + 复刻 webview CSP 的页面）----
+// 关键验证目标：mermaid 独立产物经懒加载链路（URI 注入 → 按需 <script>）在
+// 与宿主 webview 同款的 CSP（无 unsafe-eval、script-src 'self'+nonce）下真实
+// 渲染；live/阅读双模式、源码编辑重渲染、无效语法降级、同源多图 id 唯一、
+// 图内链接不跳转、明暗主题重渲染。真实 mermaid 11.12.2，非 mock。
+import http from 'node:http'
+
+const mermaidArtifact = path.join(root, 'out/test/browser/mermaid.js')
+await build({
+  // 生产同构：与 esbuild.mjs 的 mermaid target 同入口同配置（ESM 源打包，
+  // 官方 UMD 的模块作用域全局自赋值会落空，见 mermaidEntry.ts 头注释）
+  entryPoints: [path.join(root, 'src/webview/mermaidEntry.ts')],
+  outfile: mermaidArtifact, bundle: true, platform: 'browser', format: 'iife',
+  target: 'chrome118', minify: true, sourcemap: false, logLevel: 'silent',
+})
+const browserOutDir = path.join(root, 'out/test/browser')
+const serveOutFile = async (res, rel) => {
+  const file = path.join(browserOutDir, rel)
+  try {
+    const data = await readFile(file) // 文件顶部的 node:fs/promises 版本
+    res.writeHead(200, {
+      'content-type': rel.endsWith('.css') ? 'text/css'
+        : rel.endsWith('.html') ? 'text/html'
+          : 'text/javascript',
+    })
+    res.end(data)
+  } catch {
+    res.writeHead(404)
+    res.end('not found')
+  }
+}
+// CSP 复刻（与 textEditorProvider.buildWebviewHtml 同形）：default-src 'none'、
+// script-src 'self' + nonce（nonce 放行 URI 注入内联脚本——宿主同款机制）、
+// style-src 'unsafe-inline'（CM6 与 mermaid SVG 内嵌样式）、无 unsafe-eval
+const mermaidNonce = 'vsidian-mermaid-test-nonce'
+const mermaidPageHtml = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'nonce-${mermaidNonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' https:; font-src 'self'">
+<link rel="stylesheet" href="/tableCaret.css">
+</head><body><div id="app"></div>
+<script nonce="${mermaidNonce}">window.__vsidianMermaidUri = "/mermaid.js";</script>
+<script nonce="${mermaidNonce}" src="/tableCaret.js"></script>
+</body></html>`
+const mermaidServer = http.createServer((req, res) => {
+  const url = new URL(req.url ?? '/', 'http://localhost')
+  if (url.pathname === '/') {
+    res.writeHead(200, { 'content-type': 'text/html' })
+    res.end(mermaidPageHtml)
+    return
+  }
+  void serveOutFile(res, url.pathname.slice(1))
+})
+await new Promise((resolve) => mermaidServer.listen(0, '127.0.0.1', resolve))
+const mermaidBase = `http://127.0.0.1:${mermaidServer.address().port}`
+
+const mermaidBrowser = await chromium.launch({
+  headless: true,
+  channel: process.env.VSIDIAN_TEST_BROWSER_CHANNEL || undefined,
+})
+const MERMAID_DOC = [
+  '# 图表演例', '',
+  '```mermaid', 'graph TD', 'A[开始]-->B[结束]', '```', '',
+  '正文段落一。', '',
+  '```mermaid', 'sequenceDiagram', 'Alice->>Bob: 你好', 'Bob-->>Alice: 很好', '```', '',
+  '```mermaid', 'flowchart LR', 'X-->Y', '```', '',
+  '```mermaid', 'flowchart LR', 'X-->Y', '```', '',
+  '语法错误样例：', '',
+  '```mermaid', '这不是合法图表语法', '```', '',
+  '结尾段落保持可用。',
+].join('\n')
+const mermaidFailures = []
+let mermaidPassed = 0
+try {
+  for (const scenario of ['live-render', 'edit-rerender', 'reading-mode', 'no-navigation', 'theme-rerender']) {
+    const page = await mermaidBrowser.newPage()
+    // 高视口：CM6 widget 只在可见区物化——图渲染后高度扩张会把后续围栏推出
+    // 默认 720px 视口，widget 永不创建导致等待超时；拉高视口让全部图可见
+    await page.setViewportSize({ width: 1280, height: 2600 })
+    const errors = []
+    const consoleErrors = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    page.on('console', (msg) => {
+      const text = msg.text()
+      // favicon 请求被 default-src 'none' 拦截属页面副作用，与渲染无关
+      if (msg.type() === 'error' && !/favicon/i.test(text)) {
+        consoleErrors.push(text)
+      }
+    })
+    try {
+      await page.goto(mermaidBase + '/')
+      await page.waitForFunction(() => typeof window.initTable === 'function')
+      await page.evaluate((text) => window.initTable(text), MERMAID_DOC)
+      const states = () => page.evaluate(() => {
+        const readingActive = document.querySelector('.vsidian-view-reading').style.display !== 'none'
+        const scope = readingActive
+          ? document.querySelector('.vsidian-view-reading')
+          : document.querySelector('.cm-content')
+        return {
+          rendered: scope.querySelectorAll('.vsidian-mermaid[data-vsidian-mermaid-state="rendered"]').length,
+          pending: scope.querySelectorAll('.vsidian-mermaid[data-vsidian-mermaid-state="rendering"], .vsidian-mermaid[data-vsidian-mermaid-state="pending"]').length,
+          degraded: scope.querySelectorAll('.vsidian-mermaid[data-vsidian-mermaid-state="error"]').length,
+          svg: scope.querySelectorAll('.vsidian-mermaid svg').length,
+          text: window.readEditor().text,
+        }
+      })
+      const locate = (offset) => page.evaluate(
+        (o) => window.controller.handleHostMessage({ kind: 'view.locate', offset: o }), offset)
+      if (scenario === 'live-render') {
+        // 流程图 + 时序图 + 同源相邻多图：4 个 rendered，1 个语法降级
+        await page.waitForFunction(() =>
+          document.querySelectorAll('.cm-content .vsidian-mermaid[data-vsidian-mermaid-state="rendered"]').length === 4,
+          null, { timeout: 20000 })
+        const st = await states()
+        assert.equal(st.rendered, 4, `渲染数: ${JSON.stringify(st)}`)
+        assert.equal(st.degraded, 1, `语法错误图降级: ${JSON.stringify(st)}`)
+        assert.equal(st.svg, 4, '渲染态必须含真实 SVG')
+        assert.equal(st.text, MERMAID_DOC, '渲染不得改写源文')
+        // 真实绘制（rect 有面积）+ SVG 宽度受容器约束
+        const painted = await page.evaluate(() => {
+          const el = document.querySelector('.cm-content .vsidian-mermaid svg')
+          if (!el) return false
+          const rect = el.getBoundingClientRect()
+          const container = el.closest('.vsidian-mermaid').getBoundingClientRect()
+          return rect.width > 0 && rect.height > 0 && rect.width <= container.width + 1
+        })
+        assert(painted, '图形必须真实绘制（rect 有面积且不超出容器宽）')
+        // 懒加载链路：mermaid.js 注入且仅注入一次；全局可用
+        const loaded = await page.evaluate(() => ({
+          scripts: document.querySelectorAll('script[src$="/mermaid.js"]').length,
+          api: typeof globalThis.mermaid === 'object' && typeof globalThis.mermaid.render === 'function',
+        }))
+        assert.equal(loaded.scripts, 1, 'mermaid.js 按需注入一次')
+        assert(loaded.api, '全局 mermaid API 可用（懒加载完成）')
+        // 同源相邻两图：文档内无重复 id（缓存克隆改写）
+        const uniqueIds = await page.evaluate(() => {
+          const ids = [...document.querySelectorAll('.vsidian-mermaid [id]')].map((el) => el.id)
+          return { total: ids.length, unique: new Set(ids).size }
+        })
+        assert(uniqueIds.total > 0, '渲染产物应含内部 id')
+        assert.equal(uniqueIds.unique, uniqueIds.total, '同源多图缓存复用不得产生重复 id')
+        // 降级不吞后续块：结尾段落仍在
+        const tail = await page.evaluate(() => {
+          const lines = [...document.querySelectorAll('.cm-content .cm-line')]
+          return lines.some((l) => l.textContent.includes('结尾段落保持可用'))
+        })
+        assert(tail, '语法错误图不吞掉后续正文块')
+        // CSP 不得出现渲染被拦截的报错（无 unsafe-eval 下的真实渲染证明）
+        assert.deepEqual(consoleErrors.filter((t) => /Content Security Policy/i.test(t)), [],
+          `CSP 拦截了渲染资源: ${JSON.stringify(consoleErrors)}`)
+      } else if (scenario === 'edit-rerender') {
+        await page.waitForFunction(() =>
+          document.querySelectorAll('.cm-content .vsidian-mermaid[data-vsidian-mermaid-state="rendered"]').length === 4,
+          null, { timeout: 20000 })
+        await page.locator('.cm-line').first().click({ position: { x: 5, y: 8 } })
+        const aAt = MERMAID_DOC.indexOf('A[开始]') + 1
+        await locate(aAt)
+        // 光标进入围栏：该图退场显源码，其余图不受影响
+        await page.waitForFunction(() =>
+          document.querySelectorAll('.cm-content .vsidian-mermaid').length === 4)
+        await page.keyboard.type('2')
+        assert((await states()).text.includes('A2[开始]'), '围栏内输入精确写回')
+        await locate(0)
+        // 离开围栏：源码修改后的图重新渲染（缓存按新源文失效）
+        await page.waitForFunction(() =>
+          document.querySelectorAll('.cm-content .vsidian-mermaid[data-vsidian-mermaid-state="rendered"]').length === 4,
+          null, { timeout: 20000 })
+        await locate(aAt + 1)
+        await page.keyboard.press('Backspace')
+        await locate(0)
+        await page.waitForFunction(() =>
+          document.querySelectorAll('.cm-content .vsidian-mermaid[data-vsidian-mermaid-state="rendered"]').length === 4,
+          null, { timeout: 20000 })
+        assert.equal((await states()).text, MERMAID_DOC, '退格后围栏原文逐字节复原')
+      } else if (scenario === 'reading-mode') {
+        // 阅读模式：挂载块内渲染 + 模式切换一致性（切回 live 再渲染、零写回）
+        await page.evaluate(() => window.controller.handleHostMessage({ kind: 'view.mode.set', mode: 'reading' }))
+        await page.waitForFunction(() =>
+          document.querySelectorAll('.vsidian-view-reading .vsidian-mermaid[data-vsidian-mermaid-state="rendered"]').length === 4,
+          null, { timeout: 20000 })
+        const reading = await page.evaluate(() => {
+          const scope = document.querySelector('.vsidian-view-reading')
+          const svg = scope.querySelector('.vsidian-mermaid svg')
+          const rect = svg?.getBoundingClientRect()
+          return {
+            degraded: scope.querySelectorAll('.vsidian-mermaid[data-vsidian-mermaid-state="error"]').length,
+            painted: !!rect && rect.width > 0 && rect.height > 0,
+          }
+        })
+        assert.equal(reading.degraded, 1, '阅读模式同样降级语法错误图')
+        assert(reading.painted, '阅读模式图形真实绘制')
+        await page.evaluate(() => window.controller.handleHostMessage({ kind: 'view.mode.set', mode: 'live' }))
+        await page.waitForFunction(() =>
+          document.querySelectorAll('.cm-content .vsidian-mermaid[data-vsidian-mermaid-state="rendered"]').length === 4,
+          null, { timeout: 20000 })
+        assert.equal((await states()).text, MERMAID_DOC, '模式切换不得改写文本')
+      } else if (scenario === 'no-navigation') {
+        await page.waitForFunction(() =>
+          document.querySelectorAll('.cm-content .vsidian-mermaid[data-vsidian-mermaid-state="rendered"]').length === 4,
+          null, { timeout: 20000 })
+        // 图内点击（节点区域）不产生导航；产物内无 javascript: 链接
+        const urlBefore = page.url()
+        await page.locator('.cm-content .vsidian-mermaid svg').first().click()
+        await page.waitForTimeout(300)
+        assert.equal(page.url(), urlBefore, '图内点击不得触发导航')
+        const dangerous = await page.evaluate(() =>
+          [...document.querySelectorAll('.vsidian-mermaid a[href]')]
+            .filter((a) => (a.getAttribute('href') ?? '').trim().toLowerCase().startsWith('javascript:')).length)
+        assert.equal(dangerous, 0, '渲染产物不得含 javascript: 链接')
+      } else if (scenario === 'theme-rerender') {
+        await page.waitForFunction(() =>
+          document.querySelectorAll('.cm-content .vsidian-mermaid[data-vsidian-mermaid-state="rendered"]').length === 4,
+          null, { timeout: 20000 })
+        await page.evaluate(() => {
+          window.__firstMermaidSvg = document.querySelector('.cm-content .vsidian-mermaid svg')
+        })
+        // 宿主主题 class 切换（webview 同款观察源）：dark 触发重渲染（新 SVG 实例）
+        await page.evaluate(() => document.body.classList.add('vscode-dark'))
+        await page.waitForFunction(() => {
+          const svg = document.querySelector('.cm-content .vsidian-mermaid svg')
+          return svg && svg !== window.__firstMermaidSvg
+        }, null, { timeout: 20000 })
+        // 切回亮色再次重渲染（第二次实例替换）
+        await page.evaluate(() => {
+          window.__secondMermaidSvg = document.querySelector('.cm-content .vsidian-mermaid svg')
+          document.body.classList.remove('vscode-dark')
+        })
+        await page.waitForFunction(() => {
+          const svg = document.querySelector('.cm-content .vsidian-mermaid svg')
+          return svg && svg !== window.__firstMermaidSvg && svg !== window.__secondMermaidSvg
+        }, null, { timeout: 20000 })
+      }
+      assert.deepEqual(errors, [], `页面异常: ${JSON.stringify(errors)}`)
+      mermaidPassed++
+      console.log(`[原生输入][PASS] mermaid/${scenario}`)
+    } catch (error) {
+      mermaidFailures.push(error)
+      console.error(`[原生输入][FAIL] mermaid/${scenario}: ${error.message}`)
+    } finally {
+      await page.close()
+    }
+  }
+} finally {
+  await mermaidBrowser.close()
+  mermaidServer.close()
+}
+if (mermaidFailures.length) throw new AggregateError(mermaidFailures, 'Mermaid 渲染回归失败')
+console.log(`[原生输入] mermaid ${mermaidPassed} 项通过`)

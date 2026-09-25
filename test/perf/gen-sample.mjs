@@ -103,6 +103,24 @@ export function generateMathDenseSample(blocks = 240) {
   return out.join('\n')
 }
 
+// 图表密集样例（工单 #60）：中小 mermaid 围栏（流程图/时序图交替，同源
+// 重复触发缓存克隆改写）与普通段落交替——一屏多图的渲染串行成本、滚动
+// 往返的挂载/回收与缓存命中、块卸载释放 DOM 的观测载体。
+export function generateMermaidDenseSample(blocks = 120) {
+  const out = ['# 图表密集性能样例', '']
+  for (let i = 1; i <= blocks; i++) {
+    if (i % 3 === 0) {
+      out.push('```mermaid', 'sequenceDiagram', `A_${i}->>B_${i}: 请求 ${i}`, `B_${i}-->>A_${i}: 响应 ${i}`, '```', '')
+    } else if (i % 3 === 1) {
+      out.push('```mermaid', 'flowchart LR', `S${i}-->T${i}`, '```', '')
+    } else {
+      out.push(`第 ${i} 段 普通段落样本行，固定宽度内容，作为滚动与击键的测量锚点。`, '')
+    }
+  }
+  out.push('结尾段落。', '')
+  return out.join('\n')
+}
+
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].replace(/\\/g, '/')}`).href) {
   const lines = Number(process.argv[2])
   const outFile = process.argv[3]

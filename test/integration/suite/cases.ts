@@ -357,6 +357,9 @@ interface ViewState {
   /** #59 公式计数（live 视口渲染数 / 阅读挂载块内数） */
   liveMathCount?: number
   readingMathCount?: number
+  /** #60 Mermaid 计数（live 视口渲染数 / 阅读挂载块内数） */
+  liveMermaidCount?: number
+  readingMermaidCount?: number
   imageStates?: { loading: number; loaded: number; error: number }
   /** #14 查找会话观测（首次打开后回报；匹配集来自文本模型全量计算） */
   find?: {
@@ -421,6 +424,14 @@ interface ViewState {
     math?: {
       visible: boolean
       display: string | null
+      count: number
+    }
+    /** #60 Mermaid 绘制：当前激活视图内图表容器的实际可见性与分态计数 */
+    mermaid?: {
+      visible: boolean
+      display: string | null
+      rendered: number
+      error: number
       count: number
     }
   }
@@ -4266,5 +4277,141 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await vscode.commands.executeCommand(CMD.postToPanel, wsUri('math.md').toString(), {
       kind: 'view.mode.set', mode: 'reading' })
     await waitViewState('math.md', (v) => v.viewMode === 'reading' && (v.readingMathCount ?? -1) === 8)
+  }],
+  // ---- 工单 #60：Mermaid 围栏块双模式渲染（live/reading/降级/一致性） ----
+
+  ['live Mermaid 渲染与绘制层：渲染数、分态计数与真实可见（#60）', async () => {
+    await openWithEditor('mermaid.md')
+    await waitSessionReady('mermaid.md')
+    const uri = wsUri('mermaid.md').toString()
+    const diskBefore = await readDisk('mermaid.md')
+    // 滚到文档尾部使全部围栏进入视口（光标停在围栏外段落，不抑制装饰）
+    const tailAnchor = diskBefore.indexOf('结尾段落')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: tailAnchor,
+    })
+    const state = await waitViewState('mermaid.md', (v) =>
+      (v.liveMermaidCount ?? -1) === 5 && v.paint?.mermaid?.rendered === 4)
+    assert(state.liveMermaidCount === 5,
+      `live 围栏装饰数应为 5（4 有效 + 1 无效降级），实际 ${state.liveMermaidCount}`)
+    // 绘制层断言（AGENTS 视觉层断言约定）：图真的画出来（rect 有面积 +
+    // elementFromPoint 命中），不是只有 DOM 存在
+    assert(state.paint?.mermaid?.visible === true,
+      `图表应真实绘制（paint.mermaid.visible=${String(state.paint?.mermaid?.visible)}，` +
+        `display=${String(state.paint?.mermaid?.display)}）`)
+    assert(state.paint?.mermaid?.display !== 'none', '图表容器不得 display:none')
+    assert(state.paint?.mermaid?.rendered === 4,
+      `有效图渲染数应为 4，实际 ${state.paint?.mermaid?.rendered}`)
+    assert(state.paint?.mermaid?.error === 1,
+      `无效语法应恰有一个降级容器，实际 ${state.paint?.mermaid?.error}`)
+    assert(state.paint?.mermaid?.count === 5, `容器总数应为 5，实际 ${state.paint?.mermaid?.count}`)
+    assert(state.text === diskBefore, '渲染不得改写源文')
+  }],
+
+  ['live 光标进出围栏显隐零写回：进入显源码、离开恢复渲染（#60）', async () => {
+    await openWithEditor('mermaid.md')
+    await waitSessionReady('mermaid.md')
+    const uri = wsUri('mermaid.md').toString()
+    const diskBefore = await readDisk('mermaid.md')
+    const tailAnchor = diskBefore.indexOf('结尾段落')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: tailAnchor,
+    })
+    const before = await waitViewState('mermaid.md', (v) => (v.liveMermaidCount ?? -1) === 5)
+    // 光标移入首个围栏内容（graph TD 的 g 后）→ 该图退出渲染态显源码
+    const fenceBody = before.text.indexOf('graph TD')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: fenceBody + 1,
+    })
+    const editing = await waitViewState('mermaid.md', (v) => (v.liveMermaidCount ?? -1) === 4)
+    const editOffset = editing.selectionOffset ?? -1
+    assert(editOffset >= fenceBody && editOffset <= fenceBody + 7,
+      `光标应落在围栏区间（实际 ${editOffset}）`)
+    // 离开（回到文档首，围栏外）→ 恢复渲染
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: 0,
+    })
+    await waitViewState('mermaid.md', (v) => (v.liveMermaidCount ?? -1) >= 4)
+    // 纯视图交互零写回：磁盘不变（显隐切换不产生编辑事务）
+    assert(await readDisk('mermaid.md') === diskBefore, '围栏显隐交互不得改写源文')
+  }],
+
+  ['阅读模式 Mermaid 渲染：整块成块、绘制层与降级不吞后续块（#60）', async () => {
+    await openWithEditor('mermaid.md')
+    await waitSessionReady('mermaid.md')
+    const uri = wsUri('mermaid.md').toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const reading = await waitViewState('mermaid.md', (v) =>
+      v.viewMode === 'reading' && (v.readingMermaidCount ?? -1) === 5 && v.paint?.mermaid?.rendered === 4)
+    assert(reading.readingMermaidCount === 5,
+      `阅读图表容器数应为 5（4 渲染 + 1 降级），实际 ${reading.readingMermaidCount}`)
+    assert(reading.paint?.mermaid?.visible === true, '阅读图表应真实绘制（rect + elementFromPoint）')
+    assert(reading.paint?.mermaid?.error === 1, `无效语法应降级 1 个，实际 ${reading.paint?.mermaid?.error}`)
+    // 大围栏豁免切片 + 降级不吞后续块：切块数合理且锚点块可定位
+    assert((reading.readingTotalBlocks ?? 0) >= 5, `阅读切块应含全部图表块，实际 ${reading.readingTotalBlocks}`)
+  }],
+
+  ['Mermaid 跨模式切换一致性：两模式计数对齐、文本不变、无写回（#60）', async () => {
+    await openWithEditor('mermaid.md')
+    await waitSessionReady('mermaid.md')
+    const uri = wsUri('mermaid.md').toString()
+    const diskBefore = await readDisk('mermaid.md')
+    const tailAnchor = diskBefore.indexOf('结尾段落')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: tailAnchor,
+    })
+    const live = await waitViewState('mermaid.md', (v) => (v.liveMermaidCount ?? -1) === 5)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const reading = await waitViewState('mermaid.md', (v) =>
+      v.viewMode === 'reading' && (v.readingMermaidCount ?? -1) === 5)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'live' })
+    const tailAnchor2 = (await readDisk('mermaid.md')).indexOf('结尾段落')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: tailAnchor2,
+    })
+    const back = await waitViewState('mermaid.md', (v) =>
+      v.viewMode === 'live' && (v.liveMermaidCount ?? -1) === 5)
+    assert(back.text === live.text, '模式切换不得改写文本')
+    assert(back.docLength === live.docLength, '模式切换不得改变文档长度')
+    assert(reading.text === live.text, '阅读渲染不写回')
+    assert(await readDisk('mermaid.md') === diskBefore, '模式切换不得触发磁盘写回')
+  }],
+
+  ['伪围栏与普通围栏不误渲染：边界样例零图表、正文完好（#60）', async () => {
+    await openWithEditor('mermaid-edge.md')
+    await waitSessionReady('mermaid-edge.md')
+    const uri = wsUri('mermaid-edge.md').toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: (await readDisk('mermaid-edge.md')).indexOf('结尾段落'),
+    })
+    const live = await waitViewState('mermaid-edge.md', (v) => (v.liveMermaidCount ?? -1) === 0)
+    assert(live.liveMermaidCount === 0, `普通围栏与伪围栏不得渲染图表，实际 ${live.liveMermaidCount}`)
+    assert(live.text.includes('结尾段落保持可用。'), '伪围栏后的正文完好')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const reading = await waitViewState('mermaid-edge.md', (v) =>
+      v.viewMode === 'reading' && (v.readingMermaidCount ?? -1) === 0)
+    assert(reading.readingMermaidCount === 0, `阅读侧同样不渲染伪围栏，实际 ${reading.readingMermaidCount}`)
+  }],
+
+  ['外部更新后新增 Mermaid 围栏进入渲染（#60）', async () => {
+    await openWithEditor('mermaid.md')
+    await waitSessionReady('mermaid.md')
+    const doc = await vscode.workspace.openTextDocument(wsUri('mermaid.md'))
+    const extEdit = new vscode.WorkspaceEdit()
+    extEdit.replace(wsUri('mermaid.md'), new vscode.Range(0, 0, 0, 0), '新增图：\n\n```mermaid\nC-->D\n```\n\n')
+    assert(await vscode.workspace.applyEdit(extEdit), '外部修改应成功')
+    await poll('外部修改生效', () => (doc.getText().startsWith('新增图：') ? true : undefined))
+    const tailAnchor = doc.getText().indexOf('结尾段落')
+    await vscode.commands.executeCommand(CMD.postToPanel, wsUri('mermaid.md').toString(), {
+      kind: 'view.locate', offset: tailAnchor,
+    })
+    // 面板同步外部增量：围栏装饰 +1（新增有效图），原围栏不变
+    const after = await waitViewState('mermaid.md', (v) => (v.liveMermaidCount ?? -1) === 6)
+    assert(after.text.startsWith('新增图：'), '面板文本应含外部新增围栏')
+    // 切阅读模式：外部增量同样渲染
+    await vscode.commands.executeCommand(CMD.postToPanel, wsUri('mermaid.md').toString(), {
+      kind: 'view.mode.set', mode: 'reading' })
+    await waitViewState('mermaid.md', (v) =>
+      v.viewMode === 'reading' && (v.readingMermaidCount ?? -1) === 6)
   }],
 ]
