@@ -445,6 +445,8 @@ interface ViewState {
       label: string | null
       headerCount: number
       cardLineCount: number
+      /** #80 视口内卡内行号文本序列 */
+      lineNumberTexts?: string[] | null
     }
     /** #55：标题行左缘绘制观测（distinct computed 值；无挂载标题行为 null） */
     heading?: {
@@ -4885,6 +4887,10 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(present.paint?.code?.visible === true, '卡片头部应真实绘制（rect + elementFromPoint）')
     assert(present.paint?.code?.label === 'JavaScript', `首块标签应为 JavaScript，实际 ${String(present.paint?.code?.label)}`)
     assert((present.liveMermaidCount ?? -1) === 1, `mermaid 围栏不套卡片且仍渲染图表，实际 ${present.liveMermaidCount}`)
+    // #80 卡内行号：js 块 4 行从 1 起；文档行号槽照常显示（不因卡片隐藏）
+    const ln = present.paint?.code?.lineNumberTexts
+    assert(Array.isArray(ln) && ln.slice(0, 4).join(',') === '1,2,3,4',
+      `js 块卡内行号应为 1..4，实际 ${JSON.stringify(ln)}`)
     // 编辑态：光标进入首块代码体 → 头部与卡片行保留（外壳不撤）
     const body = present.text.indexOf('const a = 1')
     await vscode.commands.executeCommand(CMD.postToPanel, uri, {
@@ -4905,5 +4911,12 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(await readDisk('code-card.md') === diskBefore, '设置切换不得改写源文')
     await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.card': true })
     await waitViewState('code-card.md', (v) => v.paint?.code?.headerCount === 4)
+    // #80 行号子开关：关闭 → 行号消失、卡片保留；重开恢复
+    await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.lineNumbers': false })
+    await waitViewState('code-card.md', (v) =>
+      v.paint?.code?.headerCount === 4 && (v.paint.code.lineNumberTexts?.length ?? 0) === 0)
+    await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.lineNumbers': true })
+    await waitViewState('code-card.md', (v) =>
+      v.paint?.code?.headerCount === 4 && (v.paint.code.lineNumberTexts?.length ?? 0) > 0)
   }],
 ]

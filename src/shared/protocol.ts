@@ -507,6 +507,8 @@ export interface PaintProbe {
     headerCount: number
     /** 当前激活视图内 .vsidian-code-card-line 行数（含被清空的围栏行） */
     cardLineCount: number
+    /** #80 视口内卡内行号文本序列（如 ['1','2','3']；关闭或无行为 null） */
+    lineNumberTexts?: string[] | null
   }
   /** #55 标题行绘制观测：视口内已挂载的 .vsidian-heading-inview 行的
    *  distinct 计算值（box-shadow 应为 'none'、border-left-width 应为
@@ -844,7 +846,9 @@ function isPaintProbe(v: unknown): v is PaintProbe {
       isNullOrString(v.code.display) &&
       (v.code.label === undefined || v.code.label === null || isString(v.code.label)) &&
       isNonNegativeInt(v.code.headerCount) &&
-      isNonNegativeInt(v.code.cardLineCount)
+      isNonNegativeInt(v.code.cardLineCount) &&
+      (v.code.lineNumberTexts === undefined || v.code.lineNumberTexts === null ||
+        (Array.isArray(v.code.lineNumberTexts) && v.code.lineNumberTexts.every(isString)))
     )) &&
     (v.heading === undefined || v.heading === null || (
       isObject(v.heading) &&

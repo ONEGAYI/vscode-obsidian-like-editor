@@ -474,6 +474,17 @@ body {
   gap: 8px;
 }
 
+/* 卡内行号（#80）：代码行行首右对齐数字，颜色与文档行号槽同源；与文档
+   行号槽两列并存（读图结论），user-select:none 且点击穿透编辑器 */
+#app .cm-editor .cm-scroller .vsidian-code-card-linenumber {
+  display: inline-block;
+  min-width: 2ch;
+  text-align: right;
+  margin-right: 24px;
+  color: var(--vscode-editorLineNumber-foreground, rgba(128, 128, 128, 0.8));
+  user-select: none;
+}
+
 /* 行内格式 span（mark 按各自范围显形；类名为稳定样式入口，Obsidian 对应
    .cm-header-N/.cm-strong/.cm-emphasis/.cm-inline-code，见映射表） */
 #app .cm-editor .cm-scroller .vsidian-strong {

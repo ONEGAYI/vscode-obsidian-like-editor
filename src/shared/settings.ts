@@ -52,8 +52,16 @@ export const CODEBLOCK_CARD_KEY = 'codeblock.card'
 export const CODEBLOCK_CARD_DEFAULT = true
 
 /**
+ * #80「卡内行号」子开关：卡片内代码行行首的块内行号（每块从 1 起、围栏
+ * 行不占号）。依附卡片总开关——卡片关闭时本项无效。
+ */
+export const CODEBLOCK_LINE_NUMBERS_KEY = 'codeblock.lineNumbers'
+export const CODEBLOCK_LINE_NUMBERS_DEFAULT = true
+
+/**
  * 生产设置定义注册表：#33 交付空状态页面与完整数据链路，#34 加入首个
- * 实际设置项「显示行号」（设置页自此渲染真实开关），#79 加入「代码块卡片」。
+ * 实际设置项「显示行号」（设置页自此渲染真实开关），#79 加入「代码块卡片」，
+ * #80 加入「卡内行号」。
  */
 export const PRODUCTION_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
   {
@@ -69,6 +77,13 @@ export const PRODUCTION_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     default: CODEBLOCK_CARD_DEFAULT,
     title: '代码块卡片',
     description: '围栏代码块在光标离开时收起为卡片：隐藏围栏标记，显示语言头部横带。关闭后回到朴素源码围栏外观。',
+  },
+  {
+    key: CODEBLOCK_LINE_NUMBERS_KEY,
+    type: 'boolean',
+    default: CODEBLOCK_LINE_NUMBERS_DEFAULT,
+    title: '卡内行号',
+    description: '卡片内代码行行首显示块内行号（每块从 1 起，围栏行不占号）。需开启「代码块卡片」。',
   },
 ]
 

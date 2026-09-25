@@ -984,6 +984,10 @@ console.log(`[原生输入] mermaid ${mermaidPassed} 项通过`)
       assert(s.headers[0].includes('JavaScript'), `标签应为 JavaScript: ${s.headers[0]}`)
       assert(!s.fenceVisible, `呈现态围栏文本必须清空（DOM 行内不残留）: ${s.text}`)
       assert.equal(s.cardLines, 3, `卡片行类应覆盖开围栏/代码/闭围栏 3 行，实际 ${s.cardLines}`)
+      // #80 卡内行号：单行代码块恰有一个行号 1（右对齐文本、不随输入漂移）
+      const lnTexts = await page.evaluate(() =>
+        [...document.querySelectorAll('.vsidian-code-card-linenumber')].map((el) => el.textContent))
+      assert.deepEqual(lnTexts, ['1'], `卡内行号应为 ['1']，实际 ${JSON.stringify(lnTexts)}`)
 
       // 2) 原生点击代码行 → 编辑态：围栏显形、头部保留
       await page.locator('.cm-line.vsidian-code-card-line').nth(1).click()
@@ -1019,6 +1023,9 @@ console.log(`[原生输入] mermaid ${mermaidPassed} 项通过`)
       s = await states()
       assert.equal(s.headers.length, 1, '离开围栏后头部保留')
       assert.equal(s.cardLines, 3, '离开围栏后卡片行类保留')
+      const lnAfter = await page.evaluate(() =>
+        [...document.querySelectorAll('.vsidian-code-card-linenumber')].map((el) => el.textContent))
+      assert.deepEqual(lnAfter, ['1'], '离开围栏后行号保留')
 
       // 5b) 键盘离开：重新进入代码行，ArrowDown 逐行穿出围栏（代码行→空行→
       //     闭围栏行→后文）——穿越期间保持编辑态，越界后恢复呈现

@@ -46,4 +46,12 @@ describe('代码块卡片 CSS 契约（#79）', () => {
     expect(rule('#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-header-actions'))
       .toMatch(/display:\s*inline-flex/)
   })
+
+  it('卡内行号：右对齐、颜色与文档行号槽同源、禁选（#80）', () => {
+    const ln = rule('#app .cm-editor .cm-scroller .vsidian-code-card-linenumber')
+    expect(ln).toMatch(/display:\s*inline-block/)
+    expect(ln).toMatch(/text-align:\s*right/)
+    expect(ln).toMatch(/color:\s*var\(--vscode-editorLineNumber-foreground/)
+    expect(ln).toMatch(/user-select:\s*none/)
+  })
 })

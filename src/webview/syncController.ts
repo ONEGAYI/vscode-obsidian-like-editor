@@ -47,6 +47,8 @@ import {
 import {
   CODEBLOCK_CARD_DEFAULT,
   CODEBLOCK_CARD_KEY,
+  CODEBLOCK_LINE_NUMBERS_DEFAULT,
+  CODEBLOCK_LINE_NUMBERS_KEY,
   SHOW_LINE_NUMBERS_DEFAULT,
   SHOW_LINE_NUMBERS_KEY,
   type SettingsPayload,
@@ -2660,17 +2662,22 @@ export class WebviewSyncController {
   }
 
   /**
-   * 应用代码块卡片设置（#79；settings.snapshot / settings.changed 到达时）：
-   * card 总开关读 codeblock.card（缺键回定义默认、非布尔忽略——与行号同
-   * 口径）；子项键由后续工单接入，暂保持默认开。经 Compartment.reconfigure
-   * 热重配 codeCardConfigFacet（卡片装饰 StateField 检测到 facet 变化时对
-   * 围栏表全量重建），EditorView 不重建
+   * 应用代码块卡片设置（#79/#80；settings.snapshot / settings.changed 到达时）：
+   * card 总开关读 codeblock.card、行号子开关读 codeblock.lineNumbers（缺键回
+   * 定义默认、非布尔忽略——与行号同口径）；copyButton/highlight 由后续工单
+   * 接入，暂保持默认开。经 Compartment.reconfigure 热重配 codeCardConfigFacet
+   * （卡片装饰 StateField 检测到 facet 变化时对围栏表全量重建），EditorView 不重建
    */
   private applyCodeCardSetting(): void {
-    const raw = this.settings?.[CODEBLOCK_CARD_KEY]
-    const card = typeof raw === 'boolean' ? raw : CODEBLOCK_CARD_DEFAULT
-    const next: CodeCardConfig = { ...this.codeCardConfig, card }
-    if (next.card === this.codeCardConfig.card) {
+    const bool = (raw: unknown, fallback: boolean): boolean =>
+      typeof raw === 'boolean' ? raw : fallback
+    const next: CodeCardConfig = {
+      card: bool(this.settings?.[CODEBLOCK_CARD_KEY], CODEBLOCK_CARD_DEFAULT),
+      lineNumbers: bool(this.settings?.[CODEBLOCK_LINE_NUMBERS_KEY], CODEBLOCK_LINE_NUMBERS_DEFAULT),
+      copyButton: this.codeCardConfig.copyButton,
+      highlight: this.codeCardConfig.highlight,
+    }
+    if (next.card === this.codeCardConfig.card && next.lineNumbers === this.codeCardConfig.lineNumbers) {
       return
     }
     this.codeCardConfig = next
@@ -3006,6 +3013,12 @@ export class WebviewSyncController {
         cardLineCount: codeScope
           ? codeScope.querySelectorAll(`.${CODE_CARD_CLASS_NAMES.line}`).length
           : 0,
+        // #80 卡内行号文本序列（视口内；关闭行号子开关后为空数组）
+        lineNumberTexts: codeScope
+          ? [...codeScope.querySelectorAll(`.${CODE_CARD_CLASS_NAMES.linenumber}`)]
+            .map((el) => el.textContent ?? '')
+            .filter((t) => t !== '')
+          : [],
       }
       : undefined
     return {

@@ -8,6 +8,7 @@ import { EditorSelection, EditorState } from '@codemirror/state'
 import {
   CODE_CARD_CLASS_NAMES,
   CodeCardHeaderWidget,
+  CodeCardLineNumberWidget,
   buildCodeCardDecorations,
   codeCardConfigFacet,
   codeCardDecorations,
@@ -22,17 +23,23 @@ interface Item {
   cls?: string
   block?: boolean
   widget?: CodeCardHeaderWidget
+  ln?: { value: number; widthCh: number }
   hide?: boolean
 }
 
 /** 装饰集合直驱（卡片装饰来自 StateField；围栏表来自 mermaidFencesField） */
-function decos(text: string, anchor: number, card = true): Item[] {
+function decos(text: string, anchor: number, config?: { card?: boolean; lineNumbers?: boolean }): Item[] {
   const state = EditorState.create({
     doc: text,
     extensions: [
       liveDecorationsField,
       mermaidFencesField,
-      codeCardConfigFacet.of({ card, lineNumbers: true, copyButton: true, highlight: true }),
+      codeCardConfigFacet.of({
+        card: config?.card ?? true,
+        lineNumbers: config?.lineNumbers ?? true,
+        copyButton: true,
+        highlight: true,
+      }),
       codeCardDecorations,
     ],
     selection: EditorSelection.single(anchor),
@@ -43,13 +50,19 @@ function decos(text: string, anchor: number, card = true): Item[] {
 function itemsOf(set: import('@codemirror/view').DecorationSet): Item[] {
   const out: Item[] = []
   set.between(0, Number.MAX_SAFE_INTEGER, (from, to, value) => {
-    const spec = value.spec as { class?: string; widget?: CodeCardHeaderWidget; block?: boolean }
+    const spec = value.spec as { class?: string; widget?: CodeCardHeaderWidget | CodeCardLineNumberWidget; block?: boolean }
+    const widget = spec.widget
+    const isHeader = widget instanceof CodeCardHeaderWidget
+    const isLn = widget instanceof CodeCardLineNumberWidget
     out.push({
       from,
       to,
       cls: spec['class'],
       block: spec.block,
-      widget: spec.widget instanceof CodeCardHeaderWidget ? spec.widget : undefined,
+      widget: isHeader ? (widget as CodeCardHeaderWidget) : undefined,
+      ln: isLn
+        ? { value: (widget as CodeCardLineNumberWidget).value, widthCh: (widget as CodeCardLineNumberWidget).widthCh }
+        : undefined,
       hide: spec['class'] === undefined && spec.widget === undefined && to > from,
     })
   })
@@ -166,7 +179,7 @@ describe('代码块卡片：排除与降级', () => {
   })
 
   it('卡片总开关关闭 → 无装饰', () => {
-    expect(decos(DOC, 0, false)).toHaveLength(0)
+    expect(decos(DOC, 0, { card: false })).toHaveLength(0)
   })
 })
 
@@ -230,6 +243,53 @@ describe('卡片装饰：增量一致性', () => {
     state = state.update({ selection: EditorSelection.single(FENCE_FROM + 4) }).state
     expect(state.doc.toString()).toBe(before)
     expect(itemsOf(state.field(codeCardDecorations)).filter((i) => i.hide)).toHaveLength(0)
+  })
+})
+
+describe('卡内行号（#80）', () => {
+  it('代码行行首挂行号 widget：每块从 1 起，围栏行不占号', () => {
+    const items = decos(DOC, 0)
+    const lns = items.filter((i) => i.ln)
+    expect(lns.map((i) => i.ln!.value)).toEqual([1, 2, 3])
+    // 行号在代码行行首（行 4/5/6）
+    expect(lns[0]!.from).toBe(lineOf(DOC, 4).from)
+    expect(lns[2]!.from).toBe(lineOf(DOC, 6).from)
+  })
+
+  it('编辑态行号保留（两态一致）', () => {
+    const items = decos(DOC, FENCE_FROM + 4)
+    expect(items.filter((i) => i.ln).map((i) => i.ln!.value)).toEqual([1, 2, 3])
+  })
+
+  it('多块独立编号互不串号', () => {
+    const text = '```js\na\nb\n```\n\n```py\nx\n```'
+    const items = decos(text, 0)
+    expect(items.filter((i) => i.ln).map((i) => i.ln!.value)).toEqual([1, 2, 1])
+  })
+
+  it('列宽随块内行数位数对齐（<10 行 2ch、≥10 行 2ch、≥100 行 3ch）', () => {
+    expect(decos(DOC, 0).find((i) => i.ln)!.ln!.widthCh).toBe(2)
+    const ten = '```js\n' + Array.from({ length: 10 }, (_, i) => `l${i}`).join('\n') + '\n```'
+    expect(decos(ten, 0).find((i) => i.ln)!.ln!.widthCh).toBe(2)
+    const big = '```js\n' + Array.from({ length: 100 }, (_, i) => `line${i}`).join('\n') + '\n```'
+    expect(decos(big, 0).find((i) => i.ln)!.ln!.widthCh).toBe(3)
+  })
+
+  it('行号子开关关闭 → 无行号 widget，卡片外壳保留', () => {
+    const items = decos(DOC, 0, { lineNumbers: false })
+    expect(items.filter((i) => i.ln)).toHaveLength(0)
+    expect(items.find((i) => i.block && i.widget)).toBeDefined()
+    expect(items.filter((i) => i.cls?.includes(CODE_CARD_CLASS_NAMES.line))).toHaveLength(5)
+  })
+
+  it('行号 widget 形态：toDOM 产出右对齐文本、忽略事件', () => {
+    const w = new CodeCardLineNumberWidget(3, 2)
+    expect(w.eq(new CodeCardLineNumberWidget(3, 2))).toBe(true)
+    expect(w.eq(new CodeCardLineNumberWidget(4, 2))).toBe(false)
+    const dom = w.toDOM()
+    expect(dom.className).toBe(CODE_CARD_CLASS_NAMES.linenumber)
+    expect(dom.textContent).toBe('3')
+    expect(w.ignoreEvent()).toBe(true)
   })
 })
 

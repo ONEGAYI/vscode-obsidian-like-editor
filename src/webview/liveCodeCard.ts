@@ -38,6 +38,8 @@ export const CODE_CARD_CLASS_NAMES = {
   headerLabel: 'vsidian-code-card-header-label',
   /** 按钮区（#81 复制按钮、#82 折叠 chevron 挂载点） */
   headerActions: 'vsidian-code-card-header-actions',
+  /** 卡内行号（#80：代码行行首 widget，每块从 1，围栏行不占号） */
+  linenumber: 'vsidian-code-card-linenumber',
 } as const
 
 /** 卡片运行配置（设置驱动；#79 仅消费 card） */
@@ -118,16 +120,61 @@ function headerDeco(label: string, languageId: string | null): ReturnType<typeof
   return deco
 }
 
+const linenumberDecos = new Map<string, ReturnType<typeof Decoration.widget>>()
+function linenumberDeco(value: number, widthCh: number): ReturnType<typeof Decoration.widget> {
+  const key = `${value}\u0000${widthCh}`
+  let deco = linenumberDecos.get(key)
+  if (!deco) {
+    deco = Decoration.widget({ widget: new CodeCardLineNumberWidget(value, widthCh), side: -1 })
+    linenumberDecos.set(key, deco)
+  }
+  return deco
+}
+
 /**
- * 卡片装饰构建（#79 契约入口；纯数据输入，可单测直驱、阅读侧对拍复用）：
+ * 卡内行号 widget（#80）：代码行行首的右对齐数字，每块从 1 起、围栏行不占号。
+ * widthCh 为本块行号列宽（末行号位数与 2 取大，ch 单位随等宽字体对齐）；
+ * 两态（呈现/编辑）一致保留。ignoreEvent=true 纯展示，点击穿透编辑器。
+ */
+export class CodeCardLineNumberWidget extends WidgetType {
+  constructor(
+    readonly value: number,
+    readonly widthCh: number,
+  ) {
+    super()
+  }
+
+  eq(other: CodeCardLineNumberWidget): boolean {
+    return other.value === this.value && other.widthCh === this.widthCh
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement('span')
+    span.className = CODE_CARD_CLASS_NAMES.linenumber
+    span.textContent = String(this.value)
+    span.style.width = `${this.widthCh}ch`
+    span.setAttribute('aria-hidden', 'true')
+    return span
+  }
+
+  ignoreEvent(): boolean {
+    return true
+  }
+}
+
+/**
+ * 卡片装饰构建（#79/#80 契约入口；纯数据输入，可单测直驱、阅读侧对拍复用）：
  * 围栏表逐围栏发射——头部 block widget、卡片行类（首/尾圆角修饰）、
- * 呈现态围栏行内容清空。编辑态（触及围栏区间）不清空、外壳保留。
+ * 呈现态围栏行内容清空、代码行行首行号 widget（config.lineNumbers，每块
+ * 从 1、围栏行不占号、列宽随末行号位数对齐）。编辑态（触及围栏区间）
+ * 不清空、行号保留，外壳保留。
  */
 export function buildCodeCardDecorations(
   doc: Text,
   selection: EditorSelection,
   fm: { end: number } | null,
   fences: readonly FenceSpan[],
+  config: Pick<CodeCardConfig, 'lineNumbers'> = { lineNumbers: true },
 ): Array<Range<Decoration>> {
   const out: Array<Range<Decoration>> = []
   for (const fence of fences) {
@@ -154,6 +201,12 @@ export function buildCodeCardDecorations(
         .join(' ')
       out.push(cardLineDeco(cls).range(line.from, line.from))
     }
+    if (config.lineNumbers && closeLine.number > openLine.number + 1) {
+      const widthCh = Math.max(2, String(closeLine.number - openLine.number - 1).length)
+      for (let n = openLine.number + 1; n < closeLine.number; n++) {
+        out.push(linenumberDeco(n - openLine.number, widthCh).range(doc.line(n).from))
+      }
+    }
     if (!selectionTouchesRange(selection, fence.from, fence.to)) {
       out.push(fenceHideDeco.range(openLine.from, openLine.to))
       out.push(fenceHideDeco.range(closeLine.from, closeLine.to))
@@ -171,7 +224,7 @@ export const codeCardDecorations = StateField.define<DecorationSet>({
       return RangeSet.empty
     }
     return RangeSet.of(
-      buildCodeCardDecorations(state.doc, state.selection, decoField.fm, fences.spans),
+      buildCodeCardDecorations(state.doc, state.selection, decoField.fm, fences.spans, state.facet(codeCardConfigFacet)),
       true,
     )
   },
@@ -189,7 +242,7 @@ export const codeCardDecorations = StateField.define<DecorationSet>({
       return RangeSet.empty
     }
     return RangeSet.of(
-      buildCodeCardDecorations(tr.state.doc, tr.state.selection, decoField.fm, fences.spans),
+      buildCodeCardDecorations(tr.state.doc, tr.state.selection, decoField.fm, fences.spans, tr.state.facet(codeCardConfigFacet)),
       true,
     )
   },
