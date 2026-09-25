@@ -25,6 +25,7 @@
 import type { Text } from '@codemirror/state'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import type { OutlineSpanInfo, OutlineSpanKind } from '../shared/protocol'
+import type { OutlineSearchRange } from './outlineSearch'
 import { parseWikilinkInner, scanWikilinksInLine } from '../shared/wikilink'
 import {
   docInput,
@@ -83,10 +84,25 @@ export const OUTLINE_CLASS_NAMES = {
   hidden: 'vsidian-outline-hidden',
   /** #67 折叠中的父节点条目（箭头旋转的差异来源） */
   collapsed: 'vsidian-outline-collapsed',
+  /** #68 工具条行（侧栏顶栏与滑块行之间；显隐跟随 outline-active 类） */
+  toolbar: 'vsidian-outline-toolbar',
+  /** #68 跳转到笔记末尾按钮 */
+  jumpBottom: 'vsidian-outline-jump-bottom',
+  /** #68 重置按钮（清搜索 + 档位回默认 + 清手动折叠） */
+  reset: 'vsidian-outline-reset',
+  /** #68 标题搜索输入框 */
+  search: 'vsidian-outline-search',
+  /** #68 命中片段 mark（只包命中子串；文本层切分，与语义元素正交） */
+  searchHit: 'vsidian-outline-search-hit',
+  /** #68 无匹配占位（有词条但零命中） */
+  nomatch: 'vsidian-outline-nomatch',
 } as const
 
 /** 大纲面板可访问名称（按钮 aria-label 与面板 aria-label 共用文案） */
 export const OUTLINE_LABEL = '大纲'
+
+/** #68 搜索框占位文案（QO「Input to search」的中文口径） */
+export const OUTLINE_SEARCH_PLACEHOLDER = '输入以搜索'
 
 /** 白名单节点名 → 标记类型（判定与 liveDecorations 的行内 span 同源；
  *  高亮/公式 GFM 解析器不产节点，正文支持后在此接入） */
@@ -466,12 +482,16 @@ const OUTLINE_SPAN_ELEMENTS: Record<OutlineSpanKind, { tag: string; cls: string 
  * 构建（语义元素 + 稳定类名；双链/链接为纯文本，无 a 元素不可点）。
  * #67 起 hasChildren 标记父节点条目：前置折叠箭头按钮（点击目标与文字
  * 区分：箭头折叠/展开、文字跳转）；无子项条目渲染同宽占位保持文字对齐。
- * hidden/collapsed/located 等状态类不在此施加（控制器随折叠状态机维护）。
+ * #68 起 hits（与 items 同序的命中区间）在文本层切分出命中子串包 mark
+ * （片段级高亮与语义元素正交：mark 只落在文本节点内，不包裹语义元素
+ * 外层）；缺省为无高亮。hidden/collapsed/located 等状态类不在此施加
+ * （控制器随折叠状态机维护）。
  */
 export function renderOutlineItems(
   panel: HTMLElement,
   items: readonly OutlineItem[],
   hasChildren?: readonly boolean[],
+  hits?: readonly (readonly OutlineSearchRange[])[],
 ): void {
   if (items.length === 0) {
     const empty = document.createElement('div')
@@ -500,17 +520,22 @@ export function renderOutlineItems(
       spacer.setAttribute('aria-hidden', 'true')
       el.appendChild(spacer)
     }
-    appendOutlineContent(el, item)
+    appendOutlineContent(el, item, hits?.[i])
     nodes.push(el)
   }
   panel.replaceChildren(...nodes)
 }
 
-/** 条目内容：plainText 文本段 + 嵌套标记区间 → 嵌套语义元素 */
-function appendOutlineContent(el: HTMLElement, item: OutlineItem): void {
+/** 条目内容：plainText 文本段 + 嵌套标记区间 → 嵌套语义元素；
+ *  #68 命中区间在文本层切分包 mark */
+function appendOutlineContent(
+  el: HTMLElement,
+  item: OutlineItem,
+  hits?: readonly OutlineSearchRange[],
+): void {
   // 树遍历产出的区间恒为层叠（嵌套或相离）；排序后外层在前
   const spans = [...item.spans].sort((a, b) => a.start - b.start || b.end - a.end)
-  appendSpanRange(el, 0, item.plainText.length, spans, item.plainText)
+  appendSpanRange(el, 0, item.plainText.length, spans, item.plainText, hits)
 }
 
 /** [from,to) 文本段 + 直接子 span（spans 为层叠序）追加到 host */
@@ -520,6 +545,7 @@ function appendSpanRange(
   to: number,
   spans: readonly OutlineSpanInfo[],
   plainText: string,
+  hits?: readonly OutlineSearchRange[],
 ): void {
   let pos = from
   let i = 0
@@ -533,7 +559,7 @@ function appendSpanRange(
       break
     }
     if (s.start > pos) {
-      host.appendChild(document.createTextNode(plainText.slice(pos, s.start)))
+      appendTextWithHits(host, plainText, pos, s.start, hits)
     }
     // 直接子 span：被 s 完全包含的连续前缀（排序保证同起点外层在前）
     const children: OutlineSpanInfo[] = []
@@ -549,10 +575,45 @@ function appendSpanRange(
     const def = OUTLINE_SPAN_ELEMENTS[s.kind]
     const child = document.createElement(def.tag)
     child.className = def.cls
-    appendSpanRange(child, s.start, s.end, children, plainText)
+    appendSpanRange(child, s.start, s.end, children, plainText, hits)
     host.appendChild(child)
     pos = s.end
     i = j
+  }
+  if (pos < to) {
+    appendTextWithHits(host, plainText, pos, to, hits)
+  }
+}
+
+/** 纯文本段 [from,to) 追加到 host；#68 搜索命中区间（全局 plainText
+ *  坐标，有序不重叠）与段相交处包 mark——命中子串跨语义 span 边界时在
+ *  各文本节点内各自切分（两段 mark 视觉连续，语义结构不被拆改） */
+function appendTextWithHits(
+  host: HTMLElement,
+  plainText: string,
+  from: number,
+  to: number,
+  hits?: readonly OutlineSearchRange[],
+): void {
+  if (!hits || hits.length === 0) {
+    host.appendChild(document.createTextNode(plainText.slice(from, to)))
+    return
+  }
+  let pos = from
+  for (const h of hits) {
+    if (h.end <= pos || h.start >= to) {
+      continue
+    }
+    const s = Math.max(h.start, pos)
+    const e = Math.min(h.end, to)
+    if (s > pos) {
+      host.appendChild(document.createTextNode(plainText.slice(pos, s)))
+    }
+    const mark = document.createElement('mark')
+    mark.className = OUTLINE_CLASS_NAMES.searchHit
+    mark.textContent = plainText.slice(s, e)
+    host.appendChild(mark)
+    pos = e
   }
   if (pos < to) {
     host.appendChild(document.createTextNode(plainText.slice(pos, to)))
@@ -667,6 +728,85 @@ export function outlineSliderLevelAt(
     }
   })
   return best
+}
+
+/** 工具条装配结果（#68）：跳末按钮、重置按钮、搜索输入框 */
+export interface OutlineToolbarDom {
+  row: HTMLElement
+  jumpBottom: HTMLButtonElement
+  reset: HTMLButtonElement
+  search: HTMLInputElement
+}
+
+/**
+ * #68 大纲工具条行（侧栏顶栏与滑块行之间）：「跳转到笔记末尾」按钮、
+ * 「重置」按钮、搜索输入框（flex 占余宽）。行为装配在 syncController
+ * （与滑块行同分工：此处只建 DOM 与可访问属性）。图标线宽遵循侧栏图标
+ * 口径——不写在 SVG 属性上，样式失效由 CSS 契约与集成绘制断言暴露。
+ * 搜索用 type=search（原生清除 affordance）+ aria-label；输入即时生效
+ * （无去抖，标题序列量级小，QO 同款按键即时重算口径）
+ */
+export function buildOutlineToolbar(): OutlineToolbarDom {
+  const row = document.createElement('div')
+  row.className = OUTLINE_CLASS_NAMES.toolbar
+  const jumpBottom = document.createElement('button')
+  jumpBottom.type = 'button'
+  jumpBottom.className = OUTLINE_CLASS_NAMES.jumpBottom
+  jumpBottom.setAttribute('aria-label', '跳转到笔记末尾')
+  jumpBottom.setAttribute('title', '跳转到笔记末尾')
+  jumpBottom.appendChild(createOutlineJumpBottomIcon())
+  const reset = document.createElement('button')
+  reset.type = 'button'
+  reset.className = OUTLINE_CLASS_NAMES.reset
+  reset.setAttribute('aria-label', '重置')
+  reset.setAttribute('title', '重置')
+  reset.appendChild(createOutlineResetIcon())
+  const search = document.createElement('input')
+  search.type = 'search'
+  search.className = OUTLINE_CLASS_NAMES.search
+  search.setAttribute('placeholder', OUTLINE_SEARCH_PLACEHOLDER)
+  search.setAttribute('aria-label', '搜索大纲标题')
+  search.autocomplete = 'off'
+  search.spellcheck = false
+  row.appendChild(jumpBottom)
+  row.appendChild(reset)
+  row.appendChild(search)
+  return { row, jumpBottom, reset, search }
+}
+
+/** #68 跳转到末尾图标（lucide arrow-down-to-line 的 16px 缩放意象）：
+ *  竖线 + 箭头 + 底线 */
+function createOutlineJumpBottomIcon(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg')
+  svg.setAttribute('viewBox', '0 0 16 16')
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('stroke', 'currentColor')
+  svg.setAttribute('stroke-linecap', 'round')
+  svg.setAttribute('stroke-linejoin', 'round')
+  svg.setAttribute('aria-hidden', 'true')
+  for (const d of ['M8 2 V11.3', 'M4 7.3 L8 11.3 L12 7.3', 'M3.3 13.7 H12.7']) {
+    const path = document.createElementNS(SVG_NS, 'path')
+    path.setAttribute('d', d)
+    svg.appendChild(path)
+  }
+  return svg
+}
+
+/** #68 重置图标（lucide rotate-ccw 的 16px 缩放意象）：逆时针弧 + 箭头角 */
+function createOutlineResetIcon(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg')
+  svg.setAttribute('viewBox', '0 0 16 16')
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('stroke', 'currentColor')
+  svg.setAttribute('stroke-linecap', 'round')
+  svg.setAttribute('stroke-linejoin', 'round')
+  svg.setAttribute('aria-hidden', 'true')
+  for (const d of ['M2.7 8 A5.3 5.3 0 1 0 8 2.7 A5.8 5.8 0 0 0 3.6 4.5 L2.7 5.3', 'M2.7 2.7 V5.3 H5.3']) {
+    const path = document.createElementNS(SVG_NS, 'path')
+    path.setAttribute('d', d)
+    svg.appendChild(path)
+  }
+  return svg
 }
 
 /** 大纲按钮图标（#54：Obsidian outline / lucide list 意象）：三条横线 +
