@@ -208,10 +208,13 @@ const taskCheckboxDecos = [
 
 const tablePipeDeco = Decoration.mark({ class: LIVE_CLASS_NAMES.tablePipe })
 const tableEscapedPipeDeco = Decoration.mark({ class: LIVE_CLASS_NAMES.tableEscapedPipe })
-// 行尾一个 Markdown 填充空格保留文字节点供原生输入使用，但不参与可见排版。
+// 行尾一个 Markdown 填充空格保留文字节点供原生输入/IME 使用，但不参与
+// 可见排版。不要替换成零宽 widget：删空格再输入曾使光标显示在后一列。
 const tableGridPaddingDeco = Decoration.mark({ class: 'vsidian-table-grid-padding' })
 class TableCellBreakWidget extends WidgetType {
   eq(): boolean { return true }
+  // 文档仍只有一个源行，CM6 必须得知 widget 在视觉上增加一行，
+  // 否则格内上下方向键与光标测量会停留在原行。
   get lineBreaks(): number { return 1 }
   toDOM(): HTMLElement {
     const br = document.createElement('br')
@@ -420,6 +423,7 @@ function emitTableRowMarks(
       if (cell.to > cell.from && doc.sliceString(cell.to - 1, cell.to) === ' ') {
         out.push(tableGridPaddingDeco.range(cell.to - 1, cell.to))
       }
+      // 只替换裸 br；代码片段或转义后的 br 要保持可见字面文本。
       for (const lineBreak of tableCellBreaks(doc.sliceString(cell.from, cell.to))) {
         out.push(tableCellBreakDeco.range(cell.from + lineBreak.from, cell.from + lineBreak.to))
       }
@@ -1172,6 +1176,8 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
   },
   provide: (f) => [
     EditorView.decorations.from(f, (s) => s.decos),
+    // `<br>` 的四个源字符是一个可见换行。将其设为原子范围，退格时
+    // 一次合行，方向键也不会钻进不可见的 <、b、r、> 中间。
     EditorView.atomicRanges.of((view) => {
       const breaks: Array<Range<Decoration>> = []
       for (const visible of view.visibleRanges) {
@@ -1219,8 +1225,9 @@ const inviewActiveDeco = Decoration.line({
   class: `${HEADING_CLASS_NAMES.inview} ${HEADING_CLASS_NAMES.active}`,
 })
 
-/** CSS grid 的留白可能让 CM6 默认点击命中隐藏管道；把落点约束到目标格。
- *  mouseup 再核对一次，处理浏览器默认选区定位晚于 mousedown 的情况。 */
+/** CSS grid 的留白可能让 CM6 默认点击命中隐藏管道，甚至把中格点击映射
+ * 到右格；先按实际点击的格 DOM 约束源位置。mouseup 再核对一次，处理
+ * 浏览器默认选区定位晚于 mousedown 的情况，空格也必须可点可编辑。 */
 const gridPointerDown = new WeakMap<EditorView, { x: number; y: number }>()
 
 /** 鼠标拖选、双击和三击都只在起始格的内容区间内定位。 */

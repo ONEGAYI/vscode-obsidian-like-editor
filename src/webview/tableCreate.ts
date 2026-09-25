@@ -21,6 +21,8 @@ export function planCreateTable(doc: string, from: number, to = from): PlannedTa
   const rightText = right.trim() ? right : ''
   const previousLine = before.endsWith('\n') ? before.slice(0, -1).split('\n').at(-1) ?? '' : ''
   const nextLine = after.startsWith('\n') ? after.slice(1).split('\n', 1)[0] ?? '' : ''
+  // 行内左右文字各自成为段落，表格前后再留空行。若只在光标处插入
+  // 管道行，Markdown 会把原行文字并进表头或紧邻段落，表格解析失败。
   const prefix = leftText ? `${leftText}\n\n` : previousLine.trim() ? '\n' : ''
   const suffix = rightText ? `\n\n${rightText}` : nextLine.trim() ? '\n' : ''
   return {

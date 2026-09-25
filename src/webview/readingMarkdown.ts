@@ -90,6 +90,8 @@ export function createMarkdownRenderer(): InstanceType<typeof MarkdownIt> {
   // #11 双链规则先于 link（[t](u)）：`[[…]]` 在 CommonMark 中只是普通文本，
   // 必须在文本规则消费前拦截
   md.inline.ruler.before('link', 'vsidian_wikilink', vsidianWikilinkInlineRule)
+  // 编辑态把格内回车存成 br。阅读态只在表格 inline token 里重新解析
+  // 无属性 br；全局 html:false 继续转义其他 HTML，代码片段由解析器保留字面值。
   md.inline.ruler.before('html_inline', 'vsidian_table_break', (state, silent) => {
     if (!state.env.vsidianTableCell) return false
     const length = tableCellBreakLength(state.src, state.pos)

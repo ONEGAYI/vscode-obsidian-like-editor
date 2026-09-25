@@ -201,6 +201,8 @@ const tableCompositionCleanup = ViewPlugin.fromClass(class {
 })
 
 const markTableCompositionInput = EditorState.transactionExtender.of((tr) =>
+  // IME 候选阶段的临时文本可能暂时改变列数；通知装饰层只平移原网格，
+  // 等候选落定再重算，避免整表在候选期间闪成源码。
   tr.docChanged && tr.startState.field(tableComposition) && tr.isUserEvent('input')
     ? { annotations: tableCompositionPreview.of(true) }
     : null)
@@ -261,7 +263,8 @@ function gridTableAcross(state: EditorState, from: number, to: number, reverse =
   return null
 }
 
-/** 鼠标从表格外跨行拖选时停在网格边界，不把隐藏管道/分隔行纳入选区。 */
+/** 鼠标从表格外跨行拖选时停在网格边界。隐藏的 `| --- |` 仍在
+ * CM6 源文档里；若让选区跨进去，按 Delete 会删掉表格结构。 */
 const protectGridPointerSelection = EditorState.transactionFilter.of((tr) => {
   if (tr.docChanged || tr.selection === undefined || !tr.isUserEvent('select.pointer') ||
       tr.newSelection.ranges.length !== 1) return tr
@@ -280,7 +283,8 @@ const protectGridPointerSelection = EditorState.transactionFilter.of((tr) => {
   }
 })
 
-/** 原生删除命令可跨过隐藏源码。格内开始的编辑只修改这一格的可见内容。 */
+/** 原生删除命令可跨过隐藏源码。格内开始的编辑只修改这一格的可见内容；
+ * 过滤器同时覆盖键盘删除与浏览器 DOM observer 回报的输入事务。 */
 const protectGridCellContent = EditorState.transactionFilter.of((tr) => {
   if (!tr.docChanged || (!tr.isUserEvent('delete') && !tr.isUserEvent('input'))) return tr
   const ranges = tr.startState.selection.ranges
@@ -295,7 +299,8 @@ const protectGridCellContent = EditorState.transactionFilter.of((tr) => {
     return tr
   }
   // 边界取管道内侧；普通空白可删除，但删到零长度时保留一个 Markdown
-  // 填充空格作为原生输入节点，避免 CM6 将当前格换成不可编辑的 widget。
+  // 填充空格作为原生输入节点。纯 `||` 没有文字节点，浏览器会把输入/IME
+  // 附着到相邻格或不可编辑 widget；这个空格在装饰层须保持视觉透明。
   const lower = cell.from
   const upper = cell.to
   const changes: Array<{ from: number; to: number; insert: string }> = []
@@ -370,7 +375,8 @@ const protectGridCellContent = EditorState.transactionFilter.of((tr) => {
 })
 
 /** 浏览器输入默认生成 assoc=0 的光标。格尾紧邻隐藏管道时，这会把原生
- * caret 锚在网格行边界，视觉上落到下一列；向当前格关联以保持可继续退格。 */
+ * caret 锚在网格行边界，视觉上落到下一列；向当前格关联以保持可继续退格。
+ * br 后例外：下一视觉行必须向右关联，才不会显示在 br 之前。 */
 const keepGridInputCaretInsideCell = EditorState.transactionFilter.of((tr) => {
   if (!tr.docChanged || !tr.isUserEvent('input') || tr.newSelection.ranges.length !== 1 ||
       !tr.newSelection.main.empty) return tr
@@ -394,7 +400,8 @@ const keepGridInputCaretInsideCell = EditorState.transactionFilter.of((tr) => {
 })
 
 /** 原生 DOM 输入会在 CM6 事务后再次同步浏览器选区，并把格尾 assoc
- * 复位为 0。待本轮 DOM 更新结束后重新关联当前格，避免原生 caret 跑到右列。 */
+ * 复位为 0。仅修事务选择不足以阻止光标跑到右列；DOM 更新后还需把
+ * 原生 Selection 锚回目标格的文字节点，br 改行高后再经过测量阶段复核。 */
 const stabilizeGridCaretAfterInput = ViewPlugin.fromClass(class {
   update(update: ViewUpdate): void {
     if ((!update.docChanged && !update.selectionSet) || update.view.compositionStarted) return
@@ -468,7 +475,9 @@ const selectGridCell: Command = (view) => {
   return true
 }
 
-/** 回车保持 Markdown 表格源行完整，并把光标移到格内下一视觉行。 */
+/** 回车在格内写 `<br>`，维持 Markdown 表格的一格一源行；真实 `\n`
+ * 会把此格后半段变成下一源行，下一次解析便丢失原表格形状。
+ * 光标放在 br 之后，交给装饰层的原生 br 显示为下一视觉行。 */
 const insertGridCellBreak: Command = (view) => {
   if (view.compositionStarted || view.state.selection.ranges.length !== 1) return false
   const range = view.state.selection.main
@@ -481,6 +490,7 @@ const insertGridCellBreak: Command = (view) => {
     node.firstChild && node.lastChild && from >= node.firstChild.to && to <= node.lastChild.from)
   if (code?.firstChild && code.lastChild) {
     // 换行应在代码片段外序列化；否则 <br> 会变成代码中的可见字面文本。
+    // 左右有内容才各自补全反引号：在片段首尾回车也必须得到可解析的代码。
     const ticks = view.state.sliceDoc(code.from, code.firstChild.to)
     const before = view.state.sliceDoc(code.firstChild.to, from)
     const after = view.state.sliceDoc(to, code.lastChild.from)
@@ -491,6 +501,7 @@ const insertGridCellBreak: Command = (view) => {
       userEvent: 'input.type', scrollIntoView: true })
     return true
   }
+  // 格尾 br 后仍要留原生输入文字节点，否则换行后立即输入会落到下一格。
   const padding = to === cell.to ? ' ' : ''
   view.dispatch({ changes: { from, to, insert: '<br>' + padding },
     selection: EditorSelection.create([EditorSelection.cursor(from + 4, 1)]),
@@ -498,7 +509,9 @@ const insertGridCellBreak: Command = (view) => {
   return true
 }
 
-/** 代码片段被格内换行分开后，从后一段开头退格合回原片段。 */
+/** 代码片段被格内换行分开后，从后一段开头退格合回原片段。
+ * 不能只删除 `<br>`：两侧临时补的反引号也要成对去掉，否则原代码
+ * 被拆成两个相邻 span，退格后的源码与回车前不一致。 */
 const deleteGridCellBreak: Command = (view) => {
   const range = view.state.selection.main
   if (view.compositionStarted || view.state.selection.ranges.length !== 1 || !range.empty) return false
@@ -520,7 +533,9 @@ const deleteGridCellBreak: Command = (view) => {
   return true
 }
 
-/** 在可编辑边界直接导航到相邻格，跳过透明填充和隐藏管道。 */
+/** 在可编辑边界直接导航到相邻格，跳过透明填充和隐藏管道。
+ * 格内仍交给原生左右移动；若无条件拦截，光标将无法逐字移动。
+ * 格尾返回 true 还用于阻止原生右移进入隐藏的分隔符。 */
 function moveAcrossGridCell(view: EditorView, forward: boolean): boolean {
   if (view.compositionStarted || view.state.selection.ranges.length !== 1 || !view.state.selection.main.empty) return false
   const head = view.state.selection.main.head
@@ -540,7 +555,9 @@ function moveAcrossGridCell(view: EditorView, forward: boolean): boolean {
   return true
 }
 
-/** 网格视觉行不等于 CM6 源行：上下导航按内容行定位，绕过隐藏分隔行。 */
+/** 网格视觉行不等于 CM6 源行：上下导航按内容行定位，绕过隐藏分隔行。
+ * 格内 `<br>` 与自动折行先尝试同格视觉行；跨源行时保留列和水平目标。
+ * 进入/离开表格的相邻一步也须接管，否则 CM6 会按块测量跨过整张表。 */
 function moveVerticallyAcrossGrid(view: EditorView, forward: boolean): boolean {
   const state = view.state
   const range = state.selection.main
@@ -617,7 +634,8 @@ function moveVerticallyAcrossGrid(view: EditorView, forward: boolean): boolean {
   const at = empty ? next.from : Math.max(next.contentFrom, Math.min(next.contentTo, hit ?? next.contentFrom))
   return select(at, empty || at === next.contentFrom ? 1 : -1)
 }
-/** 退格直接删除可见内容，不先消耗透明填充。 */
+/** 退格直接删除可见内容，不先消耗透明填充。
+ * 填充空格虽然写在源文里，却不是用户打出的末尾空格。 */
 const deleteBeforeGridPadding: Command = (view) => {
   if (view.compositionStarted || view.state.selection.ranges.length !== 1 || !view.state.selection.main.empty) return false
   const head = view.state.selection.main.head
@@ -638,7 +656,8 @@ function prepareGridInputPadding(view: EditorView): void {
     selection: EditorSelection.create([EditorSelection.cursor(caret.head, cell.from === cell.to ? 1 : -1)]) })
 }
 
-/** 普通键入、粘贴在空白行首笔规范化；IME 的中间事务交宿主组合缓冲处理。 */
+/** 普通键入、粘贴在空白行首笔规范化；IME 候选过程可能多次替换同一区间，
+ * 此处不能逐笔改整行，否则宿主收到的变更坐标与候选终态不一致。 */
 const normalizeBlankRowInput = EditorState.transactionFilter.of((tr) => {
   if (!tr.isUserEvent('input') || tr.changes.empty || tr.startState.field(tableComposition)) return tr
   let change: { from: number; to: number; text: string } | null = null

@@ -427,6 +427,8 @@ body {
 #app .cm-editor .cm-scroller .vsidian-table-grid-align-center { text-align: center; }
 #app .cm-editor .cm-scroller .vsidian-table-grid-align-right { text-align: right; }
 
+/* 这些 mark 仅在绘制层隐藏，仍存在于 CM6 源文档。光标和删除边界必须
+   同时由 tableEditing.ts 保护，单靠 display:none 无法阻止跨格误删。 */
 #app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-pipe,
 #app .cm-editor .cm-scroller .vsidian-table-grid-row > .cm-widgetBuffer,
 #app .cm-editor .cm-scroller .vsidian-table-grid-delimiter {

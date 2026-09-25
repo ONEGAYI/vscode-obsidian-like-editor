@@ -28,7 +28,9 @@ export interface TableCellRange {
   contentTo: number
 }
 
-/** 表格格内换行的持久化形式，仅允许无属性的 br。 */
+/** 表格格内换行的持久化形式，仅允许无属性的 br。
+ * 宽松接受大小写、空格和自闭合写法，以便重新打开已有 Markdown 时同样换行；
+ * 带属性标签不在此白名单内，也不应因此打开通用 HTML 渲染。 */
 export function tableCellBreakLength(text: string, at: number): number {
   return /^<br[\t ]*\/?>/i.exec(text.slice(at))?.[0].length ?? 0
 }

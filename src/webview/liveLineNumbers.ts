@@ -2,7 +2,9 @@ import type { EditorState } from '@codemirror/state'
 import { lineNumbers, type EditorView } from '@codemirror/view'
 import { liveDecorationsField, LIVE_CLASS_NAMES } from './liveDecorations'
 
-/** 安全网格表格只标段首源行号；源码回退表格仍逐行编号。 */
+/** 安全网格表格只标段首源行号；源码回退表格仍逐行编号。
+ * 分隔行虽然在文档里占一行，CSS 将它隐藏后 gutter 仍会占位、与网格行重叠；
+ * 在网格表格内只返回表头行数字，保留源行号含义又避免视觉叠字。 */
 function formatLiveLineNumber(lineNumber: number, state: EditorState): string {
   // CM6 用超出文档的 9/99/... 测量列宽，测量值不能走 doc.line。
   if (lineNumber > state.doc.lines) return String(lineNumber)
