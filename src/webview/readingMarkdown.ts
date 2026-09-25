@@ -11,6 +11,9 @@
 // offset 写入 data-vsidian-src-start/end（与协议坐标同构）；任务项标记的更细
 // 锚点在 convertTaskItems 中按 li 首行源文计算（#9 勾选写回的定位依据）。
 import MarkdownIt, { type Env, type StateInline, type Token } from 'markdown-it'
+import katexPlugin from '@vscode/markdown-it-katex'
+import katex from 'katex'
+import { MATH_CLASS_NAMES } from '../shared/math'
 import { WIKILINK_CLASS_NAMES, parseWikilinkInner } from '../shared/wikilink'
 import { tableCellBreakLength } from './tableCells'
 
@@ -31,6 +34,70 @@ export const READING_MARKDOWN_CLASS_NAMES = {
   taskItem: 'vsidian-reading-task',
   taskCheckbox: 'vsidian-reading-task-checkbox',
 } as const
+
+/**
+ * KaTeX 渲染（#59）：成功返回 KaTeX HTML，失败返回 null（调用方降级为
+ * 原文 span——不显示英文错误消息，原文可读且源文不丢）。displayMode 的
+ * 判定与 @vscode/markdown-it-katex 的 katexInline 一致（align/equation 等
+ * 环境强制 display）。
+ */
+function renderKatex(latex: string, displayMode: boolean): string | null {
+  try {
+    return katex.renderToString(latex, {
+      displayMode,
+      throwOnError: true,
+      // 中文等 Unicode 文本字符在数学模式下静默渲染（strict 警告不阻断）：
+      // 中文用户在公式内夹注中文是常态，不构成降级理由
+      strict: false,
+    })
+  } catch {
+    return null
+  }
+}
+
+/** HTML 转义（降级 span 的原文内容；与 markdown-it 的 default规则同覆盖面） */
+function escapeHtmlText(s: string): string {
+  return s
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+}
+
+/**
+ * 公式渲染规则（#59）：覆盖插件的默认规则——
+ * - 成功：KaTeX HTML 包 vsidian-math（/ vsidian-math-block）稳定类名
+ *   （cssProbe 与选择器映射表的入口）
+ * - 失败：vsidian-math-error span 显示 `$原文$`（可读降级，源文经转义，
+ *   title 带原文便于悬停核对）
+ * 块级输出对齐插件的 `<p class="katex-block">` 包裹（阅读 CSS 的 display
+ * 居中挂在该容器上）。
+ */
+function installMathRenderers(md: InstanceType<typeof MarkdownIt>): void {
+  const inline = (tokens: Token[], idx: number): string => {
+    const content = tokens[idx]!.content
+    // 与插件一致：$`1+1`$ 形态剥反引号
+    const tex = content.length > 2 && content[0] === '`' && content[content.length - 1] === '`'
+      ? content.slice(1, -1)
+      : content
+    const displayMode = /\\begin\{(align|equation|gather|cd|alignat)\}/i.test(tex)
+    const html = renderKatex(tex, displayMode)
+    return html !== null
+      ? `<span class="${MATH_CLASS_NAMES.math}">${html}</span>`
+      : `<span class="${MATH_CLASS_NAMES.mathError}" title="${escapeHtmlText(tex)}">${escapeHtmlText(`$${tex}$`)}</span>`
+  }
+  const block = (tokens: Token[], idx: number): string => {
+    const tex = tokens[idx]!.content
+    const html = renderKatex(tex, true)
+    return html !== null
+      ? `<p class="katex-block ${MATH_CLASS_NAMES.math} ${MATH_CLASS_NAMES.mathBlock}">${html}</p>\n`
+      : `<p class="katex-block ${MATH_CLASS_NAMES.mathError}"><code>${escapeHtmlText(`$$${tex}$$`)}</code></p>\n`
+  }
+  md.renderer.rules['math_inline'] = inline
+  md.renderer.rules['math_inline_block'] = block
+  md.renderer.rules['math_inline_bare_block'] = block
+  md.renderer.rules['math_block'] = block
+}
 
 /**
  * 双链 inline 规则（#11）：合法 `[[…]]` 渲染为 `<a class="vsidian-wikilink"
@@ -90,6 +157,10 @@ export function createMarkdownRenderer(): InstanceType<typeof MarkdownIt> {
   // #11 双链规则先于 link（[t](u)）：`[[…]]` 在 CommonMark 中只是普通文本，
   // 必须在文本规则消费前拦截
   md.inline.ruler.before('link', 'vsidian_wikilink', vsidianWikilinkInlineRule)
+  // #59 公式：@vscode/markdown-it-katex 的解析规则（$…$ / $$…$$ 判定与
+  // shared/math.ts 对齐）；渲染规则覆盖为带稳定类名 + 原文降级
+  md.use(katexPlugin, { throwOnError: true })
+  installMathRenderers(md)
   // 编辑态把格内回车存成 br。阅读态只在表格 inline token 里重新解析
   // 无属性 br；全局 html:false 继续转义其他 HTML，代码片段由解析器保留字面值。
   md.inline.ruler.before('html_inline', 'vsidian_table_break', (state, silent) => {
