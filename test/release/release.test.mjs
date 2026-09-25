@@ -4,6 +4,18 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { extractLatestChangelog, inspectVsixEntries, parseUnzipListing, SIZE_LIMITS } from '../../scripts/release.mjs'
 
+// KaTeX 字体条目（#59）：体积取 woff2 实际产物的代表值（最大 28KB）
+function katexFontEntries() {
+  return ['AMS-Regular', 'Caligraphic-Bold', 'Caligraphic-Regular', 'Fraktur-Bold',
+    'Fraktur-Regular', 'Main-Bold', 'Main-BoldItalic', 'Main-Italic', 'Main-Regular',
+    'Math-BoldItalic', 'Math-Italic', 'SansSerif-Bold', 'SansSerif-Italic',
+    'SansSerif-Regular', 'Script-Regular', 'Size1-Regular', 'Size2-Regular',
+    'Size3-Regular', 'Size4-Regular', 'Typewriter-Regular'].map((family) => ({
+    size: 14000,
+    name: `extension/out/webview/assets/KaTeX_${family}.woff2`,
+  }))
+}
+
 // 与真实 VSIX 内容对应的合法基线（体积取包体检查阈值内的代表值）。
 function makeEntries() {
   return [
@@ -16,12 +28,16 @@ function makeEntries() {
     { size: 3000, name: 'extension/CHANGELOG.md' },
     { size: 1100, name: 'extension/LICENSE.txt' },
     { size: 101482, name: 'extension/out/extension.js' },
-    { size: 545586, name: 'extension/out/webview/main.js' },
-    { size: 18571, name: 'extension/out/webview/main.css' },
+    { size: 829024, name: 'extension/out/webview/main.js' },
+    { size: 41308, name: 'extension/out/webview/main.css' },
     { size: 5683, name: 'extension/out/webview/settings.js' },
     { size: 902, name: 'extension/out/webview/settings.css' },
+    // #60 Mermaid 独立产物（minify 后实测 2,727,077 B 的代表值；低于 3MB
+    // 单文件警告线与 4MB 上限）
+    { size: 2727077, name: 'extension/out/webview/mermaid.js' },
     { size: 3898, name: 'extension/media/css-contract-probe.css' },
     { size: 35761, name: 'extension/media/vsidian-icon-256.png' },
+    ...katexFontEntries(),
   ]
 }
 
@@ -72,10 +88,21 @@ test('unzip -l 解析：只提取"长度 日期 时间 路径"形态的文件行
   assert.equal(entries[1].name, 'extension/readme.md')
 })
 
-test('VSIX 检查：完整合法集合通过且无警告', () => {
+test('VSIX 检查：完整合法集合通过且零警告（#60 后单文件警告线 3MB，main.js 829KB 与 mermaid.js 2.62MB 均在线内）', () => {
   const result = inspectVsixEntries(makeEntries(), { iconPath: 'media/vsidian-icon-256.png' })
   assert.equal(result.ok, true)
+  // #60 阈值调整后：总量约 4.08MB < 4.5MB 警告线，全部单文件 < 3MB——
+  // 合法基线不再有预期警告（#59 期 main.js 超 700KB 警告线的口径作废）
   assert.deepEqual(result.warnings, [])
+})
+
+test('VSIX 检查：缺少任一 KaTeX 字体报错（公式回落系统字体的防线）', () => {
+  const missing = makeEntries().filter(
+    (e) => e.name !== 'extension/out/webview/assets/KaTeX_Size1-Regular.woff2',
+  )
+  const result = inspectVsixEntries(missing, { iconPath: 'media/vsidian-icon-256.png' })
+  assert.equal(result.ok, false)
+  assert.ok(result.errors.some((e) => e.includes('KaTeX_Size1-Regular.woff2')))
 })
 
 test('VSIX 检查：缺少必需运行时资产报错（大小写不敏感匹配）', () => {
@@ -107,6 +134,33 @@ test('VSIX 检查：仓库管理与开发文件一律拒绝', () => {
   }
 })
 
+test('VSIX 检查：out/ 未登记产物拒绝（白名单拦「多」，评审 C1）', () => {
+  for (const name of [
+    'extension/out/webview/zz_analyze.css', // 调试遗留（v0.1.0 后实测发生过）
+    'extension/out/webview/assets/KaTeX_Main-Regular.woff', // 裁剪失效的多余格式（同时被 C7 拦）
+    'extension/out/webview/vendor.js', // 未登记的新产物
+  ]) {
+    const result = inspectVsixEntries([...makeEntries(), { size: 100, name }])
+    assert.equal(result.ok, false, `${name} 应被拒绝`)
+    assert.ok(result.errors.some((e) => e.includes('未登记产物')), `${name} 的错误应标注未登记产物`)
+  }
+})
+
+test('VSIX 检查：woff/ttf 字体拒绝（字体裁剪失效防线，评审 C7）', () => {
+  for (const name of [
+    'extension/out/webview/assets/KaTeX_Main-Regular.woff',
+    'extension/out/webview/assets/KaTeX_Main-Regular.ttf',
+    'extension/media/fonts/some.ttf',
+  ]) {
+    const result = inspectVsixEntries([...makeEntries(), { size: 100, name }])
+    assert.equal(result.ok, false, `${name} 应被拒绝`)
+    assert.ok(
+      result.errors.some((e) => e.includes('woff2')),
+      `${name} 的错误应指向仅 woff2 约定`,
+    )
+  }
+})
+
 test('VSIX 检查：icon 缺失或超限报错（原图不得混入包内）', () => {
   const missing = inspectVsixEntries(makeEntries().filter((e) => !e.name.endsWith('vsidian-icon-256.png')), { iconPath: 'media/vsidian-icon-256.png' })
   assert.equal(missing.ok, false)
@@ -121,10 +175,24 @@ test('VSIX 检查：icon 缺失或超限报错（原图不得混入包内）', (
   assert.ok(oversized.errors.some((e) => e.includes('图标')))
 })
 
+test('VSIX 检查：缺少 mermaid.js 报错（#60 图表渲染器懒加载产物的防线）', () => {
+  const missing = makeEntries().filter((e) => e.name !== 'extension/out/webview/mermaid.js')
+  const result = inspectVsixEntries(missing, { iconPath: 'media/vsidian-icon-256.png' })
+  assert.equal(result.ok, false)
+  assert.ok(result.errors.some((e) => e.includes('out/webview/mermaid.js')))
+})
+
 test('VSIX 检查：解压总体积与单文件双阈值（警告线与失败线）', () => {
-  const warn = inspectVsixEntries(
-    makeEntries().map((e) => ({ ...e, size: Math.max(e.size, Math.floor(SIZE_LIMITS.totalWarnBytes / makeEntries().length) + 1) })),
+  // 总量恰过警告线：放大最大条目 mermaid.js（增量后仍 < 4MB 单文件上限，
+  // 只触发总量警告不触发失败；#60 基线总量约 4.08MB，直接构造不再可靠）
+  const base = makeEntries()
+  const baseTotal = base.reduce((sum, e) => sum + e.size, 0)
+  const warnEntries = base.map((e) =>
+    e.name === 'extension/out/webview/mermaid.js'
+      ? { ...e, size: e.size + (Math.floor(SIZE_LIMITS.totalWarnBytes) - baseTotal) + 1 }
+      : e,
   )
+  const warn = inspectVsixEntries(warnEntries)
   assert.equal(warn.ok, true)
   assert.ok(warn.warnings.some((w) => w.includes('警告线')), '总量过警告线应有警告不失败')
 

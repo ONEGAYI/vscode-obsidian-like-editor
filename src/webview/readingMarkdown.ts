@@ -11,7 +11,11 @@
 // offset 写入 data-vsidian-src-start/end（与协议坐标同构）；任务项标记的更细
 // 锚点在 convertTaskItems 中按 li 首行源文计算（#9 勾选写回的定位依据）。
 import MarkdownIt, { type Env, type StateInline, type Token } from 'markdown-it'
+import katexPlugin from '@vscode/markdown-it-katex'
+import { MATH_CLASS_NAMES, stripInlineTexTicks } from '../shared/math'
+import { MERMAID_CLASS_NAMES, MERMAID_CODE_ATTR, MERMAID_STATE_ATTR, isMermaidInfo } from '../shared/mermaid'
 import { WIKILINK_CLASS_NAMES, parseWikilinkInner } from '../shared/wikilink'
+import { renderMathHtml } from './mathRenderCache'
 import { tableCellBreakLength } from './tableCells'
 
 /** 渲染环境：行首/行尾 offset 表（lineStarts[i]/lineEnds[i] 为第 i 行界） */
@@ -31,6 +35,81 @@ export const READING_MARKDOWN_CLASS_NAMES = {
   taskItem: 'vsidian-reading-task',
   taskCheckbox: 'vsidian-reading-task-checkbox',
 } as const
+
+/**
+ * KaTeX 渲染（#59）：经共享缓存入口 mathRenderCache.renderMathHtml（live
+ * 与阅读两通道同一 LRU，#59 评审 C2）。失败返回 null（调用方降级为
+ * 原文 span——不显示英文错误消息，原文可读且源文不丢）。displayMode 的
+ * 判定与 @vscode/markdown-it-katex 的 katexInline 一致（align/equation 等
+ * 环境强制 display）。
+ */
+
+/** HTML 转义（降级 span 的原文内容；与 markdown-it 的 default规则同覆盖面） */
+function escapeHtmlText(s: string): string {
+  return s
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+}
+
+/**
+ * Mermaid fence 渲染规则（#60）：覆盖默认 fence 规则——info 为 mermaid 的
+ * 围栏渲染为空容器 div（稳定类名 + data 属性携带转义源码 + pending 状态），
+ * 真正的渲染在块挂载钩子（mermaidRender.renderMermaidIn）里经 DOM API 完成。
+ * 设计使然不走 markdown-it 产物管线：mermaid SVG 内嵌 <style> 子元素会被
+ * sanitizeReadingDom 剥除导致配色丢失（净化层语义保持不变），容器路径由
+ * mermaid 自产 SVG + securityLevel:'strict' + CSP 兜底安全边界。
+ * 规则作用于所有层级的 fence（含列表/引用内嵌套），非 mermaid fence 走默认。
+ */
+function installMermaidFenceRenderer(md: InstanceType<typeof MarkdownIt>): void {
+  const defaultFence = md.renderer.rules.fence
+  md.renderer.rules.fence = (tokens, idx, options, env, self) => {
+    const token = tokens[idx]!
+    if (!isMermaidInfo(token.info ?? '')) {
+      return defaultFence!(tokens, idx, options, env, self)
+    }
+    // 去掉尾部换行与 live 侧围栏内容口径对齐（缓存键一致）；属性内换行
+    // 转义为 &#10;（innerHTML 解析回 \n，html 字符串本身保持单行可读）
+    const code = token.content.replace(/\n$/, '')
+    const attr = escapeHtmlText(code).replaceAll('\n', '&#10;')
+    return `<div class="${MERMAID_CLASS_NAMES.diagram}" ${MERMAID_CODE_ATTR}="${attr}" ${MERMAID_STATE_ATTR}="pending"></div>\n`
+  }
+}
+
+/**
+ * 公式渲染规则（#59）：覆盖插件的默认规则——
+ * - 成功：KaTeX HTML 包 vsidian-math（/ vsidian-math-block）稳定类名
+ *   （cssProbe 与选择器映射表的入口）
+ * - 失败：vsidian-math-error span 显示 `$原文$`（可读降级，源文经转义，
+ *   title 带原文便于悬停核对）
+ * 块级输出对齐插件的 `<p class="katex-block">` 包裹（阅读 CSS 的 display
+ * 居中挂在该容器上）。
+ */
+function installMathRenderers(md: InstanceType<typeof MarkdownIt>): void {
+  const inline = (tokens: Token[], idx: number): string => {
+    const content = tokens[idx]!.content
+    // 与插件一致：$`1+1`$ 形态剥反引号（stripInlineTexTicks 与 live 渲染
+    // 共用同一实现，#59 评审 C5；renderMathHtml 内部对行内同样剥离）
+    const tex = stripInlineTexTicks(content)
+    const displayMode = /\\begin\{(align|equation|gather|cd|alignat)\}/i.test(tex)
+    const html = renderMathHtml(content, displayMode)
+    return html !== null
+      ? `<span class="${MATH_CLASS_NAMES.math}">${html}</span>`
+      : `<span class="${MATH_CLASS_NAMES.mathError}" title="${escapeHtmlText(tex)}">${escapeHtmlText(`$${tex}$`)}</span>`
+  }
+  const block = (tokens: Token[], idx: number): string => {
+    const tex = tokens[idx]!.content
+    const html = renderMathHtml(tex, true)
+    return html !== null
+      ? `<p class="katex-block ${MATH_CLASS_NAMES.math} ${MATH_CLASS_NAMES.mathBlock}">${html}</p>\n`
+      : `<p class="katex-block ${MATH_CLASS_NAMES.mathError}"><code>${escapeHtmlText(`$$${tex}$$`)}</code></p>\n`
+  }
+  md.renderer.rules['math_inline'] = inline
+  md.renderer.rules['math_inline_block'] = block
+  md.renderer.rules['math_inline_bare_block'] = block
+  md.renderer.rules['math_block'] = block
+}
 
 /**
  * 双链 inline 规则（#11）：合法 `[[…]]` 渲染为 `<a class="vsidian-wikilink"
@@ -90,6 +169,12 @@ export function createMarkdownRenderer(): InstanceType<typeof MarkdownIt> {
   // #11 双链规则先于 link（[t](u)）：`[[…]]` 在 CommonMark 中只是普通文本，
   // 必须在文本规则消费前拦截
   md.inline.ruler.before('link', 'vsidian_wikilink', vsidianWikilinkInlineRule)
+  // #59 公式：@vscode/markdown-it-katex 的解析规则（$…$ / $$…$$ 判定与
+  // shared/math.ts 对齐）；渲染规则覆盖为带稳定类名 + 原文降级
+  md.use(katexPlugin, { throwOnError: true })
+  installMathRenderers(md)
+  // #60 Mermaid：fence 规则覆盖为容器输出（挂载后经 DOM API 渲染 SVG）
+  installMermaidFenceRenderer(md)
   // 编辑态把格内回车存成 br。阅读态只在表格 inline token 里重新解析
   // 无属性 br；全局 html:false 继续转义其他 HTML，代码片段由解析器保留字面值。
   md.inline.ruler.before('html_inline', 'vsidian_table_break', (state, silent) => {

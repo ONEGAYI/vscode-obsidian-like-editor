@@ -640,6 +640,27 @@ body {
   background: var(--vsidian-table-background, rgba(128, 128, 128, 0.1));
 }
 
+/* 矩形格区：只强调外轮廓，内部沿用表格网格线。 */
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-region-cell {
+  background: color-mix(in srgb, var(--vscode-focusBorder, #7ab0d0) 14%, transparent);
+}
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-region-top {
+  border-top: 2px solid var(--vscode-focusBorder, #7ab0d0);
+}
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-region-bottom {
+  border-bottom: 2px solid var(--vscode-focusBorder, #7ab0d0);
+}
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-region-left {
+  border-left: 2px solid var(--vscode-focusBorder, #7ab0d0);
+}
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-region-right {
+  border-right: 2px solid var(--vscode-focusBorder, #7ab0d0);
+}
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-region-top.vsidian-table-region-left { border-top-left-radius: 6px; }
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-region-top.vsidian-table-region-right { border-top-right-radius: 6px; }
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-region-bottom.vsidian-table-region-left { border-bottom-left-radius: 6px; }
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-region-bottom.vsidian-table-region-right { border-bottom-right-radius: 6px; }
+
 #app .cm-editor .cm-scroller .vsidian-table-grid-align-left { text-align: left; }
 #app .cm-editor .cm-scroller .vsidian-table-grid-align-center { text-align: center; }
 #app .cm-editor .cm-scroller .vsidian-table-grid-align-right { text-align: right; }
@@ -690,6 +711,25 @@ body {
   cursor: grab;
   font-size: 16px;
   line-height: 20px;
+  color: var(--vscode-descriptionForeground, #8195a1);
+  background: transparent;
+}
+
+#app .cm-editor .vsidian-table-controls .vsidian-table-column-handle {
+  cursor: grab;
+  font-size: 16px;
+  line-height: 20px;
+  color: var(--vscode-descriptionForeground, #8195a1);
+  background: transparent;
+}
+
+#app .cm-editor .vsidian-table-controls button.vsidian-table-row-handle.vsidian-table-control-hover,
+#app .cm-editor .vsidian-table-controls button.vsidian-table-column-handle.vsidian-table-control-hover,
+#app .cm-editor .vsidian-table-controls button.vsidian-table-row-handle:hover,
+#app .cm-editor .vsidian-table-controls button.vsidian-table-row-handle:focus-visible,
+#app .cm-editor .vsidian-table-controls button.vsidian-table-column-handle:hover,
+#app .cm-editor .vsidian-table-controls button.vsidian-table-column-handle:focus-visible {
+  background: transparent;
 }
 
 #app .cm-editor .vsidian-table-controls .vsidian-table-row-handle:active {
@@ -700,8 +740,11 @@ body {
 #app .cm-editor .vsidian-table-controls .vsidian-table-insert-column {
   color: var(--vscode-textLink-foreground, #8abce2);
   font-size: 18px;
-  line-height: 20px;
+  line-height: 12px;
 }
+
+#app .cm-editor .vsidian-table-controls .vsidian-table-insert-row { height: 12px; }
+#app .cm-editor .vsidian-table-controls .vsidian-table-insert-column { width: 12px; }
 
 #app .cm-editor .cm-scroller .vsidian-table-grid-row.vsidian-table-row-selected {
   border-radius: 6px;
@@ -744,6 +787,13 @@ body {
 
 #app .cm-editor .cm-scroller .vsidian-table-grid-row.vsidian-table-drop-after {
   box-shadow: inset 0 -3px 0 var(--vscode-focusBorder, #7ab0d0);
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-drop-before {
+  border-left: 3px solid var(--vscode-focusBorder, #7ab0d0);
+}
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-drop-after {
+  border-right: 3px solid var(--vscode-focusBorder, #7ab0d0);
 }
 
 /* 表头单元格内容强调 */
@@ -1035,4 +1085,102 @@ body {
   box-shadow: inset 3px 0 0 var(--vsidian-find-match-current-background, rgba(255, 141, 55, 0.85));
   background-color: var(--vsidian-find-hit-block-background, rgba(255, 141, 55, 0.08));
   border-radius: 2px;
+}
+
+/* ---- #59 公式渲染（KaTeX）样式 ----
+   KaTeX 基础样式与字体经 esbuild 从 katex.min.css 打入本产物（main.css），
+   字体文件（仅 woff2）产物化到 out/webview/assets/。此处只做主题适配、
+   布局与降级态；类名入口见 docs/design/obsidian-selector-map.md 数学节。 */
+
+/* live 渲染态 widget（行内公式）：内联排版，颜色继承正文 */
+#app .cm-editor .cm-content .vsidian-math {
+  color: var(--vscode-editor-foreground);
+}
+
+/* live 块级公式（$$…$$ 折叠为单视觉行）：独立块 + 居中 + 横向滚动 */
+#app .cm-editor .cm-content .vsidian-math-block {
+  display: block;
+  text-align: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+}
+
+/* KaTeX display 层不折行（KaTeX 官方建议：溢出走容器横向滚动） */
+#app .vsidian-math-block .katex-display,
+#app .vsidian-view-reading .katex-block .katex-display {
+  margin: 0;
+}
+
+#app .vsidian-view-reading .katex-block {
+  margin: 0.75em 0;
+  text-align: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* live 编辑态（光标进入公式范围）：源码显形，等宽着色区分正文 */
+#app .cm-editor .cm-content .vsidian-math-source {
+  color: var(--vscode-textPreformat-foreground, var(--vscode-editor-foreground));
+  background-color: var(--vsidian-math-source-background, rgba(120, 120, 120, 0.12));
+  border-radius: 2px;
+}
+
+/* 降级态（语法/渲染失败）：原文可读可编辑，浅红底标记异常，
+   错误不外溢到邻近内容（独立行内盒，颜色仅作用于自身） */
+#app .cm-editor .cm-content .vsidian-math-error,
+#app .vsidian-view-reading .vsidian-math-error {
+  font-family: var(--vscode-editor-font-family, monospace);
+  color: var(--vscode-editorError-foreground, #f14c4c);
+  background-color: var(--vsidian-math-error-background, rgba(241, 76, 76, 0.10));
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+/* ---- #60 Mermaid 围栏渲染（追加区：live widget 与阅读 fence 容器共用，勿混入上方段落） ---- */
+
+/* 渲染容器：块级占位（渲染前有高度语义）、水平可滚（宽图不遮挡周围文本）；
+   居中呈现与 Obsidian 的 .mermaid 对齐 */
+#app .vsidian-mermaid {
+  display: block;
+  margin: 0.75em 0;
+  overflow-x: auto;
+  text-align: center;
+}
+
+/* SVG 宽度受容器约束：图形不超出正文列宽（高度随宽等比缩放） */
+#app .vsidian-mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* 阅读块级容器（mermaid 围栏整块成块）：块级 margin 交给内层容器，
+   块元素自身只保留与相邻块的间距语义 */
+#app .vsidian-view-reading .vsidian-reading-mermaid {
+  margin: 0;
+}
+
+/* 降级态（语法/渲染失败）：错误信息 + 源码可读，浅红底标记异常，
+   不外溢邻近内容；颜色走 VSCode 主题变量保证明暗可读 */
+#app .vsidian-mermaid.vsidian-mermaid-error {
+  border-left: 2px solid var(--vscode-editorError-foreground, #f14c4c);
+  background-color: var(--vsidian-mermaid-error-background, rgba(241, 76, 76, 0.10));
+  border-radius: 4px;
+  padding: 6px 10px;
+  text-align: left;
+}
+
+#app .vsidian-mermaid .vsidian-mermaid-error-message {
+  color: var(--vscode-editorError-foreground, #f14c4c);
+  font-family: var(--vscode-ui-font-family, sans-serif);
+  font-size: 0.9em;
+  margin-bottom: 4px;
+}
+
+#app .vsidian-mermaid .vsidian-mermaid-error-source {
+  font-family: var(--vscode-editor-font-family, monospace);
+  color: var(--vscode-textPreformat-foreground, var(--vscode-editor-foreground));
+  white-space: pre-wrap;
+  margin: 0;
+  text-align: left;
 }

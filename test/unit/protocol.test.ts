@@ -411,6 +411,122 @@ describe('isWebviewToHost', () => {
     expect(isWebviewToHost({ ...base, paint: { ...paint, table: { ...table, columnRightBorderWidth: 2 } } })).toBe(false)
   })
 
+  it('公式观测与绘制样本校验（#59）：计数/字体/paint.math 类型必须可信', () => {
+    const base = { kind: 'view.state', text: '$x$', docLength: 3, lineCount: 1, renderedLines: 1 }
+    // 合法：计数非负整数、字体串或 null、paint.math 形态正确
+    expect(
+      isWebviewToHost({
+        ...base,
+        liveMathCount: 1,
+        readingMathCount: 0,
+        cssProbe: {
+          liveHeadingDecorationColor: null, readingHeadingDecorationColor: null, readingVarProbe: null,
+          liveStrongDecorationColor: null, liveInlineCodeDecorationColor: null,
+          liveCodeLineDecorationColor: null, readingStrongDecorationColor: null,
+          liveTaskCheckboxDecorationColor: null, readingTaskCheckboxDecorationColor: null,
+          liveLinkDecorationColor: null, readingLinkDecorationColor: null,
+          readingImageDecorationColor: null, liveTablePipeDecorationColor: null,
+          readingTableDecorationColor: null, liveWikilinkDecorationColor: null,
+          readingWikilinkDecorationColor: null,
+          liveMathFontFamily: 'KaTeX_Main, Times New Roman, serif',
+          readingMathFontFamily: null,
+        },
+        paint: {
+          textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none',
+          darkTheme: false, caretColor: null,
+          math: { visible: true, display: 'inline', count: 1 },
+        },
+      }),
+    ).toBe(true)
+    // 非法：计数负数 / 非整数、paint.math 字段类型错误
+    expect(isWebviewToHost({ ...base, liveMathCount: -1 })).toBe(false)
+    expect(isWebviewToHost({ ...base, readingMathCount: 1.5 })).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        paint: {
+          textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none',
+          darkTheme: false, caretColor: null,
+          math: { visible: 'true', display: 'inline', count: 1 },
+        },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        paint: {
+          textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none',
+          darkTheme: false, caretColor: null,
+          math: { visible: true, display: 3, count: 1 },
+        },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        paint: {
+          textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none',
+          darkTheme: false, caretColor: null,
+          math: { visible: true, display: 'inline', count: -2 },
+        },
+      }),
+    ).toBe(false)
+    // 缺省合法（旧 webview 无公式字段）
+    expect(isWebviewToHost(base)).toBe(true)
+  })
+
+  it('Mermaid 观测与绘制样本校验（#60）：计数/paint.mermaid 类型必须可信', () => {
+    const base = { kind: 'view.state', text: '```mermaid\nA-->B\n```', docLength: 23, lineCount: 3, renderedLines: 3 }
+    // 合法：计数非负整数、paint.mermaid 形态正确（含分态计数）
+    expect(
+      isWebviewToHost({
+        ...base,
+        liveMermaidCount: 1,
+        readingMermaidCount: 1,
+        paint: {
+          textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none',
+          darkTheme: false, caretColor: null,
+          mermaid: { visible: true, display: 'block', rendered: 1, error: 0, count: 1 },
+        },
+      }),
+    ).toBe(true)
+    // 非法：计数负数 / 非整数、paint.mermaid 字段类型与分态计数错误
+    expect(isWebviewToHost({ ...base, liveMermaidCount: -1 })).toBe(false)
+    expect(isWebviewToHost({ ...base, readingMermaidCount: 1.5 })).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        paint: {
+          textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none',
+          darkTheme: false, caretColor: null,
+          mermaid: { visible: 'true', display: 'block', rendered: 1, error: 0, count: 1 },
+        },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        paint: {
+          textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none',
+          darkTheme: false, caretColor: null,
+          mermaid: { visible: true, display: null, rendered: -1, error: 0, count: 1 },
+        },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        paint: {
+          textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none',
+          darkTheme: false, caretColor: null,
+          mermaid: { visible: true, display: 'block', rendered: 1, error: 'x', count: 1 },
+        },
+      }),
+    ).toBe(false)
+    // 缺省合法（无 mermaid 字段的旧样本）
+    expect(isWebviewToHost(base)).toBe(true)
+  })
+
   it('标题绘制样本校验（#55）：计数非负整数、计算值数组元素为字符串', () => {
     const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 1 }
     const paint = {

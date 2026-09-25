@@ -306,6 +306,9 @@ interface ViewState {
     readingTableDecorationColor: string | null
     liveWikilinkDecorationColor: string | null
     readingWikilinkDecorationColor: string | null
+    /** #59 公式字体观测：katex.min.css 生效时含 KaTeX 字体族 */
+    liveMathFontFamily?: string | null
+    readingMathFontFamily?: string | null
   }
   /** #8 双视图语法一致性观测 */
   liveSyntax?: {
@@ -351,6 +354,12 @@ interface ViewState {
   /** #11 双链观测（live：widget+mark；reading：a.vsidian-wikilink） */
   liveWikilinkCount?: number
   readingWikilinkCount?: number
+  /** #59 公式计数（live 视口渲染数 / 阅读挂载块内数） */
+  liveMathCount?: number
+  readingMathCount?: number
+  /** #60 Mermaid 计数（live 视口渲染数 / 阅读挂载块内数） */
+  liveMermaidCount?: number
+  readingMermaidCount?: number
   imageStates?: { loading: number; loaded: number; error: number }
   /** #14 查找会话观测（首次打开后回报；匹配集来自文本模型全量计算） */
   find?: {
@@ -410,6 +419,24 @@ interface ViewState {
       columnTopBorderWidth: string | null
       columnBottomBorderWidth: string | null
       columnBackgroundColor: string | null
+      regionCellCount?: number
+      regionBackgroundColor?: string | null
+      regionTopBorderWidth?: string | null
+      regionLeftBorderWidth?: string | null
+    }
+    /** #59 公式绘制：当前激活视图内首个公式的实际可见性与计数 */
+    math?: {
+      visible: boolean
+      display: string | null
+      count: number
+    }
+    /** #60 Mermaid 绘制：当前激活视图内图表容器的实际可见性与分态计数 */
+    mermaid?: {
+      visible: boolean
+      display: string | null
+      rendered: number
+      error: number
+      count: number
     }
     /** #55：标题行左缘绘制观测（distinct computed 值；无挂载标题行为 null） */
     heading?: {
@@ -575,6 +602,9 @@ async function waitViewState(
   file: string,
   match?: (v: ViewState) => boolean,
   panelIndex = 0,
+  /** 等待预算（默认 20s；mermaid 绘制层等重负载用例可放宽至 60s——
+   *  独立桌面宿主下高负载时段的懒加载解析 + 渲染偶发击穿默认预算） */
+  timeoutMs = 20000,
 ): Promise<ViewState> {
   return poll(`视图状态 ${file}`, async () => {
     const state = (await vscode.commands.executeCommand(CMD.viewState, wsUri(file).toString(), panelIndex)) as ViewState | undefined
@@ -582,7 +612,7 @@ async function waitViewState(
       return state
     }
     return undefined
-  })
+  }, timeoutMs)
 }
 
 /** #9 任务勾选 fixture（与 runTest.mjs 的 TASK_DOC 一致） */
@@ -2711,22 +2741,76 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert((await readDisk(name)) === doc.getText(), '三列点击写回与磁盘回读须一致')
   }],
 
-  ['跨行选区不显露或选中安全表格分隔标记', async () => {
+  ['跨行拖选可横跨表格；端点落在隐藏结构上收缩到内容边界（#57）', async () => {
     const name = 'table-cross-selection.md'
     const source = '前文\n\n| 带 | s是 | 送 |\n| --- | --- | --- |\n| 甲 | 乙 | 丙 |\n\n后文'
     await vscode.workspace.fs.writeFile(wsUri(name), Buffer.from(source))
     await openWithEditor(name)
     const initial = await waitSessionReady(name)
     const uri = wsUri(name).toString()
+    // 表外 anchor → 表外 head（视觉跨过整表）：不再截断在表格边界
     await vscode.commands.executeCommand(CMD.postToPanel, uri, {
       kind: 'table.test.crossSelect', anchor: 1, head: source.indexOf('后文') + 1,
     })
-    const state = await waitViewState(name, (v) => v.selectionHead === source.indexOf('| 带 | s是 | 送 |'))
-    assert(state.paint?.table?.delimiterDisplay === 'none',
-      `跨行选择后分隔行仍须隐藏：${JSON.stringify(state.paint?.table)}`)
-    assert(state.paint?.table?.gridDisplay === 'grid', '跨行选择后表格仍须绘制为网格')
+    const across = await waitViewState(name, (v) => v.selectionHead === source.indexOf('后文') + 1)
+    assert(across.paint?.table?.delimiterDisplay === 'none',
+      `跨行选区覆盖表格时分隔行仍须隐藏：${JSON.stringify(across.paint?.table)}`)
+    assert(across.paint?.table?.gridDisplay === 'grid', '跨行选区不撤下网格绘制')
+    // head 落在分隔行（隐藏结构）：收缩到上一内容行末格内容尾
+    const delimiterAt = source.indexOf('| --- | --- | --- |')
+    const headerAt = source.indexOf('| 带 | s是 | 送 |')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'table.test.crossSelect', anchor: 1, head: delimiterAt + 3,
+    })
+    const snapped = await waitViewState(name, (v) =>
+      v.selectionHead === headerAt + '| 带 | s是 | 送 |'.length - 2)
+    assert(snapped.paint?.table?.delimiterDisplay === 'none',
+      `选区端点收缩后分隔行不显形：${JSON.stringify(snapped.paint?.table)}`)
+    assert(snapped.paint?.table?.gridDisplay === 'grid', '端点收缩后网格仍在绘制')
     const after = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
-    assert(after.appliedEdits === initial.appliedEdits, '跨行选区不能改写源文')
+    assert(after.appliedEdits === initial.appliedEdits, '选区操作不能改写源文')
+  }],
+
+  ['跨格与整表选区删除：删除作用范围与可见选区一致（#57）', async () => {
+    const name = 'table-cross-cell-delete.md'
+    const source = '前文\n\n| 带 | s是 | 送 |\n| --- | --- | --- |\n| 甲 | 乙 | 丙 |\n\n后文'
+    await vscode.workspace.fs.writeFile(wsUri(name), Buffer.from(source))
+    await openWithEditor(name)
+    await waitSessionReady(name)
+    const uri = wsUri(name).toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri(name))
+    // 场景 1：同行跨格（数据行三格内容全选）→ 只删可见内容，管道与分隔行保留。
+    // 表头行不用于此场景：表头全部格删空会使表格解析消失，删除按防护语义拒绝。
+    const rowAt = source.indexOf('| 甲 | 乙 | 丙 |')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'table.test.crossSelect', anchor: rowAt + 2, head: rowAt + 11,
+    })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'backspace' })
+    const rowCleared = source.replace('| 甲 | 乙 | 丙 |', '|  |  |  |')
+    await poll('跨格删除写回', () => doc.getText() === rowCleared ? true : undefined)
+    const state = await waitViewState(name, (v) => v.text === rowCleared && v.tableGrid?.visibleRows === 2)
+    assert(state.paint?.table?.gridDisplay === 'grid' && state.paint.table.cellVisible === true,
+      `跨格删除后网格与剩余文字须在绘制层可见：${JSON.stringify(state.paint?.table)}`)
+    assert(state.paint?.table?.delimiterDisplay === 'none', '跨格删除后分隔行保持隐藏')
+    assert(await doc.save(), '跨格删除保存失败')
+    assert(await readDisk(name) === rowCleared, '跨格删除磁盘回读：结构完整、仅清空内容')
+
+    // 场景 2：表外发起、横跨整表的选区（用户主路径）→ 一次删除整块，前后正文按选区保留
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'table.test.crossSelect', anchor: 1, head: rowCleared.length,
+    })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'backspace' })
+    const tableRemoved = '前'
+    await poll('整表删除写回', () => doc.getText() === tableRemoved ? true : undefined)
+    const removed = await waitViewState(name, (v) => v.text === tableRemoved)
+    assert(removed.paint?.table?.gridDisplay == null,
+      `整表删除后不得残留网格绘制：${JSON.stringify(removed.paint?.table)}`)
+    assert(await doc.save(), '整表删除保存失败')
+    assert(await readDisk(name) === tableRemoved, '整表删除磁盘回读：表格整块移除、前后正文不被误删')
+
+    // 一次撤销 = 恢复删除前的表格（宿主权威栈回流）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('撤销整表删除', () => doc.getText() === rowCleared ? true : undefined)
   }],
 
   ['表格回车在格内换行，退格合行、保存回读与撤销保持完整表格', async () => {
@@ -3227,7 +3311,8 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const uri = wsUri('table43-crlf.md').toString()
     await vscode.commands.executeCommand(CMD.postToPanel, uri,
       { kind: 'table.test.select', axis: 'row', index: 1 })
-    const row = await waitViewState('table43-crlf.md', (v) => v.paint?.table?.rowOutlineWidth != null)
+    const row = await waitViewState('table43-crlf.md', (v) =>
+      v.paint?.table?.rowOutlineWidth != null && v.paint.table.regionCellCount === 2)
     const rowPaint = row.paint!.table!
     assert(rowPaint.cellVisible === true && rowPaint.gridDisplay === 'grid',
       '选中行的表格文字仍须真实可见且保持网格布局')
@@ -3238,6 +3323,13 @@ export const cases: Array<[string, () => Promise<void>]> = [
       `选中行轮廓须比普通格线更醒目：格线=${rowPaint.cellBorderWidth}，轮廓=${rowPaint.rowOutlineWidth}`)
     assert(rowPaint.rowBackgroundColor !== null && rowPaint.rowBackgroundColor !== 'rgba(0, 0, 0, 0)',
       `选中行单元格须实际着色：${rowPaint.rowBackgroundColor}`)
+    assert(rowPaint.regionCellCount === 2, `两格矩形选区须完整绘出：${rowPaint.regionCellCount}`)
+    assert(rowPaint.regionBackgroundColor !== null && rowPaint.regionBackgroundColor !== 'transparent' &&
+      rowPaint.regionBackgroundColor !== 'rgba(0, 0, 0, 0)',
+      `矩形选区的单元格须实际着色：${rowPaint.regionBackgroundColor}`)
+    assert(Number.parseFloat(rowPaint.regionTopBorderWidth ?? '') > baseBorderWidth &&
+      Number.parseFloat(rowPaint.regionLeftBorderWidth ?? '') > baseBorderWidth,
+      `矩形外围顶/左边框须比普通格线更醒目：格线=${rowPaint.cellBorderWidth}，顶/左=${rowPaint.regionTopBorderWidth}/${rowPaint.regionLeftBorderWidth}`)
 
     await vscode.commands.executeCommand(CMD.postToPanel, uri,
       { kind: 'table.test.select', axis: 'column', index: 0 })
@@ -4539,5 +4631,236 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // 收起侧栏收尾
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
     await waitViewState('outline-long.md', (v) => v.sidebar?.open === false)
+  }],
+
+  // ---- 工单 #59：公式渲染（KaTeX）实时预览/阅读/一致性 ----
+
+  ['live 公式渲染与绘制层：渲染数、KaTeX 字体与真实可见（#59）', async () => {
+    await openWithEditor('math.md')
+    await waitSessionReady('math.md')
+    const state = await waitViewState('math.md', (v) => (v.liveMathCount ?? -1) === 7)
+    assert(state.liveMathCount === 7, `live 公式渲染数应为 7（6 合法 + 1 降级），实际 ${state.liveMathCount}`)
+    // 绘制层断言（AGENTS 视觉层断言约定）：公式真的画出来（rect 有面积 +
+    // elementFromPoint 命中），且 KaTeX 样式管线存活（字体族命中）
+    assert(state.paint?.math?.visible === true,
+      `公式应真实绘制（paint.math.visible=${String(state.paint?.math?.visible)}，` +
+        `display=${String(state.paint?.math?.display)}）`)
+    assert(state.paint?.math?.display !== 'none', '公式外层不得 display:none')
+    assert(state.paint?.math?.count === 7, `绘制计数应为 7，实际 ${state.paint?.math?.count}`)
+    assert((state.cssProbe?.liveMathFontFamily ?? '').includes('KaTeX'),
+      `KaTeX 字体应生效（实际 ${state.cssProbe?.liveMathFontFamily}；若为 body 字体说明 CSS/字体管线失效）`)
+    // 普通美元不被误判（$5 与 $10 不产生渲染态）
+    assert(state.text.includes('$5 与 $10'), '源文普通美元应原样保留')
+  }],
+
+  ['live 光标进入公式显源码、离开恢复渲染且零写回（#59）', async () => {
+    await openWithEditor('math.md')
+    await waitSessionReady('math.md')
+    const uri = wsUri('math.md').toString()
+    const diskBefore = await readDisk('math.md')
+    const before = await waitViewState('math.md', (v) => (v.liveMathCount ?? -1) === 7)
+    // 光标移入首个行内公式（$E=mc^2$ 的区间内）→ 该公式退出渲染态
+    const inlineAt = before.text.indexOf('$E=mc^2$')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: inlineAt + 3,
+    })
+    const editing = await waitViewState('math.md', (v) => (v.liveMathCount ?? -1) === 6)
+    const editOffset = editing.selectionOffset ?? -1
+    assert(editOffset >= inlineAt && editOffset <= inlineAt + 7,
+      `光标应落在公式区间（实际 ${editOffset}）`)
+    // 离开 → 恢复渲染
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: 0,
+    })
+    await waitViewState('math.md', (v) => (v.liveMathCount ?? -1) === 7)
+    // 纯视图交互零写回：磁盘不变（显隐切换不产生编辑事务）
+    assert(await readDisk('math.md') === diskBefore, '公式显隐交互不得改写源文')
+  }],
+
+  ['阅读模式公式渲染：块级独立成块、KaTeX 字体与绘制层（#59）', async () => {
+    await openWithEditor('math.md')
+    await waitSessionReady('math.md')
+    const uri = wsUri('math.md').toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const reading = await waitViewState('math.md', (v) =>
+      v.viewMode === 'reading' && (v.readingMathCount ?? -1) === 7)
+    assert(reading.readingMathCount === 7, `阅读公式数应为 7（6 KaTeX + 1 降级），实际 ${reading.readingMathCount}`)
+    assert((reading.cssProbe?.readingMathFontFamily ?? '').includes('KaTeX'),
+      `阅读 KaTeX 字体应生效（实际 ${reading.cssProbe?.readingMathFontFamily}）`)
+    assert(reading.paint?.math?.visible === true, '阅读公式应真实绘制（rect + elementFromPoint）')
+    assert((reading.readingTotalBlocks ?? 0) > 0, '阅读切块应正常')
+  }],
+
+  ['公式跨模式切换一致性：两模式计数对齐、文本不变、无写回（#59）', async () => {
+    await openWithEditor('math.md')
+    await waitSessionReady('math.md')
+    const uri = wsUri('math.md').toString()
+    const diskBefore = await readDisk('math.md')
+    const live = await waitViewState('math.md', (v) => (v.liveMathCount ?? -1) === 7)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const reading = await waitViewState('math.md', (v) =>
+      v.viewMode === 'reading' && (v.readingMathCount ?? -1) === 7)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'live' })
+    const back = await waitViewState('math.md', (v) =>
+      v.viewMode === 'live' && (v.liveMathCount ?? -1) === 7)
+    assert(back.text === live.text, '模式切换不得改写文本')
+    assert(back.docLength === live.docLength, '模式切换不得改变文档长度')
+    assert(reading.text === live.text, '阅读渲染不写回')
+    assert(await readDisk('math.md') === diskBefore, '模式切换不得触发磁盘写回')
+  }],
+
+  ['外部更新后公式与文本一致：新增公式进入渲染（#59）', async () => {
+    await openWithEditor('math.md')
+    await waitSessionReady('math.md')
+    const doc = await vscode.workspace.openTextDocument(wsUri('math.md'))
+    const extEdit = new vscode.WorkspaceEdit()
+    extEdit.replace(wsUri('math.md'), new vscode.Range(0, 0, 0, 0), '新增公式 $z^3$ 与块\n\n')
+    assert(await vscode.workspace.applyEdit(extEdit), '外部修改应成功')
+    await poll('外部修改生效', () => (doc.getText().startsWith('新增公式 $z^3$') ? true : undefined))
+    // 面板同步外部增量：渲染数 +1（新增行内公式），原公式不变
+    const after = await waitViewState('math.md', (v) => (v.liveMathCount ?? -1) === 8)
+    assert(after.text.startsWith('新增公式 $z^3$'), '面板文本应含外部新增公式')
+    // 切阅读模式：外部增量同样渲染
+    await vscode.commands.executeCommand(CMD.postToPanel, wsUri('math.md').toString(), {
+      kind: 'view.mode.set', mode: 'reading' })
+    await waitViewState('math.md', (v) => v.viewMode === 'reading' && (v.readingMathCount ?? -1) === 8)
+  }],
+  // ---- 工单 #60：Mermaid 围栏块双模式渲染（live/reading/降级/一致性） ----
+
+  ['live Mermaid 渲染与绘制层：渲染数、分态计数与真实可见（#60）', async () => {
+    await openWithEditor('mermaid.md')
+    await waitSessionReady('mermaid.md')
+    const uri = wsUri('mermaid.md').toString()
+    const diskBefore = await readDisk('mermaid.md')
+    // 滚到文档尾部使全部围栏进入视口（光标停在围栏外段落，不抑制装饰）
+    const tailAnchor = diskBefore.indexOf('结尾段落')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: tailAnchor,
+    })
+    const state = await waitViewState('mermaid.md', (v) =>
+      (v.liveMermaidCount ?? -1) === 5 && v.paint?.mermaid?.rendered === 4, 0, 60000)
+    assert(state.liveMermaidCount === 5,
+      `live 围栏装饰数应为 5（4 有效 + 1 无效降级），实际 ${state.liveMermaidCount}`)
+    // 绘制层断言（AGENTS 视觉层断言约定）：图真的画出来（rect 有面积 +
+    // elementFromPoint 命中），不是只有 DOM 存在
+    assert(state.paint?.mermaid?.visible === true,
+      `图表应真实绘制（paint.mermaid.visible=${String(state.paint?.mermaid?.visible)}，` +
+        `display=${String(state.paint?.mermaid?.display)}）`)
+    assert(state.paint?.mermaid?.display !== 'none', '图表容器不得 display:none')
+    assert(state.paint?.mermaid?.rendered === 4,
+      `有效图渲染数应为 4，实际 ${state.paint?.mermaid?.rendered}`)
+    assert(state.paint?.mermaid?.error === 1,
+      `无效语法应恰有一个降级容器，实际 ${state.paint?.mermaid?.error}`)
+    assert(state.paint?.mermaid?.count === 5, `容器总数应为 5，实际 ${state.paint?.mermaid?.count}`)
+    assert(state.text === diskBefore, '渲染不得改写源文')
+  }],
+
+  ['live 光标进出围栏显隐零写回：进入显源码、离开恢复渲染（#60）', async () => {
+    await openWithEditor('mermaid.md')
+    await waitSessionReady('mermaid.md')
+    const uri = wsUri('mermaid.md').toString()
+    const diskBefore = await readDisk('mermaid.md')
+    const tailAnchor = diskBefore.indexOf('结尾段落')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: tailAnchor,
+    })
+    const before = await waitViewState('mermaid.md', (v) => (v.liveMermaidCount ?? -1) === 5)
+    // 光标移入首个围栏内容（graph TD 的 g 后）→ 该图退出渲染态显源码
+    const fenceBody = before.text.indexOf('graph TD')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: fenceBody + 1,
+    })
+    const editing = await waitViewState('mermaid.md', (v) => (v.liveMermaidCount ?? -1) === 4)
+    const editOffset = editing.selectionOffset ?? -1
+    assert(editOffset >= fenceBody && editOffset <= fenceBody + 7,
+      `光标应落在围栏区间（实际 ${editOffset}）`)
+    // 离开（回到文档首，围栏外）→ 恢复渲染：进入 4、离开 5 的完整往返
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: 0,
+    })
+    const restored = await waitViewState('mermaid.md', (v) => (v.liveMermaidCount ?? -1) === 5)
+    assert(restored.liveMermaidCount === 5,
+      `光标离开围栏后应恢复全部 5 个装饰（4 有效 + 1 降级），实际 ${restored.liveMermaidCount}`)
+    // 纯视图交互零写回：磁盘不变（显隐切换不产生编辑事务）
+    assert(await readDisk('mermaid.md') === diskBefore, '围栏显隐交互不得改写源文')
+  }],
+
+  ['阅读模式 Mermaid 渲染：整块成块、绘制层与降级不吞后续块（#60）', async () => {
+    await openWithEditor('mermaid.md')
+    await waitSessionReady('mermaid.md')
+    const uri = wsUri('mermaid.md').toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const reading = await waitViewState('mermaid.md', (v) =>
+      v.viewMode === 'reading' && (v.readingMermaidCount ?? -1) === 5 && v.paint?.mermaid?.rendered === 4, 0, 60000)
+    assert(reading.readingMermaidCount === 5,
+      `阅读图表容器数应为 5（4 渲染 + 1 降级），实际 ${reading.readingMermaidCount}`)
+    assert(reading.paint?.mermaid?.visible === true, '阅读图表应真实绘制（rect + elementFromPoint）')
+    assert(reading.paint?.mermaid?.error === 1, `无效语法应降级 1 个，实际 ${reading.paint?.mermaid?.error}`)
+    // 大围栏豁免切片 + 降级不吞后续块：切块数合理且锚点块可定位
+    assert((reading.readingTotalBlocks ?? 0) >= 5, `阅读切块应含全部图表块，实际 ${reading.readingTotalBlocks}`)
+  }],
+
+  ['Mermaid 跨模式切换一致性：两模式计数对齐、文本不变、无写回（#60）', async () => {
+    await openWithEditor('mermaid.md')
+    await waitSessionReady('mermaid.md')
+    const uri = wsUri('mermaid.md').toString()
+    const diskBefore = await readDisk('mermaid.md')
+    const tailAnchor = diskBefore.indexOf('结尾段落')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: tailAnchor,
+    })
+    const live = await waitViewState('mermaid.md', (v) => (v.liveMermaidCount ?? -1) === 5, 0, 60000)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const reading = await waitViewState('mermaid.md', (v) =>
+      v.viewMode === 'reading' && (v.readingMermaidCount ?? -1) === 5, 0, 60000)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'live' })
+    const tailAnchor2 = (await readDisk('mermaid.md')).indexOf('结尾段落')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: tailAnchor2,
+    })
+    const back = await waitViewState('mermaid.md', (v) =>
+      v.viewMode === 'live' && (v.liveMermaidCount ?? -1) === 5, 0, 60000)
+    assert(back.text === live.text, '模式切换不得改写文本')
+    assert(back.docLength === live.docLength, '模式切换不得改变文档长度')
+    assert(reading.text === live.text, '阅读渲染不写回')
+    assert(await readDisk('mermaid.md') === diskBefore, '模式切换不得触发磁盘写回')
+  }],
+
+  ['伪围栏与普通围栏不误渲染：边界样例零图表、正文完好（#60）', async () => {
+    await openWithEditor('mermaid-edge.md')
+    await waitSessionReady('mermaid-edge.md')
+    const uri = wsUri('mermaid-edge.md').toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: (await readDisk('mermaid-edge.md')).indexOf('结尾段落'),
+    })
+    const live = await waitViewState('mermaid-edge.md', (v) => (v.liveMermaidCount ?? -1) === 0)
+    assert(live.liveMermaidCount === 0, `普通围栏与伪围栏不得渲染图表，实际 ${live.liveMermaidCount}`)
+    assert(live.text.includes('结尾段落保持可用。'), '伪围栏后的正文完好')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const reading = await waitViewState('mermaid-edge.md', (v) =>
+      v.viewMode === 'reading' && (v.readingMermaidCount ?? -1) === 0)
+    assert(reading.readingMermaidCount === 0, `阅读侧同样不渲染伪围栏，实际 ${reading.readingMermaidCount}`)
+  }],
+
+  ['外部更新后新增 Mermaid 围栏进入渲染（#60）', async () => {
+    await openWithEditor('mermaid.md')
+    await waitSessionReady('mermaid.md')
+    const doc = await vscode.workspace.openTextDocument(wsUri('mermaid.md'))
+    const extEdit = new vscode.WorkspaceEdit()
+    extEdit.replace(wsUri('mermaid.md'), new vscode.Range(0, 0, 0, 0), '新增图：\n\n```mermaid\nC-->D\n```\n\n')
+    assert(await vscode.workspace.applyEdit(extEdit), '外部修改应成功')
+    await poll('外部修改生效', () => (doc.getText().startsWith('新增图：') ? true : undefined))
+    const tailAnchor = doc.getText().indexOf('结尾段落')
+    await vscode.commands.executeCommand(CMD.postToPanel, wsUri('mermaid.md').toString(), {
+      kind: 'view.locate', offset: tailAnchor,
+    })
+    // 面板同步外部增量：围栏装饰 +1（新增有效图），原围栏不变
+    const after = await waitViewState('mermaid.md', (v) => (v.liveMermaidCount ?? -1) === 6)
+    assert(after.text.startsWith('新增图：'), '面板文本应含外部新增围栏')
+    // 切阅读模式：外部增量同样渲染
+    await vscode.commands.executeCommand(CMD.postToPanel, wsUri('mermaid.md').toString(), {
+      kind: 'view.mode.set', mode: 'reading' })
+    await waitViewState('mermaid.md', (v) =>
+      v.viewMode === 'reading' && (v.readingMermaidCount ?? -1) === 6)
   }],
 ]

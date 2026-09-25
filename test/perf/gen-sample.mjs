@@ -83,6 +83,44 @@ export function generateGiantBlockSample(lines) {
   return out.join('\n')
 }
 
+// 公式密集样例（工单 #59）：行内公式与跨行 $$ 块交替（渲染缓存命中率与
+// 装饰/块表增量的成本载体）；普通段落穿插（编辑目标行，验证击键不因屏外
+// 公式常驻 DOM 而劣化）。
+export function generateMathDenseSample(blocks = 240) {
+  const out = ['# 公式密集性能样例', '']
+  for (let i = 1; i <= blocks; i++) {
+    const kind = i % 4
+    if (kind === 1) {
+      out.push(`第 ${i} 段 正文含行内公式 $a_${i}^2 + b_${i}^2 = c_${i}^2$ 与第二处 $\\sum_{k=1}^{n} k$，普通美元 5 元不算公式。`, '')
+    } else if (kind === 2) {
+      out.push('$$', `I_${i} = \\int_0^1 x_${i}^2 \\, dx = \\frac{1}{3}`, '$$', '')
+    } else if (kind === 3) {
+      out.push(`第 ${i} 段 混排 $$E_${i} = mc^2$$ 段内块与行内 $\\alpha_${i}$ 相邻。`, '')
+    } else {
+      out.push(`第 ${i} 段 普通段落样本行，固定宽度内容，作为击键延迟的测量目标。`, '')
+    }
+  }
+  return out.join('\n')
+}
+
+// 图表密集样例（工单 #60）：中小 mermaid 围栏（流程图/时序图交替，同源
+// 重复触发缓存克隆改写）与普通段落交替——一屏多图的渲染串行成本、滚动
+// 往返的挂载/回收与缓存命中、块卸载释放 DOM 的观测载体。
+export function generateMermaidDenseSample(blocks = 120) {
+  const out = ['# 图表密集性能样例', '']
+  for (let i = 1; i <= blocks; i++) {
+    if (i % 3 === 0) {
+      out.push('```mermaid', 'sequenceDiagram', `A_${i}->>B_${i}: 请求 ${i}`, `B_${i}-->>A_${i}: 响应 ${i}`, '```', '')
+    } else if (i % 3 === 1) {
+      out.push('```mermaid', 'flowchart LR', `S${i}-->T${i}`, '```', '')
+    } else {
+      out.push(`第 ${i} 段 普通段落样本行，固定宽度内容，作为滚动与击键的测量锚点。`, '')
+    }
+  }
+  out.push('结尾段落。', '')
+  return out.join('\n')
+}
+
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].replace(/\\/g, '/')}`).href) {
   const lines = Number(process.argv[2])
   const outFile = process.argv[3]

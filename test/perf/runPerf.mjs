@@ -16,6 +16,8 @@ import {
   generateSampleNearBytes,
   generateLongLineSample,
   generateImageDenseSample,
+  generateMathDenseSample,
+  generateMermaidDenseSample,
 } from './gen-sample.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -45,6 +47,11 @@ try {
   writeFileSync(path.join(wsDir, 'reading-giant.md'), generateGiantBlockSample(20_000), 'utf8')
   writeFileSync(path.join(wsDir, 'perf-longline.md'), generateLongLineSample(), 'utf8')
   writeFileSync(path.join(wsDir, 'perf-images.md'), generateImageDenseSample(), 'utf8')
+  // #59 公式密集档：行内/块级/段内公式交替（渲染缓存与装饰增量的载体）
+  writeFileSync(path.join(wsDir, 'perf-math.md'), generateMathDenseSample(), 'utf8')
+  // #60 图表密集档：中小 mermaid 围栏与段落交替（懒加载/串行渲染/缓存克隆
+  // 改写/挂载回收的载体；量级默认 120 图，长档按需加大 blocks 参数）
+  writeFileSync(path.join(wsDir, 'perf-mermaid.md'), generateMermaidDenseSample(), 'utf8')
   for (let i = 0; i < 24; i++) {
     const width = 320 + (i % 4) * 80
     const height = 180 + (i % 6) * 60
