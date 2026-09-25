@@ -8,6 +8,10 @@
 // 可由调用方传入（syncController 复用 liveDecorationsField 的增量树，
 // 免去大文档的全量 parse；树与文档须来自同一 state）。
 //
+// 条目携带标题区权威范围（headingSpan = 语法树 heading 节点范围，第 3 轮
+// 复核）：重命名/调级/拖拽搬移替换的字节区间以它为准，几何启发式
+// （outlineSection）只作手写/陈旧条目的兜底。
+//
 // #65 行内透传的形态学：白名单节点（StrongEmphasis/Emphasis/InlineCode/
 // Strikethrough，节点名判定与 liveDecorations 的 pushInnerSpan 同源）压
 // 栈记类型、内容区间剥两端标记；双链 [[…]] 不在树中（外层括号是普通文
@@ -51,6 +55,12 @@ export interface OutlineItem {
   spans: OutlineSpanInfo[]
   /** 标题起始行（1 基；Setext 为内容首行） */
   line: number
+  /** 标题区权威范围（doc 偏移 [from, to)，第 3 轮复核）：语法树 heading 节点
+   *  的范围——from = 标题内容起点（容器标记与缩进之后），to = 标题块末行行尾
+   *  （ATX = 该行行尾，不含块尾换行；Setext = 下划线所在行行尾）。写操作
+   *  （重命名/调级/拖拽搬移）优先按此范围替换，几何启发式只作兜底
+   *  （见 outlineSection）；手写/合成条目可缺省（缺省即走兜底） */
+  headingSpan?: { from: number; to: number }
 }
 
 /** 大纲面板的稳定类名（样式与断言的公共锚点） */
@@ -415,6 +425,7 @@ export function extractOutline(doc: Text, tree?: Tree): OutlineItem[] {
     let text: string
     let contentFrom: number
     let contentEnd: number
+    let headingTo: number
     if (mark && mark.from === node.from) {
       // ATX：# 标记在头部，文字 = 标记后空格到行尾（clamp 去块尾换行）
       const lineEnd = doc.lineAt(node.from).to
@@ -423,6 +434,7 @@ export function extractOutline(doc: Text, tree?: Tree): OutlineItem[] {
       text = stripAtxClosing(raw)
       contentFrom = rawFrom
       contentEnd = rawFrom + text.length // 关闭序列只剥尾，text 是 raw 前缀
+      headingTo = lineEnd // 标题区 = 标题行行尾（含关闭序列，不含块尾换行）
     } else {
       // Setext：内容 = 下划线标记之前的行（可多行，空格连接）
       const underlineLine = mark ? doc.lineAt(mark.from).number : doc.lineAt(node.to).number
@@ -435,6 +447,9 @@ export function extractOutline(doc: Text, tree?: Tree): OutlineItem[] {
       const lead = raw.length - raw.trimStart().length
       contentFrom = node.from + lead
       contentEnd = contentFrom + text.length
+      // 标题区 = 内容行 + 下划线行（到该行行尾；无 HeaderMark 的防御分支
+      // 退化为内容结束位置所在行行尾）
+      headingTo = mark ? doc.line(underlineLine).to : doc.lineAt(Math.max(0, node.to)).to
     }
     const collector = new PlainTextCollector(doc, scanHeadingWikilinks(doc, contentFrom, contentEnd))
     collectInline(doc, node, contentFrom, contentEnd, collector, [], true)
@@ -444,6 +459,7 @@ export function extractOutline(doc: Text, tree?: Tree): OutlineItem[] {
       plainText: collector.plainText,
       spans: collector.spans(),
       line: doc.lineAt(node.from).number,
+      headingSpan: { from: node.from, to: headingTo },
     })
   })
   return items

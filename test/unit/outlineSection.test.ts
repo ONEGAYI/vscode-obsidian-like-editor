@@ -20,6 +20,7 @@ import {
   outlineRenameChange,
   outlineSectionLineRange,
   outlineSiblingIndices,
+  outlineSplitContainerPrefix,
   outlineSubtreeIndices,
 } from '../../src/webview/outlineSection'
 
@@ -57,6 +58,22 @@ function applyChanges(text: string, changes: ReadonlyArray<{ offset: number; len
     out = out.slice(0, c.offset) + c.text + out.slice(c.offset + c.length)
   }
   return out
+}
+
+/** 重命名后的文档文本（断言对象是用户看到的文档文本，不是 span 数值） */
+function renameTo(docText: string, index: number, newText: string): string {
+  const doc = Text.of(docText.split('\n'))
+  const items = extractOutline(doc)
+  const change = outlineRenameChange(doc, items, index, newText)
+  expect(change, `条目 ${index} 应有重命名变更`).not.toBeNull()
+  return applyChanges(docText, [change!])
+}
+
+/** 文档经仓库自己的解析器（extractOutline）复解析后的 [级别, 原文] 序列
+ *  ——写操作结果的裁判：标题没消失、没多出幻影标题，都由它给结论 */
+function outlineOf(docText: string): Array<[number, string]> {
+  const doc = Text.of(docText.split('\n'))
+  return extractOutline(doc).map((item) => [item.level, item.text])
 }
 
 describe('控制域几何：子树与同级组（跨级挂靠语义）', () => {
@@ -429,15 +446,6 @@ describe('超长 Setext 标题的标题区几何（review-loops A1）', () => {
 // ---- review-loops 第 2 轮：容器内 / 缩进标题的标题区几何（写操作不得越过标题区） ----
 
 describe('容器内 / 缩进标题的标题区几何（review-loops 第 2 轮）', () => {
-  /** 重命名后的文档文本（断言对象是用户看到的文档文本，不是 span 数值） */
-  const renameTo = (docText: string, index: number, newText: string): string => {
-    const doc = Text.of(docText.split('\n'))
-    const items = extractOutline(doc)
-    const change = outlineRenameChange(doc, items, index, newText)
-    expect(change, `条目 ${index} 应有重命名变更`).not.toBeNull()
-    return applyChanges(docText, [change!])
-  }
-
   it('块引用内标题 + 下方 --- 分隔线：只重写标题行，分隔线与正文不动', () => {
     // 旧实现按列 0 判 ATX → `> # 引用标题` 判否 → 进入 Setext 扫描 → 命中
     // 下方 `---` → span 覆盖两行 → 重命名把分隔线一并删除（数据丢失）
@@ -471,11 +479,182 @@ describe('容器内 / 缩进标题的标题区几何（review-loops 第 2 轮）
     expect(applyChanges(text, changes)).toBe('   ## 缩进标题\n正文一\n正文二\n---\n尾')
   })
 
-  it('防御语义：容器前缀不一致时 Setext 扫描即停（手写条目的异常输入）', () => {
-    // 该形态不经 extractOutline 产出（`> 段落` 非标题），仅作行号漂移防御
+  it('兜底语义：`> 段落` 后的裸 `---` 不是其下划线（解析器同判：该形态无标题节点）', () => {
+    // 复核 ⑤ 事实核对：`> 段落\n---` 不经 extractOutline 产出条目——解析器
+    // 的 heading 节点为空（下划线行无 `>` 也不是列表续行），`---` 是顶层
+    // 分隔线。因此兜底扫描不得吞并它（第 2 轮这条语义正确，保留并补上
+    // 「谁给的结论」：由仓库自己的解析器判）。
     const doc = Text.of(['> 段落', '---', '后续'])
+    expect(extractOutline(doc)).toEqual([])
     const span = outlineHeadingSpan(doc, { level: 1, text: '段落', plainText: '段落', line: 1 })
-    expect(span).toEqual({ from: 0, to: doc.line(1).to })
+    // 兜底区间 = 首行内容起点（容器前缀 `> ` 之后）到首行行尾（不含下一行）
+    expect(span).toEqual({ from: 2, to: doc.line(1).to })
+  })
+
+  it('真实条目形态（`- T\\n  ===`、`> T\\n>  ===`）确为标题：兜底必须覆盖下划线行', () => {
+    // 复核 ⑤：这两种形态是真实条目（解析器产出 SetextHeading），不是「不可达
+    // 的异常输入」——因此下划线行必须进入标题区，否则重命名留幻影下划线。
+    const cases: Array<{ text: string; from: number }> = [
+      { text: '- T\n  ===\n', from: 2 }, // 列表项内容列 2 上的续行
+      { text: '> T\n>  ===\n', from: 2 }, // 块引用标记链相同的下划线行
+    ]
+    for (const { text, from } of cases) {
+      const doc = Text.of(text.split('\n'))
+      const items = extractOutline(doc)
+      expect(items, `${JSON.stringify(text)} 应为真实条目`).toHaveLength(1)
+      const span = outlineHeadingSpan(doc, { level: 1, text: 'T', plainText: 'T', line: 1 })
+      expect(span, `${JSON.stringify(text)} 兜底应覆盖下划线行`).toEqual({ from, to: doc.line(2).to })
+    }
+  })
+})
+
+// ---- review-loops 第 3 轮：语法树权威标题区 + 兜底几何修正（复核 ①②③④） ----
+
+describe('标题区权威范围：语法树节点优先，启发式只兜底（第 3 轮复核方案）', () => {
+  it('extractOutline 逐条携带标题区范围（解析器 heading 节点起点 → 标题块末行行尾）', () => {
+    // 范围不含容器标记与缩进（那些字节在范围之前，写回时留在原地）；
+    // ATX = 标题行行尾（不含块尾换行），Setext = 下划线行行尾
+    const cases: Array<{ text: string; spans: Array<{ from: number; to: number }> }> = [
+      { text: '- 父项\n  - # 子标题\n  正文\n---\n尾', spans: [{ from: 9, to: 14 }] },
+      { text: '- T\n  U\n  ===\n\nnext', spans: [{ from: 2, to: 13 }] },
+      { text: '> T\n>  ===\n\ntext', spans: [{ from: 2, to: 10 }] },
+      { text: ' > # 缩进引用标题\n---\n尾', spans: [{ from: 3, to: 11 }] },
+      { text: '标题\n  ===\n正文', spans: [{ from: 0, to: 8 }] },
+      { text: '　标题\n===\n\ntext', spans: [{ from: 0, to: 7 }] },
+    ]
+    for (const { text, spans } of cases) {
+      const doc = Text.of(text.split('\n'))
+      expect(extractOutline(doc).map((item) => item.headingSpan), JSON.stringify(text)).toEqual(spans)
+    }
+  })
+
+  it('兜底覆盖不到的深层形态（块引用内列表的 Setext）由权威范围兜住', () => {
+    // '> - T' 的标记链是 ['>','-']，下划线行 '>   ===' 是 ['>']——兜底判据
+    // 认不出这一层（手写条目退化单行，属已知限界）；真条目由语法树范围覆盖
+    const input = '> - T\n>   ===\n\ntext'
+    const doc = Text.of(input.split('\n'))
+    const bare = { level: 1, text: 'T', plainText: 'T', line: 1 }
+    expect(outlineHeadingSpan(doc, bare)).toEqual({ from: 4, to: doc.line(1).to })
+    const after = renameTo(input, 0, '新名')
+    expect(after).toBe('> - # 新名\n\ntext')
+    expect(outlineOf(after)).toEqual([[1, '新名']])
+  })
+
+  it('权威范围越界/倒置/与条目行不符/起点非内容列时回退启发式（结果与缺省字段一致）', () => {
+    const text = '   # 缩进标题\n---\n正文'
+    const doc = Text.of(text.split('\n'))
+    const item = extractOutline(doc)[0]!
+    const withoutSpan: typeof item = { ...item }
+    delete withoutSpan.headingSpan
+    const baseline = applyChanges(text, [outlineRenameChange(doc, [withoutSpan], 0, '新名')!])
+    expect(baseline).toBe('   # 新名\n---\n正文') // 兜底路径的用户可见结果
+    const corrupt: Array<{ from: number; to: number }> = [
+      { from: -1, to: 5 }, // 起点越界
+      { from: 0, to: doc.length + 1 }, // 终点越界
+      { from: 10, to: 3 }, // 倒置
+      { from: 12, to: 16 }, // 与条目行不符（起点落在第 2 行）
+      { from: 0, to: 5 }, // 起点不是标题内容列（会与容器前缀重叠）
+    ]
+    for (const headingSpan of corrupt) {
+      const change = outlineRenameChange(doc, [{ ...item, headingSpan }], 0, '新名')
+      expect(applyChanges(text, [change!]), JSON.stringify(headingSpan)).toBe(baseline)
+    }
+  })
+})
+
+describe('非 ASCII 空白开头的标题：空白是内容不是缩进（第 3 轮复核 ①）', () => {
+  it('全角空格 / NBSP 开头的 Setext：重命名后标题仍在（旧实现产出非标题）', () => {
+    // 旧实现按 trimStart 切前缀 → 空白被吞进前缀 → 结果 `　# 新名` 是段落
+    // （解析器复解析零条目：标题消失）
+    for (const lead of ['\u3000', '\u00a0']) {
+      const input = `${lead}标题\n===\n\ntext`
+      const after = renameTo(input, 0, '新名')
+      expect(after, JSON.stringify(lead)).toBe('# 新名\n\ntext')
+      expect(outlineOf(after), JSON.stringify(lead)).toEqual([[1, '新名']])
+    }
+  })
+
+  it('调级同源：全角空格开头的标题升高一级后仍是标题', () => {
+    const text = '\u3000标题\n===\n\ntext'
+    const doc = Text.of(text.split('\n'))
+    const items = extractOutline(doc)
+    const after = applyChanges(text, outlineLevelChanges(doc, items, 0, 1, false)!)
+    expect(after).toBe('## 标题\n\ntext')
+    expect(outlineOf(after)).toEqual([[2, '标题']])
+  })
+
+  it('结构前缀只认 ASCII 空白与容器标记（Unicode 空白留在余下内容里）', () => {
+    expect(outlineSplitContainerPrefix('\u3000标题')).toEqual({ prefix: '', markers: [], rest: '\u3000标题' })
+    expect(outlineSplitContainerPrefix('\u00a0# 标题')).toEqual({ prefix: '', markers: [], rest: '\u00a0# 标题' })
+    expect(outlineSplitContainerPrefix('  - # T')).toEqual({ prefix: '  - ', markers: ['-'], rest: '# T' })
+    expect(outlineSplitContainerPrefix('> \t> T')).toEqual({ prefix: '> \t> ', markers: ['>', '>'], rest: 'T' })
+  })
+})
+
+describe('列表 / 块引用内 Setext：下划线行属标题区（第 3 轮复核 ②④）', () => {
+  it('列表内 Setext（内容行续行）：整标题区替换，不产生幻影标题', () => {
+    // 旧实现前缀全等比较失败 → 扫描提前中断 → 只替换首行 → `  ===` 成为
+    // 下一段落的下划线，凭空多出标题 U
+    const after = renameTo('- T\n  U\n  ===\n\nnext', 0, '新名')
+    expect(after).toBe('- # 新名\n\nnext')
+    expect(outlineOf(after)).toEqual([[1, '新名']])
+  })
+
+  it('列表内 Setext（`---` 下划线，level 2）：下划线行随标题区替换', () => {
+    // 旧实现残留 `  ---` 行；新实现整标题区（内容 + 下划线）→ ATX 单行
+    const after = renameTo('- T\n  ---\n- 二\n  内容', 0, '新名')
+    expect(after).toBe('- ## 新名\n- 二\n  内容')
+    expect(outlineOf(after)).toEqual([[2, '新名']])
+  })
+
+  it('有序列表内 Setext：内容列上的续行同样覆盖', () => {
+    const after = renameTo('1. T\n   ===\n\ntext', 0, '新名')
+    expect(after).toBe('1. # 新名\n\ntext')
+    expect(after).not.toContain('===')
+    expect(outlineOf(after)).toEqual([[1, '新名']])
+  })
+
+  it('块引用内 Setext 下划线空白不对称：标记链相等即覆盖（复核 ④）', () => {
+    // `> ` 与 `>  ` 的标记链同为 ['>']：旧实现按前缀串全等比较 → 不等 →
+    // 扫描中断 → 重命名后残留 `>  ===`
+    expect(renameTo('> T\n>  ===\n\ntext', 0, '新名')).toBe('> # 新名\n\ntext')
+    expect(renameTo('> 引用标题\n>  ===\n> 正文', 0, '新名')).toBe('> # 新名\n> 正文')
+  })
+
+  it('调级同源：Setext 下划线行随标题区一起被 ATX 行替换（无残留）', () => {
+    const text = '- T\n  ===\n\nnext'
+    const doc = Text.of(text.split('\n'))
+    const items = extractOutline(doc)
+    const after = applyChanges(text, outlineLevelChanges(doc, items, 0, 1, false)!)
+    expect(after).toBe('- ## T\n\nnext')
+    expect(outlineOf(after)).toEqual([[2, 'T']])
+  })
+})
+
+describe('缩进后的容器标记：ATX 判定与前缀口径一致（第 3 轮复核 ③）', () => {
+  it('列表内缩进 ATX：只替换标题文字，列表标记/正文/分隔线逐字节保留', () => {
+    // 旧实现按列 0 认容器标记 → `  - # 子标题` 判否 → 进入 Setext 扫描 →
+    // 命中远处 `---` → 正文与 `- ` 一起被吞（用户可见的数据丢失）
+    const input = '- 父项\n  - # 子标题\n  正文\n---\n尾'
+    const after = renameTo(input, 0, '新名')
+    expect(after).toBe('- 父项\n  - # 新名\n  正文\n---\n尾')
+    expect(outlineOf(after)).toEqual([[1, '新名']])
+  })
+
+  it('缩进 1 空格的块引用 ATX：`>` 与缩进保留（不吞下方 `---`）', () => {
+    const after = renameTo(' > # 缩进引用标题\n---\n尾', 0, '新名')
+    expect(after).toBe(' > # 新名\n---\n尾')
+    expect(outlineOf(after)).toEqual([[1, '新名']])
+  })
+
+  it('缩进块引用 ATX + 多行正文 + `---`：正文序列与分隔线全保留', () => {
+    // 旧实现三行全丢（`  > # 引用标题\n  正文一\n  正文二\n---` 被当作标题区）
+    const input = '  > # 引用标题\n  正文一\n  正文二\n---\n尾'
+    const after = renameTo(input, 0, '新名')
+    expect(after).toBe('  > # 新名\n  正文一\n  正文二\n---\n尾')
+    // 第二行起是独立的 Setext 标题（解析器判定）：改完仍在，且首条已改名
+    expect(outlineOf(after).map(([level]) => level)).toEqual([1, 2])
+    expect(outlineOf(after)[0]).toEqual([1, '新名'])
   })
 })
 

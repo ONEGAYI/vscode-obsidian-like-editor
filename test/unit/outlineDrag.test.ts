@@ -281,6 +281,33 @@ describe('移动计划：误伤红线（控制域外字节级零变更）', () =
   })
 })
 
+describe('移动计划：容器内 / 缩进标题的搬移原子（第 3 轮复核 ③）', () => {
+  it('列表内缩进 ATX 标题：标题区只到标题行，段内正文与分隔线随段保留', () => {
+    // 源段 = 子标题的控制域（含正文与 ---）；旧实现把标题区算到远处的 `---`，
+    // 搬移段变成 `  # 子标题\n\n`（正文与分隔线途中被删）
+    const text = '- 父项\n  - # 子标题\n  正文\n---\n\n# 顶层\n顶层内容\n'
+    const doc = Text.of(text.split('\n'))
+    const items = extractOutline(doc)
+    const plan = outlineMovePlan(doc, items, 0, 1, 'before')!
+    expect(plan.movedText).toBe('  - # 子标题\n  正文\n---\n\n')
+    // 拖到紧邻的下一段之前（物理位置不变的原地搬移）：文档逐字节不变
+    const result = applyChanges(text, plan.changes)
+    expect(result).toBe(text)
+    assertMovedSegmentIsolated(text, result, plan)
+  })
+
+  it('列表内 Setext 标题被搬移：整标题区（内容 + 下划线）规范化为 ATX 单行', () => {
+    const text = '- T\n  ===\n\n# 顶层\n顶层内容\n'
+    const doc = Text.of(text.split('\n'))
+    const items = extractOutline(doc)
+    const plan = outlineMovePlan(doc, items, 0, 1, 'before')!
+    expect(plan.movedText).toBe('- # T\n\n')
+    const result = applyChanges(text, plan.changes)
+    expect(result).toBe('- # T\n\n# 顶层\n顶层内容\n')
+    assertMovedSegmentIsolated(text, result, plan)
+  })
+})
+
 describe('移动计划：无效落点与退化情形', () => {
   it('拖入自身控制域内部（含自身）返回 null：三态同拒', () => {
     expect(outlineMovePlan(docA, itemsA, 0, 0, 'before')).toBeNull()

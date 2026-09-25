@@ -35,7 +35,7 @@
 import type { Text } from '@codemirror/state'
 import type { SerChange } from '../shared/protocol'
 import type { OutlineItem } from './outline'
-import { outlineAtxLine, outlineHeadingPrefix, outlineHeadingSpan, outlineSectionLineRange, outlineSubtreeIndices } from './outlineSection'
+import { outlineAtxLine, outlineHeadingSpan, outlineSectionLineRange, outlineSubtreeIndices } from './outlineSection'
 
 /** 三态落点：目标之前/之后/内部（内部 = 成为目标最后子级） */
 export type OutlineDropPosition = 'before' | 'after' | 'inside'
@@ -135,7 +135,8 @@ export function outlineMovePlan(
   const levelDelta = to.level - from.level + (position === 'inside' ? 1 : 0)
 
   // 搬移段文本：子树内每个标题区替换为调级后的 ATX 单行（从后往前替换，
-  // 段内偏移不漂移）；段尾换行规范化（补齐），插入点无前置换行时前置
+  // 段内偏移不漂移）；标题区不含容器前缀（`- `/`> `/缩进在标题区之前），
+  // 替换后结构按字节留在段内；段尾换行规范化（补齐），插入点无前置换行时前置
   let moved = doc.sliceString(span.from, span.to)
   const subtree = outlineSubtreeIndices(items, fromIndex)
   for (let k = subtree.length - 1; k >= 0; k--) {
@@ -146,9 +147,7 @@ export function outlineMovePlan(
     if (at < 0 || end > moved.length || at >= end) {
       continue // 防御（标题区不在段内——锚点已对齐时不可达）
     }
-    moved = moved.slice(0, at) +
-      outlineHeadingPrefix(doc, item) + outlineAtxLine(item.level + levelDelta, item.text) +
-      moved.slice(end)
+    moved = moved.slice(0, at) + outlineAtxLine(item.level + levelDelta, item.text) + moved.slice(end)
   }
   // 尾换行补齐只在插入点后有后续内容时发生（合并替换的文末段保持原样，
   // 不为文档凭空补尾换行）；插入点前一字符非 \n 且非文档起点时前置换行
