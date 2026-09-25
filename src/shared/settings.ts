@@ -66,9 +66,16 @@ export const CODEBLOCK_COPY_BUTTON_KEY = 'codeblock.copyButton'
 export const CODEBLOCK_COPY_BUTTON_DEFAULT = true
 
 /**
+ * #83「语法高亮」独立开关：tok-* token 着色（Lezer 语言包 + legacy-modes，
+ * 两视图共用同一词表与色板）。独立于卡片——卡片关闭时朴素围栏仍可着色。
+ */
+export const CODEBLOCK_HIGHLIGHT_KEY = 'codeblock.highlight'
+export const CODEBLOCK_HIGHLIGHT_DEFAULT = true
+
+/**
  * 生产设置定义注册表：#33 交付空状态页面与完整数据链路，#34 加入首个
  * 实际设置项「显示行号」（设置页自此渲染真实开关），#79 加入「代码块卡片」，
- * #80 加入「卡内行号」，#81 加入「复制按钮」。
+ * #80 加入「卡内行号」，#81 加入「复制按钮」，#83 加入「语法高亮」。
  */
 export const PRODUCTION_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
   {
@@ -98,6 +105,13 @@ export const PRODUCTION_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     default: CODEBLOCK_COPY_BUTTON_DEFAULT,
     title: '复制按钮',
     description: '卡片头部悬停显示复制按钮，点击复制整块代码（不含围栏行）。需开启「代码块卡片」。',
+  },
+  {
+    key: CODEBLOCK_HIGHLIGHT_KEY,
+    type: 'boolean',
+    default: CODEBLOCK_HIGHLIGHT_DEFAULT,
+    title: '语法高亮',
+    description: '代码块内容按语言着色（卡片关闭时朴素围栏同样生效；未识别语言回退纯文本）。',
   },
 ]
 

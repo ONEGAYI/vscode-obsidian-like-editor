@@ -988,6 +988,10 @@ console.log(`[原生输入] mermaid ${mermaidPassed} 项通过`)
       const lnTexts = await page.evaluate(() =>
         [...document.querySelectorAll('.vsidian-code-card-linenumber')].map((el) => el.textContent))
       assert.deepEqual(lnTexts, ['1'], `卡内行号应为 ['1']，实际 ${JSON.stringify(lnTexts)}`)
+      // #83 语法高亮：呈现态代码内容有 tok-* 着色 span
+      const tokCount = await page.evaluate(() =>
+        document.querySelectorAll('.cm-content [class*="tok-"]').length)
+      assert(tokCount > 0, `呈现态代码应有着色 token，实际 ${tokCount}`)
 
       // 2) 原生点击代码行 → 编辑态：围栏显形、头部保留
       await page.locator('.cm-line.vsidian-code-card-line').nth(1).click()

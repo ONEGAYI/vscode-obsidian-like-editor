@@ -523,6 +523,8 @@ export interface PaintProbe {
     copyCount?: number
     /** #82 视口内收起态头部数（chevron -collapsed 计数） */
     foldedCount?: number
+    /** #83 视口内 tok-* token 元素数（高亮关闭或无引擎语言为 0） */
+    tokenCount?: number
   }
   /** #55 标题行绘制观测：视口内已挂载的 .vsidian-heading-inview 行的
    *  distinct 计算值（box-shadow 应为 'none'、border-left-width 应为
@@ -864,7 +866,8 @@ function isPaintProbe(v: unknown): v is PaintProbe {
       (v.code.lineNumberTexts === undefined || v.code.lineNumberTexts === null ||
         (Array.isArray(v.code.lineNumberTexts) && v.code.lineNumberTexts.every(isString))) &&
       (v.code.copyCount === undefined || isNonNegativeInt(v.code.copyCount)) &&
-      (v.code.foldedCount === undefined || isNonNegativeInt(v.code.foldedCount))
+      (v.code.foldedCount === undefined || isNonNegativeInt(v.code.foldedCount)) &&
+      (v.code.tokenCount === undefined || isNonNegativeInt(v.code.tokenCount))
     )) &&
     (v.heading === undefined || v.heading === null || (
       isObject(v.heading) &&

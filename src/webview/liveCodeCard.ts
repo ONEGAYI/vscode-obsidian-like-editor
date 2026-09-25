@@ -23,6 +23,7 @@ import { liveDecorationsField, selectionTouchesRange } from './liveDecorations'
 import { mermaidFencesField } from './liveMermaid'
 import type { FenceSpan } from '../shared/mermaid'
 import { resolveCodeLanguage } from '../shared/codeLangs'
+import { hasHighlightEngine, highlightCodeRanges, splitRangeAtLineBreaks } from './codeHighlight'
 
 /** #79 代码块卡片稳定类名（Obsidian/Code Styler 对应见选择器映射表） */
 export const CODE_CARD_CLASS_NAMES = {
@@ -51,7 +52,36 @@ export const CODE_CARD_CLASS_NAMES = {
   fold: 'vsidian-code-card-fold',
   /** 折叠收起态修饰（chevron 转向；头部仍保留） */
   foldCollapsed: 'vsidian-code-card-fold-collapsed',
+  /** 语言徽标（#83：头部标签左侧的彩色字形徽标，两视图共用） */
+  headerIcon: 'vsidian-code-card-header-icon',
 } as const
+
+/**
+ * 语言徽标（#83，Q8-B 共识）：注册表语言的彩色字形徽标——等宽缩写 +
+ * 品牌近似色，随头部标签显示。v1 为字形徽标（typographic badge），
+ * 非 Code Styler 的矢量 logo 集；升级为真实 logo 属后续工单（体积与
+ * 素材来源另行决策）。键 = codeLangs 语言 id。
+ */
+const CODE_LANG_ICONS: Readonly<Record<string, { text: string; color: string }>> = {
+  javascript: { text: 'JS', color: '#f0db4f' },
+  typescript: { text: 'TS', color: '#3178c6' },
+  json: { text: '{ }', color: '#a8b9cc' },
+  html: { text: '<>', color: '#e34c26' },
+  css: { text: 'CSS', color: '#563d7c' },
+  python: { text: 'PY', color: '#3572a5' },
+  shell: { text: 'SH', color: '#89e051' },
+  powershell: { text: 'PS', color: '#012456' },
+  c: { text: 'C', color: '#a8b9cc' },
+  cpp: { text: 'C++', color: '#00599c' },
+  java: { text: 'J', color: '#b07219' },
+  go: { text: 'GO', color: '#00add8' },
+  rust: { text: 'RS', color: '#dea584' },
+  sql: { text: 'SQL', color: '#e38c00' },
+  yaml: { text: 'YML', color: '#cb171e' },
+  markdown: { text: 'MD', color: '#519aba' },
+  verilog: { text: 'V', color: '#8a2be2' },
+  text: { text: 'TXT', color: '#8a8a8a' },
+}
 
 /**
  * 复制请求 effect（#81）：按钮点击 → 零写回事务携带代码体原文，由
@@ -165,7 +195,16 @@ export class CodeCardHeaderWidget extends WidgetType {
     div.setAttribute('data-vsidian-code-lang', this.languageId ?? '')
     const label = document.createElement('span')
     label.className = CODE_CARD_CLASS_NAMES.headerLabel
-    label.textContent = this.label
+    const icon = this.languageId ? CODE_LANG_ICONS[this.languageId] : undefined
+    if (icon) {
+      const badge = document.createElement('span')
+      badge.className = CODE_CARD_CLASS_NAMES.headerIcon
+      badge.textContent = icon.text
+      badge.style.color = icon.color
+      badge.setAttribute('aria-hidden', 'true')
+      label.appendChild(badge)
+    }
+    label.appendChild(document.createTextNode(this.label))
     const actions = document.createElement('span')
     actions.className = CODE_CARD_CLASS_NAMES.headerActions
     actions.appendChild(buildFoldButton(this.folded))
@@ -298,6 +337,17 @@ function linenumberDeco(value: number, widthCh: number): ReturnType<typeof Decor
   return deco
 }
 
+/** tok-* 高亮 mark 实例缓存（同类复用，RangeSet.eq 前提；#83） */
+const tokenMarkDecos = new Map<string, ReturnType<typeof Decoration.mark>>()
+function tokenMarkDeco(cls: string): ReturnType<typeof Decoration.mark> {
+  let deco = tokenMarkDecos.get(cls)
+  if (!deco) {
+    deco = Decoration.mark({ class: cls })
+    tokenMarkDecos.set(cls, deco)
+  }
+  return deco
+}
+
 /**
  * 卡内行号 widget（#80）：代码行行首的右对齐数字，每块从 1 起、围栏行不占号。
  * widthCh 为本块行号列宽（末行号位数与 2 取大，ch 单位随等宽字体对齐）；
@@ -336,12 +386,25 @@ export class CodeCardLineNumberWidget extends WidgetType {
  * 从 1、围栏行不占号、列宽随末行号位数对齐）。编辑态（触及围栏区间）
  * 不清空、行号保留，外壳保留。
  */
+/**
+ * 卡片装饰构建（#79–#83 契约入口；纯数据输入，可单测直驱、阅读侧对拍复用）：
+ * 语法高亮 mark（config.highlight，独立于卡片开关——朴素围栏仍可着色）；
+ * 卡片形态（config.card）：头部 block widget、卡片行类（首/尾圆角修饰）、
+ * 呈现态围栏行内容清空、卡内行号（每块从 1、围栏行不占号）；编辑态不清空、
+ * 外壳保留；折叠块整块收起（行类/行号/高亮均不发射）。跨行 token 按换行
+ * 切段（mark 装饰不跨行约束）。
+ */
 export function buildCodeCardDecorations(
   doc: Text,
   selection: EditorSelection,
   fm: { end: number } | null,
   fences: readonly FenceSpan[],
-  config: Pick<CodeCardConfig, 'lineNumbers' | 'copyButton'> = { lineNumbers: true, copyButton: true },
+  config: Pick<CodeCardConfig, 'card' | 'lineNumbers' | 'copyButton' | 'highlight'> = {
+    card: true,
+    lineNumbers: true,
+    copyButton: true,
+    highlight: true,
+  },
   folded: ReadonlySet<number> = new Set<number>(),
 ): Array<Range<Decoration>> {
   const out: Array<Range<Decoration>> = []
@@ -355,11 +418,28 @@ export function buildCodeCardDecorations(
     const openLine = doc.lineAt(fence.from)
     const closeLine = doc.lineAt(Math.min(fence.to, doc.length))
     const lang = resolveCodeLanguage(fence.info)
+    const editing = selectionTouchesRange(selection, fence.from, fence.to)
+    // 折叠收起（#82）：光标在块内时临时展开；收起态无复制按钮（规格）。
+    // 折叠只在卡片开启时呈现（朴素围栏无头部可挂 chevron）
+    const isFolded = config.card && folded.has(fence.from) && !editing
+    // 语法高亮（#83）：卡片关闭时朴素围栏仍可着色；折叠块不可见跳过
+    if (config.highlight && !isFolded && lang && hasHighlightEngine(lang.id)) {
+      const contentStart = openLine.to + 1
+      for (const token of highlightCodeRanges(lang.id, fence.code)) {
+        for (const seg of splitRangeAtLineBreaks(fence.code, token.from, token.to)) {
+          const from = contentStart + seg.from
+          const to = contentStart + seg.to
+          if (to > from && to <= closeLine.from) {
+            out.push(tokenMarkDeco(token.cls).range(from, to))
+          }
+        }
+      }
+    }
+    if (!config.card) {
+      continue
+    }
     const trimmed = fence.info.trim()
     const label = lang?.displayName ?? (trimmed === '' ? 'Plain text' : trimmed)
-    const editing = selectionTouchesRange(selection, fence.from, fence.to)
-    // 折叠收起（#82）：光标在块内时临时展开；收起态无复制按钮（规格）
-    const isFolded = folded.has(fence.from) && !editing
     const copy = config.copyButton && !editing && !isFolded
     out.push(headerDeco(label, lang?.id ?? null, copy, fence.code, isFolded).range(fence.from, fence.from))
     if (isFolded) {
@@ -398,7 +478,8 @@ export const codeCardDecorations = StateField.define<DecorationSet>({
   create(state) {
     const decoField = state.field(liveDecorationsField, false)
     const fences = state.field(mermaidFencesField, false)
-    if (!state.facet(codeCardConfigFacet).card || !decoField || !fences) {
+    const config = state.facet(codeCardConfigFacet)
+    if ((!config.card && !config.highlight) || !decoField || !fences) {
       return RangeSet.empty
     }
     return RangeSet.of(
@@ -410,7 +491,8 @@ export const codeCardDecorations = StateField.define<DecorationSet>({
     )
   },
   update(value, tr) {
-    if (!tr.state.facet(codeCardConfigFacet).card) {
+    const nextConfig = tr.state.facet(codeCardConfigFacet)
+    if (!nextConfig.card && !nextConfig.highlight) {
       return RangeSet.empty
     }
     const configChanged = tr.startState.facet(codeCardConfigFacet) !== tr.state.facet(codeCardConfigFacet)

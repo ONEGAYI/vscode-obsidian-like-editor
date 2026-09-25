@@ -30,7 +30,7 @@ interface Item {
 }
 
 /** 装饰集合直驱（卡片装饰来自 StateField；围栏表来自 mermaidFencesField） */
-function decos(text: string, anchor: number, config?: { card?: boolean; lineNumbers?: boolean; copyButton?: boolean }): Item[] {
+function decos(text: string, anchor: number, config?: { card?: boolean; lineNumbers?: boolean; copyButton?: boolean; highlight?: boolean }): Item[] {
   const state = EditorState.create({
     doc: text,
     extensions: [
@@ -40,7 +40,7 @@ function decos(text: string, anchor: number, config?: { card?: boolean; lineNumb
         card: config?.card ?? true,
         lineNumbers: config?.lineNumbers ?? true,
         copyButton: config?.copyButton ?? true,
-        highlight: true,
+        highlight: config?.highlight ?? true,
       }),
       codeCardFoldField,
       codeCardDecorations,
@@ -198,8 +198,8 @@ describe('代码块卡片：排除与降级', () => {
     expect(decos(text, 0)).toHaveLength(0)
   })
 
-  it('卡片总开关关闭 → 无装饰', () => {
-    expect(decos(DOC, 0, { card: false })).toHaveLength(0)
+  it('卡片总开关关闭且高亮关闭 → 无装饰（仅关卡片 → 只剩高亮，见 #83 节）', () => {
+    expect(decos(DOC, 0, { card: false, highlight: false })).toHaveLength(0)
   })
 })
 
@@ -476,6 +476,70 @@ describe('折叠（#82）', () => {
   })
 })
 
+describe('语法高亮 mark（#83）', () => {
+  it('呈现态：代码内容携带 tok-* mark，且区间不越过围栏', () => {
+    const items = decos(DOC, 0)
+    const toks = items.filter((i) => typeof i.cls === 'string' && i.cls.includes('tok-'))
+    expect(toks.length).toBeGreaterThan(0)
+    expect(toks.some((i) => i.cls!.includes('tok-keyword'))).toBe(true)
+    const open = lineOf(DOC, OPEN_LINE)
+    const close = lineOf(DOC, CLOSE_LINE)
+    for (const t of toks) {
+      expect(t.from).toBeGreaterThan(open.to)
+      expect(t.to).toBeLessThanOrEqual(close.from)
+    }
+  })
+
+  it('mark 不跨行（多行 token 逐行切段）', () => {
+    const text = '```js\n/* one\ntwo */ let x = 1\n```'
+    const items = decos(text, 0)
+    const toks = items.filter((i) => typeof i.cls === 'string' && i.cls.includes('tok-comment'))
+    expect(toks.length).toBeGreaterThanOrEqual(2)
+    for (const t of toks) {
+      const line = text.slice(t.from, t.to)
+      expect(line.includes('\n')).toBe(false)
+    }
+  })
+
+  it('编辑态保持高亮（两态一致）', () => {
+    const toks = decos(DOC, FENCE_FROM + 4).filter((i) => i.cls?.includes('tok-'))
+    expect(toks.length).toBeGreaterThan(0)
+  })
+
+  it('未识别语言与 text 不着色（卡片与行号仍在）', () => {
+    const zzz = '```zzz\nsome code\n```'
+    expect(decos(zzz, 0).filter((i) => i.cls?.includes('tok-'))).toHaveLength(0)
+    const plain = '```\nsome code\n```'
+    expect(decos(plain, 0).filter((i) => i.cls?.includes('tok-'))).toHaveLength(0)
+    expect(decos(plain, 0).find((i) => i.widget)).toBeDefined()
+  })
+
+  it('高亮独立于卡片：card=false + highlight=true → 仅 tok mark（无头部/行类）', () => {
+    const items = decos(DOC, 0, { card: false })
+    expect(items.find((i) => i.block && i.widget)).toBeUndefined()
+    expect(items.filter((i) => i.cls?.includes(CODE_CARD_CLASS_NAMES.line))).toHaveLength(0)
+    expect(items.filter((i) => i.cls?.includes('tok-')).length).toBeGreaterThan(0)
+    // 无围栏清空（朴素源码形态）
+    expect(items.filter((i) => i.hide)).toHaveLength(0)
+  })
+
+  it('card=false + highlight=false → 无装饰', () => {
+    expect(decos(DOC, 0, { card: false, highlight: false })).toHaveLength(0)
+  })
+
+  it('高亮开关关闭 → 无 tok mark，卡片其余装饰保留', () => {
+    const items = decos(DOC, 0, { highlight: false })
+    expect(items.filter((i) => i.cls?.includes('tok-'))).toHaveLength(0)
+    expect(items.find((i) => i.block && i.widget)).toBeDefined()
+    expect(items.filter((i) => i.cls?.includes(CODE_CARD_CLASS_NAMES.line))).toHaveLength(5)
+  })
+
+  it('折叠块不着色（整块不可见）', () => {
+    const { items } = decosFolded(DOC, 0, FENCE_FROM)
+    expect(items.filter((i) => i.cls?.includes('tok-'))).toHaveLength(0)
+  })
+})
+
 describe('头部 widget 形态', () => {
   it('eq 按标签/语言/copy/code 比较；toDOM 产出头部结构与复制按钮', () => {
     const w = new CodeCardHeaderWidget('JavaScript', 'javascript', true, 'let a')
@@ -484,7 +548,10 @@ describe('头部 widget 形态', () => {
     expect(w.eq(new CodeCardHeaderWidget('JavaScript', 'javascript', true, 'other'))).toBe(false)
     const dom = w.toDOM()
     expect(dom.className).toBe(CODE_CARD_CLASS_NAMES.header)
-    expect(dom.querySelector(`.${CODE_CARD_CLASS_NAMES.headerLabel}`)!.textContent).toBe('JavaScript')
+    const label = dom.querySelector(`.${CODE_CARD_CLASS_NAMES.headerLabel}`)!
+    // #83 语言徽标在标签内（'JS' + 显示名文本节点）
+    expect(label.querySelector(`.${CODE_CARD_CLASS_NAMES.headerIcon}`)?.textContent).toBe('JS')
+    expect(label.textContent).toContain('JavaScript')
     expect(dom.querySelector(`.${CODE_CARD_CLASS_NAMES.headerActions}`)).not.toBeNull()
     const btn = dom.querySelector(`button.${CODE_CARD_CLASS_NAMES.copy}`)!
     expect(btn).not.toBeNull()

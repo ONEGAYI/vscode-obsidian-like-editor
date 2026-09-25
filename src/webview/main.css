@@ -1327,3 +1327,58 @@ body {
   margin: 0;
   text-align: left;
 }
+
+/* ---- 代码块语法高亮 token 色板（#83）----
+   tok-* 为 @lezer/highlight classHighlighter 的稳定词表（两视图共用）；
+   取色参照 VSCode Dark+ / Light+，明暗随宿主 body 主题类切换
+   （vscode-dark / vscode-high-contrast 走深色组）。未列出的 tok-* 继承
+   编辑器前景色（词表全集见 @lezer/highlight 文档）。 */
+.vsidian-code-card-header .vsidian-code-card-header-icon {
+  display: inline-block;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: calc(var(--vscode-font-size, 13px) * 0.72);
+  font-weight: 700;
+  line-height: 1;
+  margin-right: 6px;
+  padding: 1px 3px;
+  border-radius: 3px;
+  border: 1px solid currentColor;
+}
+
+#app .tok-keyword,
+#app .tok-atom,
+#app .tok-bool { color: #0000ff; }
+#app .tok-string,
+#app .tok-string2 { color: #a31515; }
+#app .tok-comment,
+#app .tok-meta { color: #008000; }
+#app .tok-number { color: #098658; }
+#app .tok-typeName,
+#app .tok-className,
+#app .tok-namespace { color: #267f99; }
+#app .tok-function,
+#app .tok-macroName { color: #795e26; }
+#app .tok-variableName2,
+#app .tok-propertyName { color: #001080; }
+#app .tok-operator { color: inherit; }
+#app .tok-punctuation { color: inherit; }
+#app .tok-invalid { color: #cd3131; text-decoration: underline wavy #cd3131; }
+
+body.vscode-dark #app .tok-keyword,
+body.vscode-dark #app .tok-atom,
+body.vscode-dark #app .tok-bool,
+body.vscode-high-contrast #app .tok-keyword { color: #569cd6; }
+body.vscode-dark #app .tok-string,
+body.vscode-dark #app .tok-string2 { color: #ce9178; }
+body.vscode-dark #app .tok-comment,
+body.vscode-dark #app .tok-meta { color: #6a9955; }
+body.vscode-dark #app .tok-number { color: #b5cea8; }
+body.vscode-dark #app .tok-typeName,
+body.vscode-dark #app .tok-className,
+body.vscode-dark #app .tok-namespace { color: #4ec9b0; }
+body.vscode-dark #app .tok-function,
+body.vscode-dark #app .tok-macroName { color: #dcdcaa; }
+body.vscode-dark #app .tok-variableName2,
+body.vscode-dark #app .tok-propertyName { color: #9cdcfe; }
+body.vscode-dark #app .tok-operator { color: #d4d4d4; }
+body.vscode-dark #app .tok-invalid { color: #f44747; text-decoration-color: #f44747; }

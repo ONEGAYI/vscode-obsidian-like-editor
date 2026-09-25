@@ -17,7 +17,12 @@ export async function run(): Promise<void> {
   if (ext && !ext.isActive) {
     await ext.activate()
   }
+  // 诊断过滤：VSIDIAN_IT_FILTER=子串 只跑名称含该子串的用例（失败定位用）
+  const only = process.env.VSIDIAN_IT_FILTER
   for (const [name, fn] of cases) {
+    if (only && !name.includes(only)) {
+      continue
+    }
     try {
       // #38：全局模式记忆（globalState）在同一集成进程内跨用例共享——
       // reading 记忆会让后续用例的新面板被恢复成阅读模式、source 记忆会

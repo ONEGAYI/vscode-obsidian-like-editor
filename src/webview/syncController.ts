@@ -49,6 +49,8 @@ import {
   CODEBLOCK_CARD_KEY,
   CODEBLOCK_COPY_BUTTON_DEFAULT,
   CODEBLOCK_COPY_BUTTON_KEY,
+  CODEBLOCK_HIGHLIGHT_DEFAULT,
+  CODEBLOCK_HIGHLIGHT_KEY,
   CODEBLOCK_LINE_NUMBERS_DEFAULT,
   CODEBLOCK_LINE_NUMBERS_KEY,
   SHOW_LINE_NUMBERS_DEFAULT,
@@ -2697,12 +2699,13 @@ export class WebviewSyncController {
       card: bool(this.settings?.[CODEBLOCK_CARD_KEY], CODEBLOCK_CARD_DEFAULT),
       lineNumbers: bool(this.settings?.[CODEBLOCK_LINE_NUMBERS_KEY], CODEBLOCK_LINE_NUMBERS_DEFAULT),
       copyButton: bool(this.settings?.[CODEBLOCK_COPY_BUTTON_KEY], CODEBLOCK_COPY_BUTTON_DEFAULT),
-      highlight: this.codeCardConfig.highlight,
+      highlight: bool(this.settings?.[CODEBLOCK_HIGHLIGHT_KEY], CODEBLOCK_HIGHLIGHT_DEFAULT),
     }
     if (
       next.card === this.codeCardConfig.card &&
       next.lineNumbers === this.codeCardConfig.lineNumbers &&
-      next.copyButton === this.codeCardConfig.copyButton
+      next.copyButton === this.codeCardConfig.copyButton &&
+      next.highlight === this.codeCardConfig.highlight
     ) {
       return
     }
@@ -3059,12 +3062,17 @@ export class WebviewSyncController {
       }
     }
     const codeCardDisplay = cardHeader ? getComputedStyle(cardHeader).display : null
-    const code = cardHeader
+    // #83 tok-* token 元素计数（卡片关闭仅高亮时 code 节由 token 驱动存在）
+    const tokenCount = codeScope
+      ? codeScope.querySelectorAll('[class*="tok-"]').length
+      : 0
+    const code = cardHeader || tokenCount > 0
       ? {
         visible: codeCardVisible,
         display: codeCardDisplay,
         label:
-          cardHeader.querySelector(`.${CODE_CARD_CLASS_NAMES.headerLabel}`)?.textContent ?? null,
+          // #83 徽标在标签内：取标签的末文本节点（显示名），不含徽标字形
+          cardHeader?.querySelector(`.${CODE_CARD_CLASS_NAMES.headerLabel}`)?.lastChild?.textContent ?? null,
         headerCount: codeScope
           ? codeScope.querySelectorAll(`.${CODE_CARD_CLASS_NAMES.header}`).length
           : 0,
@@ -3086,6 +3094,8 @@ export class WebviewSyncController {
         foldedCount: codeScope
           ? codeScope.querySelectorAll(`.${CODE_CARD_CLASS_NAMES.foldCollapsed}`).length
           : 0,
+        // #83 视口内 tok-* token 元素数
+        tokenCount,
       }
       : undefined
     return {

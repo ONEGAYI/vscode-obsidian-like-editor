@@ -451,6 +451,8 @@ interface ViewState {
       copyCount?: number
       /** #82 收起态头部数 */
       foldedCount?: number
+      /** #83 视口内 tok-* token 元素数 */
+      tokenCount?: number
     }
     /** #55：标题行左缘绘制观测（distinct computed 值；无挂载标题行为 null） */
     heading?: {
@@ -4900,6 +4902,9 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // #81 呈现态每张卡片一个复制按钮
     assert(present.paint?.code?.copyCount === 4,
       `呈现态应 4 个复制按钮，实际 ${present.paint?.code?.copyCount}`)
+    // #83 默认高亮：js 块产出 tok-* token
+    assert((present.paint?.code?.tokenCount ?? 0) > 0,
+      `默认高亮应产出 tok token，实际 ${present.paint?.code?.tokenCount}`)
     // 编辑态：光标进入首块代码体 → 头部与卡片行保留，该块复制按钮隐藏
     const body = present.text.indexOf('const a = 1')
     await vscode.commands.executeCommand(CMD.postToPanel, uri, {
@@ -4953,9 +4958,11 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await waitViewState('code-card.md', (v) =>
       v.paint?.code?.foldedCount === 0 && v.paint.code.cardLineCount === 15)
     assert(await readDisk('code-card.md') === diskBefore, '折叠交互不得改写源文')
-    // 设置总开关：关闭 → 卡片消失；重开 → 恢复（Compartment 热重配）
+    // 设置总开关：关闭 → 卡片形态消失（#83 起高亮独立：code 节由 token 驱动
+    // 仍存在，头部与行类为 0）；重开 → 恢复（Compartment 热重配）
     await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.card': false })
-    await waitViewState('code-card.md', (v) => v.paint?.code === undefined)
+    await waitViewState('code-card.md', (v) =>
+      v.paint?.code !== undefined && v.paint.code.headerCount === 0 && v.paint.code.cardLineCount === 0)
     assert(await readDisk('code-card.md') === diskBefore, '设置切换不得改写源文')
     await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.card': true })
     await waitViewState('code-card.md', (v) => v.paint?.code?.headerCount === 4)
@@ -4973,5 +4980,15 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.copyButton': true })
     await waitViewState('code-card.md', (v) =>
       v.paint?.code?.headerCount === 4 && (v.paint.code.copyCount ?? 0) === 4)
+    // #83 高亮独立于卡片：关卡片仅高亮 → 无头部有 token；重开卡片关高亮 → 有头部无 token
+    await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.card': false })
+    await waitViewState('code-card.md', (v) =>
+      v.paint?.code?.headerCount === 0 && (v.paint.code.tokenCount ?? 0) > 0)
+    await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.card': true, 'codeblock.highlight': false })
+    await waitViewState('code-card.md', (v) =>
+      v.paint?.code?.headerCount === 4 && (v.paint.code.tokenCount ?? 0) === 0)
+    await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.highlight': true })
+    await waitViewState('code-card.md', (v) =>
+      v.paint?.code?.headerCount === 4 && (v.paint.code.tokenCount ?? 0) > 0)
   }],
 ]

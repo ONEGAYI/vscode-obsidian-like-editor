@@ -60,6 +60,15 @@ describe('生产注册表（#34 起含实际设置项）', () => {
     expect(isSettingDefinition(def)).toBe(true)
   })
 
+  it('注册「语法高亮」：键 codeblock.highlight、boolean、默认开启（#83）', () => {
+    const def = PRODUCTION_SETTING_DEFINITIONS[4]
+    expect(def.key).toBe('codeblock.highlight')
+    expect(def.type).toBe('boolean')
+    expect(def.default).toBe(true)
+    expect(def.title).toBe('语法高亮')
+    expect(isSettingDefinition(def)).toBe(true)
+  })
+
   it('键与消费方常量一致：webview/宿主经 SHOW_LINE_NUMBERS_KEY 读同一键', () => {
     expect(SHOW_LINE_NUMBERS_KEY).toBe('editor.lineNumbers')
     expect(SHOW_LINE_NUMBERS_DEFAULT).toBe(true)

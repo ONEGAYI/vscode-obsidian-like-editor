@@ -79,4 +79,17 @@ describe('代码块卡片 CSS 契约（#79）', () => {
       rule('#app .cm-editor .cm-scroller .vsidian-code-card-header:has(> .vsidian-code-card-header-actions > .vsidian-code-card-fold-collapsed)'),
     ).toMatch(/border-radius:\s*6px/)
   })
+
+  it('token 色板：明暗两套关键类存在（#83，VSCode Dark+/Light+ 取色）', () => {
+    expect(css.match(/#app \.tok-keyword[^{]*\{[^}]*#0000ff/)).not.toBeNull()
+    expect(css.match(/#app \.tok-string[^{]*\{[^}]*#a31515/)).not.toBeNull()
+    expect(css.match(/#app \.tok-comment[^{]*\{[^}]*#008000/)).not.toBeNull()
+    expect(css.match(/body\.vscode-dark #app \.tok-keyword[^{]*\{[^}]*#569cd6/)).not.toBeNull()
+    expect(css.match(/body\.vscode-dark #app \.tok-string[^{]*\{[^}]*#ce9178/)).not.toBeNull()
+  })
+
+  it('语言徽标：头部标签左侧字形徽标（#83）', () => {
+    expect(rule('.vsidian-code-card-header .vsidian-code-card-header-icon'))
+      .toMatch(/font-weight:\s*700/)
+  })
 })
