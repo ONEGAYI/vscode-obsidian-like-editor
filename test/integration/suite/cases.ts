@@ -411,6 +411,12 @@ interface ViewState {
       columnBottomBorderWidth: string | null
       columnBackgroundColor: string | null
     }
+    /** #55：标题行左缘绘制观测（distinct computed 值；无挂载标题行为 null） */
+    heading?: {
+      inviewCount: number
+      boxShadowValues: string[]
+      borderLeftWidthValues: string[]
+    } | null
   }
 }
 
@@ -1466,10 +1472,23 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await openWithEditor('heading.md')
     await waitSessionReady('heading.md')
     // 光标初始在文档头的 # 标记处：该标记显形，另一标题的标记隐藏
-    const view = await waitViewState('heading.md', (v) => (v.headingLineCount ?? 0) >= 2)
+    const view = await waitViewState('heading.md', (v) => (v.headingLineCount ?? 0) >= 2 && v.paint?.heading != null)
     assert((view.headingActiveText ?? '').startsWith('#'), `光标贴近的标题标记应显形（# 开头）：${JSON.stringify(view.headingActiveText)}`)
     assert((view.headingHiddenText ?? '').startsWith('#') === false, `另一标题标记应隐藏（不以 # 开头）：${JSON.stringify(view.headingHiddenText)}`)
     assert((view.headingHiddenText ?? '') === '中部二级标题', `另一标题行 DOM 文本应为标题内容：${JSON.stringify(view.headingHiddenText)}`)
+
+    // #55 绘制层断言：标题行开头不绘制左缘竖线。正向控制先行——标题字号
+    // 须实际大于正文字号（样式注入失效时控制先失败，左缘断言才有意义）
+    const bodyFontPx = view.typography?.live?.fontSizePx
+    assert(bodyFontPx != null && (view.headingFontPx ?? 0) > bodyFontPx,
+      `正向控制失败：标题字号应大于正文（标题=${view.headingFontPx}px，正文=${bodyFontPx}px；样式注入失效会让左缘断言失去意义）`)
+    const headingPaint = view.paint!.heading!
+    assert(headingPaint.inviewCount >= 2,
+      `视口内应挂载至少 2 个标题行（H1/H2）供绘制观测，实际 ${headingPaint.inviewCount}`)
+    assert(JSON.stringify(headingPaint.boxShadowValues) === JSON.stringify(['none']),
+      `标题行不得以 box-shadow 绘制左缘竖线：${JSON.stringify(headingPaint.boxShadowValues)}`)
+    assert(JSON.stringify(headingPaint.borderLeftWidthValues) === JSON.stringify(['0px']),
+      `标题行不得以 border-left 绘制左缘竖线：${JSON.stringify(headingPaint.borderLeftWidthValues)}`)
 
     const uri = wsUri('heading.md').toString()
     const bodyOffset = '# 顶部'.length
@@ -1479,6 +1498,12 @@ export const cases: Array<[string, () => Promise<void>]> = [
       return v?.selectionOffset === bodyOffset ? v : undefined
     })
     assert((inBody.headingActiveText ?? '').startsWith('#'), `光标在标题正文时 # 应保持显形：${JSON.stringify(inBody.headingActiveText)}`)
+    // 光标位于标题正文时左缘同样无竖线（光标内外一致）
+    const inBodyPaint = inBody.paint?.heading
+    assert(inBodyPaint != null &&
+      JSON.stringify(inBodyPaint.boxShadowValues) === JSON.stringify(['none']) &&
+      JSON.stringify(inBodyPaint.borderLeftWidthValues) === JSON.stringify(['0px']),
+      `光标在标题正文时标题行也不得绘制左缘竖线：${JSON.stringify(inBodyPaint)}`)
 
     // 外部编辑把普通行改成标题：装饰随文本增量更新（doc.changed 广播路径）
     const before = view.headingLineCount ?? 0
