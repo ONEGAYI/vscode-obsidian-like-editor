@@ -1,6 +1,6 @@
 # Obsidian 选择器映射表（一期稳定样式契约）
 
-状态：工单 #6 交付物，2026-09-23；#8 补 span 级映射与阅读语义标签结构（2026-09-24）；#9 补任务勾选交互类（2026-09-24）；#10 补链接/图片映射（2026-09-24）；#12 补表格映射（2026-09-24）；#11 补双链映射（2026-09-24）；#42 补实时预览表格网格入口（2026-09-24）；#55 移除 live 标题行左缘竖线及其强调色变量（2026-09-25）；#59 补公式映射（2026-09-25）；#60 补 Mermaid 图表映射（2026-09-25）。依据 [ADR-0004](../adr/0004-stable-styling-contract.md)。
+状态：工单 #6 交付物，2026-09-23；#8 补 span 级映射与阅读语义标签结构（2026-09-24）；#9 补任务勾选交互类（2026-09-24）；#10 补链接/图片映射（2026-09-24）；#12 补表格映射（2026-09-24）；#11 补双链映射（2026-09-24）；#42 补实时预览表格网格入口（2026-09-24）；#55 移除 live 标题行左缘竖线及其强调色变量（2026-09-25）；#59 补公式映射（2026-09-25）；#60 补 Mermaid 图表映射（2026-09-25）；#78 增补代码块卡片映射（2026-09-26，随 #79–#84 分支落地并逐票验证）。依据 [ADR-0004](../adr/0004-stable-styling-contract.md)。
 
 本文记录一期已建立的稳定类名/CSS 变量入口与 Obsidian 同款选择器的核对结果，供二期自定义 CSS 片段兼容使用。**边界声明**：
 
@@ -149,7 +149,24 @@
 - SVG 经 DOM API 插入专用容器，**不经过** sanitizeReadingDom（净化层剥 `<style>` 会毁配色）——安全边界由 mermaid 自产 SVG + `securityLevel:'strict'` + webview CSP 三层兜底。
 - live 跨行 replace 装饰走 StateField（CM6 约束），围栏表增量重建以变更前最后一个已闭合围栏为顶层锚点；无锚点回溯以文末开放围栏开启行（trailingOpenStart）为窗口下界（幻影围栏防护），尾部开放按批增量续扫并在 8192 行熔断。
 
+## 代码块卡片（#78 规格，#79–#84 实施）
+
+围栏代码块（mermaid/公式围栏除外）在卡片开启时收起为卡片：呈现态围栏行内容清空、行槽保留，块首行上方插入头部横带（语言标签 + 按钮区）；编辑态围栏源码显形、外壳保留。行为契约见 [code-block-card.md](../specs/code-block-card.md)。以下类名随 #79–#84 分支逐票建立，断言见各工单验收标准：
+
+| 本项目稳定类名 | 本项目用途 | Obsidian 对应选择器 | 核对结果 |
+| --- | --- | --- | --- |
+| `.vsidian-code-card-line` | 卡片覆盖的源**行**级类（含被清空的围栏行与全部代码行），承载卡片底色 | `.HyperMD-codeblock`（行族，原有 `.vsidian-code-line` 语义并入） | 语义等价（行级）；CSS 契约钉底色变量 |
+| `.vsidian-code-card-edge-top` / `-bottom` | 卡片首/末行圆角修饰（无头部覆盖的底边圆角；顶边圆角由头部横带承担） | 无对应（圆角由 Obsidian 原生 code 块样式承担） | 本项目自有修饰形态 |
+| `.vsidian-code-card-header`（live block widget / 阅读头部容器共用） | 头部横带：语言标签 + 右侧按钮区，底部 1px 分隔线 | `.code-styler-header-container`（Code Styler 插件方向；Obsidian 原生 live 无头部） | 本项目自有结构（观感参照 Code Styler） |
+| `.vsidian-code-card-header-label` / `-actions` | 语言标签（首字母大写显示名）/ 按钮容器 | `.code-styler-header-title` 方向 | 本项目自有形态 |
+| `.vsidian-code-card-copy`（+ `-done` 修饰） | 复制按钮；`-done` 为点击后约 1.2s 的 ✓ 反馈态 | `button.copy-code-button`（Obsidian 原生复制按钮）/ Code Styler 重定位方向 | 本项目自建 widget（经宿主剪贴板 API，非 webview 剪贴板） |
+| `.vsidian-code-card-fold`（+ `-collapsed` 修饰） | 折叠 chevron；`-collapsed` 为收起态（转向） | `.code-styler-header-container::after`（Code Styler 折叠箭头方向） | 本项目自建 widget；折叠为视图态不写源文件 |
+| `.vsidian-code-card-linenumber` | 卡内行号（每块从 1，围栏行不占号；行首 widget） | `.code-styler-line-number`（Code Styler 行号 widget 方向） | 本项目自有形态；与文档行号槽（源文件行号）两列并存互不遮挡 |
+| `tok-*` token 族（`tok-keyword`/`tok-string` 等，`@lezer/highlight` `classHighlighter` 词表） | 语法高亮 token span，**两视图共用**同一类名与明暗色板 | `.token-*`（Prism 词表方向）/ `.cm-*` token 族 | 本项目自有映射（Lezer tag → 稳定类）；明暗两套固定色板（Dark+/Light+ 取色），非 Obsidian 主题变量 |
+| `.vsidian-reading-code-card`（阅读块级） | 阅读视图卡片容器（`vsidian-reading-code-block` 的卡片化外壳） | `.markdown-preview-view pre`（原有映射保留） | 类等价 + 卡片化包装；`language-x` 类保留在 `code` 上供路由 |
+
 ## 悬浮提示等既有稳定类（沿用 #4/#5，与 Obsidian 无对应）
+
 
 `.vsidian-suspend-banner`（冲突暂停横幅）、`.vsidian-toolbar` 与 `.vsidian-mode-toggle`（模式切换工具栏）：本项目自有 UI，无 Obsidian 对应物，不参与兼容承诺。
 
@@ -164,6 +181,7 @@
 | `--vsidian-reading-max-width` | `760px` | 阅读块最大宽度 | `--file-line-width`（语义对应，名称不同） |
 | `--vsidian-reading-line-height` | `1.6` | 阅读正文行高 | `--line-height-normal`（语义对应，名称不同） |
 | `--vsidian-reading-code-background` | `var(--vscode-textCodeBlock-background, …)` | 代码块背景 | `--code-background`（语义对应，名称不同） |
+| `--vsidian-code-card-background` | `var(--vscode-textCodeBlock-background, …)` | 代码块卡片底色（#79 起，头部横带与代码区共用；阅读卡片同源） | `--code-background`（语义对应，名称不同） |
 | `--vsidian-table-background` | `rgba(128, 128, 128, 0.05)` | live 表格行背景 / 阅读表头背景（#12） | `--table-background`（语义对应，名称不同） |
 
 变量名**不与 Obsidian 原名对齐**（加 `vsidian-` 前缀避免与宿主 VSCode 变量冲突）；二期若需要按 Obsidian 变量名片段兼容，经映射垫片（alias）实现，不在一期承诺内。
@@ -186,7 +204,7 @@
 - 任务扩展状态：`.task-list-item[data-task="x"]` 等（仅支持空格/`x`/`X` 三态，#9）
 - frontmatter：~~`.markdown-frontmatter`~~（#8 已按源码形态呈现；Obsidian 属性面板形态不在一期）
 - 标签：`.cm-hashtag` / `.tag`（一期未实现标签语法；~~双链 `.cm-hmd-internal-link` / `.internal-link` 待 #11~~ #11 已建立 `.vsidian-wikilink` 对应类，见上文双链节。Obsidian 双链的 is-unresolved 区分——按目标存在与否变色——一期不做：显示不查询工作区，避免为样式引入索引/查找）
-- 语法高亮 token：`.token-*` / HyperMD codeblock 行内高亮 `.HyperMD-codeblock-*`（`language-x` 类已就位，高亮 token 属后续扩展）
+- ~~语法高亮 token~~（#83 起提供 `tok-*` 稳定词表（`@lezer/highlight` `classHighlighter`），两视图共用，见上文代码块卡片节；Prism 原名 `.token-*` 与 `.HyperMD-codeblock-*` 仍不提供，片段按原名定位不命中）
 - 删除线：`.cm-strikethrough` / 阅读视图 `del`（解析器支持但一期未装饰——如实记录，待后续补齐）
 - 虚拟化结构差异（#7 已生效）：阅读视图视口外块不存在于 DOM——依赖"全文 DOM 常驻"的片段（全局 `:nth-child` 定位、跨屏兄弟/后代选择器、假设完整内容高度的滚动条计算）与按需挂载冲突；正文块结构见上文 #7 说明
 - 查找高亮与隐藏标记区的交叉形态（#14 已知限制）：当前匹配的 replace 装饰优先于查找高亮，命中区间落在被折叠的隐藏标记（如链接语法标记）内时查找高亮不可见；匹配计数与步进不受影响，仍按全文文本模型计算
