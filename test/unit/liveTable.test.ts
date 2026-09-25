@@ -100,26 +100,41 @@ describe('live 表格装饰', () => {
       item.cls?.split(' ').includes(LIVE_CLASS_NAMES.tableGridDelimiter))).toBe(true)
   })
 
-  it('鼠标从段落跨行拖选到表格后方时停在表格边界，不把结构标记纳入选区', () => {
+  it('表外拖选可横跨表格；端点落在隐藏结构上收缩到最近内容边界（#57）', () => {
     const doc = '前文\n\n| A | B | C |\n| --- | --- | --- |\n| 带 | s是 | 送 |\n\n后文'
     const view = makeEditView(doc, 1)
+    // 表外 anchor → 表外 head（视觉跨过整表）：不再截断在表格边界
     view.dispatch({ selection: EditorSelection.single(1, doc.indexOf('后文') + 1),
       userEvent: 'select.pointer' })
     expect(view.state.selection.main.anchor).toBe(1)
-    expect(view.state.selection.main.head).toBe(doc.indexOf('| A | B | C |'))
-    expect(view.state.doc.toString()).toBe(doc)
+    expect(view.state.selection.main.head).toBe(doc.indexOf('后文') + 1)
+    // head 落在分隔行（隐藏结构）：前向选区收缩到上一内容行末格内容尾
+    const delimiterAt = doc.indexOf('| --- | --- | --- |')
+    const headerAt = doc.indexOf('| A | B | C |')
+    view.dispatch({ selection: EditorSelection.single(1, delimiterAt + 3),
+      userEvent: 'select.pointer' })
+    expect(view.state.selection.main.head).toBe(headerAt + '| A | B | C |'.length - 2)
+    // 反向（表后 anchor）落在分隔行：收缩到下一内容行首格内容首
     const after = doc.indexOf('后文') + 1
-    view.dispatch({ selection: EditorSelection.single(after, 0), userEvent: 'select.pointer' })
-    expect(view.state.selection.main.head).toBe(doc.indexOf('| 带 | s是 | 送 |') + '| 带 | s是 | 送 |'.length)
+    const rowAt = doc.indexOf('| 带 | s是 | 送 |')
+    view.dispatch({ selection: EditorSelection.single(after, delimiterAt + 3),
+      userEvent: 'select.pointer' })
+    expect(view.state.selection.main.head).toBe(rowAt + 2)
+    // head 落在可见格内容上：保持原位（选区反馈与实际内容一致）
+    const sentAt = rowAt + doc.slice(rowAt).indexOf('送')
+    view.dispatch({ selection: EditorSelection.single(1, sentAt),
+      userEvent: 'select.pointer' })
+    expect(view.state.selection.main.head).toBe(sentAt)
     view.destroy()
   })
 
-  it('键盘跨过安全表格的非空选区删除不破坏隐藏结构', () => {
+  it('键盘扩选覆盖整表后删除：整表块移除，前后正文按选区保留（#57）', () => {
     const doc = '前文\n\n| A | B | C |\n| --- | --- | --- |\n| 带 | s是 | 送 |\n\n后文'
     const view = makeEditView(doc, 1)
-    view.dispatch({ selection: EditorSelection.single(1, doc.indexOf('后文') + 1), userEvent: 'select' })
+    const head = doc.indexOf('后文') + 1
+    view.dispatch({ selection: EditorSelection.single(1, head), userEvent: 'select' })
     deleteCharBackward(view)
-    expect(view.state.doc.toString()).toBe(doc)
+    expect(view.state.doc.toString()).toBe(doc.slice(0, 1) + doc.slice(head))
     view.destroy()
   })
 
@@ -585,12 +600,14 @@ describe('单元格编辑权威链路', () => {
     linked.controller.dispose()
   })
 
-  it('从第二格扩选到前格后键入管道只替换第二格内容', () => {
+  it('从第二格扩选到前格后键入管道：按可见选区替换，列数保持（#57）', () => {
     const at = TABLE_DOC.indexOf('| 3 |') + 2
     const view = makeEditView(TABLE_DOC, at + 1)
     view.dispatch({ selection: EditorSelection.single(at + 1, TABLE_DOC.indexOf('苹果') + 2) })
     expect(tablePipeKeyHandler(view)).toBe(true)
-    expect(view.state.doc.toString()).toBe(TABLE_DOC.replace('| 3 |', '| \\| |'))
+    // 选区可见内容（3）被替换；转义序列落在选区头（苹果格内容尾）
+    expect(view.state.doc.line(5).text).toBe('| 苹果\\| |  |')
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(3)
     view.destroy()
   })
 
@@ -716,7 +733,7 @@ describe('单元格编辑权威链路', () => {
     view.destroy()
   })
 
-  it('从格内拖到隐藏管道外时，鼠标选区仍限定在原格内容中', () => {
+  it('格内拖选可跨格：落点在邻格内容上原样延伸，删除只删两格可见内容（#57）', () => {
     const at = TABLE_DOC.indexOf('苹果')
     const view = new EditorView({
       parent: document.body.appendChild(document.createElement('div')),
@@ -725,19 +742,58 @@ describe('单元格编辑权威链路', () => {
     })
     const cell = view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]!
       .querySelector<HTMLElement>('.vsidian-table-grid-cell')!
-    const hit = vi.spyOn(view, 'posAtCoords').mockReturnValue(at + 2)
+    // 起始点：苹果格内容首
+    const hit = vi.spyOn(view, 'posAtCoords').mockReturnValue(at)
     cell.dispatchEvent(new MouseEvent('mousedown', {
       bubbles: true, cancelable: true, button: 0, buttons: 1, clientX: 80, clientY: 20,
     }))
-    hit.mockReturnValue(at - 2)
+    // 拖到同行右格（3）内容尾：选区跨过隐藏管道延伸到右格
+    const threeTo = TABLE_DOC.indexOf('| 3 |') + 3
+    hit.mockReturnValue(threeTo)
     document.dispatchEvent(new MouseEvent('mousemove', {
-      bubbles: true, cancelable: true, button: 0, buttons: 1, clientX: 0, clientY: 20,
+      bubbles: true, cancelable: true, button: 0, buttons: 1, clientX: 200, clientY: 20,
     }))
     document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }))
     expect(view.state.selection.main.from).toBe(at)
-    expect(view.state.selection.main.to).toBe(at + 2)
+    expect(view.state.selection.main.to).toBe(threeTo)
+    // 删除只作用于选区内两格的可见内容，管道保留、列数不变
     deleteCharBackward(view)
-    expect(view.state.doc.toString()).toBe(TABLE_DOC.replace('苹果', ''))
+    expect(view.state.doc.line(5).text).toBe('|  |  |')
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(3)
+    hit.mockRestore()
+    view.destroy()
+  })
+
+  it('格内拖选落点在隐藏管道与分隔行上收缩到最近内容边界，不选入结构（#57）', () => {
+    const at = TABLE_DOC.indexOf('名字')
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc: TABLE_DOC,
+        extensions: [livePreviewDecorations, tableEditing, keymap.of(defaultKeymap)] }),
+    })
+    const cell = view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[0]!
+      .querySelector<HTMLElement>('.vsidian-table-grid-cell')!
+    const hit = vi.spyOn(view, 'posAtCoords').mockReturnValue(at)
+    cell.dispatchEvent(new MouseEvent('mousedown', {
+      bubbles: true, cancelable: true, button: 0, buttons: 1, clientX: 80, clientY: 20,
+    }))
+    // 拖到名字格与数量格之间的隐藏管道上：head 收缩到名字格内容尾
+    const pipeAt = TABLE_DOC.indexOf('| 名字 | 数量 |') + 5
+    hit.mockReturnValue(pipeAt)
+    document.dispatchEvent(new MouseEvent('mousemove', {
+      bubbles: true, cancelable: true, button: 0, buttons: 1, clientX: 150, clientY: 20,
+    }))
+    expect(view.state.selection.main.to).toBe(at + 2)
+    // 向下拖到分隔行上：head 收缩到表头行末格内容尾，不越过隐藏行
+    const delimiterAt = TABLE_DOC.indexOf('| --- | :---: |')
+    hit.mockReturnValue(delimiterAt + 3)
+    document.dispatchEvent(new MouseEvent('mousemove', {
+      bubbles: true, cancelable: true, button: 0, buttons: 1, clientX: 100, clientY: 40,
+    }))
+    const headerTo = TABLE_DOC.indexOf('| 名字 | 数量 |') + '| 名字 | 数量 |'.length - 2
+    expect(view.state.selection.main.to).toBe(headerTo)
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }))
+    expect(view.state.doc.toString()).toBe(TABLE_DOC)
     hit.mockRestore()
     view.destroy()
   })
@@ -764,7 +820,7 @@ describe('单元格编辑权威链路', () => {
     view.destroy()
   })
 
-  it('格内反向键盘扩选越过隐藏管道后删除仍保留结构，格外选中整表可以删除', () => {
+  it('格内反向键盘扩选越过隐藏管道后删除仍保留结构，全文档选区删除放行', () => {
     const at = TABLE_DOC.indexOf('苹果')
     const view = makeEditView(TABLE_DOC, at + 2)
     view.dispatch({ selection: EditorSelection.single(at + 2, at - 2), userEvent: 'select' })
@@ -773,6 +829,100 @@ describe('单元格编辑权威链路', () => {
     view.dispatch({ selection: EditorSelection.single(0, view.state.doc.length), userEvent: 'select' })
     deleteCharBackward(view)
     expect(view.state.doc.toString()).toBe('')
+    view.destroy()
+  })
+
+  it('从首格内容到末格内容的整表选区一次删除整块，前后正文保留（#57）', () => {
+    const view = makeEditView(TABLE_DOC, 0)
+    const first = TABLE_DOC.indexOf('名字')
+    const last = TABLE_DOC.lastIndexOf('4') + 1
+    view.dispatch({ selection: EditorSelection.single(first, last), userEvent: 'select' })
+    deleteCharBackward(view)
+    // 表格整块移除（与原生选中表格行删除同口径：前后空行相遇）
+    expect(view.state.doc.toString()).toBe('# 表格样例\n\n\n\n普通段落。\n')
+    view.destroy()
+  })
+
+  it('部分跨格选区删除只删可见内容交集，格间空白与管道原样保留（#57）', () => {
+    const view = makeEditView(TABLE_DOC, 0)
+    const from = TABLE_DOC.indexOf('果')  // 苹果格后半
+    const to = TABLE_DOC.indexOf('| 3 |') + 3  // 到 3 格内容尾
+    view.dispatch({ selection: EditorSelection.single(from, to), userEvent: 'select' })
+    deleteCharBackward(view)
+    expect(view.state.doc.line(5).text).toBe('| 苹 |  |')
+    expect(view.state.doc.line(6).text).toBe('| `x|y` | 4 |')
+    expect(view.state.doc.toString()).toBe(TABLE_DOC.replace('| 苹果 | 3 |', '| 苹 |  |'))
+    view.destroy()
+  })
+
+  it('跨格选区键入字符只替换两格可见内容，管道与列数不变（#57）', () => {
+    const view = makeEditView(TABLE_DOC, 0)
+    const from = TABLE_DOC.indexOf('苹果')
+    const to = TABLE_DOC.indexOf('| 3 |') + 3
+    view.dispatch({ selection: EditorSelection.single(from, to), userEvent: 'select' })
+    view.dispatch({ changes: { from, to, insert: 'x' }, userEvent: 'input.type' })
+    expect(view.state.doc.line(5).text).toBe('| x |  |')
+    view.destroy()
+  })
+
+  it('选区从格内延伸到表外文本：格内容与表外文本按选区删除（#57）', () => {
+    const view = makeEditView(TABLE_DOC, 0)
+    const from = TABLE_DOC.indexOf('苹果')
+    const head = TABLE_DOC.indexOf('普通段落') + 2
+    view.dispatch({ selection: EditorSelection.single(from, head), userEvent: 'select' })
+    deleteCharBackward(view)
+    // 选区覆盖表内全部格内容与表后文本：格清空、表后「普通段」删除
+    expect(view.state.doc.line(5).text).toBe('|  |  |')
+    expect(view.state.doc.line(6).text).toBe('|  |  |')
+    expect(view.state.doc.toString().endsWith('落。\n')).toBe(true)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(3)
+    view.destroy()
+  })
+
+  it('删空整个表头行的跨格选区删除被拒绝，表格不静默消失（#57）', () => {
+    const doc = 'a|b\n---|---\nc|d\n'
+    const view = makeEditView(doc, 0)
+    const from = doc.indexOf('a')
+    const to = doc.indexOf('b') + 1
+    view.dispatch({ selection: EditorSelection.single(from, to), userEvent: 'select' })
+    deleteCharBackward(view)
+    // 表头全部格内容为空白时 lezer 不再解析为表格；删除被拒绝，结构保持
+    expect(view.state.doc.toString()).toBe(doc)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
+    view.destroy()
+  })
+
+  it('整表选区删除经权威链路写回，一次撤销整表恢复（#57）', async () => {
+    const linked = await setupLinked(TABLE_DOC)
+    const view = linked.controller.getView()!
+    const first = TABLE_DOC.indexOf('名字')
+    const last = TABLE_DOC.lastIndexOf('4') + 1
+    view.dispatch({ selection: EditorSelection.single(first, last), userEvent: 'select' })
+    deleteCharBackward(view)
+    await settle()
+    expect(linked.doc.getText()).toBe('# 表格样例\n\n\n\n普通段落。\n')
+    expect(linked.hostSent.filter((msg) => msg.kind === 'edit.request')).toHaveLength(1)
+    await linked.session.handleWebviewMessage(
+      { kind: 'history.request', op: 'undo' },
+      linked.sessionId,
+    )
+    await settle()
+    expect(linked.doc.getText()).toBe(TABLE_DOC)
+    expect(view.state.doc.toString()).toBe(TABLE_DOC)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(3)
+    linked.controller.dispose()
+  })
+
+  it('数据行跨格删空保留填充与管道，网格结构不变（#57）', () => {
+    const doc = 'a|b\n---|---\nc|d\n'
+    const view = makeEditView(doc, 0)
+    const from = doc.indexOf('c')
+    const to = doc.indexOf('d') + 1
+    view.dispatch({ selection: EditorSelection.single(from, to), userEvent: 'select' })
+    deleteCharBackward(view)
+    // c|d 两格删空各保留一个填充空格，分隔管道仍在，两列网格保持
+    expect(view.state.doc.line(3).text).toBe(' | ')
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
     view.destroy()
   })
 

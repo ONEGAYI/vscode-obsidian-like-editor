@@ -2673,22 +2673,76 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert((await readDisk(name)) === doc.getText(), '三列点击写回与磁盘回读须一致')
   }],
 
-  ['跨行选区不显露或选中安全表格分隔标记', async () => {
+  ['跨行拖选可横跨表格；端点落在隐藏结构上收缩到内容边界（#57）', async () => {
     const name = 'table-cross-selection.md'
     const source = '前文\n\n| 带 | s是 | 送 |\n| --- | --- | --- |\n| 甲 | 乙 | 丙 |\n\n后文'
     await vscode.workspace.fs.writeFile(wsUri(name), Buffer.from(source))
     await openWithEditor(name)
     const initial = await waitSessionReady(name)
     const uri = wsUri(name).toString()
+    // 表外 anchor → 表外 head（视觉跨过整表）：不再截断在表格边界
     await vscode.commands.executeCommand(CMD.postToPanel, uri, {
       kind: 'table.test.crossSelect', anchor: 1, head: source.indexOf('后文') + 1,
     })
-    const state = await waitViewState(name, (v) => v.selectionHead === source.indexOf('| 带 | s是 | 送 |'))
-    assert(state.paint?.table?.delimiterDisplay === 'none',
-      `跨行选择后分隔行仍须隐藏：${JSON.stringify(state.paint?.table)}`)
-    assert(state.paint?.table?.gridDisplay === 'grid', '跨行选择后表格仍须绘制为网格')
+    const across = await waitViewState(name, (v) => v.selectionHead === source.indexOf('后文') + 1)
+    assert(across.paint?.table?.delimiterDisplay === 'none',
+      `跨行选区覆盖表格时分隔行仍须隐藏：${JSON.stringify(across.paint?.table)}`)
+    assert(across.paint?.table?.gridDisplay === 'grid', '跨行选区不撤下网格绘制')
+    // head 落在分隔行（隐藏结构）：收缩到上一内容行末格内容尾
+    const delimiterAt = source.indexOf('| --- | --- | --- |')
+    const headerAt = source.indexOf('| 带 | s是 | 送 |')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'table.test.crossSelect', anchor: 1, head: delimiterAt + 3,
+    })
+    const snapped = await waitViewState(name, (v) =>
+      v.selectionHead === headerAt + '| 带 | s是 | 送 |'.length - 2)
+    assert(snapped.paint?.table?.delimiterDisplay === 'none',
+      `选区端点收缩后分隔行不显形：${JSON.stringify(snapped.paint?.table)}`)
+    assert(snapped.paint?.table?.gridDisplay === 'grid', '端点收缩后网格仍在绘制')
     const after = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
-    assert(after.appliedEdits === initial.appliedEdits, '跨行选区不能改写源文')
+    assert(after.appliedEdits === initial.appliedEdits, '选区操作不能改写源文')
+  }],
+
+  ['跨格与整表选区删除：删除作用范围与可见选区一致（#57）', async () => {
+    const name = 'table-cross-cell-delete.md'
+    const source = '前文\n\n| 带 | s是 | 送 |\n| --- | --- | --- |\n| 甲 | 乙 | 丙 |\n\n后文'
+    await vscode.workspace.fs.writeFile(wsUri(name), Buffer.from(source))
+    await openWithEditor(name)
+    await waitSessionReady(name)
+    const uri = wsUri(name).toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri(name))
+    // 场景 1：同行跨格（数据行三格内容全选）→ 只删可见内容，管道与分隔行保留。
+    // 表头行不用于此场景：表头全部格删空会使表格解析消失，删除按防护语义拒绝。
+    const rowAt = source.indexOf('| 甲 | 乙 | 丙 |')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'table.test.crossSelect', anchor: rowAt + 2, head: rowAt + 11,
+    })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'backspace' })
+    const rowCleared = source.replace('| 甲 | 乙 | 丙 |', '|  |  |  |')
+    await poll('跨格删除写回', () => doc.getText() === rowCleared ? true : undefined)
+    const state = await waitViewState(name, (v) => v.text === rowCleared && v.tableGrid?.visibleRows === 2)
+    assert(state.paint?.table?.gridDisplay === 'grid' && state.paint.table.cellVisible === true,
+      `跨格删除后网格与剩余文字须在绘制层可见：${JSON.stringify(state.paint?.table)}`)
+    assert(state.paint?.table?.delimiterDisplay === 'none', '跨格删除后分隔行保持隐藏')
+    assert(await doc.save(), '跨格删除保存失败')
+    assert(await readDisk(name) === rowCleared, '跨格删除磁盘回读：结构完整、仅清空内容')
+
+    // 场景 2：表外发起、横跨整表的选区（用户主路径）→ 一次删除整块，前后正文按选区保留
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'table.test.crossSelect', anchor: 1, head: rowCleared.length,
+    })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'backspace' })
+    const tableRemoved = '前'
+    await poll('整表删除写回', () => doc.getText() === tableRemoved ? true : undefined)
+    const removed = await waitViewState(name, (v) => v.text === tableRemoved)
+    assert(removed.paint?.table?.gridDisplay == null,
+      `整表删除后不得残留网格绘制：${JSON.stringify(removed.paint?.table)}`)
+    assert(await doc.save(), '整表删除保存失败')
+    assert(await readDisk(name) === tableRemoved, '整表删除磁盘回读：表格整块移除、前后正文不被误删')
+
+    // 一次撤销 = 恢复删除前的表格（宿主权威栈回流）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('撤销整表删除', () => doc.getText() === rowCleared ? true : undefined)
   }],
 
   ['表格回车在格内换行，退格合行、保存回读与撤销保持完整表格', async () => {

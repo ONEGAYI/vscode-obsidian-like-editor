@@ -12,5 +12,6 @@ Object.assign(window, { initTable(text: string) {
 }, readEditor() {
   const view = EditorView.findFromDOM(document.querySelector('.cm-editor')!)!
   const head = view.state.selection.main.head
-  return { text: view.state.doc.toString(), head, line: view.state.doc.lineAt(head).number }
+  return { text: view.state.doc.toString(), head, from: view.state.selection.main.from,
+    to: view.state.selection.main.to, line: view.state.doc.lineAt(head).number }
 }, controller })
