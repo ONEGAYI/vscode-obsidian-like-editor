@@ -4,6 +4,18 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { extractLatestChangelog, inspectVsixEntries, parseUnzipListing, SIZE_LIMITS } from '../../scripts/release.mjs'
 
+// KaTeX 字体条目（#59）：体积取 woff2 实际产物的代表值（最大 28KB）
+function katexFontEntries() {
+  return ['AMS-Regular', 'Caligraphic-Bold', 'Caligraphic-Regular', 'Fraktur-Bold',
+    'Fraktur-Regular', 'Main-Bold', 'Main-BoldItalic', 'Main-Italic', 'Main-Regular',
+    'Math-BoldItalic', 'Math-Italic', 'SansSerif-Bold', 'SansSerif-Italic',
+    'SansSerif-Regular', 'Script-Regular', 'Size1-Regular', 'Size2-Regular',
+    'Size3-Regular', 'Size4-Regular', 'Typewriter-Regular'].map((family) => ({
+    size: 14000,
+    name: `extension/out/webview/assets/KaTeX_${family}.woff2`,
+  }))
+}
+
 // 与真实 VSIX 内容对应的合法基线（体积取包体检查阈值内的代表值）。
 function makeEntries() {
   return [
@@ -16,12 +28,13 @@ function makeEntries() {
     { size: 3000, name: 'extension/CHANGELOG.md' },
     { size: 1100, name: 'extension/LICENSE.txt' },
     { size: 101482, name: 'extension/out/extension.js' },
-    { size: 545586, name: 'extension/out/webview/main.js' },
-    { size: 18571, name: 'extension/out/webview/main.css' },
+    { size: 829024, name: 'extension/out/webview/main.js' },
+    { size: 41308, name: 'extension/out/webview/main.css' },
     { size: 5683, name: 'extension/out/webview/settings.js' },
     { size: 902, name: 'extension/out/webview/settings.css' },
     { size: 3898, name: 'extension/media/css-contract-probe.css' },
     { size: 35761, name: 'extension/media/vsidian-icon-256.png' },
+    ...katexFontEntries(),
   ]
 }
 
@@ -72,10 +85,22 @@ test('unzip -l 解析：只提取"长度 日期 时间 路径"形态的文件行
   assert.equal(entries[1].name, 'extension/readme.md')
 })
 
-test('VSIX 检查：完整合法集合通过且无警告', () => {
+test('VSIX 检查：完整合法集合通过（#59 后 main.js 携带 KaTeX，超单文件警告线属预期）', () => {
   const result = inspectVsixEntries(makeEntries(), { iconPath: 'media/vsidian-icon-256.png' })
   assert.equal(result.ok, true)
-  assert.deepEqual(result.warnings, [])
+  // 唯一预期警告：vendored KaTeX 使 main.js（约 829KB）越过 700KB 警告线
+  //（未超 1MB 上限）；除此之外不得有其他警告（总量、字体单文件均在线内）
+  assert.deepEqual(result.warnings.filter((w) => !w.includes('out/webview/main.js')), [])
+  assert.ok(result.warnings.some((w) => w.includes('out/webview/main.js')))
+})
+
+test('VSIX 检查：缺少任一 KaTeX 字体报错（公式回落系统字体的防线）', () => {
+  const missing = makeEntries().filter(
+    (e) => e.name !== 'extension/out/webview/assets/KaTeX_Size1-Regular.woff2',
+  )
+  const result = inspectVsixEntries(missing, { iconPath: 'media/vsidian-icon-256.png' })
+  assert.equal(result.ok, false)
+  assert.ok(result.errors.some((e) => e.includes('KaTeX_Size1-Regular.woff2')))
 })
 
 test('VSIX 检查：缺少必需运行时资产报错（大小写不敏感匹配）', () => {

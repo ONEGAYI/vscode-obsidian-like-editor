@@ -46,6 +46,35 @@ const REQUIRED_EXTENSION = [
   'media/css-contract-probe.css',
 ]
 
+// #59 KaTeX 字体（仅 woff2，esbuild assetNames 稳定命名无 hash）：缺失任一
+// 都会导致公式回落系统字体，逐文件登记精确拦截。
+const KATEX_FONT_FAMILIES = [
+  'KaTeX_AMS-Regular',
+  'KaTeX_Caligraphic-Bold',
+  'KaTeX_Caligraphic-Regular',
+  'KaTeX_Fraktur-Bold',
+  'KaTeX_Fraktur-Regular',
+  'KaTeX_Main-Bold',
+  'KaTeX_Main-BoldItalic',
+  'KaTeX_Main-Italic',
+  'KaTeX_Main-Regular',
+  'KaTeX_Math-BoldItalic',
+  'KaTeX_Math-Italic',
+  'KaTeX_SansSerif-Bold',
+  'KaTeX_SansSerif-Italic',
+  'KaTeX_SansSerif-Regular',
+  'KaTeX_Script-Regular',
+  'KaTeX_Size1-Regular',
+  'KaTeX_Size2-Regular',
+  'KaTeX_Size3-Regular',
+  'KaTeX_Size4-Regular',
+  'KaTeX_Typewriter-Regular',
+]
+const REQUIRED_KATEX_FONTS = KATEX_FONT_FAMILIES.map(
+  (family) => `out/webview/assets/${family}.woff2`,
+)
+const REQUIRED_EXTENSION_WITH_FONTS = [...REQUIRED_EXTENSION, ...REQUIRED_KATEX_FONTS]
+
 // 禁止模式：仓库管理与开发文件一律不得进入 VSIX（大小写不敏感）。
 const FORBIDDEN_PATTERNS = [
   [/^extension\/\.github\//, 'GitHub 平台配置'],
@@ -135,11 +164,11 @@ export function inspectVsixEntries(entries, options = {}) {
   for (const root of REQUIRED_ROOT) {
     if (!lowerNames.includes(root)) errors.push(`缺少结构文件 ${root}`)
   }
-  for (const rel of REQUIRED_EXTENSION) {
+  for (const rel of REQUIRED_EXTENSION_WITH_FONTS) {
     if (rel === 'license') {
       const hit = lowerNames.some((n) => /^extension\/license(\.txt)?$/.test(n))
       if (!hit) errors.push('缺少 LICENSE（打包后应为 extension/LICENSE*）')
-    } else if (!lowerNames.includes(`extension/${rel}`)) {
+    } else if (!lowerNames.includes(`extension/${rel.toLowerCase()}`)) {
       errors.push(`缺少运行时资产 extension/${rel}`)
     }
   }
