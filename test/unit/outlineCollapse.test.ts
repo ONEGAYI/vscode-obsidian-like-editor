@@ -256,3 +256,60 @@ describe('编辑后折叠集合迁移（刷新存活）', () => {
     expect(migrateOutlineExpanded(seq, seq, new Set([0, 1]))).toEqual(new Set([0, 1]))
   })
 })
+
+// ---- review-loops C2：Myers 迁移熔断（大幅分歧回退档位精确集） ----
+
+describe('迁移熔断（review-loops C2：编辑距离超限回退档位精确集）', () => {
+  const item = (i: number, level: number) => ({ level, text: `t${i}`, plainText: `t${i}`, spans: [], line: i + 1 })
+
+  it('大分歧（300 删 + 300 增，编辑距离 600 超限）回退档位精确集', () => {
+    const prev = Array.from({ length: 300 }, (_, i) => item(i, (i % 5) + 1))
+    const next = Array.from({ length: 300 }, (_, i) => item(1000 + i, (i % 5) + 1))
+    const prevExpanded = new Set([0, 1, 2])
+    const out = migrateOutlineExpanded(prev, next, prevExpanded, 2)
+    // 与档位 2 精确集一致（outlineExpandSetForLevel 语义），旧键不参与
+    const expected = outlineExpandSetForLevel(next, 2)
+    expect(out).toEqual(expected)
+    expect(out.has(0)).toBe(true) // next[0] 是父节点且 level 1 ≤ 2
+  })
+
+  it('中分歧（编辑距离 ≤ 熔断阈值）仍正常迁移保键', () => {
+    const prev = Array.from({ length: 100 }, (_, i) => item(i, (i % 5) + 1))
+    // 改名其中 80 条：160 编辑距离 < 256，不熔断
+    const next = prev.map((p, i) => (i < 80 ? { ...p, text: `x${i}`, plainText: `x${i}` } : p))
+    const prevExpanded = new Set<number>()
+    for (let i = 0; i < prev.length - 1; i++) {
+      if (prev[i]!.level < prev[i + 1]!.level) {
+        prevExpanded.add(i)
+      }
+    }
+    const out = migrateOutlineExpanded(prev, next, prevExpanded, 5)
+    // 全部保键（重命名不扰动）+ 新增祖先链语义不变
+    expect(out).toEqual(prevExpanded)
+  })
+
+  it('未传回退档位时默认 5（全展开与面板默认一致）', () => {
+    const prev = Array.from({ length: 300 }, (_, i) => item(i, (i % 5) + 1))
+    const next = Array.from({ length: 300 }, (_, i) => item(2000 + i, (i % 5) + 1))
+    const out = migrateOutlineExpanded(prev, next, new Set())
+    expect(out).toEqual(outlineExpandSetForLevel(next, 5))
+  })
+})
+
+// ---- review-loops A3：段内配对的位置优先语义钉住 ----
+
+describe('段内配对语义（review-loops A3：位置优先 1:1）', () => {
+  const mk = (text: string, level: number) => ({ level, text, plainText: text, spans: [], line: 1 })
+
+  it('删 A + 改 B→X：A 的键配给 X，B 的键丢弃（位置优先，非内容择优）', () => {
+    // prev：A(H1) B(H2) D(H3) C(H2)；next：X(H1) D(H3) C(H2)
+    // script = del A, del B, ins X → 配对 A→X（位置序），B 的展开键丢弃
+    const prev = [mk('A', 1), mk('B', 2), mk('D', 3), mk('C', 2)]
+    const next = [mk('X', 1), mk('D', 3), mk('C', 2)]
+    // B 是父（D 是其子）；X 是父（D 是其子）
+    const out = migrateOutlineExpanded(prev, next, new Set([1]))
+    expect(out).toEqual(new Set()) // B 的键丢弃（无配对），不漂给 D 或 X
+    const out2 = migrateOutlineExpanded(prev, next, new Set([0, 1]))
+    expect(out2).toEqual(new Set([0])) // A 的键经配对迁给 X（X 仍是父）
+  })
+})

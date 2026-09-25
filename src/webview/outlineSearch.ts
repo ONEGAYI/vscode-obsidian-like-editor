@@ -47,6 +47,22 @@ export interface OutlineSearchFilter {
   noMatch: boolean
 }
 
+/** 折叠 plainText 并记录偏移映射（review-loops A2：toLowerCase 对个别
+ *  字符变长，如 İ → i+U+0307，折叠串上 indexOf 的偏移不等于原串偏移）。
+ *  map[j] = 折叠串第 j 位对应的原串起始索引；末位哨兵 = 原串长度 */
+function foldWithMap(s: string): { folded: string; map: number[] } {
+  let folded = ''
+  const map: number[] = []
+  for (let i = 0; i < s.length; i++) {
+    for (const ch of s[i]!.toLowerCase()) {
+      map.push(i)
+      folded += ch
+    }
+  }
+  map.push(s.length)
+  return { folded, map }
+}
+
 /**
  * 搜索过滤：query 为空串时等于无过滤（kept 全 true、matched/ranges 空、
  * noMatch false）。多出现全收集；kept = 命中 ∪ 命中祖先
@@ -62,11 +78,12 @@ export function outlineSearchFilter(items: readonly SearchableItem[], query: str
   }
   const needle = query.toLowerCase()
   for (let i = 0; i < n; i++) {
-    const hay = items[i]!.plainText.toLowerCase()
-    let at = hay.indexOf(needle)
+    const { folded, map } = foldWithMap(items[i]!.plainText)
+    let at = folded.indexOf(needle)
     while (at !== -1) {
-      ranges[i]!.push({ start: at, end: at + needle.length })
-      at = hay.indexOf(needle, at + needle.length)
+      // 折叠区间 [at, at+len) 经映射回原串坐标（mark 高亮的真实区间）
+      ranges[i]!.push({ start: map[at]!, end: map[at + needle.length]! })
+      at = folded.indexOf(needle, at + needle.length)
     }
     if (ranges[i]!.length > 0) {
       matchedIndices.push(i)

@@ -111,3 +111,42 @@ describe('单行无换行文档（末尾无 \\n，mvp.md 文档样例清单）',
     expect(crlfEnd.lfOffsetToHost(4)).toBe(5)
   })
 })
+
+// ---- review-loops C7：大纲式多段搬移变更在 CRLF 文档上的转换不变式 ----
+
+describe('大纲多段搬移的 CRLF 转换不变式（review-loops C7）', () => {
+  // 模拟拖拽产出的两段变更：删除「乙段」+ 在丙标题前插入（文本含多行 \n）
+  const host = '# 甲\r\n甲内容\r\n## 乙\r\n乙内容\r\n# 丙\r\n丙内容\r\n'
+  const lf = host.replace(/\r\n/g, '\n')
+  const applyText = (text: string, changes: ReadonlyArray<{ offset: number; length: number; text: string }>): string => {
+    let out = text
+    for (let i = changes.length - 1; i >= 0; i--) {
+      const ch = changes[i]!
+      out = out.slice(0, ch.offset) + ch.text + out.slice(ch.offset + ch.length)
+    }
+    return out
+  }
+
+  it('LF 域应用后转 CRLF == 宿主域直接应用（两域等价）', () => {
+    const c = new NewlineCoordinator(host)
+    expect(c.isCrlfDoc).toBe(true)
+    // LF 坐标：'## 乙\n乙内容\n' 段 [10, 23)，插入到 '# 丙' 前（offset 23）
+    const lfChanges = [
+      { offset: 10, length: 13, text: '' },
+      { offset: 23, length: 0, text: '## 乙\n乙内容\n' },
+    ]
+    const hostChanges = c.lfChangesToHost(lfChanges)
+    const lfAfter = applyText(lf, lfChanges)
+    const hostAfter = applyText(host, hostChanges)
+    expect(hostAfter).toBe(lfAfter.replace(/\n/g, '\r\n'))
+  })
+
+  it('升序不重叠在宿主域保持（大纲写回约束跨域不破）', () => {
+    const c = new NewlineCoordinator(host)
+    const hostChanges = c.lfChangesToHost([
+      { offset: 10, length: 13, text: '' },
+      { offset: 23, length: 0, text: '## 乙\n乙内容\n' },
+    ])
+    expect(hostChanges[0]!.offset + hostChanges[0]!.length).toBeLessThanOrEqual(hostChanges[1]!.offset)
+  })
+})

@@ -111,18 +111,24 @@ function isAtxLine(lineText: string): boolean {
 }
 
 /** 标题区 doc 偏移 [from, to)：ATX = 单行；Setext = 内容行（可多行）+
- *  下划线行（向下扫描首个 =/- 全等行，防御上限 8 行）。行号取自条目 */
+ *  下划线行。下划线紧随内容行（CommonMark：之间不可有空行），扫描遇
+ *  空行或文档尾停止——真标题（extractOutline 只产真标题）必在停止前
+ *  命中，无行数上限（review-loops A1：8 行截断使超长 Setext 的写操作
+ *  落入单行回退，产生幻影标题）。行号取自条目 */
 export function outlineHeadingSpan(doc: Text, item: RewritableItem): { from: number; to: number } {
   const startLine = Math.min(Math.max(1, item.line), doc.lines)
   const start = doc.line(startLine)
   if (isAtxLine(doc.sliceString(start.from, start.to))) {
     return { from: start.from, to: start.to }
   }
-  // Setext：向下找下划线行（内容行可多行；真标题必命中，扫描上限防御）
-  for (let n = startLine + 1; n <= Math.min(doc.lines, startLine + 8); n++) {
+  // Setext：向下逐行找下划线行（内容行可多行；空行后不再是本标题内容）
+  for (let n = startLine + 1; n <= doc.lines; n++) {
     const line = doc.line(n)
-    if (/^[=]+\s*$/.test(doc.sliceString(line.from, line.to)) ||
-        /^-+\s*$/.test(doc.sliceString(line.from, line.to))) {
+    const text = doc.sliceString(line.from, line.to)
+    if (text === '') {
+      break // 空行：合法 Setext 下划线不会出现在空行之后（异常输入防御）
+    }
+    if (/^[=]+\s*$/.test(text) || /^-+\s*$/.test(text)) {
       return { from: start.from, to: line.to }
     }
   }

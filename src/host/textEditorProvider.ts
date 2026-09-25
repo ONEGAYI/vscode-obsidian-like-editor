@@ -169,6 +169,12 @@ export function outlineNoteNameOf(docUri: string): string {
   }
 }
 
+/** 标题进 wikilink 的内联转义（review-loops B2）：`]` 截断链接、`|` 切
+ *  别名、`#` 开子锚点——不转义则粘贴产物解析错位 */
+export function outlineEscapeHeadingLink(heading: string): string {
+  return heading.replace(/]/g, '\\]').replace(/\|/g, '\\|').replace(/#/g, '\\#')
+}
+
 /** 链接目标解析上下文（宿主文件系统语义：扩展宿主进程的平台即工作区
  *  文件系统所在机器——本地 Windows 是 win32，远程 SSH 宿主是远程平台，
  *  两类路径语义天然不混用） */
@@ -720,8 +726,9 @@ export function createTextEditorProvider(
           void vscode.env.clipboard.writeText(text)
         },
         writeHeadingLinkClipboard: (docUri: string, heading: string) => {
-          const name = outlineNoteNameOf(docUri)
-          void vscode.env.clipboard.writeText(`[[${name}#${heading}]]`)
+          void vscode.env.clipboard.writeText(
+            `[[${outlineNoteNameOf(docUri)}#${outlineEscapeHeadingLink(heading)}]]`,
+          )
         },
       })
       entry.panels.set(sessionId, webviewPanel)

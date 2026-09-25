@@ -379,3 +379,48 @@ describe('复制载荷：四种文本形态（标题链接由宿主拼接，不�
     expect(outlineCopyText('heading', styled, styledItems, 9)).toBeNull()
   })
 })
+
+// ---- review-loops A1：超长 Setext 标题区几何（废除 8 行扫描截断） ----
+
+describe('超长 Setext 标题的标题区几何（review-loops A1）', () => {
+  // 10 行内容 + 下划线：CommonMark 完全合法（长段落下接 === 即 Setext H1）
+  const longDoc = Text.of([
+    '首行内容',
+    '内容第2行', '内容第3行', '内容第4行', '内容第5行',
+    '内容第6行', '内容第7行', '内容第8行', '内容第9行', '内容第10行',
+    '===',
+    '后续段落',
+  ])
+  const longItems = extractOutline(longDoc)
+
+  it('extractOutline 前置：10 行内容 Setext 产出单条目（level 1、内容首行）', () => {
+    expect(longItems.length).toBe(1)
+    expect(longItems[0]).toMatchObject({ level: 1, line: 1 })
+  })
+
+  it('outlineHeadingSpan 覆盖全部内容行与下划线行（不再 8 行截断）', () => {
+    expect(outlineHeadingSpan(longDoc, longItems[0]!))
+      .toEqual({ from: 0, to: longDoc.line(11).to })
+  })
+
+  it('重命名整标题区替换：幻影标题不再产生', () => {
+    const change = outlineRenameChange(longDoc, longItems, 0, '新名')!
+    const after = applyChanges(longDoc.toString(), [change])
+    expect(after).toBe('# 新名\n后续段落')
+    expect(extractOutline(Text.of(after.split('\n'))).length).toBe(1)
+  })
+
+  it('调级整区替换为 ATX（同源修复）', () => {
+    const changes = outlineLevelChanges(longDoc, longItems, 0, 1, false)!
+    const after = applyChanges(longDoc.toString(), changes)
+    expect(after).toBe(`## ${longItems[0]!.text}\n后续段落`)
+    expect(extractOutline(Text.of(after.split('\n'))).length).toBe(1)
+  })
+
+  it('防御语义：内容行间空行后远距 === 不误认下划线（空行即停，回退单行）', () => {
+    // 合法 Setext 内容不含空行；此形态仅在行号漂移的异常输入下出现
+    const doc = Text.of(['段落甲', '', '===', '后续'])
+    const span = outlineHeadingSpan(doc, { level: 1, text: '段落甲', plainText: '段落甲', line: 1 })
+    expect(span).toEqual({ from: 0, to: doc.line(1).to })
+  })
+})

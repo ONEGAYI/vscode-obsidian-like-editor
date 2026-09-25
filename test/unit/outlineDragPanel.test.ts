@@ -316,6 +316,26 @@ describe('取消路径（零写回）', () => {
     document.body.removeChild(parent)
   })
 
+  it('window blur 取消（review-loops B1：指针越出 webview 释放的兜底，零写回）', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    stubRects(parent)
+    dragTo(parent, 1, 4, 'after')
+    window.dispatchEvent(new Event('blur'))
+    expect(viewState(c, h).outline?.draggingIndex).toBeNull()
+    expect(editRequests(h)).toHaveLength(0)
+    expect(c.getView()!.state.doc.toString()).toBe(DRAG_DOC)
+    // 会话清理后拖拽功能不死锁：新拖拽会话可再次进入拖拽态
+    const el = items(parent)[1]!
+    const rect = el.getBoundingClientRect()
+    firePointer(el, 'pointerdown', rect.left + 20, rect.top + 20)
+    firePointer(el, 'pointermove', rect.left + 20, rect.top + 30)
+    expect(viewState(c, h).outline?.draggingIndex).toBe(1)
+    document.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
+    c.dispose()
+    document.body.removeChild(parent)
+  })
+
   it('拖拽期间文档被外部改写：drop 放弃（锚点过期防御）', () => {
     const h = makeBridge()
     const { c, parent } = mountDrag(h)

@@ -190,8 +190,15 @@ interface OutlineDiffResult {
   autoExpand: Set<number>
 }
 
-/** prev/next 的结构 diff：Myers 最短编辑脚本 + 段内 1:1 配对 */
-function outlineDiff(prev: readonly LevelLike[], next: readonly LevelLike[]): OutlineDiffResult {
+/** 迁移熔断阈值（review-loops C2）：Myers O(ND) 的编辑距离上限。常态
+ *  编辑 D 为个位数；全选粘贴整篇 / 递归调级等大幅重排 D 可达 2×标题数，
+ *  trace 快照内存与 O(D²) 循环在数千标题下会卡死 webview。超限放弃
+ *  迁移，回退档位精确集（视图重置可接受，卡死不可接受） */
+const OUTLINE_DIFF_LIMIT = 256
+
+/** prev/next 的结构 diff：Myers 最短编辑脚本 + 段内 1:1 配对。
+ *  编辑距离超 OUTLINE_DIFF_LIMIT 返回 null（熔断，调用方回退档位集） */
+function outlineDiff(prev: readonly LevelLike[], next: readonly LevelLike[]): OutlineDiffResult | null {
   // Myers O(ND)（标题序列的编辑量 D 常态极小）。等价判据 = level +
   // plainText（行号与标记结构不参与：纯增删行/改标记不扰动折叠状态）
   const eq = (a: number, b: number): boolean =>
@@ -202,7 +209,7 @@ function outlineDiff(prev: readonly LevelLike[], next: readonly LevelLike[]): Ou
   const trace: Int32Array[] = []
   let v = new Int32Array(2 * max + 1)
   let foundD = -1
-  for (let d = 0; d <= max; d++) {
+  for (let d = 0; d <= Math.min(max, OUTLINE_DIFF_LIMIT); d++) {
     trace.push(v.slice())
     for (let k = -d; k <= d; k += 2) {
       let x: number
@@ -225,6 +232,9 @@ function outlineDiff(prev: readonly LevelLike[], next: readonly LevelLike[]): Ou
     if (foundD >= 0) {
       break
     }
+  }
+  if (foundD < 0) {
+    return null // 编辑距离超 OUTLINE_DIFF_LIMIT：熔断（Myers 保证 D ≤ max，仅截断可达此）
   }
   // 回溯编辑脚本（keep(x,y) / delete x / insert y），恢复正序
   type Op = { op: 'keep' | 'del' | 'ins'; a: number; b: number }
@@ -327,8 +337,15 @@ export function migrateOutlineExpanded(
   prev: readonly LevelLike[],
   next: readonly LevelLike[],
   prevExpanded: ReadonlySet<number>,
+  fallbackLevel = 5,
 ): Set<number> {
-  const { map, autoExpand } = outlineDiff(prev, next)
+  const diff = outlineDiff(prev, next)
+  if (diff === null) {
+    // 熔断回退（review-loops C2）：放弃迁移，按回退档位取精确集——
+    // 视图状态重置优于 webview 卡死；调用方传当前档位以贴近用户意图
+    return outlineExpandSetForLevel(next, fallbackLevel)
+  }
+  const { map, autoExpand } = diff
   const nextFacts = outlineCollapseFacts(next)
   const out = new Set<number>()
   for (const [from, to] of map) {

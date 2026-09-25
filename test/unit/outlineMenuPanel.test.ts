@@ -408,6 +408,23 @@ describe('重命名（行内编辑态：编辑原文、标记是资产）', () =
     expect(menuDom(parent).renameInput(), 'Esc 后输入框应移除').toBeNull()
   })
 
+  it('重命名打开期间文档被外部改写：提交放弃（锚点防御，零写回）', () => {
+    // review-loops C1：外部变更窗口内提交会按过期行号改写错误行——
+    // doc 快照校验失败时视作取消，与菜单/拖拽锚点防御同口径
+    const h = makeBridge()
+    const { c, parent } = mountMenu(h)
+    const input = startRename(parent, 1)
+    input.value = '外部已变'
+    // 模拟外部改写（doc 引用变化，条目行号过期）；dispatch 产生的本地
+    // 上报不属于被测对象，清空后只观察 Enter 提交路径
+    c.getView()!.dispatch({ changes: { from: 0, insert: '# 顶部新增\n\n' } })
+    h.sent.length = 0
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(c.getView()!.state.doc.toString()).not.toContain('## 外部已变')
+    expect(h.sent.filter((m) => m.kind === 'edit.request')).toHaveLength(0)
+    expect(viewState(c, h).outline?.renamingIndex).toBe(null)
+  })
+
   it('输入框键盘事件不冒泡成正文快捷键、点击不触发跳转', () => {
     const h = makeBridge()
     const { c, parent } = mountMenu(h)

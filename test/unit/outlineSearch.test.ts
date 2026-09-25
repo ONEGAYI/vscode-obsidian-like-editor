@@ -152,3 +152,26 @@ describe('outlineFilteredVisibleIndices：折叠可见 ∩ 搜索保留（probe 
     expect(outlineFilteredVisibleIndices(ITEMS, partial, kept)).toEqual([0, 1, 3, 5])
   })
 })
+
+// ---- review-loops A2：折叠变长字符的命中区间映射回原串坐标 ----
+
+describe('命中区间的折叠映射（review-loops A2）', () => {
+  const mk = (text: string) => ({ level: 1, text, plainText: text })
+
+  it('İ（折叠为两码元）之后的命中区间不漂移', () => {
+    // 'İstanbul 指南'：İ 折叠为 i+U+0307，折叠串比原串长 1
+    const r = outlineSearchFilter([mk('İstanbul 指南')], '指南')
+    expect(r.ranges[0]).toEqual([{ start: 9, end: 11 }]) // 原串坐标（折叠坐标 10 会漂移）
+  })
+
+  it('命中折叠展开的字符本身：区间覆盖原串单字符', () => {
+    const r = outlineSearchFilter([mk('İB')], 'i̇') // needle 含 i+U+0307
+    expect(r.matchedIndices).toEqual([0])
+    expect(r.ranges[0]).toEqual([{ start: 0, end: 1 }])
+  })
+
+  it('ASCII 不受影响（折叠恒等，区间与旧行为一致）', () => {
+    const r = outlineSearchFilter([mk('Bold Heading')], 'heading')
+    expect(r.ranges[0]).toEqual([{ start: 5, end: 12 }])
+  })
+})

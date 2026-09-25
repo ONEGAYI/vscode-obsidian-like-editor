@@ -462,6 +462,9 @@ export class WebviewSyncController {
   private outlineMenuDismissKey: ((e: KeyboardEvent) => void) | undefined
   /** 重命名编辑态的条目索引（null = 无编辑态；条目内容区被 input 替换） */
   private outlineRenameIndex: number | null = null
+  /** 重命名打开时的 doc 快照（review-loops C1：提交前锚点防御——外部改写
+   *  使行号过期时放弃提交，与菜单/拖拽同口径，防错误行静默替换） */
+  private outlineRenameDoc: Text | null = null
   /** #70 拖拽会话态：条目 pointerdown 时记录（源索引 + doc 锚点快照），
    *  超阈值 pointermove 进入拖拽态（moved）并计算落点；pointerup 执行
    *  移动计划写回。null = 无拖拽 */
@@ -473,6 +476,8 @@ export class WebviewSyncController {
     moved: boolean
     targetIndex: number | null
     position: OutlineDropPosition | null
+    /** 当前带落点指示的条目（review-loops C4：增量清除，null = 无指示） */
+    hintEl: HTMLElement | null
   } | null = null
   /** #70 拖拽收尾后吞一次面板 click（位移超阈值的拖拽后补发 click 不触发跳转） */
   private outlineSuppressClick = false
@@ -783,6 +788,7 @@ export class WebviewSyncController {
     // #69：菜单浮层与重命名编辑态随卸载退出（document 监听一并摘除）
     this.closeOutlineMenu()
     this.outlineRenameIndex = null
+    this.outlineRenameDoc = null
     // #70：拖拽会话随卸载退出（document 监听一并摘除）
     this.cancelOutlineDrag()
     this.sidebarEl?.remove()
@@ -1560,6 +1566,9 @@ export class WebviewSyncController {
       this.persistState()
       return
     }
+    // review-loops B3：命令面板切模式不经鼠标路径（无 pointercancel），
+    // 拖拽会话若残留会跨模式存活（落点判定随视图重算漂移）——统一取消
+    this.cancelOutlineDrag()
     if (next === 'reading') {
       // 锚点 = live 光标主位（选区最小 from）；阅读视图按当前 CM6 文本渲染
       // （含未确认输入），不依赖宿主权威。锚点随即规范化为块 start——
@@ -2102,7 +2111,13 @@ export class WebviewSyncController {
     // 扰动）；启动即记 doc 锚点快照并校准数据（条目索引与文档坐标对齐）。
     // 命中隐藏条目不启动（折叠遮蔽/搜索过滤的条目不可拖）
     panel.addEventListener('pointerdown', (event) => {
-      if (this.outlineDragState || this.view === undefined) {
+      // review-loops B1：上次拖拽越出 webview 释放（up 不送达）的残留会话
+      // 在此清理——残留的 pointerup 监听若不清，下次文档内释放会被误判
+      // 为 drop 写回；先摘监听再正常处理本次按下（新会话由本次启动）
+      if (this.outlineDragState) {
+        this.cancelOutlineDrag()
+      }
+      if (this.view === undefined) {
         return
       }
       if (event.pointerType === 'mouse' && event.button !== 0) {
@@ -2134,11 +2149,13 @@ export class WebviewSyncController {
         moved: false,
         targetIndex: null,
         position: null,
+        hintEl: null,
       }
       document.addEventListener('pointermove', this.onOutlineDragMove)
       document.addEventListener('pointerup', this.onOutlineDragEnd)
       document.addEventListener('pointercancel', this.onOutlineDragCancel)
       document.addEventListener('keydown', this.onOutlineDragEscape, true)
+      window.addEventListener('blur', this.onOutlineDragCancel)
     })
     this.outlineToggleBtn = toggle
     this.outlinePanelEl = panel
@@ -2341,7 +2358,10 @@ export class WebviewSyncController {
         this.outlineExpandedBeforeSearch = outlineExpandSetForLevel(items, this.outlineExpandLevel)
       }
     } else {
-      this.outlineExpanded = migrateOutlineExpanded(prevItems, items, prevExpanded)
+      // fallbackLevel 传当前档位（review-loops C2 熔断回退贴近用户意图）
+      this.outlineExpanded = migrateOutlineExpanded(
+        prevItems, items, prevExpanded, this.outlineExpandLevel,
+      )
       // #68：搜索展开快照随编辑同款迁移（重命名/增删不扰动清空回放的
       // 目标视图——快照与展开集是同一坐标系的两个视图）
       if (this.outlineExpandedBeforeSearch !== null) {
@@ -2349,6 +2369,7 @@ export class WebviewSyncController {
           prevItems,
           items,
           this.outlineExpandedBeforeSearch,
+          this.outlineExpandLevel,
         )
       }
     }
@@ -2357,6 +2378,7 @@ export class WebviewSyncController {
       // （重命名提交路径已在 finishOutlineRename 先清状态，此处无重入）
       this.closeOutlineMenu()
       this.outlineRenameIndex = null
+      this.outlineRenameDoc = null
       // #70：条目 DOM 重建使拖拽锚点与落点指示过期——取消拖拽（零写回；
       // 写回路径自身即时 ensureFresh 时序列未变不进此分支，拖拽不被误杀）
       this.cancelOutlineDrag()
@@ -2493,6 +2515,9 @@ export class WebviewSyncController {
     if (!sidebar || !panel || !item || !this.view) {
       return
     }
+    // review-loops B4：拖拽进行中右键可达此（contextmenu 委托不查拖拽态），
+    // 先取消拖拽防两会话并存的指示混乱（数据由锚点防御兜底）
+    this.cancelOutlineDrag()
     this.closeOutlineMenu()
     this.cancelOutlineRename()
     const hasChildren = this.outlineFacts.hasChildren[index] === true
@@ -2615,9 +2640,30 @@ export class WebviewSyncController {
     if (!view || !changes || changes.length === 0) {
       return
     }
-    view.dispatch({
-      changes: changes.map((c) => ({ from: c.offset, to: c.offset + c.length, insert: c.text })),
-    })
+    // review-loops C3：「升序互不重叠」是全部大纲写计划生成端的约定，但
+    // CM6 ChangeSet 对乱序/重叠段不报错而是 flush 合成（静默错位写入权威
+    // 文档）——运行时断言兜底：违例放弃并留诊断（与 confirmSentTxn 的
+    // 显式排序同根约束）
+    for (let i = 1; i < changes.length; i++) {
+      const prev = changes[i - 1]!
+      const cur = changes[i]!
+      if (cur.offset < prev.offset + prev.length) {
+        console.error(
+          `[vsidian] 大纲写回变更段违例（升序互不重叠）：[${prev.offset}, ${prev.offset + prev.length}) 与 [${cur.offset}, ${cur.offset + cur.length}) 重叠/乱序，放弃写回`,
+        )
+        return
+      }
+    }
+    try {
+      view.dispatch({
+        changes: changes.map((c) => ({ from: c.offset, to: c.offset + c.length, insert: c.text })),
+      })
+    } catch (error) {
+      // review-loops C6：越界坐标等异常若逃逸只在监听器里静默吞掉——
+      // 留诊断线索（大纲与正文不同步时可定位）
+      console.error('[vsidian] 大纲写回 dispatch 失败（变更段与当前文档不匹配）', error)
+      return
+    }
     this.outlineEnsureFresh()
   }
 
@@ -2633,6 +2679,7 @@ export class WebviewSyncController {
     }
     this.cancelOutlineRename()
     this.outlineRenameIndex = index
+    this.outlineRenameDoc = this.view?.state.doc ?? null
     const input = document.createElement('input')
     input.type = 'text'
     input.className = OUTLINE_MENU_CLASS_NAMES.renameInput
@@ -2671,7 +2718,13 @@ export class WebviewSyncController {
     const newText = input?.value ?? ''
     const item = this.outlineItems[index]
     const view = this.view
-    if (commit && input && item && view && newText !== item.text) {
+    // 锚点防御（review-loops C1，与菜单/拖拽同口径）：重命名打开期间文档
+    // 被改写（同文件多面板/git checkout 等）则行号过期，提交会改写错误
+    // 行——放弃提交视作取消（零写回）
+    const docAnchored = view !== undefined && this.outlineRenameDoc !== null &&
+      view.state.doc === this.outlineRenameDoc
+    this.outlineRenameDoc = null
+    if (commit && input && item && view && newText !== item.text && docAnchored) {
       const change = outlineRenameChange(view.state.doc, this.outlineItems, index, newText)
       if (change) {
         this.applyOutlineEdits([change]) // 内部 ensureFresh 重建条目（input 随之消失）
@@ -2725,18 +2778,21 @@ export class WebviewSyncController {
         return
       }
       drag.moved = true
+      // review-loops C4：源条目提示只在进入拖拽态时施加一次（原先每 move
+      // 全量循环 toggle/removeClassList，数千条目 × 60-120Hz 掉帧）
+      const src = panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)[drag.fromIndex]
+      src?.classList.add(OUTLINE_CLASS_NAMES.dragging)
     }
-    const nodes = panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)
-    for (const el of nodes) {
-      el.classList.toggle(OUTLINE_CLASS_NAMES.dragging, el === nodes[drag.fromIndex])
-      el.classList.remove(
-        OUTLINE_CLASS_NAMES.dropBefore,
-        OUTLINE_CLASS_NAMES.dropAfter,
-        OUTLINE_CLASS_NAMES.dropInside,
-      )
-    }
+    // 落点指示增量化：只清上一个指示元素（全量清除留给收尾兜底）
+    drag.hintEl?.classList.remove(
+      OUTLINE_CLASS_NAMES.dropBefore,
+      OUTLINE_CLASS_NAMES.dropAfter,
+      OUTLINE_CLASS_NAMES.dropInside,
+    )
+    drag.hintEl = null
     drag.targetIndex = null
     drag.position = null
+    const nodes = panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)
     const hit = (event.target as Element | null)?.closest?.(`.${OUTLINE_CLASS_NAMES.item}`)
       ?? document.elementFromPoint?.(event.clientX, event.clientY)?.closest(`.${OUTLINE_CLASS_NAMES.item}`)
     if (!(hit instanceof HTMLElement) || !panel.contains(hit)) {
@@ -2756,6 +2812,7 @@ export class WebviewSyncController {
     const position = outlineDropPositionAt(rect.top, rect.height, event.clientY)
     drag.targetIndex = index
     drag.position = position
+    drag.hintEl = hit
     hit.classList.add(
       position === 'before' ? OUTLINE_CLASS_NAMES.dropBefore
         : position === 'after' ? OUTLINE_CLASS_NAMES.dropAfter
@@ -2800,9 +2857,11 @@ export class WebviewSyncController {
     }
   }
 
-  /** 结束拖拽会话（幂等）：摘除 document 监听、清指示类与状态 */
+  /** 结束拖拽会话（幂等）：摘除 document/window 监听、释放指针捕获、
+   *  清指示类与状态 */
   private cancelOutlineDrag(): void {
-    if (!this.outlineDragState) {
+    const drag = this.outlineDragState
+    if (!drag) {
       return
     }
     this.outlineDragState = null
@@ -2810,6 +2869,7 @@ export class WebviewSyncController {
     document.removeEventListener('pointerup', this.onOutlineDragEnd)
     document.removeEventListener('pointercancel', this.onOutlineDragCancel)
     document.removeEventListener('keydown', this.onOutlineDragEscape, true)
+    window.removeEventListener('blur', this.onOutlineDragCancel)
     this.clearOutlineDragDom()
   }
 
