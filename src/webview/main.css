@@ -408,6 +408,119 @@ body {
   border-radius: 4px;
 }
 
+/* ---- #67 折叠滑块行（结绳记事：六圆点 + 横线串联）----
+   显隐唯一开关是侧栏容器的 outline-active 类（与面板同模式）。六档：
+   0=No-Expand（全部折叠只露顶层）、1–5=展开到 H1–H5（展开所有 level≤n
+   且有子项的父节点）。当前档与空闲档的用户可见差异唯一来源是圆点的
+   active 类规则（空闲珠=透明面描边圆环、当前珠=实心），样式失效时
+   六珠同态可被集成 computed 断言捕获。横线由行容器的 ::before 绘制
+   （贯穿珠心，珠面相对定位盖线）。可访问口径：role=group 六按钮组 */
+#app .vsidian-sidebar .vsidian-outline-slider {
+  display: none;
+}
+
+#app .vsidian-sidebar.vsidian-outline-active .vsidian-outline-slider {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  position: relative;
+  width: var(--vsidian-sidebar-width, 280px);
+  box-sizing: border-box;
+  height: 22px;
+  margin: 2px 0;
+  padding: 0 24px;
+}
+
+/* 串珠横线：绝对定位贯穿行中心（行高 22px，珠心 11px；线高 2px 居中） */
+.vsidian-sidebar .vsidian-outline-slider::before {
+  content: '';
+  position: absolute;
+  left: 28px;
+  right: 28px;
+  top: 10px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.4));
+}
+
+/* 圆点（珠）：8px 正圆；空闲珠空心（透明面 + 描边圆环，主题侧栏背景
+   透明时绳线穿珠可见——结绳意象），当前珠实心。珠面相对定位抬到线之上 */
+.vsidian-sidebar .vsidian-outline-slider-dot {
+  display: block;
+  position: relative;
+  z-index: 1;
+  width: 8px;
+  height: 8px;
+  box-sizing: border-box;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--vscode-descriptionForeground, rgba(128, 128, 128, 0.7));
+  background: var(--vscode-sideBar-background, transparent);
+  cursor: pointer;
+}
+
+.vsidian-sidebar .vsidian-outline-slider-dot:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #4fc1ff);
+  outline-offset: 2px;
+}
+
+.vsidian-sidebar .vsidian-outline-slider-dot.vsidian-outline-slider-active {
+  border-color: var(--vscode-button-background, #0e639c);
+  background: var(--vscode-button-background, #0e639c);
+}
+
+/* ---- #67 手动折叠：条目箭头与折叠隐藏 ----
+   有子项条目前置箭头按钮（点击折叠/展开；点文字仍跳转——事件按目标
+   分流），无子项条目渲染同宽占位保持文字左缘对齐。折叠中的父节点条目
+   加 collapsed 类：箭头旋转 -90° 朝右是两态差异唯一来源。折叠遮蔽的
+   条目加 hidden 类：display:none 是唯一显隐开关（DOM 保留——索引与
+   outlineItems 同序的不变式不因折叠破坏，高亮回退按可见代表施加） */
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 22px;
+  padding: 0;
+  box-sizing: border-box;
+  margin: 0;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  vertical-align: middle;
+  flex: 0 0 auto;
+}
+
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-chevron:hover,
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-chevron:focus-visible {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
+  outline: none;
+}
+
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-chevron svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+/* 展开态箭头朝下（图标本体）；折叠态由 collapsed 类旋转朝右 */
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-collapsed .vsidian-outline-chevron {
+  transform: rotate(-90deg);
+}
+
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-chevron-spacer {
+  display: inline-block;
+  width: 18px;
+  height: 22px;
+}
+
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-hidden {
+  display: none;
+}
+
 /* 侧栏顶栏按钮（#54「大纲」）：与主编辑区顶栏图标按钮同形态（透明底、
    悬停高亮跟随 VSCode 变量）。active 态背景高亮的唯一来源是
    outline-active 类规则（非 active 时透明底，两态差异可被集成 computed

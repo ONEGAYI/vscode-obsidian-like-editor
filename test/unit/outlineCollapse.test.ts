@@ -80,9 +80,10 @@ describe('档位展开集（「展开到 Hn」语义）', () => {
     expect(outlineExpandSetForLevel(NESTED, 5)).toEqual(new Set([0, 1, 3]))
   })
 
-  it('H6 恒为叶（Markdown 无更深层），档 5 即全展开', () => {
+  it('H6 恒为叶（Markdown 无更深层）；末条目无子，档 5 只展开真实父节点', () => {
     const seq = items([1, 'A'], [6, 'Z'], [2, 'B'])
-    expect(outlineExpandSetForLevel(seq, 5)).toEqual(new Set([0, 2]))
+    // Z(H6) 后继更浅无子；B 是末条目无子；只有 A 是父
+    expect(outlineExpandSetForLevel(seq, 5)).toEqual(new Set([0]))
   })
 
   it('默认档位为 5（H5 全展开）', () => {
@@ -112,9 +113,11 @@ describe('可见性推导（hiddenFlags / visibleIndices）', () => {
     expect(outlineVisibleIndices(NESTED, expanded)).toEqual([0, 1, 3, 4, 5])
   })
 
-  it('手动展开叠加：档 0 基础上展开 B，则 B 的直接子级 C 可见（D/E 仍隐藏）', () => {
-    const expanded = new Set([1])
-    expect(outlineVisibleIndices(NESTED, expanded)).toEqual([0, 1, 2, 5])
+  it('手动展开叠加：展开 A 与 B 后 C 可见（层级展开——祖先折叠则子级整体隐藏）', () => {
+    // 只展开 B（A 仍折叠）时 B 不可见（档 0 场景的嵌套折叠语义见下条）
+    expect(outlineVisibleIndices(NESTED, new Set([1]))).toEqual([0, 5])
+    // A、B 都展开：C 可见；D 折叠（E 隐藏）
+    expect(outlineVisibleIndices(NESTED, new Set([0, 1]))).toEqual([0, 1, 2, 3, 5])
   })
 
   it('嵌套折叠（折叠 A）：一切深度 > 1 的条目隐藏（含已展开的 B 不生效）', () => {
@@ -225,12 +228,12 @@ describe('编辑后折叠集合迁移（刷新存活）', () => {
     expect(migrateOutlineExpanded(prev, next, new Set([0]))).toEqual(new Set([0, 3]))
   })
 
-  it('前部批量插入（行号偏移）：既有展开键按偏移平移', () => {
+  it('前部插入新分支（行号偏移）：既有展开键按偏移平移，新父自动展开', () => {
     const prev = items([1, '甲'], [2, '乙'], [3, '丙'])
-    const next = items([1, '零'], [1, '甲'], [2, '乙'], [3, '丙'])
-    // 甲乙丙整体后移 1；零是新 H1（父节点自动展开）
+    const next = items([1, '零'], [2, '零之子'], [1, '甲'], [2, '乙'], [3, '丙'])
+    // 甲乙丙整体后移 2；零是新 H1 父节点（自动展开）
     expect(migrateOutlineExpanded(prev, next, new Set([0, 1])))
-      .toEqual(new Set([0, 1, 2]))
+      .toEqual(new Set([0, 2, 3]))
   })
 
   it('清空全部标题：迁移结果为空集', () => {

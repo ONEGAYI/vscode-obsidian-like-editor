@@ -64,13 +64,29 @@ import { runReadingPerfProbe } from './readingProbe'
 import { createReadingContainer, prepareReadingImages } from './readingView'
 import { READING_MARKDOWN_CLASS_NAMES } from './readingMarkdown'
 import {
+  applyOutlineSliderState,
   buildOutlineDom,
+  buildOutlineSlider,
   extractOutline,
   OUTLINE_CLASS_NAMES,
   type OutlineItem,
+  type OutlineSliderDom,
   outlineItemsEqual,
+  outlineSliderLevelAt,
   renderOutlineItems,
 } from './outline'
+import {
+  migrateOutlineExpanded,
+  normalizeOutlineExpandLevel,
+  outlineCollapseFacts,
+  type OutlineCollapseFacts,
+  outlineExpandAncestors,
+  outlineExpandLevelLabel,
+  outlineExpandSetForLevel,
+  outlineHiddenFlags,
+  outlineRepresentativeIndex,
+  outlineVisibleIndices,
+} from './outlineCollapse'
 import { locateOutlineIndex } from './outlineLocate'
 import { resolveStaleTaskToggle } from './taskToggle'
 import { VirtualReadingView } from './readingVirtualView'
@@ -115,6 +131,10 @@ interface PersistedState {
   sidebarOpen?: boolean
   /** #54 大纲面板 active 态（缺省激活：展开侧栏即见大纲，当前唯一面板） */
   outlineActive?: boolean
+  /** #67 大纲展开档位（0=No-Expand、1–5=展开到 H1–H5；缺省 5=全展开。
+   *  全局记忆（跨文档共享），与 sidebarOpen 同机制；手动折叠集合是
+   *  会话内内存态，不持久化（重载回到档位精确展开集） */
+  outlineExpandLevel?: number
 }
 
 /** 外部同步事务标记：updateListener 见到它即跳过（不回发）。
@@ -373,6 +393,19 @@ export class WebviewSyncController {
   /** 护栏超时释放句柄（首个滚动事件先到则取消） */
   private outlineJumpGuardTimer: ReturnType<typeof setTimeout> | undefined
 
+  // ---- 大纲折叠状态（#67）----
+  /** 展开档位（0=No-Expand、1–5=展开到 Hn；bridge state 全局记忆） */
+  private outlineExpandLevel: number
+  /** 展开集合（父节点索引集合）：折叠状态唯一载体——档位切换整体替换、
+   *  手动折叠/展开增删单键、滚动 only-expand 并入祖先链、编辑重建迁移 */
+  private outlineExpanded: ReadonlySet<number> = new Set()
+  /** 父子结构缓存（随 outlineItems 更新；箭头渲染与折叠推导消费） */
+  private outlineFacts: OutlineCollapseFacts = { parents: [], hasChildren: [] }
+  /** 折叠滑块 DOM（row + 六圆点；档位变化经 applyOutlineSliderState 落类） */
+  private outlineSlider: OutlineSliderDom | undefined
+  /** 上次高亮滚动落点（代表索引）：同索引不重复滚（用户手动滚面板不打扰） */
+  private outlineLastScrolledRep: number | null = null
+
   // ---- 查找会话状态（#14）----
   /** 查找是纯只读视图状态：不写 TextDocument、不入撤销栈、零出站消息。
    *  匹配基于 webview 全文文本模型（CM6 doc），屏外内容同样命中 */
@@ -465,6 +498,7 @@ export class WebviewSyncController {
     this.modeAnchor = typeof saved?.anchor === 'number' && saved.anchor >= 0 ? Math.floor(saved.anchor) : null
     this.sidebarOpen = saved?.sidebarOpen === true
     this.outlineActive = saved?.outlineActive !== false
+    this.outlineExpandLevel = normalizeOutlineExpandLevel(saved?.outlineExpandLevel)
   }
 
   /** 创建编辑器视图并向宿主发送 ready（HTML 加载完成后调用一次） */
@@ -673,6 +707,7 @@ export class WebviewSyncController {
     this.sidebarToggleBtn = undefined
     this.outlineToggleBtn = undefined
     this.outlinePanelEl = undefined
+    this.outlineSlider = undefined
     this.sidebarEl?.remove()
     this.sidebarEl = undefined
     this.mainEl?.remove()
@@ -852,6 +887,22 @@ export class WebviewSyncController {
         const nodes = this.outlinePanelEl
           ?.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)
         nodes?.[message.index]?.click()
+        break
+      }
+      case 'outline.test.expandClick': {
+        // 测试钩子（#67）：点击第 level 档真实圆点（click 冒泡到滑块行
+        // 委托，与用户点击同一处理器；档位整体替换，纯视图状态零写回）
+        this.outlineSlider?.dots[message.level]?.click()
+        break
+      }
+      case 'outline.test.chevronClick': {
+        // 测试钩子（#67）：点击第 index 个真实条目的折叠箭头（面板委托
+        // 按目标分流：箭头折叠/展开，不触发跳转）
+        const itemEl = this.outlinePanelEl
+          ?.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)[message.index]
+        itemEl
+          ?.querySelector<HTMLButtonElement>(`.${OUTLINE_CLASS_NAMES.chevron}`)
+          ?.click()
         break
       }
       case 'table.test.key': {
@@ -1527,6 +1578,11 @@ export class WebviewSyncController {
     this.outlineLocatedIndex = doc
       ? locateOutlineIndex(this.outlineItems, doc.lineAt(pos).number)
       : null
+    // #67：跳转落位含 only-expand（目标被折叠遮蔽时展开祖先链——点击
+    // 折叠区条目或宿主 view.locate 落进折叠区时目标可见），高亮随代表落位
+    if (this.outlineLocatedIndex !== null) {
+      this.revealOutlineIndex(this.outlineLocatedIndex)
+    }
     this.applyOutlineHighlight()
   }
 
@@ -1786,7 +1842,8 @@ export class WebviewSyncController {
     }
   }
 
-  /** 持久化（合并写入）：seq、viewMode、anchor、sidebarOpen、outlineActive 共存互不覆盖 */
+  /** 持久化（合并写入）：seq、viewMode、anchor、sidebarOpen、outlineActive、
+   *  outlineExpandLevel（#67 档位全局记忆）共存互不覆盖 */
   private persistState(): void {
     const saved = this.bridge.getState<PersistedState>() ?? {}
     this.bridge.setState({
@@ -1797,6 +1854,7 @@ export class WebviewSyncController {
       anchor: this.modeAnchor ?? undefined,
       sidebarOpen: this.sidebarOpen,
       outlineActive: this.outlineActive,
+      outlineExpandLevel: this.outlineExpandLevel,
     })
   }
 
@@ -1826,9 +1884,10 @@ export class WebviewSyncController {
     return bar
   }
 
-  /** 右侧栏骨架（#53）：自有顶栏（#54 起含「大纲」按钮）+ 面板区域
-   *  （#54 起含大纲面板容器）。侧栏显隐由 vsidian-body 的 open 类经 CSS
-   *  控制；大纲面板显隐由侧栏容器的 outline-active 类经 CSS 控制 */
+  /** 右侧栏骨架（#53）：自有顶栏（#54 起含「大纲」按钮）+ 折叠滑块行
+   *  （#67，outline-active 时显示）+ 面板区域（#54 起含大纲面板容器）。
+   *  侧栏显隐由 vsidian-body 的 open 类经 CSS 控制；大纲面板与滑块行显隐
+   *  由侧栏容器的 outline-active 类经 CSS 控制 */
   private buildSidebar(): HTMLElement {
     const sidebar = document.createElement('div')
     sidebar.className = 'vsidian-sidebar'
@@ -1840,11 +1899,25 @@ export class WebviewSyncController {
     // #54 大纲按钮：侧栏顶栏当前唯一一项（点击切换对应面板的显隐）
     const { toggle, panel } = buildOutlineDom()
     toggle.addEventListener('click', () => this.toggleOutline())
-    // #66 条目点击跳转：面板容器事件委托（renderOutlineItems 重建条目
-    // DOM 不丢监听；条目 DOM 与 outlineItems 同序渲染，DOM 序号即数据
-    // 索引）。点击 = 纯视图定位（零写回、零出站、不入撤销栈）
+    // #66 条目点击跳转 + #67 箭头折叠：面板容器事件委托
+    // （renderOutlineItems 重建条目 DOM 不丢监听；条目 DOM 与 outlineItems
+    // 同序渲染，DOM 序号即数据索引）。点击按目标分流：箭头 = 单条折叠/
+    // 展开（纯视图），文字 = 纯视图定位跳转（零写回、零出站、不入撤销栈）
     panel.addEventListener('click', (event) => {
       const target = event.target as HTMLElement | null
+      const chevron = target?.closest?.(`.${OUTLINE_CLASS_NAMES.chevron}`)
+      if (chevron instanceof HTMLElement && panel.contains(chevron)) {
+        const itemEl = chevron.closest(`.${OUTLINE_CLASS_NAMES.item}`)
+        const index = itemEl instanceof HTMLElement
+          ? Array.from(
+            panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`),
+          ).indexOf(itemEl)
+          : -1
+        if (index >= 0) {
+          this.toggleOutlineItemCollapsed(index)
+        }
+        return
+      }
       const item = target?.closest?.(`.${OUTLINE_CLASS_NAMES.item}`)
       if (!(item instanceof HTMLElement) || !panel.contains(item)) {
         return
@@ -1860,10 +1933,58 @@ export class WebviewSyncController {
     this.outlinePanelEl = panel
     actions.appendChild(toggle)
     bar.appendChild(actions)
+    // #67 折叠滑块行：顶栏与面板之间（结绳记事六圆点）。点击走行级 click
+    // 委托（圆点冒泡；键盘激活圆点的 click 同路）；拖拽走 pointer 事件——
+    // 位移超阈值后捕获指针，逐档换算（outlineSliderLevelAt 最近圆点）。
+    // 捕获后 click 目标变为行自身（圆点落空），拖拽选档不会双发
+    const slider = buildOutlineSlider(this.outlineExpandLevel, outlineExpandLevelLabel)
+    slider.row.addEventListener('click', (event) => {
+      const dot = (event.target as HTMLElement | null)?.closest?.(
+        `.${OUTLINE_CLASS_NAMES.sliderDot}`,
+      )
+      if (dot instanceof HTMLButtonElement) {
+        const level = Number(dot.dataset['vsidianLevel'])
+        if (Number.isInteger(level)) {
+          this.setOutlineExpandLevel(level)
+        }
+      }
+    })
+    let dragStartX: number | null = null
+    let dragging = false
+    slider.row.addEventListener('pointerdown', (event) => {
+      if (event.pointerType === 'mouse' && event.button !== 0) {
+        return
+      }
+      dragStartX = event.clientX
+      dragging = false
+    })
+    slider.row.addEventListener('pointermove', (event) => {
+      if (dragStartX === null || (event.buttons & 1) === 0) {
+        return
+      }
+      if (!dragging && Math.abs(event.clientX - dragStartX) > 4) {
+        dragging = true
+        slider.row.setPointerCapture(event.pointerId)
+      }
+      if (dragging) {
+        const level = outlineSliderLevelAt(slider, event.clientX, this.outlineExpandLevel)
+        if (level !== this.outlineExpandLevel) {
+          this.setOutlineExpandLevel(level)
+        }
+      }
+    })
+    const endSliderDrag = (): void => {
+      dragStartX = null
+      dragging = false
+    }
+    slider.row.addEventListener('pointerup', endSliderDrag)
+    slider.row.addEventListener('pointercancel', endSliderDrag)
+    this.outlineSlider = slider
     const panelHost = document.createElement('div')
     panelHost.className = 'vsidian-sidebar-panel'
     panelHost.appendChild(panel)
     sidebar.appendChild(bar)
+    sidebar.appendChild(slider.row)
     sidebar.appendChild(panelHost)
     return sidebar
   }
@@ -1961,6 +2082,8 @@ export class WebviewSyncController {
    * livePreviewDecorations 装配（extensions 无条件注册），取不到时由
    * extractOutline 内部回退全量解析（防御路径）。序列（级别 + 文字）
    * 未变时只更新数据（行号），不重建条目 DOM——正文编辑不触碰大纲 DOM。
+   * #67 序列变化重建时展开集合经 diff 迁移（重命名不扰动、删除丢键、
+   * 新增/升格父自动展开——刷新存活，见 outlineCollapse 模块头）。
    */
   private outlineEnsureFresh(): void {
     const view = this.view
@@ -1973,13 +2096,95 @@ export class WebviewSyncController {
     const tree = view.state.field(liveDecorationsField, false)?.tree
     const items = extractOutline(doc, tree)
     const changed = firstRender || !outlineItemsEqual(items, this.outlineItems)
+    const prevItems = this.outlineItems
+    const prevExpanded = this.outlineExpanded
     this.outlineItems = items
+    this.outlineFacts = outlineCollapseFacts(items)
+    if (firstRender) {
+      // 首场：档位精确集（手动折叠是会话态，重载后从这里重置）
+      this.outlineExpanded = outlineExpandSetForLevel(items, this.outlineExpandLevel)
+    } else {
+      this.outlineExpanded = migrateOutlineExpanded(prevItems, items, prevExpanded)
+    }
     if (changed && this.outlinePanelEl) {
-      renderOutlineItems(this.outlinePanelEl, items)
+      renderOutlineItems(this.outlinePanelEl, items, this.outlineFacts.hasChildren)
+      this.applyOutlineCollapseDom()
+    } else if (this.outlineExpanded !== prevExpanded) {
+      // 序列未变但展开集合被迁移修正（safeFilter 等）：状态类跟随
+      this.applyOutlineCollapseDom()
     }
     // #66：文档变化后行号随编辑漂移（序列未变也可能），统一重算并重施加
-    // 高亮——重建路径丢了类、未重建路径行号变了也要重定位控制域
+    // 高亮——重建路径丢了类、未重建路径行号变了也要重定位控制域；
+    // #67：重算含 only-expand（located 被折叠遮蔽时展开祖先链）
     this.updateOutlineLocated()
+  }
+
+  // ---- 大纲折叠状态机落 DOM（#67）----
+  // 状态载体是 outlineExpanded（父节点索引集合）+ outlineExpandLevel（档位，
+  // 持久化）；推导纯函数见 outlineCollapse.ts。DOM 上三类状态类：hidden
+  // （折叠遮蔽，display:none）、collapsed（折叠中的父节点，箭头旋转）、
+  // located（高亮，施加在可见代表上——被遮蔽时为第一个可见祖先）。
+
+  /** 滑块选档：档位记录 + 展开集整体替换为档位精确集（手动微调不保留），
+   *  圆点 active 类与可访问状态同步，高亮代表可能变化（重施加） */
+  private setOutlineExpandLevel(level: number): void {
+    const next = Math.max(0, Math.min(5, Math.floor(level)))
+    this.outlineExpandLevel = next
+    this.outlineExpanded = outlineExpandSetForLevel(this.outlineItems, next)
+    if (this.outlineSlider) {
+      applyOutlineSliderState(this.outlineSlider, next)
+    }
+    this.applyOutlineCollapseDom()
+    this.applyOutlineHighlight()
+    this.persistState()
+  }
+
+  /** 手动折叠/展开单条（箭头点击）：非父节点忽略；会话态不持久化 */
+  private toggleOutlineItemCollapsed(index: number): void {
+    if (this.outlineFacts.hasChildren[index] !== true) {
+      return
+    }
+    const next = new Set(this.outlineExpanded)
+    if (next.has(index)) {
+      next.delete(index)
+    } else {
+      next.add(index)
+    }
+    this.outlineExpanded = next
+    this.applyOutlineCollapseDom()
+    this.applyOutlineHighlight()
+  }
+
+  /** 折叠可见性落 DOM：hidden/collapsed 类与箭头 aria-expanded（条目 DOM
+   *  与 outlineItems 同序的不变式下按序 toggle；toggle 幂等） */
+  private applyOutlineCollapseDom(): void {
+    const panel = this.outlinePanelEl
+    if (!panel) {
+      return
+    }
+    const hidden = outlineHiddenFlags(this.outlineItems, this.outlineExpanded)
+    const nodes = panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)
+    for (let i = 0; i < nodes.length; i++) {
+      const el = nodes[i]!
+      const isParent = this.outlineFacts.hasChildren[i] === true
+      const collapsed = isParent && !this.outlineExpanded.has(i)
+      el.classList.toggle(OUTLINE_CLASS_NAMES.collapsed, collapsed)
+      el.classList.toggle(OUTLINE_CLASS_NAMES.hidden, hidden[i] === true)
+      const chevron = el.querySelector<HTMLButtonElement>(`.${OUTLINE_CLASS_NAMES.chevron}`)
+      if (chevron) {
+        chevron.setAttribute('aria-expanded', String(!collapsed))
+      }
+    }
+  }
+
+  /** only-expand（滚动动态展开/跳转落位共用）：目标被折叠遮蔽时并入其
+   *  祖先链（只增不减，其他折叠区不动），展开集合变化才重施加状态类 */
+  private revealOutlineIndex(index: number): void {
+    const next = outlineExpandAncestors(this.outlineItems, this.outlineExpanded, index)
+    if (next !== this.outlineExpanded) {
+      this.outlineExpanded = next
+      this.applyOutlineCollapseDom()
+    }
   }
 
   // ---- 大纲定位与常驻高亮（#66）----
@@ -2044,10 +2249,15 @@ export class WebviewSyncController {
     }, OUTLINE_HIGHLIGHT_DEBOUNCE_MS)
   }
 
-  /** 重算当前控制域并施加高亮（同步即时路径：模式切换、文档校准、跳转） */
+  /** 重算当前控制域并施加高亮（同步即时路径：模式切换、文档校准、跳转）。
+   *  #67：重算含 only-expand——located 被折叠遮蔽时展开其祖先链（滚动
+   *  联动的动态展开语义），再按可见代表施加高亮 */
   private updateOutlineLocated(): void {
     const line = this.outlineViewportTopLine()
     this.outlineLocatedIndex = line === null ? null : locateOutlineIndex(this.outlineItems, line)
+    if (this.outlineLocatedIndex !== null) {
+      this.revealOutlineIndex(this.outlineLocatedIndex)
+    }
     this.applyOutlineHighlight()
   }
 
@@ -2083,17 +2293,32 @@ export class WebviewSyncController {
     return null
   }
 
-  /** 把 locatedIndex 施加到面板条目（DOM 与 outlineItems 同序渲染的不变
-   *  式下按序号 toggle；toggle 幂等，未变化条目零 DOM 写入） */
+  /** 把 located 施加到面板条目（DOM 与 outlineItems 同序渲染的不变式下按
+   *  序号 toggle；toggle 幂等，未变化条目零 DOM 写入）。#67 起高亮施加在
+   *  「可见代表」上：located 条目被折叠遮蔽时为第一个可见祖先
+   *  （outlineRepresentativeIndex；only-expand 已尽量让自身可见，回退
+   *  仅在手动折叠/档位切换遮蔽路径生效）。代表变化时高亮行滚进面板
+   *  可视区（scrollIntoView nearest——已可见零滚动，同代表不重复滚） */
   private applyOutlineHighlight(): void {
     const panel = this.outlinePanelEl
     if (!panel) {
       return
     }
+    const rep = this.outlineLocatedIndex === null
+      ? null
+      : outlineRepresentativeIndex(this.outlineItems, this.outlineExpanded, this.outlineLocatedIndex)
     let index = 0
     for (const el of panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)) {
-      el.classList.toggle(OUTLINE_CLASS_NAMES.located, index === this.outlineLocatedIndex)
+      el.classList.toggle(OUTLINE_CLASS_NAMES.located, index === rep)
       index += 1
+    }
+    if (rep === null || rep === this.outlineLastScrolledRep || !this.outlineVisible()) {
+      return
+    }
+    const el = panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)[rep]
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ block: 'nearest' })
+      this.outlineLastScrolledRep = rep
     }
   }
   // ---- 查找会话（#14）----
@@ -3164,37 +3389,43 @@ export class WebviewSyncController {
         ? this.outlineItems[this.outlineLocatedIndex]?.text ?? null
         : null,
       locatedPainted: this.collectOutlineLocatedPainted(),
+      // #67 折叠观测：档位实值 + 可见索引序列（折叠可见性断言权威口径）+
+      // 滑块行/当前档圆点/折叠箭头的绘制层证据
+      expandLevel: this.outlineExpandLevel,
+      visibleIndices: outlineVisibleIndices(this.outlineItems, this.outlineExpanded),
+      sliderPainted: hitPaintedElement(this.outlineSlider?.row, this.outlineSlider?.row),
+      sliderActiveDotPainted: this.collectOutlineSliderActiveDotPainted(),
+      chevronPainted: hitPaintedElement(
+        this.outlinePanelEl?.querySelector<HTMLElement>(`.${OUTLINE_CLASS_NAMES.chevron}`) ?? null,
+        this.outlinePanelEl,
+      ),
     }
   }
 
-  /** #66 located 条目的绘制层证据：中心点 elementFromPoint 命中自身
-   *  （真实布局与显隐规则生效）且 computed background-color 非全透明
-   *  （半透明横条规则生效——样式失效时无背景可读）。条目在面板滚动区
-   *  可视范围外时命中失败（本票不滚动面板，#67 的「高亮行滚进可视区」
-   *  落地后此口径仍成立） */
+  /** #66 located 条目的绘制层证据：施加了 located 类的元素（#67 起为
+   *  可见代表——被折叠遮蔽时是第一个可见祖先）中心点 elementFromPoint
+   *  命中自身（真实布局与显隐规则生效）且 computed background-color 非
+   *  全透明（半透明横条规则生效——样式失效时无背景可读）。代表元素在
+   *  面板滚动区可视范围外时命中失败；#67 的高亮行滚进可视区使常态下
+   *  命中成立（跳转/滚动落位即滚，probe 采集时已就位） */
   private collectOutlineLocatedPainted(): boolean {
     const panel = this.outlinePanelEl
-    const idx = this.outlineLocatedIndex
-    if (!panel || idx === null) {
+    if (!panel) {
       return false
     }
-    const el = panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)[idx]
-    if (!el || !hitPaintedElement(el, el)) {
+    const el = panel.querySelector<HTMLElement>(`.${OUTLINE_CLASS_NAMES.located}`)
+    return !!el && paintedWithVisibleBackground(el)
+  }
+
+  /** #67 当前档圆点绘制证据：active 圆点中心点命中（真实布局 + active
+   *  类规则生效——选择器写错时圆点无类可命中）且 computed 背景非全透明
+   *  （实心珠真实绘制；jsdom 无布局恒 false，真宿主断言见集成） */
+  private collectOutlineSliderActiveDotPainted(): boolean {
+    const dot = this.outlineSlider?.dots[this.outlineExpandLevel]
+    if (!dot || !dot.classList.contains(OUTLINE_CLASS_NAMES.sliderActive)) {
       return false
     }
-    try {
-      const bg = getComputedStyle(el).backgroundColor
-      if (bg === '' || bg === 'transparent') {
-        return false
-      }
-      const rgb = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)/.exec(bg)
-      if (!rgb) {
-        return false // 异常形态保守视为未绘制
-      }
-      return rgb[4] === undefined || Number.parseFloat(rgb[4]!) > 0
-    } catch {
-      return false
-    }
+    return paintedWithVisibleBackground(dot)
   }
 
   /** 暂停提示横幅：说明输入已保留、写回已暂停，提供取回与恢复按钮 */
@@ -3390,6 +3621,28 @@ function hitPaintedElement(
     const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
     const within = scope ?? el
     return !!hit && within.contains(hit)
+  } catch {
+    return false
+  }
+}
+
+/** #66/#67 绘制层证据共用口径：中心点 elementFromPoint 命中自身（真实
+ *  布局与显隐规则生效）且 computed background-color 非全透明（背景规则
+ *  生效——located 横条与滑块实心圆点共用；样式失效时任一失守即 false） */
+function paintedWithVisibleBackground(el: HTMLElement): boolean {
+  if (!hitPaintedElement(el, el)) {
+    return false
+  }
+  try {
+    const bg = getComputedStyle(el).backgroundColor
+    if (bg === '' || bg === 'transparent') {
+      return false
+    }
+    const rgb = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)/.exec(bg)
+    if (!rgb) {
+      return false // 异常形态保守视为未绘制
+    }
+    return rgb[4] === undefined || Number.parseFloat(rgb[4]!) > 0
   } catch {
     return false
   }

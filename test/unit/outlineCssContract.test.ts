@@ -192,13 +192,15 @@ describe('折叠滑块行（#67：结绳记事）', () => {
     expect(shown).toMatch(/display:\s*flex/)
   })
 
-  it('圆点按钮为正圆小点：border-radius 50% + 固定宽高 + 透明底', () => {
+  it('圆点按钮为正圆小点：border-radius 50% + 固定宽高 + 空心面（透明回退）', () => {
     const dot = rule('.vsidian-sidebar .vsidian-outline-slider-dot')
     expect(dot).toMatch(/border-radius:\s*50%/)
     expect(dot).toMatch(/width:\s*8px/)
     expect(dot).toMatch(/height:\s*8px/)
-    // 基础圆点透明底：当前档与空闲档的用户可见差异唯一来源是 active 类规则
-    expect(dot).toMatch(/background:\s*transparent/)
+    // 空闲珠空心（侧栏背景遮线、透明主题回退穿珠可见）——当前档与空闲档
+    // 的用户可见差异唯一来源是 active 类规则（实心填充 + 描边跟随）
+    expect(dot).toMatch(/background:\s*var\(--vscode-sideBar-background,\s*transparent\)/)
+    expect(dot).toMatch(/border:\s*1px solid/)
   })
 
   it('当前档圆点实心高亮：active 类规则是唯一差异来源（颜色跟随 VSCode 变量）', () => {

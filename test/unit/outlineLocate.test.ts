@@ -7,13 +7,17 @@ import { locateOutlineIndex } from '../../src/webview/outlineLocate'
 import type { OutlineItem } from '../../src/webview/outline'
 
 /** 序列刻意覆盖：首行非 1 基起点（frontmatter/序言之后）、跨级（H2 直跟
- *  H4）、同名标题（两个「同名」不混淆）、Setext 混排 */
+ *  H4）、同名标题（两个「同名」不混淆）、Setext 混排。locate 只消费
+ *  level/line；plainText/spans 按当前 OutlineItem 形态补齐（#65 起必填） */
+const item = (level: number, text: string, line: number): OutlineItem => ({
+  level, text, plainText: text, spans: [], line,
+})
 const ITEMS: OutlineItem[] = [
-  { level: 1, text: '主标题', line: 3 },
-  { level: 2, text: '同名', line: 10 },
-  { level: 4, text: '跨级四级', line: 12 },
-  { level: 2, text: '同名', line: 20 },
-  { level: 1, text: '尾部一级', line: 30 },
+  item(1, '主标题', 3),
+  item(2, '同名', 10),
+  item(4, '跨级四级', 12),
+  item(2, '同名', 20),
+  item(1, '尾部一级', 30),
 ]
 
 describe('locateOutlineIndex：当前行 → 所在控制域标题索引', () => {
@@ -66,8 +70,8 @@ describe('locateOutlineIndex：当前行 → 所在控制域标题索引', () =>
 
   it('标题行降序输入不崩溃（防御：outline 序按文档序产出，此为容错）', () => {
     const unsorted: OutlineItem[] = [
-      { level: 1, text: '后', line: 50 },
-      { level: 1, text: '前', line: 5 },
+      item(1, '后', 50),
+      item(1, '前', 5),
     ]
     // 只要求不抛错、返回索引或 null 之一（实现可选择二分的任意稳定行为）
     const result = locateOutlineIndex(unsorted, 10)

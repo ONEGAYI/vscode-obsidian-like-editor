@@ -514,7 +514,7 @@ describe('折叠滑块装配（#67）', () => {
     // 手动展开 A（chevronClick 折叠→展开）
     controller.handleHostMessage({ kind: 'outline.test.chevronClick', index: 0 })
     let d = collapseDom(parent)
-    expect(d.hiddenIndices()).toEqual([4]) // A 展开后 B/C/D 可见（B、D 折叠中遮 E）
+    expect(d.hiddenIndices()).toEqual([2, 4]) // A 展开后 B/D 可见（B 折叠遮 C、D 折叠遮 E）
     // 切档 1：整体替换，A 的手动展开被丢弃（按档 1 精确集：A 展开、B/D 折叠）
     controller.handleHostMessage({ kind: 'outline.test.expandClick', level: 1 })
     d = collapseDom(parent)
@@ -585,7 +585,7 @@ describe('滚动动态展开与高亮回退（#67，jsdom 可测路径）', () =
     // 点击 C（index 2，此刻隐藏——消息驱动等价于宿主 view.locate 落进折叠区）
     controller.handleHostMessage({ kind: 'outline.test.itemClick', index: 2 })
     const d = collapseDom(parent)
-    expect(d.hiddenIndices()).toEqual([]) // 祖先链 B 已展开
+    expect(d.hiddenIndices()).toEqual([4]) // 祖先链 B 已展开（C 可见）；D 仍折叠遮 E
     expect(d.locatedIndex()).toBe(2) // 高亮在目标自身（展开后无需回退）
   })
 
@@ -611,7 +611,7 @@ describe('滚动动态展开与高亮回退（#67，jsdom 可测路径）', () =
 describe('档位持久化与手动折叠存活（#67）', () => {
   it('档位写入 bridge state（与 sidebarOpen/outlineActive 合并互不覆盖），重载恢复非默认档', () => {
     const h = makeBridge()
-    const { c: controller, parent } = mountOutline(h, COLLAPSE_DOC)
+    const { c: controller } = mountOutline(h, COLLAPSE_DOC)
     openSidebar(controller)
     controller.handleHostMessage({ kind: 'outline.test.expandClick', level: 2 })
     const saved = h.saved() as { outlineExpandLevel?: number; sidebarOpen?: boolean }
@@ -688,7 +688,7 @@ describe('档位持久化与手动折叠存活（#67）', () => {
 
   it('空文档与无子项文档边界：滑块仍可操作，条目恒可见', () => {
     const h = makeBridge()
-    const { c: controller, parent } = mountOutline(h, '只有正文\n')
+    const { c: controller } = mountOutline(h, '只有正文\n')
     openSidebar(controller)
     controller.handleHostMessage({ kind: 'outline.test.expandClick', level: 0 })
     const state = viewState(controller, h)

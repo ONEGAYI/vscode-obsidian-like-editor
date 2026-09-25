@@ -335,6 +335,12 @@ describe('isWebviewToHost', () => {
           locatedItemIndex: 1,
           locatedText: '',
           locatedPainted: true,
+          // #67 折叠观测（必填：probe 形态演进，旧样本同步补齐）
+          expandLevel: 5,
+          visibleIndices: [0, 1],
+          sliderPainted: true,
+          sliderActiveDotPainted: true,
+          chevronPainted: true,
         },
       }),
     ).toBe(true)
@@ -354,6 +360,11 @@ describe('isWebviewToHost', () => {
           locatedItemIndex: null,
           locatedText: null,
           locatedPainted: false,
+          expandLevel: 0,
+          visibleIndices: [],
+          sliderPainted: false,
+          sliderActiveDotPainted: false,
+          chevronPainted: false,
         },
       }),
     ).toBe(true)
