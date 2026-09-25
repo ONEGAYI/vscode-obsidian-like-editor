@@ -8,9 +8,10 @@
 // - info string 精确匹配 `mermaid`（trim 后全等）：前后空白容忍、大小写
 //   敏感（CommonMark info 惯例——`Mermaid` 是另一语言）；`mermaid xxx`
 //   多词不命中（与 GitHub/Obsidian 口径一致，见 #60 实施记录）。
-// - 围栏标记：3 个及以上反引号或波浪线，缩进 0-3 空格（≥4 为缩进代码块，
-//   不是围栏——伪围栏不误渲染的判定口径）；反引号围栏的 info 不得含反引号。
-// - 闭合围栏：同字符、run ≥ 开启 run、缩进 0-3、行内不得有其他内容。
+// - 围栏标记：3 个及以上反引号或波浪线，缩进 0-3 视觉列（≥4 为缩进代码块，
+//   不是围栏——伪围栏不误渲染的判定口径；Tab 按 CommonMark 折算到下一 4 倍
+//   制表位，行首 Tab 起步即 ≥4 列）。反引号围栏的 info 不得含反引号。
+// - 闭合围栏：同字符、run ≥ 开启 run、缩进 0-3 视觉列、行内不得有其他内容。
 // - 开启围栏之后、闭合之前的所有行是内容——内层伪围栏（更长外层围栏、
 //   或非 mermaid 围栏内的 ```mermaid 文本）不产出（状态机天然抑制）。
 // - 未闭合围栏（EOF）不产出：稳定降级为源码显示。
@@ -57,7 +58,8 @@ export interface FenceSpan {
   code: string
 }
 
-/** 窗口末尾仍开放的围栏（增量重建延伸扫描的驱动信息） */
+/** 窗口末尾仍开放的围栏（增量重建延伸扫描的驱动信息；也作为续扫输入——
+ *  下一批行段以它为 initialOpen 传入，开放状态跨批延续） */
 export interface OpenFence {
   from: number
   char: '`' | '~'
@@ -88,9 +90,32 @@ function isFenceClose(rest: string, char: '`' | '~', openRun: number): boolean {
   return m !== null
 }
 
+/** 行首缩进的视觉列数与剥除点（CommonMark 口径：Tab 折算到下一 4 倍制表位，
+ *  一个 Tab = 推进到下一个 4 列边界——`\t```mermaid` 是 4 列缩进的缩进代码
+ *  块，不开启围栏，与阅读侧 markdown-it 一致）；仅空格与 Tab 计入缩进 */
+function indentColumns(line: string): { cols: number; restStart: number } {
+  let col = 0
+  let i = 0
+  while (i < line.length) {
+    const ch = line[i]!
+    if (ch === ' ') {
+      col += 1
+      i += 1
+    } else if (ch === '\t') {
+      col += 4 - (col % 4)
+      i += 1
+    } else {
+      break
+    }
+  }
+  return { cols: col, restStart: i }
+}
+
 /**
  * 扫描连续行集合中的全部围栏（CommonMark 围栏状态机；含非 mermaid 围栏）。
  * firstLineStart 为首行行首的全文 offset（围栏区间以全文坐标产出）。
+ * initialOpen 为窗口起点之前已处的开放围栏（增量续扫时传入上一批的终态
+ * open——只扫新行段、开放状态延续，闭合时产出含窗口外前缀的完整 code）。
  * 仅产出已闭合围栏；未闭合（EOF/窗口截断）不产出。
  * 纯函数，node 单测直驱；live 增量与阅读语义对照共用。
  */
@@ -99,15 +124,28 @@ export function scanFenceSpans(lines: readonly string[], firstLineStart: number)
 }
 
 /** 同 scanFenceSpans，另回报窗口末尾的开放围栏状态（增量重建延伸用） */
-export function scanFencesDetailed(lines: readonly string[], firstLineStart: number): FenceScanResult {
+export function scanFencesDetailed(
+  lines: readonly string[],
+  firstLineStart: number,
+  initialOpen: OpenFence | null = null,
+): FenceScanResult {
   const spans: FenceSpan[] = []
-  let open: { from: number; char: '`' | '~'; run: number; mermaid: boolean; code: string[] } | null = null
+  let open: { from: number; char: '`' | '~'; run: number; mermaid: boolean; code: string[] } | null =
+    initialOpen
+      ? {
+          from: initialOpen.from,
+          char: initialOpen.char,
+          run: initialOpen.run,
+          mermaid: initialOpen.mermaid,
+          code: initialOpen.code === '' ? [] : initialOpen.code.split('\n'),
+        }
+      : null
   let lineStart = firstLineStart
   for (const line of lines) {
-    const indent = line.length - line.trimStart().length
+    const { cols, restStart } = indentColumns(line)
     if (open) {
-      if (indent <= 3) {
-        const rest = line.slice(indent)
+      if (cols <= 3) {
+        const rest = line.slice(restStart)
         if (isFenceClose(rest, open.char, open.run)) {
           spans.push({
             from: open.from,
@@ -126,8 +164,8 @@ export function scanFencesDetailed(lines: readonly string[], firstLineStart: num
       lineStart += line.length + 1
       continue
     }
-    if (indent <= 3) {
-      const hit = matchFenceOpen(line.slice(indent))
+    if (cols <= 3) {
+      const hit = matchFenceOpen(line.slice(restStart))
       if (hit && !(hit.char === '`' && hit.info.includes('`'))) {
         open = { from: lineStart, char: hit.char, run: hit.run, mermaid: isMermaidInfo(hit.info), code: [] }
       }

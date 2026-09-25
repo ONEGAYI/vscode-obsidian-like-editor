@@ -91,6 +91,14 @@ describe('渲染器 fence 规则（直接驱动机）', () => {
     expect(html).toContain(MERMAID_CLASS_NAMES.diagram)
     expect(html).toContain('<pre><code class="language-js">')
   })
+
+  it('Tab 缩进围栏在阅读侧同为缩进代码块（与 live 折算口径一致，D-4）', () => {
+    const md = createMarkdownRenderer()
+    const html = md.render('\t```mermaid\n\tgraph TD\n\tA-->B\n\t```')
+    // markdown-it 按 CommonMark 把行首 Tab 折算到 4 列制表位 → 缩进代码块
+    expect(html).not.toContain(MERMAID_CLASS_NAMES.diagram)
+    expect(html).toContain('<pre><code')
+  })
 })
 
 describe('高度估计：mermaid 块初始估计放大', () => {

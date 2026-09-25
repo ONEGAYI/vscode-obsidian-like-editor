@@ -73,6 +73,24 @@ describe('scanFenceSpans：围栏状态机', () => {
     expect(scan(text)).toHaveLength(0)
   })
 
+  it('行首 Tab 按 CommonMark 折算到 4 倍制表位：Tab 起步的围栏是缩进代码块不开启（D-4）', () => {
+    // 一个 Tab = 推进到下一个 4 列边界：行首 Tab 至少 4 列 → 缩进代码块
+    expect(scan('\t```mermaid\n\tgraph TD\n\tA-->B\n\t```')).toHaveLength(0)
+    // 空格 + Tab：1 列空格后 Tab 推进到 4 列边界（4 列）→ 同为缩进代码块
+    expect(scan(' \t```mermaid\n graph TD\n ```')).toHaveLength(0)
+    // 双 Tab = 8 列
+    expect(scan('\t\t```mermaid\n\tA-->B\n\t```')).toHaveLength(0)
+    // 对照：3 空格以内（无 Tab）仍开启围栏（既有口径，Tab 折算不改变）
+    expect(scan('   ```mermaid\n   A-->B\n   ```')).toHaveLength(1)
+  })
+
+  it('Tab 起步的闭合行不是闭合围栏（内容行；Tab 折算同样作用于闭合判定）', () => {
+    // 开启行无缩进、闭合行行首 Tab（≥4 列）→ 不闭合，围栏延伸到下一裸围栏行
+    const spans = scan('```mermaid\nA-->B\n\t```\n```')
+    expect(spans).toHaveLength(1)
+    expect(spans[0]!.code).toBe('A-->B\n\t```')
+  })
+
   it('缩进 0-3 空格的围栏正常识别（列表内围栏容忍）', () => {
     const spans = scan('  ```mermaid\n  graph TD\n  ```')
     expect(spans).toHaveLength(1)
@@ -136,6 +154,28 @@ describe('scanFencesDetailed：窗口扫描的开放状态回报', () => {
     const r = scanFencesDetailed(['```mermaid', 'A-->B', '```'], 0)
     expect(r.open).toBeNull()
     expect(r.spans).toHaveLength(1)
+  })
+
+  it('initialOpen 输入：以已开放状态续扫新行段，闭合产出完整 span（D-3 增量续扫契约）', () => {
+    // 第一批：````md 开启后窗口截断 → open 携带已累积内容
+    const first = scanFencesDetailed(['````md', 'a'], 0)
+    expect(first.open).not.toBeNull()
+    expect(first.open!.code).toBe('a')
+    // 第二批：只扫新行段（开放状态延续），闭合时 code 含窗口外前缀
+    const second = scanFencesDetailed(['b', '````', 'tail'], '````md\na\n'.length, first.open)
+    expect(second.spans).toHaveLength(1)
+    expect(second.spans[0]!.code).toBe('a\nb')
+    expect(second.spans[0]!.mermaid).toBe(false)
+    expect(second.open).toBeNull()
+  })
+
+  it('initialOpen 为空 code 时续扫不引入幻影空行（空内容围栏形态）', () => {
+    const first = scanFencesDetailed(['```mermaid'], 0)
+    expect(first.open!.code).toBe('')
+    const second = scanFencesDetailed(['A-->B', '```'], '```mermaid\n'.length, first.open)
+    expect(second.spans).toHaveLength(1)
+    expect(second.spans[0]!.code).toBe('A-->B')
+    expect(second.spans[0]!.mermaid).toBe(true)
   })
 })
 
