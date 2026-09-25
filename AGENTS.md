@@ -4,7 +4,7 @@ VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 
 > 当前状态：**MVP 主要功能已实施，整体验收未结**。双视图编辑器、增量写回、任务、链接与图片、双链、表格和查找已落地；#32 统一两模式基础排版基线，#33 独立设置页，#34 实时预览源文件行号（设置页可开关）；#38 落地标题栏三态切换（实时预览 → 阅读 → 源码编辑器循环）、`.md` 默认编辑器接管、全局模式记忆（globalState）与 diff 语境防御；本联合分支整合 #45 后台集成宿主、#44 IME 同步修复、#42 表格逐格编辑网格、#43 表格控件与拖排和双语建表命令。#21–#25、#28、#30 跟进规格票验收缺口，#26–#27 等人工与跨环境事项仍按验证清单跟进。
 >
-> 自动化套件为 897 项 Vitest 单测、11 项启动器契约测试、31 项原生浏览器输入回归，以及开发态与 VSIX 安装态共用的 88 项真实 VSCode 1.86.2 宿主集成用例（另有空窗口激活实测路径）。单元格删除边界、跨行拖选标记保护、中格退格后的网格绘制、Tab 可见行导航、格内粘贴换行、多表行号和中文候选写回均有回归保护，执行记录见人工验证清单；这不代表真实 IME、物理鼠标和视觉效果已由用户验收。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能数据与待验项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 和 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
+> 自动化套件为 943 项 Vitest 单测、11 项启动器契约测试、31 项原生浏览器输入回归，以及开发态与 VSIX 安装态共用的 88 项真实 VSCode 1.86.2 宿主集成用例（另有空窗口激活实测路径）。单元格删除边界、跨行拖选标记保护、中格退格后的网格绘制、Tab 可见行导航、格内粘贴换行、多表行号和中文候选写回均有回归保护，执行记录见人工验证清单；这不代表真实 IME、物理鼠标和视觉效果已由用户验收。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能数据与待验项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 和 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
 
 ## 约定
 

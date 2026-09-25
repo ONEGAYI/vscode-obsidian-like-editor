@@ -47,6 +47,10 @@ class GatedDoc implements HostDocumentPort {
   ver: number
   applyCalls: SerChange[][] = []
   holdNext = false
+  /** 下一笔 applyChanges 失败：文本与版本均不动（失败 = 未写入权威文档），
+   *  与 holdNext 组合可构造「已 push pending → 暂存外部增量 → 失败 resolve」
+   *  的清理路径窗口 */
+  failNext = false
   private listener: ((changes: SerChange[], version: number) => void) | undefined
   private releaseFn: (() => void) | undefined
 
@@ -69,14 +73,24 @@ class GatedDoc implements HostDocumentPort {
 
   applyChanges(changes: SerChange[]): Promise<boolean> {
     this.applyCalls.push(changes)
-    this.content = applyToText(this.content, changes)
-    this.ver++
     if (this.holdNext) {
       this.holdNext = false
+      const fail = this.failNext
+      this.failNext = false
+      if (!fail) {
+        this.content = applyToText(this.content, changes)
+        this.ver++
+      }
       return new Promise<boolean>((resolve) => {
-        this.releaseFn = () => resolve(true)
+        this.releaseFn = () => resolve(!fail)
       })
     }
+    if (this.failNext) {
+      this.failNext = false
+      return Promise.resolve(false)
+    }
+    this.content = applyToText(this.content, changes)
+    this.ver++
     this.listener?.(changes, this.ver)
     return Promise.resolve(true)
   }
@@ -277,6 +291,138 @@ describe('宿主侧：已应用未确认窗口内外部增量暂存与有序补�
     expect(bChanges.map((m) => m.version)).toEqual([2, 3])
     expect(bChanges[0]!.changes).toEqual([eChange])
     expect(bChanges[1]!.changes).toEqual([{ offset: 8, length: 0, text: 'X' }])
+  })
+})
+
+/** 只保留 doc.changed 消息（面板收件断言用） */
+function docChangedOf(msgs: HostToWebview[]): Extract<HostToWebview, { kind: 'doc.changed' }>[] {
+  return msgs.filter((m): m is Extract<HostToWebview, { kind: 'doc.changed' }> => m.kind === 'doc.changed')
+}
+
+describe('宿主侧：pending 清理路径的暂存增量收口（评审修复）', () => {
+  it('写回失败暂停：失败 ack 先行，随后补发暂存的外部增量给其余面板', async () => {
+    const s = setupHost()
+    const idA = s.attach()
+    const idB = s.attach()
+    await readyPanel(s, idA)
+    await readyPanel(s, idB)
+    s.doc.holdNext = true
+    s.doc.failNext = true
+    void s.send(idA, editRequest(idA, 1, 1, [{ offset: 0, length: 0, text: 'ZZ' }])) // E 将失败
+    await new Promise((r) => setTimeout(r, 0))
+
+    // 窗口内外部 X 到达：E 未写入权威文档（失败），X 坐标不含 E
+    s.doc.externalChange([{ offset: 6, length: 0, text: 'X' }]) // 'abcdefX' v2
+    expect(s.sent.get(idB)!.filter((m) => m.kind === 'doc.changed')).toEqual([])
+
+    s.doc.release() // apply 失败 resolve → 暂停 → 补发 X
+    await new Promise((r) => setTimeout(r, 0))
+    // 失败面板：ack(error) 先于 doc.changed（先进入暂停再忽略外部增量，
+    // 避免以含失败 E 的未确认参考系应用 X 造成短暂错位）
+    const aMsgs = s.sent.get(idA)!
+    const aAck = aMsgs.findIndex((m) => m.kind === 'edit.ack' && !m.ok)
+    const aChanged = aMsgs.findIndex((m) => m.kind === 'doc.changed')
+    expect(aAck).toBeGreaterThanOrEqual(0)
+    expect(aChanged).toBeGreaterThan(aAck)
+    // 其余面板：立即可见（不滞留至下一次外部变更或任意 confirmPending）
+    const bChanges = docChangedOf(s.sent.get(idB)!)
+    expect(bChanges.map((m) => m.version)).toEqual([2])
+    expect(bChanges[0]!.changes).toEqual([{ offset: 6, length: 0, text: 'X' }])
+  })
+
+  it('在途期间面板关闭且写回失败：失败收口后补发暂存的外部增量', async () => {
+    const s = setupHost()
+    const idA = s.attach()
+    const idB = s.attach()
+    await readyPanel(s, idA)
+    await readyPanel(s, idB)
+    s.doc.holdNext = true
+    s.doc.failNext = true
+    void s.send(idA, editRequest(idA, 1, 1, [{ offset: 0, length: 0, text: 'ZZ' }]))
+    await new Promise((r) => setTimeout(r, 0))
+    s.doc.externalChange([{ offset: 6, length: 0, text: 'X' }]) // staged
+    s.session.detachPanel(idA) // 关闭 A（存在未确认输入，触发关闭通知）
+    expect(s.sent.get(idB)!.filter((m) => m.kind === 'doc.changed')).toEqual([])
+
+    s.doc.release() // 失败 resolve：不会有回流事件来触发补发，必须在此收口
+    await new Promise((r) => setTimeout(r, 0))
+    const bChanges = docChangedOf(s.sent.get(idB)!)
+    expect(bChanges.map((m) => m.version)).toEqual([2])
+    expect(bChanges[0]!.changes).toEqual([{ offset: 6, length: 0, text: 'X' }])
+  })
+
+  it('在途期间面板关闭且写回成功：由本笔回流带动按 version 序补发，不立即补发', async () => {
+    const s = setupHost()
+    const idA = s.attach()
+    const idB = s.attach()
+    await readyPanel(s, idA)
+    await readyPanel(s, idB)
+    const eChange = { offset: 0, length: 0, text: 'ZZ' }
+    s.doc.holdNext = true
+    void s.send(idA, editRequest(idA, 1, 1, [eChange])) // E 已应用（v2）、pending 未确认
+    await new Promise((r) => setTimeout(r, 0))
+    s.doc.externalChange([{ offset: 8, length: 0, text: 'X' }]) // v3 staged
+    s.session.detachPanel(idA)
+    // 不得立即补发 X：其余面板尚未见过 E（v2），X（v3）先行会让随后到达的
+    // E（v2）被 webview 版本单调防线丢弃、X 落点错位；补发等待本笔回流带动
+    expect(s.sent.get(idB)!.filter((m) => m.kind === 'doc.changed')).toEqual([])
+
+    s.doc.fireHeldEcho([eChange], 2) // 回流以外部变更身份有序入队（v2 < v3 排前）
+    await new Promise((r) => setTimeout(r, 0))
+    const bChanges = docChangedOf(s.sent.get(idB)!)
+    expect(bChanges.map((m) => m.version)).toEqual([2, 3])
+    expect(bChanges[0]!.changes).toEqual([eChange])
+    expect(bChanges[1]!.changes).toEqual([{ offset: 8, length: 0, text: 'X' }])
+
+    // 收尾：applyEdit resolve 后孤儿 entry 的兜底确认会重复广播 E（携带当前
+    // 版本），不产生更高 version 的新广播，webview 版本单调防线可吸收
+    s.doc.release()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(docChangedOf(s.sent.get(idB)!).every((m) => m.version <= 3)).toBe(true)
+  })
+
+  it('在途期间面板恢复清空 pending 且写回失败：仍补发暂存的外部增量', async () => {
+    const s = setupHost()
+    const idA = s.attach()
+    const idB = s.attach()
+    await readyPanel(s, idA)
+    await readyPanel(s, idB)
+    s.doc.holdNext = true
+    s.doc.failNext = true
+    void s.send(idA, editRequest(idA, 1, 1, [{ offset: 0, length: 0, text: 'ZZ' }]))
+    await new Promise((r) => setTimeout(r, 0))
+    s.doc.externalChange([{ offset: 6, length: 0, text: 'X' }]) // staged
+    s.session.resumePanel(idA) // 恢复路径清空 pending（webview 收到 doc.resync）
+    expect(s.sent.get(idB)!.filter((m) => m.kind === 'doc.changed')).toEqual([])
+
+    s.doc.release() // 失败 resolve：pending 已清（entry 不再可寻），在此收口
+    await new Promise((r) => setTimeout(r, 0))
+    const bChanges = docChangedOf(s.sent.get(idB)!)
+    expect(bChanges.map((m) => m.version)).toEqual([2])
+    expect(bChanges[0]!.changes).toEqual([{ offset: 6, length: 0, text: 'X' }])
+  })
+
+  it('暂存窗口内乱序到达的外部增量按 version 有序补发', async () => {
+    const s = setupHost()
+    const id = s.attach()
+    await readyPanel(s, id)
+    s.doc.holdNext = true
+    void s.send(id, editRequest(id, 1, 1, [{ offset: 0, length: 0, text: 'ZZ' }]))
+    await new Promise((r) => setTimeout(r, 0))
+    // 乱序到达：version 4 的回流先于 version 3 被处理（迟到乱序）。
+    // 直连宿主入口构造到达顺序（GatedDoc 的 externalChange 版本自增，无法乱序）
+    s.session.handleDocChanged([{ offset: 9, length: 0, text: 'Y' }], 4)
+    s.session.handleDocChanged([{ offset: 8, length: 0, text: 'X' }], 3)
+    expect(s.sent.get(id)!.filter((m) => m.kind === 'doc.changed')).toEqual([])
+
+    s.doc.release()
+    await new Promise((r) => setTimeout(r, 0))
+    const changed = docChangedOf(s.sent.get(id)!)
+    expect(changed.map((m) => m.version)).toEqual([3, 4])
+    expect(changed.map((m) => m.changes)).toEqual([
+      [{ offset: 8, length: 0, text: 'X' }],
+      [{ offset: 9, length: 0, text: 'Y' }],
+    ])
   })
 })
 
