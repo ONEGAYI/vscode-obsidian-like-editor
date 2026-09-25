@@ -301,6 +301,75 @@ describe('isWebviewToHost', () => {
     expect(isHostToWebview({ kind: 'sidebar.test.clickx' })).toBe(false)
   })
 
+  it('view.state 的 outline 观测（#54）：合法样本接受、字段非法拒绝', () => {
+    const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
+    // 合法：active 布尔；绘制命中布尔；items 每项 level 1-6 整数 + 字符串
+    // 文字 + 非负行号；背景计算值字符串或 null；名称字符串或 null
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: {
+          active: true,
+          togglePainted: true,
+          panelPainted: true,
+          items: [
+            { level: 1, text: '文档主标题', line: 1 },
+            { level: 2, text: '', line: 5 },
+          ],
+          toggleAriaLabel: '大纲',
+          panelAriaLabel: '大纲',
+        },
+      }),
+    ).toBe(true)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: {
+          active: false,
+          togglePainted: false,
+          panelPainted: false,
+          items: [],
+          toggleAriaLabel: null,
+          panelAriaLabel: null,
+        },
+      }),
+    ).toBe(true)
+    // 非法：active 非布尔 / level 超界（0、7、非整数） / text 非字符串 / line 负数
+    expect(isWebviewToHost({ ...base, outline: { active: 1 } })).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: { active: true, items: [{ level: 0, text: 'x', line: 1 }] },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: { active: true, items: [{ level: 7, text: 'x', line: 1 }] },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: { active: true, items: [{ level: 2, text: 3, line: 1 }] },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: { active: true, items: [{ level: 2, text: 'x', line: -1 }] },
+      }),
+    ).toBe(false)
+    // 缺省合法（向后兼容：大纲观测未装配的旧 webview）
+    expect(isWebviewToHost(base)).toBe(true)
+  })
+
+  it('outline.test.click 测试钩子消息校验（#54）', () => {
+    expect(isHostToWebview({ kind: 'outline.test.click' })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.click', extra: 1 })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.clickx' })).toBe(false)
+  })
+
   it('表格绘制样本校验：可见性和边框计算值类型必须可信', () => {
     const base = { kind: 'view.state', text: '| A |', docLength: 5, lineCount: 1, renderedLines: 1 }
     const table = {

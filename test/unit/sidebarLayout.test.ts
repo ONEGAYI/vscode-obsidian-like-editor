@@ -99,7 +99,7 @@ describe('布局结构（#53）', () => {
     expect(sidebar!.parentElement === body).toBe(true)
   })
 
-  it('侧栏自有顶栏（空按钮容器）与空面板容器（本期内容留空）', () => {
+  it('侧栏自有顶栏按钮容器与面板容器就位（#54 起接入大纲；结构由 outlinePanel 测试细断言）', () => {
     const h = makeBridge()
     const { parent } = mountSidebar(h)
     const sidebar = parent.querySelector<HTMLElement>('.vsidian-sidebar')!
@@ -107,10 +107,14 @@ describe('布局结构（#53）', () => {
     expect(bar, '侧栏应有 vsidian-sidebar-toolbar 自有顶栏').toBeTruthy()
     const actions = bar!.querySelector<HTMLElement>('.vsidian-sidebar-toolbar-actions')
     expect(actions, '侧栏顶栏应有按钮容器 vsidian-sidebar-toolbar-actions').toBeTruthy()
-    expect(actions!.children.length, '#53 边界：按钮容器本期为空（大纲按钮是 #54）').toBe(0)
+    // #54 起：容器内为「大纲」按钮（当前唯一一项）
+    expect(actions!.children.length).toBe(1)
+    expect(actions!.firstElementChild!.classList.contains('vsidian-outline-toggle')).toBe(true)
     const panel = sidebar.querySelector<HTMLElement>('.vsidian-sidebar-panel')
     expect(panel, '侧栏应有 vsidian-sidebar-panel 面板容器').toBeTruthy()
-    expect(panel!.children.length, '#53 边界：面板本期留空容器').toBe(0)
+    // #54 起：面板区域内为大纲面板容器
+    expect(panel!.children.length).toBe(1)
+    expect(panel!.firstElementChild!.classList.contains('vsidian-outline-panel')).toBe(true)
   })
 
   it('侧栏 DOM 不随模式显隐（布局为两模式共用，显隐只由侧栏状态控制）', () => {
