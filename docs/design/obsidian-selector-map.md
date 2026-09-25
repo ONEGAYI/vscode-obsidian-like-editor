@@ -132,6 +132,8 @@
 | `.vsidian-outline-search`（+ `::placeholder`） | #68 标题搜索输入框（flex 占余宽；配色走 `--vscode-input-*` 变量族） | 无 | 本项目自有 |
 | `mark.vsidian-outline-search-hit` | #68 命中片段高亮（只包命中子串；背景跟随 `--vscode-editor-findMatchHighlightBackground`，与正文查找命中同族视觉语言） | 无 | 本项目自有；文本层切分，与 #65 语义元素正交（mark 不包裹语义元素外层） |
 | `.vsidian-outline-nomatch` | #68 无匹配占位（有词条零命中的可读反馈，与「无标题」空态同口径弱化） | 无 | 本项目自有 |
+| `.vsidian-outline-menu`（+ `-item` / `-host` / `-submenu` / `-danger` / `-cue`） | #69 右键菜单浮层（挂侧栏内 absolute；菜单项为 button 键盘可达；子菜单显隐唯一开关是父项宿主的 `:hover`/`:focus-within`；danger 红字标删除） | 无（VSCode 原生上下文菜单为宿主级） | 本项目自有；颜色跟随 `--vscode-menu-*` 变量族 |
+| `.vsidian-outline-rename-input` | #69 重命名行内编辑态输入框（条目内容区被 input 替换，编辑原文含行内标记） | 无 | 本项目自有；VSCode 输入框三变量（前景/背景/边框） |
 
 行为边界（非样式映射，随 #65 记录）：
 

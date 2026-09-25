@@ -491,6 +491,16 @@ interface ViewState {
     searchHitPainted: boolean
     /** #68 无匹配占位绘制证据 */
     nomatchPainted: boolean
+    /** #69 右键菜单打开态 */
+    menuOpen: boolean
+    /** #69 菜单目标条目索引（items 下标；未打开为 null） */
+    menuTargetIndex: number | null
+    /** #69 菜单容器绘制证据（中心点 elementFromPoint 命中自身） */
+    menuPainted: boolean
+    /** #69 级联子菜单可见证据（hover/focus 展开；未展开为 false） */
+    submenuVisible: boolean
+    /** #69 重命名编辑态条目索引（null = 无编辑态） */
+    renamingIndex: number | null
   }
 }
 
@@ -4959,5 +4969,216 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // 收起侧栏收尾
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
     await waitViewState('outline-long.md', (v) => v.sidebar?.open === false)
+  }],
+
+  // ---- #69 大纲右键菜单 ----
+
+  ['大纲右键菜单开合与结构命令：绘制层证据、折叠状态对拍（#69）', async () => {
+    // 断言口径（视觉层断言必查）：menuPainted 是菜单容器的 elementFromPoint
+    // 命中（真实布局 + 浮层样式生效——样式失效时 DOM 存在但命中失败）；
+    // 结构命令经 outline.test.contextMenu + menuClick 真实按钮点击链路驱动，
+    // visibleIndices 状态对拍（与 #67 同口径）
+    await openWithEditor('outline-menu.md')
+    await waitSessionReady('outline-menu.md')
+    const uri = wsUri('outline-menu.md').toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-menu.md',
+      (v) => v.sidebar?.open === true && v.outline?.panelPainted === true && v.outline.items.length === 7)
+    // 右键「加粗 Alpha」（index 1）：菜单打开、目标索引正确、真实绘制
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index: 1 })
+    const opened = await waitViewState('outline-menu.md', (v) => v.outline?.menuOpen === true)
+    assert(opened.outline!.menuTargetIndex === 1,
+      `菜单目标应为条目 1（实际 ${String(opened.outline!.menuTargetIndex)}）`)
+    assert(opened.outline!.menuPainted === true,
+      `菜单应真实绘制（命中失败：${JSON.stringify(opened.outline)}）`)
+    // 关闭后再开（开合幂等）：menuClose 后 menuOpen=false
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClose' })
+    await waitViewState('outline-menu.md', (v) => v.outline?.menuOpen === false)
+    // 结构命令（折叠同级）：主标题（index 0）的同级组 = 主、Setext、第二顶；
+    // 折叠主标题遮 Alpha 与 Beta 子树（1–4 隐藏）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index: 0 })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClick', command: 'collapseSiblings' })
+    const collapsed = await waitViewState('outline-menu.md',
+      (v) => v.outline?.menuOpen === false && v.outline.visibleIndices.length === 3)
+    assert(JSON.stringify(collapsed.outline!.visibleIndices) === JSON.stringify([0, 5, 6]),
+      `折叠同级后应只露顶层三标题（实际 ${JSON.stringify(collapsed.outline!.visibleIndices)}）`)
+    // 展开同级（顶层组父节点键加回）：主标题展开 → 全部条目可见
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index: 0 })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClick', command: 'expandSiblings' })
+    const expanded = await waitViewState('outline-menu.md',
+      (v) => v.outline?.visibleIndices.length === 7)
+    assert(JSON.stringify(expanded.outline!.visibleIndices) === JSON.stringify([0, 1, 2, 3, 4, 5, 6]),
+      `展开同级后应全部可见（实际 ${JSON.stringify(expanded.outline!.visibleIndices)}）`)
+    // 递归展开（目标须自身可见——递归展开只动目标子树、不展开目标祖先）：
+    // 手动折叠 Beta（箭头）后对其递归展开，Beta 深恢复可见
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.chevronClick', index: 3 })
+    await waitViewState('outline-menu.md', (v) => v.outline?.visibleIndices.length === 6)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index: 3 })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClick', command: 'expandRecursively' })
+    const recursed = await waitViewState('outline-menu.md',
+      (v) => v.outline?.visibleIndices.length === 7)
+    assert(JSON.stringify(recursed.outline!.visibleIndices) === JSON.stringify([0, 1, 2, 3, 4, 5, 6]),
+      `递归展开 Beta 后 Beta 深应恢复可见（实际 ${JSON.stringify(recursed.outline!.visibleIndices)}）`)
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-menu.md', (v) => v.sidebar?.open === false)
+  }],
+
+  ['大纲复制五项经宿主剪贴板：端到端读写对拍（#69）', async () => {
+    // 断言口径：复制走 webview→宿主 clipboard.write 消息桥，宿主
+    // env.clipboard.writeText 写入系统剪贴板——集成侧以 readText 读回对拍
+    // （端到端：webview 载荷计算 → 消息桥 → 宿主拼接 → 剪贴板全程真实）
+    await openWithEditor('outline-menu.md')
+    await waitSessionReady('outline-menu.md')
+    const uri = wsUri('outline-menu.md').toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-menu.md',
+      (v) => v.sidebar?.open === true && v.outline?.panelPainted === true && v.outline.items.length === 7)
+    const copy = async (index: number, command: string): Promise<string> => {
+      await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index })
+      await waitViewState('outline-menu.md', (v) => v.outline?.menuOpen === true)
+      await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClick', command })
+      await waitViewState('outline-menu.md', (v) => v.outline?.menuOpen === false)
+      return vscode.env.clipboard.readText()
+    }
+    // 标题（plainText：**加粗** 标记不透出）
+    assert(await copy(1, 'copyHeading') === '加粗 Alpha', '复制标题应为剥标记可见文本')
+    // 标题和兄弟标题（同父组 = Alpha、Beta，含自身）
+    assert(await copy(1, 'copySiblings') === '加粗 Alpha\nBeta', '兄弟复制为同父全部标题逐行')
+    // 标题和子标题（Alpha 子树 = Alpha、Alpha 子）
+    assert(await copy(1, 'copyChildren') === '加粗 Alpha\nAlpha 子', '子标题复制含后代')
+    // 标题链接（宿主拼 [[笔记名#标题]]：笔记名 = 文件名去扩展名、标题 plainText）
+    assert(await copy(1, 'copyLink') === '[[outline-menu#加粗 Alpha]]', '标题链接格式 Obsidian 同款')
+    // 该段内容（整控制域源文含标题行，标记原样）
+    assert(await copy(3, 'copySection') === '## Beta\n\nBeta 内容。\n\n#### Beta 深\n\n深内容。', '该段内容为整控制域源文')
+    // Setext 标题的复制（plainText）
+    assert(await copy(5, 'copyHeading') === 'Setext 标题', 'Setext 标题复制为可见文本')
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-menu.md', (v) => v.sidebar?.open === false)
+  }],
+
+  ['大纲调整层级写回：钳制、单事务撤销、控制域外零变更（#69）', async () => {
+    // 断言口径：写操作对权威文档生效（doc.getText 对拍）+ sessionState 的
+    // version/appliedEdits 推进（单笔 edit.request）+ history.request undo
+    // 完整回滚（单事务可一次撤销）
+    await openWithEditor('outline-menu.md')
+    await waitSessionReady('outline-menu.md')
+    const uri = wsUri('outline-menu.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('outline-menu.md'))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-menu.md',
+      (v) => v.sidebar?.open === true && v.outline?.items.length === 7)
+    const original = doc.getText()
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    // H1 减少钳制：零写回（版本与 appliedEdits 不动）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index: 0 })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClick', command: 'levelDown' })
+    await new Promise((r) => setTimeout(r, 150))
+    const clamped = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(clamped.version === before.version && clamped.appliedEdits === before.appliedEdits,
+      `H1 减少钳制不得写回（${before.version}/${before.appliedEdits} → ${clamped.version}/${clamped.appliedEdits}）`)
+    // 递归增加 Beta（index 3，子树含 Beta 深）：一笔多段单事务
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index: 3 })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClick', command: 'levelUpRecursive' })
+    const upped = await waitViewState('outline-menu.md', (v) =>
+      v.outline?.items[3] !== undefined && v.outline.items[3].level === 3 && v.outline.items[4].level === 5)
+    assert(upped.outline!.items[3]!.text === 'Beta' && upped.outline!.items[4]!.text === 'Beta 深',
+      '调级只改层级不改文字')
+    const uppedText = doc.getText()
+    assert(uppedText.includes('### Beta\n') && uppedText.includes('##### Beta 深'),
+      '权威文档应重写 # 数量')
+    assert(uppedText.includes('## **加粗** Alpha') && uppedText.includes('Setext 标题'),
+      '控制域外内容零变更')
+    const afterUp = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterUp.appliedEdits === before.appliedEdits + 1,
+      `递归调级应为单笔写回（实际 +${afterUp.appliedEdits - before.appliedEdits}）`)
+    // 撤销一次完整回滚（单事务）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await waitViewState('outline-menu.md', (v) =>
+      v.outline?.items[3] !== undefined && v.outline.items[3].level === 2 && v.outline.items[4].level === 4)
+    assert(doc.getText() === original, '单次撤销应完整回滚递归调级')
+    // Setext 调级：规范化为 ATX 单行（内容+下划线两行 → 一行）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index: 5 })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClick', command: 'levelUp' })
+    const setextUp = await waitViewState('outline-menu.md', (v) =>
+      v.outline?.items[5] !== undefined && v.outline.items[5].level === 2)
+    assert(setextUp.outline!.items[5]!.text === 'Setext 标题', 'Setext 调级保留标题文字')
+    const setextText = doc.getText()
+    assert(setextText.includes('## Setext 标题\n') && !setextText.includes('============'),
+      'Setext 调级应规范化为 ATX 单行（下划线行消除）')
+    assert(setextText.includes('# 第二顶\n\n内容。'), 'Setext 段后内容完整保留')
+    // 撤销收尾回原文
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await waitViewState('outline-menu.md', (v) => v.outline?.items[5] !== undefined && v.outline.items[5].level === 1)
+    if (doc.isDirty) {
+      await doc.save()
+    }
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-menu.md', (v) => v.sidebar?.open === false)
+  }],
+
+  ['大纲重命名与删除：编辑原文保留标记、整控制域删除、撤销回滚（#69）', async () => {
+    await openWithEditor('outline-menu.md')
+    await waitSessionReady('outline-menu.md')
+    const uri = wsUri('outline-menu.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('outline-menu.md'))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-menu.md',
+      (v) => v.sidebar?.open === true && v.outline?.items.length === 7 && v.outline.panelPainted === true)
+    const original = doc.getText()
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    // 重命名「**加粗** Alpha」（index 1）：编辑原文（标记是资产）+ renamingIndex 观测
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index: 1 })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClick', command: 'rename' })
+    const renaming = await waitViewState('outline-menu.md', (v) => v.outline?.renamingIndex === 1)
+    assert(renaming.outline!.renamingIndex === 1, '重命名编辑态应回报条目索引')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'outline.test.renameKey', text: '**改名** 加粗', key: 'enter' })
+    const renamed = await waitViewState('outline-menu.md', (v) =>
+      v.outline?.items[1] !== undefined && v.outline.items[1].text === '**改名** 加粗')
+    assert(renamed.outline!.items[1]!.plainText === '改名 加粗', '重命名后 plainText 剥标记')
+    assert(renamed.outline!.renamingIndex === null, '提交后编辑态退出')
+    assert(doc.getText().includes('## **改名** 加粗'), '权威文档整标题行替换（# 数量保持）')
+    assert(renamed.outline!.items[0]!.text === '主标题' && renamed.outline!.items[2]!.text === 'Alpha 子',
+      '重命名只影响目标条目')
+    // Esc 取消零写回
+    const editsAfterRename = ((await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState).appliedEdits
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index: 1 })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClick', command: 'rename' })
+    await waitViewState('outline-menu.md', (v) => v.outline?.renamingIndex === 1)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'outline.test.renameKey', text: '不该出现', key: 'escape' })
+    await waitViewState('outline-menu.md', (v) => v.outline?.renamingIndex === null)
+    const afterEsc = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterEsc.appliedEdits === editsAfterRename, 'Esc 取消不得写回')
+    // 删除 Beta 段（index 3，跨级子树随段）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index: 3 })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClick', command: 'delete' })
+    const deleted = await waitViewState('outline-menu.md', (v) =>
+      v.outline !== undefined && v.outline.items.length === 5)
+    assert(JSON.stringify(deleted.outline!.items.map((i) => i.text)) ===
+      JSON.stringify(['主标题', '**改名** 加粗', 'Alpha 子', 'Setext 标题', '第二顶']),
+      '删除应移除 Beta 与 Beta 深两条（控制域整体）')
+    const deletedText = doc.getText()
+    assert(!deletedText.includes('Beta'), '权威文档不再含 Beta 段')
+    assert(deletedText.includes('子内容。') && deletedText.includes('Setext 内容。'),
+      '相邻段内容不丢失')
+    // 撤销删除（重命名与删除各一笔，两次撤销回原文）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await waitViewState('outline-menu.md', (v) => v.outline !== undefined && v.outline.items.length === 7)
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await waitViewState('outline-menu.md', (v) =>
+      v.outline?.items[1] !== undefined && v.outline.items[1].text === '**加粗** Alpha')
+    assert(doc.getText() === original, '两次撤销后应回到原文')
+    const final = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(final.appliedEdits - before.appliedEdits === 2, '重命名与删除各一笔写回')
+    if (doc.isDirty) {
+      await doc.save()
+    }
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-menu.md', (v) => v.sidebar?.open === false)
   }],
 ]

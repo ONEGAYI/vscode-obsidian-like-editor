@@ -97,6 +97,20 @@ import {
   type OutlineSearchFilter,
   outlineSearchRepresentativeIndex,
 } from './outlineSearch'
+import {
+  buildOutlineMenu,
+  type OutlineMenuCommand,
+  OUTLINE_MENU_CLASS_NAMES,
+  outlineMenuPosition,
+  outlineMenuSpec,
+  outlineStructuralExpand,
+} from './outlineMenu'
+import {
+  outlineCopyText,
+  outlineDeleteChange,
+  outlineLevelChanges,
+  outlineRenameChange,
+} from './outlineSection'
 import { locateOutlineIndex } from './outlineLocate'
 import { resolveStaleTaskToggle } from './taskToggle'
 import { VirtualReadingView } from './readingVirtualView'
@@ -429,6 +443,20 @@ export class WebviewSyncController {
    *  序列重建与词条变化时经 applyOutlineSearch 重算 */
   private outlineSearchState: OutlineSearchFilter | null = null
 
+  // ---- 大纲右键菜单与重命名状态（#69）----
+  /** 当前打开的菜单容器（挂侧栏内 absolute；undefined = 未打开） */
+  private outlineMenuEl: HTMLElement | undefined
+  /** 菜单目标条目索引（items 下标；菜单打开期间的命令分派对象） */
+  private outlineMenuIndex: number | null = null
+  /** 菜单打开期间菜单数据对应的文档快照（命令执行时 doc 已变则放弃——锚点过期防御） */
+  private outlineMenuDoc: Text | null = null
+  /** 菜单外点关闭监听（document capture pointerdown；close 时摘除） */
+  private outlineMenuDismissPointer: ((e: PointerEvent) => void) | undefined
+  /** 菜单 Esc 关闭监听（document capture keydown；close 时摘除） */
+  private outlineMenuDismissKey: ((e: KeyboardEvent) => void) | undefined
+  /** 重命名编辑态的条目索引（null = 无编辑态；条目内容区被 input 替换） */
+  private outlineRenameIndex: number | null = null
+
   // ---- 查找会话状态（#14）----
   /** 查找是纯只读视图状态：不写 TextDocument、不入撤销栈、零出站消息。
    *  匹配基于 webview 全文文本模型（CM6 doc），屏外内容同样命中 */
@@ -732,6 +760,9 @@ export class WebviewSyncController {
     this.outlinePanelEl = undefined
     this.outlineSlider = undefined
     this.outlineToolbar = undefined
+    // #69：菜单浮层与重命名编辑态随卸载退出（document 监听一并摘除）
+    this.closeOutlineMenu()
+    this.outlineRenameIndex = null
     this.sidebarEl?.remove()
     this.sidebarEl = undefined
     this.mainEl?.remove()
@@ -946,6 +977,48 @@ export class WebviewSyncController {
           this.outlineToolbar?.jumpBottom.click()
         } else if (message.action === 'reset') {
           this.outlineToolbar?.reset.click()
+        }
+        break
+      }
+      case 'outline.test.contextMenu': {
+        // 测试钩子（#69）：对第 index 个真实条目派发 contextmenu（与用户
+        // 右键同一面板委托处理器，菜单弹出）
+        const itemEl = this.outlinePanelEl
+          ?.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)[message.index]
+        if (itemEl) {
+          const rect = itemEl.getBoundingClientRect()
+          itemEl.dispatchEvent(new MouseEvent('contextmenu', {
+            bubbles: true, cancelable: true,
+            clientX: rect.left + 20, clientY: rect.top + 10,
+          }))
+        }
+        break
+      }
+      case 'outline.test.menuClick': {
+        // 测试钩子（#69）：点击菜单中 command 对应的真实按钮（与用户点击
+        // 同一处理器；command 已由协议校验器限定为合法菜单命令）
+        this.outlineMenuEl
+          ?.querySelector<HTMLButtonElement>(`button[data-vsidian-command="${message.command}"]`)
+          ?.click()
+        break
+      }
+      case 'outline.test.menuClose': {
+        // 测试钩子（#69）：关闭当前菜单（等价 Esc/外点路径）
+        this.closeOutlineMenu()
+        break
+      }
+      case 'outline.test.renameKey': {
+        // 测试钩子（#69）：向重命名输入框注入文本并以 Enter/Esc 收尾
+        // （真实 keydown 链路）
+        const input = this.outlinePanelEl?.querySelector<HTMLInputElement>(
+          `.${OUTLINE_MENU_CLASS_NAMES.renameInput}`,
+        )
+        if (input) {
+          input.value = message.text
+          input.dispatchEvent(new KeyboardEvent('keydown', {
+            key: message.key === 'enter' ? 'Enter' : 'Escape',
+            bubbles: true, cancelable: true,
+          }))
         }
         break
       }
@@ -1973,6 +2046,23 @@ export class WebviewSyncController {
         this.outlineJumpToItem(index)
       }
     })
+    // #69 右键菜单：面板容器 contextmenu 委托（与 click 委托同模式——条目
+    // DOM 重建不丢监听）。preventDefault 阻断浏览器原生菜单；目标取最近
+    // 条目（箭头/文字/标记 span 上右键都算该条目）
+    panel.addEventListener('contextmenu', (event) => {
+      const target = event.target as HTMLElement | null
+      const item = target?.closest?.(`.${OUTLINE_CLASS_NAMES.item}`)
+      if (!(item instanceof HTMLElement) || !panel.contains(item)) {
+        return
+      }
+      event.preventDefault()
+      const index = Array.from(
+        panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`),
+      ).indexOf(item)
+      if (index >= 0) {
+        this.openOutlineMenu(index, event.clientX, event.clientY)
+      }
+    })
     this.outlineToggleBtn = toggle
     this.outlinePanelEl = panel
     actions.appendChild(toggle)
@@ -2052,6 +2142,9 @@ export class WebviewSyncController {
     } else if (!this.sidebarOpen) {
       this.cancelOutlineRefresh()
       this.cancelOutlineHighlightUpdate()
+      // #69：侧栏收起时浮层（菜单）与重命名编辑态随之退出
+      this.closeOutlineMenu()
+      this.cancelOutlineRename()
     }
   }
 
@@ -2085,6 +2178,9 @@ export class WebviewSyncController {
     } else {
       this.cancelOutlineRefresh()
       this.cancelOutlineHighlightUpdate()
+      // #69：面板关闭时浮层（菜单）与重命名编辑态随之退出
+      this.closeOutlineMenu()
+      this.cancelOutlineRename()
     }
   }
 
@@ -2176,6 +2272,10 @@ export class WebviewSyncController {
       }
     }
     if (changed && this.outlinePanelEl) {
+      // #69：条目 DOM 重建使菜单锚点与重命名编辑态过期——先关闭再重建
+      // （重命名提交路径已在 finishOutlineRename 先清状态，此处无重入）
+      this.closeOutlineMenu()
+      this.outlineRenameIndex = null
       // #68 搜索态：重建后按当前词条重算过滤（新序列的命中链并入展开集）
       if (this.outlineSearchState !== null) {
         this.applyOutlineSearch()
@@ -2291,6 +2391,229 @@ export class WebviewSyncController {
       this.outlineExpanded = next
       this.applyOutlineCollapseDom()
     }
+  }
+
+  // ---- 大纲右键菜单与重命名（#69）----
+  // 菜单是 webview 自绘浮层（挂侧栏内 absolute，不触 CM6）：结构命令消费
+  // 折叠状态机（纯视图）；复制经宿主剪贴板消息桥（clipboard.write）；调级/
+  // 重命名/删除是写操作——文本变换由 outlineSection 产出 SerChange，一次
+  // CM6 事务 dispatch（单笔 edit.request = 宿主撤销一次），写后即时校准
+  // 大纲（不等 250ms 去抖，票面「写回后大纲与正文即时一致」）。
+
+  /** 打开菜单（先关旧菜单与重命名态）。定位：挂载后量尺寸，侧栏坐标系
+   *  内 clamp + 点击点落在目标条目内时让位到条目下方（不遮挡目标） */
+  private openOutlineMenu(index: number, clientX: number, clientY: number): void {
+    const sidebar = this.sidebarEl
+    const panel = this.outlinePanelEl
+    const item = panel?.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)[index]
+    if (!sidebar || !panel || !item || !this.view) {
+      return
+    }
+    this.closeOutlineMenu()
+    this.cancelOutlineRename()
+    const hasChildren = this.outlineFacts.hasChildren[index] === true
+    const menu = buildOutlineMenu(outlineMenuSpec(hasChildren), (command) => {
+      this.runOutlineMenuCommand(command)
+    })
+    this.outlineMenuEl = menu
+    this.outlineMenuIndex = index
+    this.outlineMenuDoc = this.view.state.doc
+    sidebar.appendChild(menu)
+    // 定位（jsdom 无布局时退化为左上角；真宿主见 outlineMenuPosition 契约）
+    const bounds = sidebar.getBoundingClientRect()
+    const targetRect = item.getBoundingClientRect()
+    const size = { w: menu.offsetWidth || 200, h: menu.offsetHeight || 260 }
+    const pos = outlineMenuPosition(
+      { x: clientX, y: clientY },
+      size,
+      { left: bounds.left, top: bounds.top, width: bounds.width || 280, height: bounds.height || 560 },
+      { top: targetRect.top, bottom: targetRect.bottom },
+    )
+    menu.style.left = `${Math.max(0, pos.left - bounds.left)}px`
+    menu.style.top = `${Math.max(0, pos.top - bounds.top)}px`
+    // 关闭通道：菜单外 pointerdown（capture，含其他面板区域）与 Esc
+    this.outlineMenuDismissPointer = (e) => {
+      if (menu.contains(e.target as Node)) {
+        return
+      }
+      this.closeOutlineMenu()
+    }
+    this.outlineMenuDismissKey = (e) => {
+      if (e.key === 'Escape') {
+        this.closeOutlineMenu()
+      }
+    }
+    document.addEventListener('pointerdown', this.outlineMenuDismissPointer, true)
+    document.addEventListener('keydown', this.outlineMenuDismissKey, true)
+  }
+
+  /** 关闭菜单（幂等；摘除 document 关闭监听） */
+  private closeOutlineMenu(): void {
+    if (this.outlineMenuDismissPointer) {
+      document.removeEventListener('pointerdown', this.outlineMenuDismissPointer, true)
+      this.outlineMenuDismissPointer = undefined
+    }
+    if (this.outlineMenuDismissKey) {
+      document.removeEventListener('keydown', this.outlineMenuDismissKey, true)
+      this.outlineMenuDismissKey = undefined
+    }
+    this.outlineMenuEl?.remove()
+    this.outlineMenuEl = undefined
+    this.outlineMenuIndex = null
+    this.outlineMenuDoc = null
+  }
+
+  /** 菜单命令分派：结构命令/复制/调级/删除/重命名（见模块头） */
+  private runOutlineMenuCommand(command: OutlineMenuCommand): void {
+    const index = this.outlineMenuIndex
+    const view = this.view
+    if (index === null || index >= this.outlineItems.length || !view) {
+      this.closeOutlineMenu()
+      return
+    }
+    // 锚点过期防御：菜单打开期间文档被外部变更改写（ensureFresh 会关菜单，
+    // 此处是竞态兜底）——坐标与行号失效，放弃执行
+    if (this.outlineMenuDoc !== view.state.doc) {
+      this.closeOutlineMenu()
+      return
+    }
+    if (command === 'rename') {
+      const target = index
+      this.closeOutlineMenu()
+      this.startOutlineRename(target)
+      return
+    }
+    this.closeOutlineMenu()
+    const doc = view.state.doc
+    if (command === 'expandRecursively' || command === 'collapseSiblings' || command === 'expandSiblings') {
+      const next = outlineStructuralExpand(command, this.outlineItems, this.outlineExpanded, index)
+      if (next !== this.outlineExpanded) {
+        this.outlineExpanded = next
+        this.applyOutlineCollapseDom()
+        this.applyOutlineHighlight()
+      }
+      return
+    }
+    if (command === 'copyHeading' || command === 'copySiblings' || command === 'copyChildren' || command === 'copySection') {
+      const kind = command === 'copyHeading' ? 'heading'
+        : command === 'copySiblings' ? 'siblings'
+          : command === 'copyChildren' ? 'children' : 'section'
+      const text = outlineCopyText(kind, doc, this.outlineItems, index)
+      if (text !== null) {
+        this.bridge.postMessage({ kind: 'clipboard.write', text })
+      }
+      return
+    }
+    if (command === 'copyLink') {
+      // `[[笔记名#标题]]` 的拼接在宿主侧（docUri 取笔记名；标题 = plainText）
+      this.bridge.postMessage({
+        kind: 'clipboard.write',
+        linkHeading: { docUri: this.docUri, heading: this.outlineItems[index]!.plainText },
+      })
+      return
+    }
+    if (command === 'levelUp' || command === 'levelUpRecursive' || command === 'levelDown' || command === 'levelDownRecursive') {
+      const delta: -1 | 1 = command.startsWith('levelUp') ? 1 : -1
+      const recursive = command.endsWith('Recursive')
+      this.applyOutlineEdits(outlineLevelChanges(doc, this.outlineItems, index, delta, recursive))
+      return
+    }
+    if (command === 'delete') {
+      const change = outlineDeleteChange(doc, this.outlineItems, index)
+      this.applyOutlineEdits(change ? [change] : null)
+    }
+  }
+
+  /** 写操作落 CM6（单事务 = 单笔 edit.request = 撤销一次）；写后即时校准
+   *  大纲（折叠状态经 #67 迁移机制存活）。null/空变更静默忽略（钳制等） */
+  private applyOutlineEdits(changes: ReadonlyArray<{ offset: number; length: number; text: string }> | null): void {
+    const view = this.view
+    if (!view || !changes || changes.length === 0) {
+      return
+    }
+    view.dispatch({
+      changes: changes.map((c) => ({ from: c.offset, to: c.offset + c.length, insert: c.text })),
+    })
+    this.outlineEnsureFresh()
+  }
+
+  /** 条目行内重命名编辑态：条目内容区替换为 input（值 = 原文 text——行内
+   *  标记是资产，编辑原文不剥标记）。Enter 提交 / Esc 取消 / 失焦提交；
+   *  input 上的 click 与 keydown 不外冒（不触发跳转与正文快捷键） */
+  private startOutlineRename(index: number): void {
+    const panel = this.outlinePanelEl
+    const item = this.outlineItems[index]
+    const el = panel?.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)[index]
+    if (!panel || !item || !el) {
+      return
+    }
+    this.cancelOutlineRename()
+    this.outlineRenameIndex = index
+    const input = document.createElement('input')
+    input.type = 'text'
+    input.className = OUTLINE_MENU_CLASS_NAMES.renameInput
+    input.value = item.text
+    input.setAttribute('aria-label', '重命名标题')
+    input.addEventListener('keydown', (event) => {
+      event.stopPropagation()
+      if (event.key === 'Enter') {
+        this.finishOutlineRename(true)
+      } else if (event.key === 'Escape') {
+        this.finishOutlineRename(false)
+      }
+    })
+    input.addEventListener('click', (event) => event.stopPropagation())
+    input.addEventListener('pointerdown', (event) => event.stopPropagation())
+    input.addEventListener('contextmenu', (event) => event.stopPropagation())
+    input.addEventListener('focusout', () => this.finishOutlineRename(true))
+    // 内容区替换：保留 chevron/spacer（文字对齐锚），其余（含文本节点）移除
+    const keep = el.querySelector(`.${OUTLINE_CLASS_NAMES.chevron}, .${OUTLINE_CLASS_NAMES.chevronSpacer}`)
+    el.replaceChildren(...(keep ? [keep] : []), input)
+    input.focus()
+    input.select()
+  }
+
+  /** 结束重命名编辑态：commit=true 整标题行替换写回（Setext → ATX 单行）；
+   *  false 取消（零写回）。状态先清空（focusout/Enter 双路径防重入） */
+  private finishOutlineRename(commit: boolean): void {
+    const index = this.outlineRenameIndex
+    if (index === null) {
+      return
+    }
+    this.outlineRenameIndex = null
+    const input = this.outlinePanelEl?.querySelector<HTMLInputElement>(
+      `.${OUTLINE_MENU_CLASS_NAMES.renameInput}`,
+    )
+    const newText = input?.value ?? ''
+    const item = this.outlineItems[index]
+    const view = this.view
+    if (commit && input && item && view && newText !== item.text) {
+      const change = outlineRenameChange(view.state.doc, this.outlineItems, index, newText)
+      if (change) {
+        this.applyOutlineEdits([change]) // 内部 ensureFresh 重建条目（input 随之消失）
+        return
+      }
+    }
+    this.rebuildOutlineItemsDom()
+  }
+
+  /** 取消重命名编辑态（外部交互转移焦点时的兜底；不写回） */
+  private cancelOutlineRename(): void {
+    if (this.outlineRenameIndex === null) {
+      return
+    }
+    this.finishOutlineRename(false)
+  }
+
+  /** 重建条目 DOM（重命名取消后恢复展示态；与 ensureFresh 的重建同构） */
+  private rebuildOutlineItemsDom(): void {
+    const panel = this.outlinePanelEl
+    if (!panel) {
+      return
+    }
+    renderOutlineItems(panel, this.outlineItems, this.outlineFacts.hasChildren)
+    this.applyOutlineCollapseDom()
+    this.applyOutlineHighlight()
   }
 
   // ---- 大纲定位与常驻高亮（#66）----
@@ -3650,7 +3973,35 @@ export class WebviewSyncController {
         this.outlinePanelEl?.querySelector<HTMLElement>(`.${OUTLINE_CLASS_NAMES.nomatch}`) ?? null,
         this.outlinePanelEl,
       ),
+      // #69 菜单观测：打开态（容器挂载于侧栏）、目标索引、绘制证据（中心点
+      // elementFromPoint 命中——侧栏展开 + 样式表浮层规则生效）、级联子菜单
+      // 可见（hover/focus 展开：computed display 非 none 且非空）
+      menuOpen: this.outlineMenuEl !== undefined,
+      menuTargetIndex: this.outlineMenuEl !== undefined ? this.outlineMenuIndex : null,
+      menuPainted: hitPaintedElement(this.outlineMenuEl, this.outlineMenuEl),
+      submenuVisible: this.collectOutlineSubmenuVisible(),
+      renamingIndex: this.outlineRenameIndex,
     }
+  }
+
+  /** #69 级联子菜单可见证据：任一子菜单 computed display 非 none 且非空串
+   *  （CSS 未加载/未 hover 时 display 为 none 或空——jsdom 恒 false） */
+  private collectOutlineSubmenuVisible(): boolean {
+    const menu = this.outlineMenuEl
+    if (!menu) {
+      return false
+    }
+    for (const el of Array.from(menu.querySelectorAll<HTMLElement>(`.${OUTLINE_MENU_CLASS_NAMES.submenu}`))) {
+      try {
+        const display = getComputedStyle(el).display
+        if (display !== '' && display !== 'none') {
+          return true
+        }
+      } catch {
+        // 计算失败保守视为不可见
+      }
+    }
+    return false
   }
 
   /** #66 located 条目的绘制层证据：施加了 located 类的元素（#67 起为

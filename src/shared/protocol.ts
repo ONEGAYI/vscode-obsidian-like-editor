@@ -131,6 +131,18 @@ export type HostToWebview =
   /** 测试钩子（#68）：点击工具条真实按钮（跳转到末尾 / 重置），驱动与
    *  用户点击同一处理器（纯视图滚动 / 三合一重置，零写回） */
   | { kind: 'outline.test.toolbarClick'; action: 'jump-bottom' | 'reset' }
+  /** 测试钩子（#69）：对第 index 个真实条目派发 contextmenu（与用户右键
+   *  同一面板委托处理器，弹出右键菜单）；宿主测试无法向 webview 派发真实
+   *  鼠标事件，以此通道验证真实宿主内的菜单装配 */
+  | { kind: 'outline.test.contextMenu'; index: number }
+  /** 测试钩子（#69）：点击菜单中 command 对应的真实按钮（与用户点击同一
+   *  处理器；command 取 outlineMenu 的 OutlineMenuCommand） */
+  | { kind: 'outline.test.menuClick'; command: string }
+  /** 测试钩子（#69）：关闭当前右键菜单（等价 Esc/外点关闭路径） */
+  | { kind: 'outline.test.menuClose' }
+  /** 测试钩子（#69）：向重命名输入框注入文本并以 Enter/Esc 收尾（真实
+   *  keydown 链路；须先经 menuClick command='rename' 进入重命名态） */
+  | { kind: 'outline.test.renameKey'; text: string; key: 'enter' | 'escape' }
   /** 测试钩子（#21）：在真实 webview 的 CM6 中输入，验证暂停态即时留存。 */
   | { kind: 'sync.test.edit'; offset: number; text: string; closeAfter?: boolean }
   /** 测试钩子：组合候选写入首行 DOM，经过 CM6 MutationObserver 的真实输入链。 */
@@ -310,6 +322,13 @@ export type WebviewToHost =
    *  校验：通过才持久化并广播 settings.changed；拒绝时向来源设置页回
    *  settings.snapshot 以权威值恢复显示 */
   | { kind: 'settings.set'; values: SettingsPayload }
+  /** #69 剪贴板写（直写）：webview 环境无 navigator.clipboard 权限面，
+   *  经宿主 env.clipboard.writeText。只读交互，暂停态同样放行 */
+  | { kind: 'clipboard.write'; text: string }
+  /** #69 剪贴板写（标题链接）：`[[笔记名#标题]]` 的拼接在宿主侧——
+   *  webview 只上报 docUri（宿主取笔记名 = 文件名去扩展名）与剥标记
+   *  可见文本标题（plainText） */
+  | { kind: 'clipboard.write'; linkHeading: { docUri: string; heading: string } }
   /** 性能探针回报（#5）：快照为 DOM 计数，输入延迟含 rAF 稳定等待 */
   | {
       kind: 'perf.report'
@@ -702,6 +721,18 @@ export interface OutlineProbe {
   /** #68 无匹配占位绘制证据：占位元素中心点命中自身（有词条零命中的
    *  「无匹配」真实可见；无占位或 jsdom 无布局时为 false） */
   nomatchPainted: boolean
+  /** #69 右键菜单打开态（菜单容器在侧栏内挂载） */
+  menuOpen: boolean
+  /** #69 菜单目标条目索引（items 下标；未打开为 null） */
+  menuTargetIndex: number | null
+  /** #69 菜单容器中心点 elementFromPoint 命中自身（菜单真实绘制；
+   *  jsdom 无布局恒 false，真宿主断言见集成） */
+  menuPainted: boolean
+  /** #69 级联子菜单可见证据：任一子菜单 computed display 非 none
+   *  （hover/focus-within 展开；未展开或 jsdom 恒 false） */
+  submenuVisible: boolean
+  /** #69 重命名编辑态：正在行内编辑的条目索引（null = 无编辑态） */
+  renamingIndex: number | null
 }
 
 /** 表格结构操作码校验（#13） */
@@ -817,12 +848,14 @@ function isOutlineItems(v: unknown): v is OutlineProbe['items'] {
   )
 }
 
-/** #54/#65/#66/#67/#68 大纲观测校验：active/命中布尔、图标尺寸与滚动几何（null 或
+/** #54/#65/#66/#67/#68/#69 大纲观测校验：active/命中布尔、图标尺寸与滚动几何（null 或
  *  非负数）、items 序列、名称字符串或 null、style 绘制证据（缺省或字段字符
  *  串或 null）、located 索引（null 或非负整数）/文字（字符串或 null）/绘制
  *  命中布尔、#67 档位（0–5 整数）/可见索引序列（非负整数数组）/滑块与箭头
  *  绘制命中布尔、#68 搜索词（字符串）/搜索态布尔/组合可见索引序列/工具条
- *  绘制命中布尔/按钮与占位文案（字符串或 null）/命中片段与占位绘制命中布尔 */
+ *  绘制命中布尔/按钮与占位文案（字符串或 null）/命中片段与占位绘制命中布
+ *  尔、#69 菜单开合布尔/目标索引（null 或非负整数）/菜单与子菜单绘制布尔/
+ *  重命名索引（null 或非负整数） */
 function isOutlineProbe(v: unknown): v is OutlineProbe {
   return (
     isObject(v) &&
@@ -861,7 +894,42 @@ function isOutlineProbe(v: unknown): v is OutlineProbe {
     isNullOrString(v.resetAriaLabel) &&
     isNullOrString(v.searchPlaceholder) &&
     typeof v.searchHitPainted === 'boolean' &&
-    typeof v.nomatchPainted === 'boolean'
+    typeof v.nomatchPainted === 'boolean' &&
+    typeof v.menuOpen === 'boolean' &&
+    (v.menuTargetIndex === null || isNonNegativeInt(v.menuTargetIndex)) &&
+    typeof v.menuPainted === 'boolean' &&
+    typeof v.submenuVisible === 'boolean' &&
+    (v.renamingIndex === null || isNonNegativeInt(v.renamingIndex))
+  )
+}
+
+/** #69 大纲菜单命令码（菜单结构单一清单：结构命令三/复制五/调级四/
+ *  重命名/删除；父项容器 id 不进此列）。webview 的 outlineMenu 与宿主
+ *  校验器共用——命令码两边一致性的单一事实源 */
+export type OutlineMenuCommand =
+  | 'expandRecursively'
+  | 'collapseSiblings'
+  | 'expandSiblings'
+  | 'copyHeading'
+  | 'copySiblings'
+  | 'copyChildren'
+  | 'copyLink'
+  | 'copySection'
+  | 'levelUp'
+  | 'levelUpRecursive'
+  | 'levelDown'
+  | 'levelDownRecursive'
+  | 'rename'
+  | 'delete'
+
+/** #69 菜单命令码校验（outline.test.menuClick 只转发合法命令） */
+export function isOutlineMenuCommand(v: unknown): v is OutlineMenuCommand {
+  return (
+    v === 'expandRecursively' || v === 'collapseSiblings' || v === 'expandSiblings' ||
+    v === 'copyHeading' || v === 'copySiblings' || v === 'copyChildren' ||
+    v === 'copyLink' || v === 'copySection' ||
+    v === 'levelUp' || v === 'levelUpRecursive' || v === 'levelDown' || v === 'levelDownRecursive' ||
+    v === 'rename' || v === 'delete'
   )
 }
 
@@ -1107,6 +1175,17 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
       return true
     case 'settings.set':
       return isSettingsPayload(v.values)
+    case 'clipboard.write':
+      // #69 两变体：text 直写 / linkHeading 由宿主拼标题链接
+      if (isString(v.text) && v.linkHeading === undefined) {
+        return true
+      }
+      return (
+        v.text === undefined &&
+        isObject(v.linkHeading) &&
+        isString(v.linkHeading.docUri) &&
+        isString(v.linkHeading.heading)
+      )
     case 'conflict.action':
       return (
         isString(v.sessionId) &&
@@ -1340,6 +1419,14 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return isString(v.text)
     case 'outline.test.toolbarClick':
       return v.action === 'jump-bottom' || v.action === 'reset'
+    case 'outline.test.contextMenu':
+      return isNonNegativeInt(v.index)
+    case 'outline.test.menuClick':
+      return isOutlineMenuCommand(v.command)
+    case 'outline.test.menuClose':
+      return true
+    case 'outline.test.renameKey':
+      return isString(v.text) && (v.key === 'enter' || v.key === 'escape')
     case 'sync.test.edit':
       return isNonNegativeInt(v.offset) && isString(v.text) &&
         (v.closeAfter === undefined || typeof v.closeAfter === 'boolean')

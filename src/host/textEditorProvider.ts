@@ -157,6 +157,18 @@ function imageResourceRoot(document: vscode.TextDocument): vscode.Uri {
   )
 }
 
+/** #69 笔记名（标题链接 `[[笔记名#标题]]` 的锚）：docUri 字符串 → 文件名
+ *  去扩展名（Obsidian 语义：不含路径不含 .md）。URI 解析失败回退原文 */
+export function outlineNoteNameOf(docUri: string): string {
+  try {
+    const fsPath = vscode.Uri.parse(docUri).fsPath
+    const base = path.basename(fsPath)
+    return base.replace(/\.[^.]+$/, '')
+  } catch {
+    return docUri
+  }
+}
+
 /** 链接目标解析上下文（宿主文件系统语义：扩展宿主进程的平台即工作区
  *  文件系统所在机器——本地 Windows 是 win32，远程 SSH 宿主是远程平台，
  *  两类路径语义天然不混用） */
@@ -700,6 +712,17 @@ export function createTextEditorProvider(
         // 设置页 webview 链路，不经文档会话）
         openSettings: () => settings?.page.open(),
         requestSettings: () => settings?.service.getSnapshot() ?? {},
+        // #69 剪贴板端口：webview 无 navigator.clipboard 权限面，经宿主
+        // env.clipboard.writeText。标题链接变体在此拼 `[[笔记名#标题]]`——
+        // 笔记名 = docUri 文件名去扩展名（Obsidian 语义），标题为 webview
+        // 上报的剥标记可见文本
+        writeClipboard: (text: string) => {
+          void vscode.env.clipboard.writeText(text)
+        },
+        writeHeadingLinkClipboard: (docUri: string, heading: string) => {
+          const name = outlineNoteNameOf(docUri)
+          void vscode.env.clipboard.writeText(`[[${name}#${heading}]]`)
+        },
       })
       entry.panels.set(sessionId, webviewPanel)
       // #38：记忆为 reading 的面板登记待恢复——就绪后首份 view.state 到达
