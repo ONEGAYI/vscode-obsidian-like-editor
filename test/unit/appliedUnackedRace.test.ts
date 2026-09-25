@@ -185,6 +185,46 @@ function setupPair(text = 'abcdef') {
   return { doc, session, controller, sessionId, settle, toWebview }
 }
 
+/** 双面板桥接装配（旁观面板场景：A/B 各持独立控制器消费宿主消息） */
+function setupTwoPanels(text = 'abcdef') {
+  const doc = new GatedDoc(text)
+  const session = new DocumentSession(doc, { docUri: DOC_URI })
+  doc.onDocChanged((changes, version) => session.handleDocChanged(changes, version))
+  const mkPanel = () => {
+    const toWebview: HostToWebview[] = []
+    const sessionId = session.attachPanel({ send: (m) => toWebview.push(m) })
+    const bridge: VsCodeBridge = {
+      postMessage: (m) => {
+        void session.handleWebviewMessage(m, sessionId)
+      },
+      getState: <T,>() => undefined as T | undefined,
+      setState: () => undefined,
+    }
+    const controller = new WebviewSyncController(bridge)
+    controller.mount(document.createElement('div'))
+    void session.handleWebviewMessage({ kind: 'ready' }, sessionId)
+    controller.handleHostMessage(toWebview.at(-1)!)
+    toWebview.length = 0
+    return { sessionId, controller, toWebview }
+  }
+  const a = mkPanel()
+  const b = mkPanel()
+  const settle = async () => {
+    let idle = 0
+    for (let i = 0; i < 20 && idle < 2; i++) {
+      await new Promise((r) => setTimeout(r, 0))
+      let received = 0
+      for (const p of [a, b]) {
+        const messages = p.toWebview.splice(0)
+        received += messages.length
+        for (const message of messages) p.controller.handleHostMessage(message)
+      }
+      idle = received === 0 ? idle + 1 : 0
+    }
+  }
+  return { doc, session, a, b, settle }
+}
+
 describe('宿主侧：已应用未确认窗口内外部增量暂存与有序补发', () => {
   it('pending 未确认时外部增量不广播，兜底确认后 ack 先于补发', async () => {
     const s = setupHost()
@@ -291,6 +331,43 @@ describe('宿主侧：已应用未确认窗口内外部增量暂存与有序补�
     expect(bChanges.map((m) => m.version)).toEqual([2, 3])
     expect(bChanges[0]!.changes).toEqual([eChange])
     expect(bChanges[1]!.changes).toEqual([{ offset: 8, length: 0, text: 'X' }])
+  })
+
+  it('release-先于-echo 的兜底确认以 E 落地版本广播：旁观面板不丢暂存的 X（#52）', async () => {
+    const s = setupHost()
+    const idA = s.attach()
+    const idB = s.attach()
+    await readyPanel(s, idA)
+    await readyPanel(s, idB)
+    const eChange = { offset: 0, length: 0, text: 'ZZ' }
+    s.doc.holdNext = true
+    void s.send(idA, editRequest(idA, 1, 1, [eChange])) // E 已应用（v2）、pending 未确认
+    await new Promise((r) => setTimeout(r, 0))
+    expect(s.doc.content).toBe('ZZabcdef')
+
+    s.doc.externalChange([{ offset: 8, length: 0, text: 'X' }]) // v3，会话级暂存
+    expect(s.sent.get(idB)!.filter((m) => m.kind === 'doc.changed')).toEqual([])
+
+    // applyEdit resolve 先于 E 的回流 → 兜底确认。确认版本必须是 E 的落地
+    // 版本（2）：取 resolve 时点的 doc.version（已被 X 推进到 3）会让 E 的
+    // 广播与随后补发的 X 同版本，X 被 webview 的 C-4 单调防线永久丢弃
+    s.doc.release()
+    await new Promise((r) => setTimeout(r, 0))
+    const bChanges = s.sent
+      .get(idB)!
+      .filter((m): m is Extract<HostToWebview, { kind: 'doc.changed' }> => m.kind === 'doc.changed')
+    expect(bChanges.map((m) => m.version)).toEqual([2, 3])
+    expect(bChanges[0]!.changes).toEqual([eChange])
+    expect(bChanges[1]!.changes).toEqual([{ offset: 8, length: 0, text: 'X' }])
+    // ack 携带 E 的真实落地版本（webview 以此推进 baseVersion）
+    const ack = s.sent.get(idA)!.find((m) => m.kind === 'edit.ack')
+    expect(ack).toMatchObject({ kind: 'edit.ack', seq: 1, ok: true, version: 2 })
+
+    // E 的迟到回流按 (version, changes) 匹配兜底记录被吞掉，不重复广播
+    const bCount = s.sent.get(idB)!.length
+    s.doc.fireHeldEcho([eChange], 2)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(s.sent.get(idB)!.length).toBe(bCount)
   })
 })
 
@@ -498,5 +575,29 @@ describe('桥接端到端：已应用未确认窗口的外部增量落点（#48 
     expect(doc.content).toBe('ZZabcdefX!')
     expect(view.state.doc.toString()).toBe('ZZabcdefX!')
     controller.dispose()
+  })
+
+  it('release-先于-echo + 旁观面板：B 不丢暂存增量 X，E/X 落点正确（#52）', async () => {
+    const { doc, session, a, b, settle } = setupTwoPanels('abcdef')
+    const viewA = a.controller.getView()!
+    const viewB = b.controller.getView()!
+    doc.holdNext = true
+    viewA.dispatch({ changes: { from: 0, insert: 'ZZ' } }) // E：权威 v2，pending 未确认
+    await new Promise((r) => setTimeout(r, 0))
+    expect(doc.content).toBe('ZZabcdef')
+
+    doc.externalChange([{ offset: 8, length: 0, text: 'X' }]) // v3，会话级暂存
+    doc.release() // applyEdit resolve 先于 E 的回流 → 兜底确认
+    await settle()
+
+    // 未修复：兜底确认取 resolve 时点的 doc.version(3)，B 先收 E 的广播
+    // （version 3），随后补发的 X（version 3）被 C-4 单调防线丢弃 → B 缺 X
+    expect(viewB.state.doc.toString()).toBe('ZZabcdefX')
+    expect(viewA.state.doc.toString()).toBe('ZZabcdefX')
+    expect(doc.content).toBe('ZZabcdefX')
+    expect(session.getConflictState(a.sessionId)?.suspended).toBe(false)
+    expect(session.getConflictState(b.sessionId)?.suspended).toBe(false)
+    a.controller.dispose()
+    b.controller.dispose()
   })
 })
