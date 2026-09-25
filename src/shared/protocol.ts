@@ -98,7 +98,7 @@ export type HostToWebview =
   /** 测试钩子（#13）：向真实编辑器派发 Tab/Shift+Tab keydown（与用户按键
    *  同一 keymap 链路；纯选区导航，零写回）。宿主测试无法向 webview 派发
    *  真实键盘事件，以此通道验证导航装配 */
-  | { kind: 'table.test.key'; key: 'tab' | 'shift-tab' }
+  | { kind: 'table.test.key'; key: 'tab' | 'shift-tab' | 'select-all' | 'backspace' | 'delete' }
   /** 测试钩子（#42）：在真实 webview 网格单元格派发鼠标点击及当前位置输入。 */
   | { kind: 'table.test.cellClick'; rowIndex: number; columnIndex: number; point?: 'edge' | 'middle' }
   | { kind: 'table.test.type'; text: string }
@@ -1004,7 +1004,8 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
     case 'table.create':
       return true
     case 'table.test.key':
-      return v.key === 'tab' || v.key === 'shift-tab'
+      return v.key === 'tab' || v.key === 'shift-tab' || v.key === 'select-all' ||
+        v.key === 'backspace' || v.key === 'delete'
     case 'table.test.cellClick':
       return isNonNegativeInt(v.rowIndex) && isNonNegativeInt(v.columnIndex) &&
         (v.point === undefined || v.point === 'edge' || v.point === 'middle')

@@ -1179,19 +1179,60 @@ const inviewActiveDeco = Decoration.line({
 /** CSS grid 的留白可能让 CM6 默认点击命中隐藏管道；把落点约束到目标格。
  *  mouseup 再核对一次，处理浏览器默认选区定位晚于 mousedown 的情况。 */
 const gridPointerDown = new WeakMap<EditorView, { x: number; y: number }>()
-function clampGridCellPointer(event: MouseEvent, view: EditorView, useSelection: boolean): boolean {
+
+/** 鼠标拖选、双击和三击都只在起始格的内容区间内定位。 */
+const gridCellMouseSelection = EditorView.mouseSelectionStyle.of((view, event) => {
+  if (event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey) return null
+  const target = event.target instanceof Element ? event.target : null
+  const cell = target?.closest<HTMLElement>('.vsidian-table-grid-row > .vsidian-table-grid-cell')
+  const row = cell?.parentElement
+  if (!cell || !row) return null
+  const cells = [...row.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')]
+  const line = view.state.doc.lineAt(view.posAtDOM(row, 0))
+  const range = tableRowCellsForColumns(line.text, line.from, cells.length)?.[cells.indexOf(cell)]
+  if (!range) return null
+  let from = range.contentFrom, to = range.contentTo
+  const clamp = (pos: number) => Math.max(from, Math.min(to, pos))
+  const hit = (e: MouseEvent) => clamp(view.posAtCoords({ x: e.clientX, y: e.clientY }) ?? from)
+  const start = hit(event)
+  let anchor = event.shiftKey ? clamp(view.state.selection.main.anchor) : start
+  const word = event.detail === 2 ? view.state.wordAt(start) : null
+  let startFrom = event.detail >= 3 ? from : word ? clamp(word.from) : start
+  let startTo = event.detail >= 3 ? to : word ? clamp(word.to) : start
+  gridPointerDown.set(view, { x: event.clientX, y: event.clientY })
+  return {
+    get(current, extend) {
+      const end = hit(current)
+      if (extend) return EditorSelection.single(anchor, end)
+      if (event.detail >= 3) return EditorSelection.single(from, to)
+      if (word) {
+        const currentWord = view.state.wordAt(end)
+        return end < startFrom
+          ? EditorSelection.single(startTo, clamp(currentWord?.from ?? end))
+          : EditorSelection.single(startFrom, clamp(currentWord?.to ?? end))
+      }
+      return EditorSelection.single(anchor, end)
+    },
+    update(update) {
+      if (!update.docChanged) return
+      from = update.changes.mapPos(from, -1)
+      to = update.changes.mapPos(to, 1)
+      anchor = update.changes.mapPos(anchor)
+      startFrom = update.changes.mapPos(startFrom)
+      startTo = update.changes.mapPos(startTo)
+    },
+  }
+})
+
+function clampGridCellPointer(event: MouseEvent, view: EditorView): boolean {
   if (event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return false
   const target = event.target instanceof Element ? event.target : null
   const cell = target?.closest<HTMLElement>('.vsidian-table-grid-row > .vsidian-table-grid-cell')
   if (!cell) return false
-  if (useSelection) {
-    const down = gridPointerDown.get(view)
-    gridPointerDown.delete(view)
-    if (!down || event.shiftKey || event.detail > 1 ||
-        Math.hypot(event.clientX - down.x, event.clientY - down.y) > 5) return false
-  } else {
-    gridPointerDown.set(view, { x: event.clientX, y: event.clientY })
-  }
+  const down = gridPointerDown.get(view)
+  gridPointerDown.delete(view)
+  if (!down || event.detail > 1 ||
+      Math.hypot(event.clientX - down.x, event.clientY - down.y) > 5) return false
   const row = cell.parentElement
   if (!row) return false
   const column = [...row.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')].indexOf(cell)
@@ -1202,9 +1243,7 @@ function clampGridCellPointer(event: MouseEvent, view: EditorView, useSelection:
   if (!range) return false
   const from = range.contentFrom
   const to = range.contentTo
-  const hit = useSelection
-    ? view.state.selection.main.head
-    : view.posAtCoords({ x: event.clientX, y: event.clientY })
+  const hit = view.state.selection.main.head
   if (hit !== null && hit >= from && hit <= to) return false
   view.dispatch({ selection: EditorSelection.single(hit === null || hit < from ? from : to) })
   event.preventDefault()
@@ -1237,15 +1276,12 @@ const viewportLivePlugin = ViewPlugin.fromClass(
   {
     decorations: (plugin) => plugin.decorations,
     eventHandlers: {
-      mousedown(event: MouseEvent, view: EditorView) {
-        return clampGridCellPointer(event, view, false)
-      },
       mouseup(event: MouseEvent, view: EditorView) {
-        return clampGridCellPointer(event, view, true)
+        return clampGridCellPointer(event, view)
       },
     },
   },
 )
 
 /** Live Preview 装饰装配：直接（StateField）+ 间接（ViewPlugin） */
-export const livePreviewDecorations: Extension = [liveDecorationsField, viewportLivePlugin]
+export const livePreviewDecorations: Extension = [liveDecorationsField, gridCellMouseSelection, viewportLivePlugin]

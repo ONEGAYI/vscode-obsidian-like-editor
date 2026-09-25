@@ -728,12 +728,13 @@ export class WebviewSyncController {
         break
       }
       case 'table.test.key': {
-        // 测试钩子（#13）：向真实编辑器派发 Tab keydown（与用户按键同一
-        // keymap 链路；纯选区导航零写回）
+        // 测试钩子：向真实编辑器派发 keydown，走用户按键的同一 keymap 链路。
         if (this.view) {
           this.view.contentDOM.dispatchEvent(
             new KeyboardEvent('keydown', {
-              key: 'Tab',
+              key: message.key === 'select-all' ? 'a' : message.key === 'backspace' ? 'Backspace'
+                : message.key === 'delete' ? 'Delete' : 'Tab',
+              ctrlKey: message.key === 'select-all',
               shiftKey: message.key === 'shift-tab',
               bubbles: true,
               cancelable: true,

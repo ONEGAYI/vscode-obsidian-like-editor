@@ -297,6 +297,7 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   writeFileSync(path.join(wsDir, 'task.md'), TASK_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'table.md'), TABLE_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'table42.md'), TABLE_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'table-cell-delete.md'), TABLE_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'table42-empty.md'), TABLE42_EMPTY_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'table13.md'), TABLE13_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'table43-crlf.md'), TABLE43_CRLF_DOC, 'utf8')

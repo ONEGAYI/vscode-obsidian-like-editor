@@ -1851,6 +1851,39 @@ export const cases: Array<[string, () => Promise<void>]> = [
     )
   }],
 
+  ['网格单元格全选删除与边界删除保留表格源码结构（P0）', async () => {
+    const name = 'table-cell-delete.md'
+    await openWithEditor(name)
+    await waitSessionReady(name)
+    const uri = wsUri(name).toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri(name))
+    const before = doc.getText()
+    const at = before.indexOf('苹果')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.cellClick', rowIndex: 1, columnIndex: 0 })
+    await waitViewState(name, (v) => v.tableGrid?.selectedRowIsGrid === true)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: at })
+    await waitViewState(name, (v) => v.selectionOffset === at)
+    for (let i = 0; i < 3; i++) {
+      await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'backspace' })
+    }
+    const boundary = await waitViewState(name, (v) => v.selectionOffset === at)
+    assert(boundary.text === before, '格首退格不得删除隐藏的填充空白或管道')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'select-all' })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'backspace' })
+    const cleared = before.replace('苹果', '')
+    await poll('仅清空当前格写回', () => doc.getText() === cleared ? true : undefined)
+    for (let i = 0; i < 3; i++) {
+      await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'delete' })
+    }
+    const rendered = await waitViewState(name, (v) => v.text === cleared)
+    assert(rendered.tableGrid?.visibleRows === 3, '删除内容后仍须保留完整网格')
+    assert(rendered.paint?.table?.cellVisible === true && rendered.paint.table.gridDisplay === 'grid',
+      '删除后剩余文字须在网格绘制层可见')
+    assert(await doc.save(), '清空单元格保存失败')
+    assert(await readDisk(name) === cleared, '落盘内容只能清空当前格，表格标记必须完整')
+  }],
+
   ['实时预览活动格保留网格与抓手，格内输入经 CM6 写回（#42）', async () => {
     await openWithEditor('table42.md')
     const beforeSession = await waitSessionReady('table42.md')

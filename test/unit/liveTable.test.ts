@@ -15,7 +15,8 @@
 // - 千行单表：装饰构建/单格编辑增量在宽松时限内完成且写回正确
 import { describe, it, expect, vi } from 'vitest'
 import { EditorSelection, EditorState, RangeSet, Text } from '@codemirror/state'
-import { EditorView } from '@codemirror/view'
+import { EditorView, keymap } from '@codemirror/view'
+import { defaultKeymap, deleteCharBackward, deleteCharForward } from '@codemirror/commands'
 import type { DecorationSet } from '@codemirror/view'
 import {
   LIVE_CLASS_NAMES,
@@ -485,7 +486,7 @@ async function setupLinked(text: string): Promise<LinkedPanel> {
   sessionId = session.attachPanel({
     send: (m: HostToWebview) => controller.handleHostMessage(m),
   })
-  controller.mount(document.createElement('div'))
+  controller.mount(document.createElement('div'), [keymap.of(defaultKeymap)])
   await settle()
   return { controller, session, doc, hostSent, sessionId, notices }
 }
@@ -498,6 +499,106 @@ const settle = async (): Promise<void> => {
 }
 
 describe('单元格编辑权威链路', () => {
+  it('格内全选再删除只清空当前格，保留管道、分隔行和其他格', async () => {
+    const linked = await setupLinked(TABLE_DOC)
+    const view = linked.controller.getView()!
+    view.dispatch({ selection: EditorSelection.single(TABLE_DOC.indexOf('苹果') + 1) })
+    view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'a', ctrlKey: true, bubbles: true, cancelable: true,
+    }))
+    expect(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to)).toBe('苹果')
+    deleteCharBackward(view)
+    await settle()
+    expect(linked.doc.getText()).toBe(TABLE_DOC.replace('苹果', ''))
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(3)
+    linked.controller.dispose()
+  })
+
+  it.each(['backward', 'forward'] as const)('单元格边界 %s 删除不会删掉隐藏的表格标记', (direction) => {
+    const from = TABLE_DOC.indexOf('苹果')
+    const view = makeEditView(TABLE_DOC, direction === 'backward' ? from : from + 2)
+    for (let i = 0; i < 5; i++) {
+      (direction === 'backward' ? deleteCharBackward : deleteCharForward)(view)
+    }
+    expect(view.state.doc.toString()).toBe(TABLE_DOC)
+    view.destroy()
+  })
+
+  it('格内新输入的空格仍可退格删除', () => {
+    const text = TABLE_DOC.replace('苹果', '苹果 ')
+    const view = makeEditView(text, text.indexOf('苹果') + 3)
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe(TABLE_DOC)
+    view.destroy()
+  })
+
+  it('Home 落到表格源行首后退格不能吞掉前一行分隔声明', () => {
+    const view = makeEditView(TABLE_DOC, TABLE_DOC.indexOf('| 苹果 |'))
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe(TABLE_DOC)
+    view.destroy()
+  })
+
+  it('从格内拖到隐藏管道外时，鼠标选区仍限定在原格内容中', () => {
+    const at = TABLE_DOC.indexOf('苹果')
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc: TABLE_DOC,
+        extensions: [livePreviewDecorations, tableEditing, keymap.of(defaultKeymap)] }),
+    })
+    const cell = view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]!
+      .querySelector<HTMLElement>('.vsidian-table-grid-cell')!
+    const hit = vi.spyOn(view, 'posAtCoords').mockReturnValue(at + 2)
+    cell.dispatchEvent(new MouseEvent('mousedown', {
+      bubbles: true, cancelable: true, button: 0, buttons: 1, clientX: 80, clientY: 20,
+    }))
+    hit.mockReturnValue(at - 2)
+    document.dispatchEvent(new MouseEvent('mousemove', {
+      bubbles: true, cancelable: true, button: 0, buttons: 1, clientX: 0, clientY: 20,
+    }))
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }))
+    expect(view.state.selection.main.from).toBe(at)
+    expect(view.state.selection.main.to).toBe(at + 2)
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe(TABLE_DOC.replace('苹果', ''))
+    hit.mockRestore()
+    view.destroy()
+  })
+
+  it.each([2, 3])('格内连续点击 %i 次后删除不包含源码标记', (detail) => {
+    const at = TABLE_DOC.indexOf('苹果')
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc: TABLE_DOC,
+        extensions: [livePreviewDecorations, tableEditing, keymap.of(defaultKeymap)] }),
+    })
+    const cell = view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]!
+      .querySelector<HTMLElement>('.vsidian-table-grid-cell')!
+    const hit = vi.spyOn(view, 'posAtCoords').mockReturnValue(at + 1)
+    cell.dispatchEvent(new MouseEvent('mousedown', {
+      bubbles: true, cancelable: true, button: 0, buttons: 1, detail,
+    }))
+    cell.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, detail }))
+    expect(view.state.selection.main.from).toBe(at)
+    expect(view.state.selection.main.to).toBe(at + 2)
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe(TABLE_DOC.replace('苹果', ''))
+    hit.mockRestore()
+    view.destroy()
+  })
+
+  it('格内反向键盘扩选越过隐藏管道后删除仍保留结构，格外选中整表可以删除', () => {
+    const at = TABLE_DOC.indexOf('苹果')
+    const view = makeEditView(TABLE_DOC, at + 2)
+    view.dispatch({ selection: EditorSelection.single(at + 2, at - 2), userEvent: 'select' })
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe(TABLE_DOC.replace('苹果', ''))
+    view.dispatch({ selection: EditorSelection.single(0, view.state.doc.length), userEvent: 'select' })
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe('')
+    view.destroy()
+  })
+
   it('特殊空白格组合提交遇全文重同步时保留本地净输入并暂停，不能静默覆盖', async () => {
     const source = 'a|b|c\n---|---|---\n | | \n'
     const linked = await setupLinked(source)

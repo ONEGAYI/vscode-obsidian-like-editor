@@ -23,7 +23,7 @@ import type { SyntaxNode, Tree } from '@lezer/common'
 import type { TableEditOp } from '../shared/protocol'
 import { liveDecorationsField, LIVE_CLASS_NAMES, tableCompositionPreview } from './liveDecorations'
 import { chainAt } from './markdownDoc'
-import { needsPipeEscapeAt, parseTableDelimiter, planBlankRowCellInput } from './tableCells'
+import { needsPipeEscapeAt, parseTableDelimiter, planBlankRowCellInput, tableRowCellsForColumns } from './tableCells'
 import { planTableEdit, planTableRowMove, tableCellNavTarget, type TableRowInfo } from './tableStructure'
 import { createTableControls } from './tableControls'
 import { planCreateTable } from './tableCreate'
@@ -203,6 +203,85 @@ const markTableCompositionInput = EditorState.transactionExtender.of((tr) =>
   tr.docChanged && tr.startState.field(tableComposition) && tr.isUserEvent('input')
     ? { annotations: tableCompositionPreview.of(true) }
     : null)
+
+/** 仅渲染为网格的行才限制编辑范围；源码降级行保留原生编辑能力。 */
+function editableGridCellAt(state: EditorState, pos: number) {
+  const field = state.field(liveDecorationsField, false)
+  if (!field) return null
+  const line = state.doc.lineAt(pos)
+  let inGrid = false
+  field.decos.between(line.from, line.from + 1, (from, to, deco) => {
+    if (from === line.from && to === from &&
+        deco.spec.class?.split(' ').includes(LIVE_CLASS_NAMES.tableGridRow)) inGrid = true
+  })
+  if (!inGrid) return null
+  const table = chainAt(field.tree, line.from + line.text.indexOf('|') + 1)
+    .find((node) => node.name === 'Table')
+  const delimiter = table?.firstChild?.nextSibling
+  if (!table || delimiter?.name !== 'TableDelimiter') return null
+  const columns = field.gridPlans.get(table.from)?.columns ??
+    parseTableDelimiter(state.doc.lineAt(delimiter.from).text)?.length
+  if (!columns) return null
+  const cells = tableRowCellsForColumns(line.text, line.from, columns)
+  if (!cells?.length) return null
+  return cells.find((cell) => pos >= cell.from && pos <= cell.to) ??
+    (pos < cells[0]!.from ? cells[0]! : cells[cells.length - 1]!)
+}
+
+/** 原生删除命令可跨过隐藏源码。格内开始的编辑只修改这一格的可见内容。 */
+const protectGridCellContent = EditorState.transactionFilter.of((tr) => {
+  if (!tr.docChanged || (!tr.isUserEvent('delete') && !tr.isUserEvent('input'))) return tr
+  const ranges = tr.startState.selection.ranges
+  if (ranges.length !== 1) return tr
+  const cell = editableGridCellAt(tr.startState, ranges[0]!.anchor)
+  if (!cell) return tr
+  // 格内空白也可编辑（包括 IME 预编辑替换）。仅在正文边界按删除键时
+  // 阻止光标继续吃掉填充空白；光标主动进入空白后仍能正常删空格。
+  const lower = cell.from
+  const upper = cell.to
+  const changes: Array<{ from: number; to: number; insert: string }> = []
+  let clipped = false
+  tr.changes.iterChanges((from, to, _fromB, _toB, insert) => {
+    const cursor = ranges[0]!
+    if (tr.isUserEvent('delete') && cursor.empty && !insert.length &&
+        ((cursor.head === cell.contentFrom && to === cursor.head && from < to) ||
+         (cursor.head === cell.contentTo && from === cursor.head && to > from))) {
+      clipped = true
+      return
+    }
+    // 空白行首笔规范化属于结构补全，不应被本过滤器截断。
+    if (from === to) {
+      const at = Math.max(lower, Math.min(upper, from))
+      if (at !== from) clipped = true
+      changes.push({ from: at, to: at, insert: insert.toString() })
+      return
+    }
+    const start = from < lower ? cell.contentFrom : from
+    const end = to > upper ? cell.contentTo : to
+    if (start !== from || end !== to) clipped = true
+    if (end >= start && (end > start || insert.length)) {
+      changes.push({ from: start, to: end, insert: insert.toString() })
+    }
+  })
+  if (!clipped) return tr
+  if (!changes.length) return []
+  const event = tr.annotation(Transaction.userEvent)
+  return {
+    changes,
+    selection: { anchor: changes[0]!.from + changes[0]!.insert.length },
+    annotations: event ? Transaction.userEvent.of(event) : undefined,
+    scrollIntoView: tr.scrollIntoView,
+  }
+})
+
+const selectGridCell: Command = (view) => {
+  if (view.compositionStarted || view.state.selection.ranges.length !== 1) return false
+  const cell = editableGridCellAt(view.state, view.state.selection.main.anchor)
+  if (!cell) return false
+  view.dispatch({ selection: EditorSelection.single(cell.contentFrom, cell.contentTo),
+    userEvent: 'select', scrollIntoView: true })
+  return true
+}
 
 /** 普通键入、粘贴在空白行首笔规范化；IME 的中间事务交宿主组合缓冲处理。 */
 const normalizeBlankRowInput = EditorState.transactionFilter.of((tr) => {
@@ -388,6 +467,8 @@ export const tableEditing = [
   }),
   markTableCompositionInput,
   normalizeBlankRowInput,
+  protectGridCellContent,
+  keymap.of([{ key: 'Mod-a', run: selectGridCell }]),
   keymap.of([{ key: '|', run: tablePipeKeyHandler }]),
   keymap.of([{ key: 'Tab', run: tableTabForward, shift: tableTabBackward }]),
   tableControls,
