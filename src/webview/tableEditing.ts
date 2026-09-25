@@ -234,7 +234,10 @@ function editableGridCellAt(state: EditorState, pos: number) {
 
 /** 选区（或其越格部分）覆盖的安全表格全集，按文档序去重。
  *  行级装饰在行首零宽放置：扫描从选区首行的行首起（选区整体落在
- *  某表格行内部时也要命中该行），再按与选区区间相交过滤。 */
+ *  某表格行内部时也要命中该行），再按与选区区间相交过滤。内容行行首
+ *  挂 tableGridRow、分隔行行首挂 tableGridDelimiter——两者都认：选区
+ *  两端都在分隔行内时不触及任何内容行行首装饰，漏判会放行原生删除
+ *  直接破坏分隔声明（#57 评审 B-2）。 */
 function gridTablesUnder(state: EditorState, from: number, to: number): SyntaxNode[] {
   const field = state.field(liveDecorationsField, false)
   if (!field || from >= to) return []
@@ -242,8 +245,11 @@ function gridTablesUnder(state: EditorState, from: number, to: number): SyntaxNo
   let lastTableEnd = -1
   const scanFrom = state.doc.lineAt(from).from
   field.decos.between(scanFrom, Math.min(to + 1, state.doc.length), (at, next, deco) => {
-    if (at < lastTableEnd || at !== next ||
-        !deco.spec.class?.split(' ').includes(LIVE_CLASS_NAMES.tableGridRow)) return
+    if (at < lastTableEnd || at !== next) return
+    const cls = deco.spec.class?.split(' ') ?? []
+    if (!cls.includes(LIVE_CLASS_NAMES.tableGridRow) && !cls.includes(LIVE_CLASS_NAMES.tableGridDelimiter)) {
+      return
+    }
     const table = chainAt(field.tree, Math.min(at + 1, state.doc.length))
       .find((node) => node.name === 'Table')
     if (table && table.from > lastTableEnd && table.from <= to && table.to >= from) {
@@ -373,16 +379,20 @@ function planGridSelectionEdit(
   if (cursor < range.to) changes.push({ from: cursor, to: range.to, insert: '' })
   let selection = range.from
   if (insert) {
-    // 插入点语义：格内换行转 <br>；表内隐藏结构上丢弃（防结构破坏）
+    // 插入点语义：格内换行持久化为 <br>、裸管道转义；表内隐藏结构上
+    // 丢弃（防结构破坏）。分隔行文本 `| --- |` 也能被切成与列数相等
+    // 的「格」，必须显式排除（#57 评审 B-1）——否则替换输入写进分隔行，
+    // 分隔声明不再匹配分隔模式、整表静默降级为源码
     let text: string | null = insert
     const line = doc.lineAt(range.from)
-    const inTable = tables.some((table) => range.from >= table.from && range.from <= table.to)
-    if (inTable) {
-      const columns = field.gridPlans.get(
-        tables.find((table) => range.from >= table.from && range.from <= table.to)!.from)?.columns
+    const table = tables.find((table) => range.from >= table.from && range.from <= table.to)
+    if (table) {
+      const plan = field.gridPlans.get(table.from)
+      const onDelimiter = plan != null && line.number === plan.delimiterLine
+      const columns = plan?.columns
       const cells = columns ? tableRowCellsForColumns(line.text, line.from, columns) : null
       const cell = cells?.find((item) => range.from >= item.from && range.from <= item.to) ?? null
-      text = cell ? insert.replace(/\r?\n/g, '<br>') : null
+      text = cell && !onDelimiter ? escapeCellText(insert) : null
     }
     if (text !== null) {
       const merged = changes.find((change) => change.from === range.from && change.insert === '')
@@ -395,8 +405,30 @@ function planGridSelectionEdit(
   return { changes, selection }
 }
 
+/** 替换/粘贴进单元格的文本持久化形式：换行写为 `<br>`（一格一源行），
+ *  裸管道前置反斜杠（已转义的 `\|` 不重复转义）。键入 `|` 有
+ *  tablePipeKeyHandler 逐位置判定转义，粘贴路径在此补齐——裸管道
+ *  入源文会拆散列结构。行内代码 span 内的管道同样转义（保守口径：
+ *  结构安全优先，罕见形态下视觉多一枚转义符可接受）。 */
+function escapeCellText(text: string): string {
+  return text
+    .replace(/\r?\n/g, '<br>')
+    .replace(/(\\*)\|/g, (all, slashes: string) =>
+      slashes.length % 2 === 0 ? `${slashes}\\|` : all)
+}
+
 /** 选区级事务重写：单 change 事务（选区替换 / 删除的常态）按规划重写，
- *  多段变更（理论不可达）与结构无法保持的规划一律拒绝，保持防护语义。 */
+ *  多段变更（理论不可达）与结构无法保持的规划一律拒绝，保持防护语义。
+ *  拒绝时 console.warn 记录原因与选区范围（#57 评审 C9：最小观测面，
+ *  不引入 UI 打扰）。 */
+function warnDroppedSelectionEdit(tr: Transaction, range: { from: number; to: number }, reason: string): void {
+  console.warn(`[vsidian] 跨格选区编辑被拒绝（${reason}）: ` + JSON.stringify({
+    from: range.from,
+    to: range.to,
+    event: tr.annotation(Transaction.userEvent) ?? 'unknown',
+  }))
+}
+
 function planSelectionRewrite(tr: Transaction, range: { from: number; to: number }): TransactionSpec | 'skip' | 'drop' {
   let insert = ''
   let count = 0
@@ -404,10 +436,16 @@ function planSelectionRewrite(tr: Transaction, range: { from: number; to: number
     count += 1
     insert = text.toString()
   })
-  if (count > 1) return 'drop'
+  if (count > 1) {
+    warnDroppedSelectionEdit(tr, range, '多段变更')
+    return 'drop'
+  }
   const plan = planGridSelectionEdit(tr.startState, range, insert)
   if (plan === null) return 'skip'
-  if (plan === 'reject' || !plan.changes.length) return 'drop'
+  if (plan === 'reject' || !plan.changes.length) {
+    warnDroppedSelectionEdit(tr, range, plan === 'reject' ? '结构无法保持' : '选区无可见表格内容交集')
+    return 'drop'
+  }
   const event = tr.annotation(Transaction.userEvent)
   return {
     changes: plan.changes,
@@ -427,6 +465,9 @@ const protectGridPointerSelection = EditorState.transactionFilter.of((tr) => {
       tr.newSelection.ranges.length !== 1) return tr
   const range = tr.newSelection.main
   if (range.empty) return tr
+  // snap 方向口径（#57 评审 B-5，与 snapGridSelectionHead 注释一致）：
+  // forward = 端点是选区的文档序右端（head 在 anchor 右 → head 右端；
+  // anchor 在 head 右 → anchor 右端），两端各自向选区内侧收缩
   const head = snapGridSelectionHead(tr.startState, range.head, range.anchor < range.head) ?? range.head
   const anchor = snapGridSelectionHead(tr.startState, range.anchor, range.head < range.anchor) ?? range.anchor
   if (head === range.head && anchor === range.anchor) return tr
@@ -465,8 +506,9 @@ const protectGridCellContent = EditorState.transactionFilter.of((tr) => {
   const lower = cell.from
   const upper = cell.to
   // 格内粘贴的多行文本持久化为格内换行标记（与 Enter 的格内换行同一
-  // 语义）：换行原样入源文会拆散表格源行、整表降级为源码显示。
-  const cellInsert = (text: string): string => text.replace(/\r?\n/g, '<br>')
+  // 语义）：换行原样入源文会拆散表格源行、整表降级为源码；裸管道同样
+  // 转义（B-3：与键入 | 的 tablePipeKeyHandler 同防护，粘贴路径补齐）。
+  const cellInsert = escapeCellText
   const changes: Array<{ from: number; to: number; insert: string }> = []
   let clipped = false
   tr.changes.iterChanges((from, to, _fromB, _toB, insert) => {

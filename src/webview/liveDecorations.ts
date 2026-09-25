@@ -1234,9 +1234,11 @@ const gridPointerDown = new WeakMap<EditorView, { x: number; y: number }>()
 /**
  * #57：把落在安全表格隐藏结构（管道 / 分隔行 / 格间空白）上的选区端点
  * 收缩到最近的可见内容边界；端点已在可见格内容或表外文本上时返回 null。
- * forward 表示端点相对选区另一端向前：向前取 ≤pos 的最近边界（不吞入
- * 前方格），向后取 ≥pos 的最近边界。选区因此可以跨格、跨行与跨进表格，
- * 而删除防护由 tableEditing 的选区级规划承担。
+ * 方向口径（与 tableEditing 的 protectGridPointerSelection 一致，#57 评审
+ * B-5 统一）：forward = 该端点是选区的文档序**右端**——收缩取 ≤pos 的
+ * 最近边界（不吞入右前方格）；左端（forward=false）取 ≥pos 的最近边界。
+ * 两端各自向选区内侧收缩，选区因此可以跨格、跨行与跨进表格，而删除
+ * 防护由 tableEditing 的选区级规划承担。
  */
 export function snapGridSelectionHead(state: EditorState, pos: number, forward: boolean): number | null {
   const field = state.field(liveDecorationsField, false)
@@ -1323,9 +1325,13 @@ const gridCellMouseSelection = EditorView.mouseSelectionStyle.of((view, event) =
   }
   const start = hit(event)
   const previousAnchor = view.state.selection.main.anchor
+  // snap 方向口径（#57 评审 B-5）：forward = 端点是选区的文档序右端
+  // （收缩取 ≤pos 的边界、向选区内侧收）；与 tableEditing 的
+  // protectGridPointerSelection（anchor<head / head<anchor 判右端）一致。
+  // shift+点击时锚点是相对新点击点 start 的另一端：锚点在右侧才传 true。
   let anchor = event.shiftKey
     ? (previousAnchor >= from && previousAnchor <= to ? previousAnchor
-      : snapGridSelectionHead(view.state, previousAnchor, previousAnchor < start) ?? previousAnchor)
+      : snapGridSelectionHead(view.state, previousAnchor, previousAnchor > start) ?? previousAnchor)
     : start
   const selection = (head: number) => anchor === head
     ? EditorSelection.create([EditorSelection.cursor(head, empty ? 1 : head === to ? -1 : head === from ? 1 : 0)])

@@ -764,6 +764,33 @@ describe('单元格编辑权威链路', () => {
     view.destroy()
   })
 
+  it('shift+点击扩选的既有锚点落在分隔行上：右端锚点向选区内侧收缩（B-5 方向口径）', () => {
+    const doc = '前文\n\n| A | B |\n| --- | --- |\n| a | b |\n\n后文'
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc,
+        extensions: [livePreviewDecorations, tableEditing, keymap.of(defaultKeymap)] }),
+    })
+    const delimiterAt = doc.indexOf('| --- | --- |')
+    // 先把折叠光标放在分隔行上（点击分隔行显源码的等价 selection）
+    view.dispatch({ selection: EditorSelection.single(delimiterAt + 3) })
+    // shift+点击表头 A 格：锚点（分隔行上）是选区右端，应收缩到表头行
+    // 末格内容尾（B 尾）——而不是越过整行吞到数据行 a 的内容首
+    const headerAt = doc.indexOf('| A | B |')
+    const aAt = doc.indexOf('A')
+    const cell = view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[0]!
+      .querySelector<HTMLElement>('.vsidian-table-grid-cell')!
+    const hit = vi.spyOn(view, 'posAtCoords').mockReturnValue(aAt)
+    cell.dispatchEvent(new MouseEvent('mousedown', {
+      bubbles: true, cancelable: true, button: 0, shiftKey: true, clientX: 80, clientY: 20,
+    }))
+    const anchor = view.state.selection.main.anchor
+    expect(anchor).toBe(headerAt + '| A | B |'.length - 2)
+    expect(view.state.selection.main.head).toBe(aAt)
+    hit.mockRestore()
+    view.destroy()
+  })
+
   it('格内拖选落点在隐藏管道与分隔行上收缩到最近内容边界，不选入结构（#57）', () => {
     const at = TABLE_DOC.indexOf('名字')
     const view = new EditorView({
@@ -862,6 +889,106 @@ describe('单元格编辑权威链路', () => {
     view.dispatch({ selection: EditorSelection.single(from, to), userEvent: 'select' })
     view.dispatch({ changes: { from, to, insert: 'x' }, userEvent: 'input.type' })
     expect(view.state.doc.line(5).text).toBe('| x |  |')
+    view.destroy()
+  })
+
+  it('分隔行上的键盘扩选替换输入被丢弃：分隔行原文不动、表格不降级（B-1）', () => {
+    const doc = '前文\n\n| A | B |\n| --- | --- |\n| a | b |\n\n后文'
+    const delimiterAt = doc.indexOf('| --- | --- |')
+    const view = makeEditView(doc, delimiterAt + 2)
+    // 点击分隔行进入源码态后 Shift+End 扩选（键盘路径，不经过 pointer snap）
+    view.dispatch({ selection: EditorSelection.single(delimiterAt + 2, delimiterAt + '| --- | --- |'.length), userEvent: 'select' })
+    view.dispatch({ changes: { from: delimiterAt + 2, to: delimiterAt + '| --- | --- |'.length, insert: 'x' }, userEvent: 'input.type' })
+    // 插入落在表内隐藏结构（分隔行）上时丢弃（#57 契约），源文与网格保持
+    expect(view.state.doc.toString()).toBe(doc)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
+    view.destroy()
+  })
+
+  it('分隔行内的键盘扩选删除被拒绝：按键不改源文、表格不降级（B-2，#57 契约钉子）', () => {
+    const doc = '前文\n\n| A | B |\n| --- | --- |\n| a | b |\n\n后文'
+    const delimiterAt = doc.indexOf('| --- | --- |')
+    const view = makeEditView(doc, delimiterAt + 2)
+    // 端点一在分隔行中部、一恰在分隔行行尾：可见内容交集为空 → 删除被拒
+    view.dispatch({ selection: EditorSelection.single(delimiterAt + 2, delimiterAt + '| --- | --- |'.length), userEvent: 'select' })
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe(doc)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
+    // 选区整体在分隔行内部（两端均不到行尾）同样拒绝：隐藏结构不被选区删除破坏
+    view.dispatch({ selection: EditorSelection.single(delimiterAt + 2, delimiterAt + 8), userEvent: 'select' })
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe(doc)
+    view.destroy()
+  })
+
+  it('起点在分隔行、终点覆盖数据行内容的扩选：删除按可见内容规划，插入丢弃（B-1 反向扩选）', () => {
+    const doc = '前文\n\n| A | B |\n| --- | --- |\n| a | b |\n\n后文'
+    const delimiterAt = doc.indexOf('| --- | --- |')
+    const rowAt = doc.indexOf('| a | b |')
+    const view = makeEditView(doc, delimiterAt + 4)
+    view.dispatch({ selection: EditorSelection.single(delimiterAt + 4, rowAt + 4), userEvent: 'select' })
+    deleteCharBackward(view)
+    // 可见内容交集只有数据行 a 格：删除其内容，分隔行与表头原样保留
+    expect(view.state.doc.toString()).toBe(doc.replace('| a | b |', '|  | b |'))
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
+    // 同一选区形态下键入：删除照常、插入（落在分隔行上）丢弃
+    const second = makeEditView(doc, delimiterAt + 4)
+    second.dispatch({ selection: EditorSelection.single(delimiterAt + 4, rowAt + 4), userEvent: 'select' })
+    second.dispatch({ changes: { from: delimiterAt + 4, to: rowAt + 4, insert: 'x' }, userEvent: 'input.type' })
+    expect(second.state.doc.toString()).toBe(doc.replace('| a | b |', '|  | b |'))
+    second.destroy()
+    view.destroy()
+  })
+
+  it('跨格选区粘贴含裸管道的文本：转义为 \\| 后保持列结构（B-3）', () => {
+    const doc = '| 左 | 右 |\n| --- | --- |\n| a | b |'
+    const from = doc.indexOf('a')
+    const to = doc.indexOf('b') + 1
+    const view = makeEditView(doc, from)
+    view.dispatch({ selection: EditorSelection.single(from, to), userEvent: 'select' })
+    view.dispatch({ changes: { from, to, insert: 'x|y' }, userEvent: 'input.paste' })
+    // 裸管道转义后仍是一格内容，列数与网格不变
+    expect(view.state.doc.line(3).text).toBe('| x\\|y |  |')
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]
+      ?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(2)
+    view.destroy()
+  })
+
+  it('跨格选区粘贴多行文本：换行持久化为 <br>，表格源行不拆散（B-3 / A7 缺口）', () => {
+    const doc = '前文\n\n| 左 | 右 |\n| --- | --- |\n| a | b |\n\n后文'
+    const from = doc.indexOf('a')
+    const to = doc.indexOf('b') + 1
+    const view = makeEditView(doc, from)
+    view.dispatch({ selection: EditorSelection.single(from, to), userEvent: 'select' })
+    view.dispatch({ changes: { from, to, insert: 'x\r\ny' }, userEvent: 'input.paste' })
+    expect(view.state.doc.line(5).text).toBe('| x<br>y |  |')
+    expect(view.state.doc.toString().split('\n')).toHaveLength(doc.split('\n').length)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
+    view.destroy()
+  })
+
+  it('格内选区粘贴含裸管道与换行的文本：转义与 <br> 持久化同口径（B-3 格内路径）', () => {
+    const doc = '| 左 | 右 |\n| --- | --- |\n| a | b |'
+    const from = doc.indexOf('a')
+    const view = makeEditView(doc, from + 1)
+    view.dispatch({ selection: EditorSelection.single(from, from + 1), userEvent: 'select' })
+    view.dispatch({ changes: { from, to: from + 1, insert: 'x|y\nz' }, userEvent: 'input.paste' })
+    expect(view.state.doc.line(3).text).toBe('| x\\|y<br>z | b |')
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
+    view.destroy()
+  })
+
+  it('键盘扩选起点落在表头管道上、终点覆盖末格内容尾后直接键入：等于删整表后在起点插入（C8）', () => {
+    const view = makeEditView(TABLE_DOC, 0)
+    // 起点 = blockFrom < from <= firstBoundary（表头行首管道内侧空白），
+    // 终点 = 末格内容尾（4 之后）：「覆盖全部可见内容」分支与插入重叠
+    const from = TABLE_DOC.indexOf('| 名字') + 1
+    const to = TABLE_DOC.lastIndexOf('4') + 1
+    view.dispatch({ selection: EditorSelection.single(from, to), userEvent: 'select' })
+    view.dispatch({ changes: { from, to, insert: 'x' }, userEvent: 'input.type' })
+    // ChangeSet.of 对重叠变更 flush+compose：删整块后插入落在删除区间起点之后
+    expect(view.state.doc.toString()).toBe('# 表格样例\n\nx\n\n普通段落。\n')
     view.destroy()
   })
 
