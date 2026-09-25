@@ -1,19 +1,30 @@
-# bundle 后产物自包含，源码与测试不进入 VSIX
+# bundle 后产物自包含，源码与测试不进入 VSIX。
+# 本文件与 scripts/release.mjs 的 VSIX 内容检查（必需清单 + 禁止模式 + 体积
+# 阈值）互为防线：这里挡打包输入，发布脚本挡最终产物；新增运行时资产时两处
+# 同步维护（约定见 AGENTS.md「打包与发布」）。
 .vscode/**
 .vscode-test/**
 .vitest/**
+.github/**
 .agents/**
 .scratch/**
+scripts/**
 node_modules/**
 src/**
 test/**
+docs/**
 esbuild.mjs
 tsconfig.json
 vitest.config.ts
-docs/**
 CONTEXT.md
 CLAUDE.md
 AGENTS.md
+README.en.md
 out/test/**
 **/*.map
 .gitignore
+.git/**
+package-lock.json
+*.vsix
+# 原图仅存仓库溯源（1254×1254），VSIX 用 media/vsidian-icon-256.png
+media/vsidian-icon.png

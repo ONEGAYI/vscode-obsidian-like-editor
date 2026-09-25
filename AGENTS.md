@@ -4,7 +4,7 @@ VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 
 > 当前状态：**MVP 主要功能已实施，整体验收未结**。双视图编辑器、增量写回、任务、链接与图片、双链、表格和查找已落地；#32 统一两模式基础排版基线，#33 独立设置页，#34 实时预览源文件行号（设置页可开关）；#38 落地标题栏三态切换（实时预览 → 阅读 → 源码编辑器循环）、`.md` 默认编辑器接管、全局模式记忆（globalState）与 diff 语境防御；本联合分支整合 #45 后台集成宿主、#44 IME 同步修复、#42 表格逐格编辑网格、#43 表格控件与拖排和双语建表命令。#21–#25、#28、#30 跟进规格票验收缺口，#26–#27 等人工与跨环境事项仍按验证清单跟进。
 >
-> 自动化套件为 943 项 Vitest 单测、11 项启动器契约测试、31 项原生浏览器输入回归，以及开发态与 VSIX 安装态共用的 88 项真实 VSCode 1.86.2 宿主集成用例（另有空窗口激活实测路径）。单元格删除边界、跨行拖选标记保护、中格退格后的网格绘制、Tab 可见行导航、格内粘贴换行、多表行号和中文候选写回均有回归保护，执行记录见人工验证清单；这不代表真实 IME、物理鼠标和视觉效果已由用户验收。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能数据与待验项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 和 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
+> 自动化套件为 943 项 Vitest 单测、21 项 node --test 契约测试（集成启动器 11 + 发布脚本 10）、31 项原生浏览器输入回归，以及开发态与 VSIX 安装态共用的 88 项真实 VSCode 1.86.2 宿主集成用例（另有空窗口激活实测路径）。单元格删除边界、跨行拖选标记保护、中格退格后的网格绘制、Tab 可见行导航、格内粘贴换行、多表行号和中文候选写回均有回归保护，执行记录见人工验证清单；这不代表真实 IME、物理鼠标和视觉效果已由用户验收。发布基建（双语 README、CHANGELOG、VSIX 体积闸、发布脚本与 CI 自动发布）已落地，见「打包与发布」。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能数据与待验项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 和 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
 
 ## 约定
 
@@ -22,6 +22,15 @@ VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 - **打包与安装态回归（#15）**：`npx @vscode/vsce package --no-dependencies` 产出 VSIX（esbuild bundle 自包含，不带 node_modules；`.vscodeignore` 排除 src/test/docs）。`node test/integration/runInstalled.mjs` 把 VSIX 经 `--install-extension` 装入隔离 profile 的 1.86.2 便携宿主（安装注册链路真实走通；1.86 测试模式要求 `--extensionTestsPath` 依赖 `--extensionDevelopmentPath` 同时存在，故 dev path 指向安装解压目录——加载代码仍是 VSIX 产物而非仓库源码树）后跑同一集成套件。
 - **性能测量**：`node test/perf/runPerf.mjs`（1千/1万/10万行、10 KB/100 KB/1 MB、超长行、图片密集与大围栏；报告写 `docs/perf/data/perf-report.json`）；档位数据与解读汇总在 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md)。
 - **版本锁定**：依赖一律精确版本（无 `^`），提交 lockfile；`engines.vscode ^1.86.0` 与 `@types/vscode 1.86.0` 对齐。`@types/node` 锁 22.x（vitest 5 的 vite peer 要求数 >=20.19，类型不进产物，宿主代码仍按 Node 18 API 面编码）。版本依据探索笔记（orch 仓库 exploration/01）。
+
+## 打包与发布
+
+- **体积红线**：VSIX 解压总量警告 1.5 MB / 上限 2.5 MB，一般单文件警告 700 KB / 上限 1 MB，图标上限 100 KB（256×256）。阈值定义在 `scripts/release.mjs` 的 `SIZE_LIMITS`；修改阈值视同变更本约定，需同步本节。
+- **双重防线**：`.vscodeignore` 挡打包输入，`scripts/release.mjs` 的 `inspectVsixEntries` 检查最终产物（必需清单 + 禁止模式 + 体积阈值），每次发布前必跑（`npm run release:check`，或随 `npm run release` / CI 自动执行）。新增运行时资产时两处同步维护：`.vscodeignore` 放行 + `REQUIRED_EXTENSION` 登记；漏登记会被发布检查拦下（`.github/` 混入包内即此类事故，实测发生过）。
+- **图标**：`media/vsidian-icon.png` 为原图（1254×1254），仅存仓库溯源、**不进 VSIX**；打包用 `media/vsidian-icon-256.png`（package.json `icon` 指向它）。替换图标时重新生成 256 版（PIL LANCZOS + optimize 即可），保持两文件同名关系。
+- **发布流程**：`CHANGELOG.md` 最新 `## <版本> - <日期>` 段落必须与 package.json `version` 一致（`scripts/release.mjs` 强校验，并以该段落作为 GitHub Release 说明）。发版步骤：升 `version` + 新建 CHANGELOG 段落 → 提交 → `npm run release:check` 本地过检查 → `git tag v<版本>` → `npm run release`（或推 tag 由 CI 执行）。
+- **CI 自动发布**：`.github/workflows/release.yml` 由 `v*` 标签触发。`release` job 跑 `npm run release`（检查失败即中止，不产出 Release）；`marketplace` job 从 Release 下载同一 VSIX 发布到 Marketplace（上市场的与 Release 附带的是同一份字节），需先配置仓库 secret `VSCE_PAT`（Azure DevOps PAT：Organization 选 All accessible organizations，Scope 选 Marketplace → Manage）并将 variable `MARKETPLACE_PUBLISH` 设为 `true`——两道开关配置前，推 tag 只产出 GitHub Release。
+- **README 双语**：`README.md`（中文，Marketplace 渲染这份）与 `README.en.md` 互为镜像，文首以**绝对 URL** 互指（相对链接在 Marketplace 页面会失效）。功能与用法变更两边同步维护；`README.en.md` 不进 VSIX（`.vscodeignore` 排除）。
 
 ## Agent skills
 
@@ -43,7 +52,8 @@ vsidian/
 │       └── file-tree/ # file-tree 技能部署实例
 ├── .github/               # GitHub 平台配置
 │   └── workflows/ # Actions 工作流目录
-│       └── ci.yml # GitHub CI 工作流
+│       ├── ci.yml      # GitHub CI 工作流
+│       └── release.yml # v* 标签触发的发布工作流
 ├── .gitignore             # Git 忽略规则
 ├── .scratch/              # MVP 开票草稿，临时目录
 ├── .vscode/               # VSCode 工作区配置
@@ -51,6 +61,7 @@ vsidian/
 │   └── tasks.json  # 调试前编译任务
 ├── .vscodeignore          # VSIX 打包排除清单
 ├── AGENTS.md              # 项目级 agent 规则单一事实源
+├── CHANGELOG.md           # 面向用户的版本变更日志
 ├── CLAUDE.md              # Claude 专属规则导入入口
 ├── CONTEXT.md             # 领域语言与产品边界事实源
 ├── docs/                  # 项目文档根
@@ -82,14 +93,19 @@ vsidian/
 │       ├── mvp-issues.md          # MVP GitHub Issue 索引
 │       └── mvp.md                 # MVP 规格主文档
 ├── esbuild.mjs            # esbuild 多产物构建脚本
+├── LICENSE                # MIT 许可证全文
 ├── media/                 # 随扩展打包的静态资源
 │   ├── css-contract-probe.css # 样式契约内部测试片段
+│   ├── vsidian-icon-256.png   # 扩展图标 256 版，VSIX 打包用
 │   └── vsidian-icon.png       # Vsidian 扩展图标
 ├── package-lock.json      # npm 依赖锁定文件
 ├── package.json           # 扩展清单与锁定依赖
 ├── package.nls.json       # 命令默认英文文案
 ├── package.nls.zh-cn.json # 命令简体中文文案
+├── README.en.md           # 英文版 README，与中文版互指
 ├── README.md              # 项目门面说明
+├── scripts/               # 仓库工具脚本目录
+│   └── release.mjs # 发布脚本：打包、包体检查与上传
 ├── src/                   # 扩展源码
 │   ├── extension.ts # 扩展激活入口
 │   ├── host/        # 宿主端实现
@@ -154,6 +170,8 @@ vsidian/
 │   │   ├── gen-sample.mjs # 性能样例生成器（#5）
 │   │   ├── runPerf.mjs    # 性能测量启动器（#5）
 │   │   └── suite.ts       # 性能测量套件（#5）
+│   ├── release/     # 发布脚本契约测试目录
+│   │   └── release.test.mjs # 发布脚本纯函数契约测试
 │   └── unit/        # vitest 单元契约测试
 │       ├── appliedUnackedRace.test.ts      # 已应用未确认竞态契约测试
 │       ├── changeMapping.test.ts           # 变更重定位契约
