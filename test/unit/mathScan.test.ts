@@ -4,7 +4,7 @@
 // 转义、空内容、$$ 优先于 $、行内代码 span 排除），保证同一文本在
 // 实时预览与阅读模式呈现一致语义。
 import { describe, expect, it } from 'vitest'
-import { scanMathRanges } from '../../src/shared/math'
+import { opensMathBlockLine, scanMathRanges, stripInlineTexTicks } from '../../src/shared/math'
 
 /** 文本按行拆分后扫描（行首 offset 自动累加，与 CM6 行迭代同构） */
 function scan(text: string) {
@@ -55,6 +55,44 @@ describe('行内公式 $…$（贴字规则与转义）', () => {
   it('空内容与相邻定界符不命中', () => {
     expect(hits('a $$ b')).toEqual([])
     expect(hits('$$$$')).toEqual([])
+  })
+
+  it('行首 $$ 后恰一对空内容 $$（$$  $$ / $$$$）不开启多行块（B-4 角案）', () => {
+    // 空内容的行首闭合形态按原文降级：不产出、也不吞后续行。若当作多行
+    // 块开启，后续首个 $$ 行会被误闭合成跨行块（与插件单行闭合语义分叉，
+    // 且增量重建的 trailingOpenStart 不认此形态 → 增量窗口漏块）
+    expect(hits('$$  $$\nb\n$$')).toEqual([])
+    expect(hits('$$$$\nb\n$$')).toEqual([])
+    // b 行的行内公式照常命中（不被上方角案吞入跨行块）
+    expect(hits('$$$$\n$x$\n$$')).toEqual([{ kind: 'inline', tex: 'x' }])
+  })
+
+  it('行内公式 tex 剥首尾反引号谓词（$`1+1`$ 与阅读侧同语义，C5）', () => {
+    // 与 @vscode/markdown-it-katex 一致：$`1+1`$ 的内容是 1+1（反引号是
+    // 定界装饰不进渲染输入）。MathOccurrence.tex 保留原文，渲染层经此
+    // 谓词剥离——live 与阅读共用同一实现
+    expect(stripInlineTexTicks('`1+1`')).toBe('1+1')
+    expect(stripInlineTexTicks('`a``')).toBe('a`')
+    expect(stripInlineTexTicks('`ab')).toBe('`ab')
+    expect(stripInlineTexTicks('``')).toBe('``')
+    expect(stripInlineTexTicks('x')).toBe('x')
+    // live 行扫描与渲染层链路：$`1+1`$ 命中且渲染输入为 1+1
+    expect(hits('a $`1+1`$ b')).toEqual([{ kind: 'inline', tex: '`1+1`' }])
+    expect(stripInlineTexTicks(scan('a $`1+1`$ b')[0]!.tex)).toBe('1+1')
+  })
+
+  it('开启多行块的行谓词（opensMathBlockLine，单一事实源）', () => {
+    expect(opensMathBlockLine('$$')).toBe(true)
+    expect(opensMathBlockLine('  $$ x')).toBe(true)
+    // 最后一对 $$ 恰在行尾 = 单行闭合形态，不开启多行块
+    expect(opensMathBlockLine('$$x$$')).toBe(false)
+    expect(opensMathBlockLine('$$  $$')).toBe(false)
+    expect(opensMathBlockLine('$$$$')).toBe(false)
+    expect(opensMathBlockLine('$$x$$y$$')).toBe(false)
+    // 对存在但不在行尾：多行块开启（与插件一致，tex 含那对 $$）
+    expect(opensMathBlockLine('$$x$$y')).toBe(true)
+    expect(opensMathBlockLine('普通行 $$')).toBe(false)
+    expect(opensMathBlockLine('')).toBe(false)
   })
 
   it('单空格内容 $ $ 依插件语义命中（开侧右字符不参与开判定）', () => {

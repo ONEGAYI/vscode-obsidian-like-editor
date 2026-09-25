@@ -136,6 +136,7 @@ vsidian/
 │       ├── main.css              # webview 全局布局样式
 │       ├── main.ts               # webview 启动入口
 │       ├── markdownDoc.ts        # Markdown 文档工具与树查询
+│       ├── mathRenderCache.ts    # KaTeX 渲染 LRU 缓存共享模块
 │       ├── perfProbe.ts          # webview 性能探针（#5）
 │       ├── readingBlocks.ts      # markdown-it 阅读块切分
 │       ├── readingMarkdown.ts    # markdown-it 安全渲染层

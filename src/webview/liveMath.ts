@@ -7,8 +7,9 @@
 //   「源码态 mark」与「渲染态 replace widget」（光标进入公式范围显源码、
 //   离开恢复排版——与链接/双链同语义）
 //
-// 渲染（KaTeX）与降级：
-// - katex.renderToString 结果按 `tex + displayMode` 缓存（LRU），击键与
+// ---- 渲染（KaTeX）与降级 ----
+// - renderMathHtml 结果按 `tex + displayMode` 缓存（LRU，共享模块
+//   mathRenderCache——live 与阅读两通道同一缓存；#59 评审 C2），击键与
 //   视口滚动不重渲染；widget 装饰实例同样按参数缓存（RangeSet.eq 前提）
 // - 解析失败（renderMathHtml 返回 null）→ widget 显示原文（vsidian-math-error
 //   样式化降级，源文不丢、邻近内容不受影响、光标进入仍可编辑）
@@ -20,73 +21,30 @@
 //
 // 已知限制：跨行块超过 MATH_BLOCK_LOOKBACK_LINES（512 行）回溯窗口时，
 // 远端击键后的增量重建可能暂时漏配对（live 显源码），文档装载/resync 的
-// 全量扫描恢复——降级方向安全。
+// 全量扫描恢复——降级方向安全；未闭合块的向下延伸在 MATH_BLOCK_EXTEND_LIMIT
+// 行后熔断（超长闭合同理漏配对）。
 import { EditorSelection, RangeSet, StateField, type Extension, type Range, type Text, type Transaction } from '@codemirror/state'
 import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet } from '@codemirror/view'
 import type { Tree } from '@lezer/common'
-import katex from 'katex'
 import { chainAt, visitRange, type SourceRange } from './markdownDoc'
 import { liveDecorationsField, selectionTouchesRange } from './liveDecorations'
-import { MATH_CLASS_NAMES, scanMathInLine, scanMathRanges, type MathOccurrence } from '../shared/math'
+import { MATH_CLASS_NAMES, opensMathBlockLine, scanMathInLine, scanMathRanges, type MathOccurrence } from '../shared/math'
+import { MATH_RENDER_CACHE_LIMIT, mathRenderStats, renderMathHtml } from './mathRenderCache'
+
+export { MATH_RENDER_CACHE_LIMIT, mathRenderStats, renderMathHtml }
 
 /** 块表增量重建的向上回溯窗口（行）：覆盖绝大多数跨行块的开启定界符；
  *  超长块的远端击键按已知限制降级（见模块头注释） */
 export const MATH_BLOCK_LOOKBACK_LINES = 512
 
+/** 未闭合块向下延伸的熔断上限（行）：超过后停止延伸（#59 评审 C3），
+ *  超长闭合的块增量窗口漏配对 → live 显源码，全量扫描恢复 */
+export const MATH_BLOCK_EXTEND_LIMIT = 4096
+
+/** 延伸批大小（行）：每批 concat 后增量续扫新行段 */
+const MATH_BLOCK_EXTEND_BATCH = 256
+
 const mathSourceDeco = Decoration.mark({ class: MATH_CLASS_NAMES.mathSource })
-
-// ---- 渲染缓存（KaTeX HTML 字符串；键 = tex + displayMode） ----
-
-/** 缓存上限：键是用户内容（公式源文），无上限会随大文档滚动无限累积 */
-export const MATH_RENDER_CACHE_LIMIT = 512
-
-const renderCache = new Map<string, string | null>()
-export const mathRenderStats = { renders: 0, cacheHits: 0 }
-
-function lruTouch(cache: Map<string, string | null>, key: string): void {
-  const hit = cache.get(key)
-  if (hit !== undefined || cache.has(key)) {
-    cache.delete(key)
-    cache.set(key, hit as string | null)
-  }
-}
-
-function lruEvict(cache: Map<string, string | null>, limit: number): void {
-  while (cache.size > limit) {
-    const oldest = cache.keys().next().value
-    if (oldest === undefined) {
-      break
-    }
-    cache.delete(oldest)
-  }
-}
-
-/**
- * 渲染公式为 KaTeX HTML（#59 live 侧）。失败返回 null（调用方降级为原文）。
- * 成功与失败的结果都进 LRU 缓存——同一公式的失败也只需解析一次。
- */
-export function renderMathHtml(tex: string, displayMode: boolean): string | null {
-  const key = `${displayMode ? 'D' : 'I'}\u0000${tex}`
-  if (renderCache.has(key)) {
-    mathRenderStats.cacheHits += 1
-    lruTouch(renderCache, key)
-    return renderCache.get(key) ?? null
-  }
-  let html: string | null
-  try {
-    html = katex.renderToString(tex, {
-      displayMode,
-      throwOnError: true,
-      strict: false, // 中文等 Unicode 数学模式字符静默渲染（与阅读侧同口径）
-    })
-  } catch {
-    html = null
-  }
-  mathRenderStats.renders += 1
-  renderCache.set(key, html)
-  lruEvict(renderCache, MATH_RENDER_CACHE_LIMIT)
-  return html
-}
 
 // ---- widget 与装饰实例缓存 ----
 
@@ -214,13 +172,19 @@ function rebuildBlocks(
     return out
   }
   let lines = collectLines(firstLine, lastLine)
-  let openFrom = trailingOpenStart(lines)
-  while (openFrom !== null && lastLine < doc.lines) {
-    const nextLast = Math.min(lastLine + 256, doc.lines)
+  // 末尾处于未闭合块中时延伸到闭合、文末或熔断上限；扫描按增量续扫
+  // （只扫新 concat 的行段，open 状态延续）——从零重扫会让未闭合长尾
+  // 呈平方级成本（#59 评审 C3）
+  let openFrom = scanOpenIncrement(lines, 0, null)
+  let scanned = lines.length
+  let extended = 0
+  while (openFrom !== null && lastLine < doc.lines && extended < MATH_BLOCK_EXTEND_LIMIT) {
+    const nextLast = Math.min(lastLine + MATH_BLOCK_EXTEND_BATCH, doc.lines)
     lines = lines.concat(collectLines(lastLine + 1, nextLast))
     lastLine = nextLast
-    const still = trailingOpenStart(lines)
-    openFrom = still
+    extended += MATH_BLOCK_EXTEND_BATCH
+    openFrom = scanOpenIncrement(lines, scanned, openFrom)
+    scanned = lines.length
   }
   const start = doc.line(firstLine).from
   const end = doc.line(lastLine).to
@@ -238,15 +202,16 @@ function rebuildBlocks(
   return out
 }
 
-/** 行集合末尾是否处于未闭合块中（最后一个行首 `$$` 开启且未闭合时返回
- *  其相对行号，否则 null）——scanMathRanges 不产出未闭合块，此处单独
- *  判定以驱动重建范围的延伸 */
-function trailingOpenStart(lines: readonly string[]): number | null {
-  let open: number | null = null
-  for (let i = 0; i < lines.length; i++) {
+/** 块开启状态的行序列续扫（#59 评审 C3 增量化 + B-4/C4 谓词统一）：
+ *  open 为 [0, fromIndex) 已扫部分的未闭合块开启行号（或 null），只扫
+ *  新增行段并返回新的开启行号——scanMathRanges 不产出未闭合块，此处
+ *  单独判定以驱动重建范围的延伸。开启判定与 scanMathRanges 共用
+ *  opensMathBlockLine（shared/math.ts 单一事实源）。 */
+function scanOpenIncrement(lines: readonly string[], fromIndex: number, open: number | null): number | null {
+  for (let i = fromIndex; i < lines.length; i++) {
     const trimmed = lines[i]!.trim()
     if (open === null) {
-      if (trimmed.startsWith('$$') && ![...trimmed.slice(2).matchAll(/\$\$/g)].length) {
+      if (opensMathBlockLine(trimmed)) {
         open = i
       }
     } else if (trimmed.includes('$$')) {

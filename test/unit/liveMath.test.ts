@@ -1,22 +1,30 @@
 // 实时预览公式装饰契约测试（工单 #59）：liveMath.ts 的视口装饰构建
 // （照 liveLinks.ts 的 ViewPlugin 模式）、跨行块表的 StateField 增量维护、
-// KaTeX widget 渲染与原文降级、渲染/装饰实例缓存。
+// KaTeX widget 渲染与原文降级、渲染/装饰实例缓存；宿主链路 undo 用例
+// 仿 liveTable.test.ts 的 setupLinked 模式（mock 宿主端口，#57 评审 A8）。
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 import { EditorSelection, EditorState } from '@codemirror/state'
-import { Decoration, EditorView } from '@codemirror/view'
+import { Decoration, EditorView, keymap } from '@codemirror/view'
+import { defaultKeymap } from '@codemirror/commands'
 import {
   LiveMathWidget,
+  MATH_BLOCK_EXTEND_LIMIT,
+  MATH_RENDER_CACHE_LIMIT,
   buildMathDecorationRanges,
   liveMath,
   mathBlockDecorations,
   mathBlocksField,
+  mathRenderStats,
   mathWidgetDeco,
   renderMathHtml,
 } from '../../src/webview/liveMath'
 import { liveDecorationsField } from '../../src/webview/liveDecorations'
 import { MATH_CLASS_NAMES } from '../../src/shared/math'
 import type { MathOccurrence } from '../../src/shared/math'
+import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
+import { DocumentSession, type HostDocumentPort } from '../../src/host/documentSession'
+import type { HostToWebview, SerChange, WebviewToHost } from '../../src/shared/protocol'
 
 /** 视口直驱：单行文档全视口（行内通道；跨行块走 mathBlockDecorations） */
 function build(
@@ -215,6 +223,42 @@ describe('跨行块表：StateField 增量维护', () => {
     const full = [...EditorState.create({ doc: state.doc, extensions: [mathBlocksField] }).field(mathBlocksField)]
     expect(incremental).toEqual(full)
   })
+
+  it('未闭合 $$ 长尾的延伸熔断：超过上限即停，行为等价于未闭合降级（C3）', () => {
+    // 行 1 开块 + 超过熔断上限的普通行长尾：延伸在 MATH_BLOCK_EXTEND_LIMIT
+    // 行后停止（成本从平方级降为线性），块表不产出、不崩溃
+    const lines = ['$$', ...Array.from({ length: MATH_BLOCK_EXTEND_LIMIT + 600 }, (_, i) => `text ${i}`)]
+    let state = EditorState.create({ doc: lines.join('\n'), extensions: [mathBlocksField] })
+    expect([...state.field(mathBlocksField)]).toHaveLength(0) // 全量扫描：未闭合
+    state = state.update({ changes: { from: state.doc.length, insert: 'x' } }).state
+    expect([...state.field(mathBlocksField)]).toHaveLength(0) // 增量：熔断后同样降级
+  })
+
+  it('闭合在延伸上限内的长块照常配对：块中段击键经增量续扫重建（C3）', () => {
+    // 块体 1000 行（> 回溯窗口 512、< 熔断 4096）：在块中段击键，
+    // 窗口末尾处于未闭合块中 → 增量延伸到闭合行，块区间与全量一致
+    const body = Array.from({ length: 1000 }, (_, i) => `line ${i}`)
+    const doc = ['$$', ...body, '$$', '尾部'].join('\n')
+    const midLine = 1 + Math.floor(body.length / 2) // 行号（1 基）：块中段
+    let state = EditorState.create({ doc, extensions: [mathBlocksField] })
+    const at = state.doc.line(midLine).from + 2
+    state = state.update({ changes: { from: at, insert: 'x' } }).state
+    const incremental = [...state.field(mathBlocksField)]
+    const full = [...EditorState.create({ doc: state.doc, extensions: [mathBlocksField] }).field(mathBlocksField)]
+    expect(incremental).toHaveLength(1)
+    expect(incremental).toEqual(full)
+  })
+
+  it('空内容闭合形态（$$  $$ / $$$$）不开启多行块：增量窗口不延伸（B-4/C4）', () => {
+    // scanMathRanges 与 trailingOpenStart（scanOpenIncrement）共用
+    // opensMathBlockLine：该形态两侧一致判「不开启」，后续 $$ 行是
+    // 独立块的开启而非误闭合前文
+    const doc = '$$  $$\ntext\n$$\nb\n$$'
+    const state = EditorState.create({ doc, extensions: [mathBlocksField] })
+    const blocks = [...state.field(mathBlocksField)]
+    expect(blocks).toHaveLength(1) // 只有 text 后的跨行块，首行角案不吞并
+    expect(doc.slice(blocks[0]!.from, blocks[0]!.to)).toBe('$$\nb\n$$')
+  })
 })
 
 describe('KaTeX widget 渲染与缓存', () => {
@@ -227,13 +271,34 @@ describe('KaTeX widget 渲染与缓存', () => {
     expect(renderMathHtml('\\notdefined', false)).toBeNull()
   })
 
-  it('渲染缓存：同 tex+displayMode 重复调用不重算', () => {
-    const probe = 'cache_probe_' + Math.random().toString(36).slice(2)
-    // 先污染缓存再计数无从下手——以实例等价性钉住缓存行为
-    const a = renderMathHtml('c^2', false)
-    const b = renderMathHtml('c^2', false)
+  it('渲染缓存：同 tex+displayMode 两次调用 renders 恰 +1、cacheHits 恰 +1（A2 重写）', () => {
+    const probe = 'a2probe_' + Math.random().toString(36).slice(2)
+    const renders0 = mathRenderStats.renders
+    const hits0 = mathRenderStats.cacheHits
+    const a = renderMathHtml(probe, false)
+    expect(mathRenderStats.renders).toBe(renders0 + 1) // 首次真实渲染
+    expect(mathRenderStats.cacheHits).toBe(hits0)
+    const b = renderMathHtml(probe, false)
+    expect(mathRenderStats.renders).toBe(renders0 + 1) // 不重算
+    expect(mathRenderStats.cacheHits).toBe(hits0 + 1) // 命中恰 +1
     expect(a).toBe(b)
-    expect(probe.length).toBeGreaterThan(0)
+    // displayMode 参与键：同 tex 的块级形态不命中行内条目
+    renderMathHtml(probe, true)
+    expect(mathRenderStats.renders).toBe(renders0 + 2)
+  })
+
+  it('渲染缓存 LRU 淘汰：填满上限后最早条目被逐出、再次访问需重算（A2）', () => {
+    const seed = Math.random().toString(36).slice(2)
+    const first = `lru_first_${seed}`
+    expect(renderMathHtml(first, false)).not.toBeNull()
+    // 用互不相同的新 tex 填满 512 上限并额外多压一条，first 被逐出
+    for (let i = 0; i <= MATH_RENDER_CACHE_LIMIT; i++) {
+      renderMathHtml(`lru_filler_${i}_${seed}`, false)
+    }
+    const renders = mathRenderStats.renders
+    renderMathHtml(first, false)
+    expect(mathRenderStats.renders).toBe(renders + 1) // 逐出后需重算
+    expect(mathRenderStats.cacheHits).toBeGreaterThanOrEqual(0)
   })
 
   it('widget toDOM：成功态带稳定类名与 KaTeX 内容', () => {
@@ -241,6 +306,17 @@ describe('KaTeX widget 渲染与缓存', () => {
     const dom = widget.toDOM()
     expect(dom.classList.contains(MATH_CLASS_NAMES.math)).toBe(true)
     expect(dom.querySelector('.katex')).toBeTruthy()
+  })
+
+  it('行内 $`1+1`$ 的渲染输入剥反引号（与阅读侧同语义，C5）', () => {
+    // occurrence.tex 保留原文（含反引号）；渲染层（renderMathHtml 共享
+    // 入口）对行内剥离——live widget 与阅读 span 呈现同一 KaTeX 输出
+    const items = collect(build('a $`1+1`$ b', 0))
+    expect(items).toHaveLength(1)
+    expect(items[0]!.widget!.tex).toBe('`1+1`')
+    const dom = items[0]!.widget!.toDOM()
+    expect(dom.querySelector('.katex')).toBeTruthy()
+    expect(dom.querySelector('annotation')?.textContent).toBe('1+1')
   })
 
   it('widget toDOM：失败态显示原文且可读', () => {
@@ -290,6 +366,142 @@ describe('liveMath 扩展装配（真实 EditorView）', () => {
       view.destroy()
       parent.remove()
     }
+  })
+})
+
+// ---- 宿主权威链路（视图 → edit.request → TextDocument → undo 回流） ----
+
+class FakeDoc implements HostDocumentPort {
+  content: string
+  ver: number
+  applyCalls: SerChange[][] = []
+  private undoStack: { changes: SerChange[]; before: string }[] = []
+  private listener: ((changes: SerChange[], version: number) => void) | undefined
+
+  constructor(text: string) {
+    this.content = text
+    this.ver = 1
+  }
+
+  get version(): number {
+    return this.ver
+  }
+
+  getText(): string {
+    return this.content
+  }
+
+  onDocChanged(cb: (changes: SerChange[], version: number) => void): void {
+    this.listener = cb
+  }
+
+  async applyChanges(changes: SerChange[]): Promise<boolean> {
+    this.applyCalls.push(changes)
+    this.undoStack.push({ changes, before: this.content })
+    this.content = applyToText(this.content, changes)
+    this.ver++
+    this.listener?.(changes, this.ver)
+    return true
+  }
+
+  async undo(): Promise<boolean> {
+    const top = this.undoStack.pop()
+    if (!top) {
+      return false
+    }
+    const inverse: SerChange[] = top.changes.map((c) => ({
+      offset: c.offset,
+      length: c.text.length,
+      text: top.before.slice(c.offset, c.offset + c.length),
+    }))
+    this.content = top.before
+    this.ver++
+    this.listener?.(inverse, this.ver)
+    return true
+  }
+
+  async redo(): Promise<boolean> {
+    return false
+  }
+}
+
+function applyToText(text: string, changes: SerChange[]): string {
+  const sorted = [...changes].sort((a, b) => a.offset - b.offset)
+  let out = text
+  let shift = 0
+  for (const c of sorted) {
+    out = out.slice(0, c.offset + shift) + c.text + out.slice(c.offset + shift + c.length)
+    shift += c.text.length - c.length
+  }
+  return out
+}
+
+interface LinkedMathPanel {
+  controller: WebviewSyncController
+  session: DocumentSession
+  doc: FakeDoc
+  hostSent: WebviewToHost[]
+  sessionId: string
+}
+
+async function setupLinkedMath(text: string): Promise<LinkedMathPanel> {
+  const doc = new FakeDoc(text)
+  const session = new DocumentSession(doc, { docUri: 'file:///d%3A/notes/math.md', onNotice: () => undefined })
+  doc.onDocChanged((changes, version) => session.handleDocChanged(changes, version))
+  const hostSent: WebviewToHost[] = []
+  let sessionId = ''
+  const bridge: VsCodeBridge = {
+    postMessage: (m) => {
+      const msg = m as WebviewToHost
+      hostSent.push(msg)
+      if (sessionId) {
+        void session.handleWebviewMessage(msg, sessionId)
+      }
+    },
+    getState: () => undefined,
+    setState: () => undefined,
+  }
+  const controller = new WebviewSyncController(bridge)
+  sessionId = session.attachPanel({
+    send: (m: HostToWebview) => controller.handleHostMessage(m),
+  })
+  controller.mount(document.createElement('div'), [keymap.of(defaultKeymap)])
+  for (let i = 0; i < 10; i++) {
+    await new Promise((r) => setTimeout(r, 5))
+  }
+  return { controller, session, doc, hostSent, sessionId }
+}
+
+describe('公式编辑宿主权威链路（A8）', () => {
+  it('公式内键入 → edit.request 单笔写回 → undo 一次恢复原文与渲染态', async () => {
+    const text = '价格 $x^2$ 元\n'
+    const linked = await setupLinkedMath(text)
+    const view = linked.controller.getView()!
+    const at = text.indexOf('2')
+    view.dispatch({ selection: EditorSelection.single(at + 1) })
+    view.dispatch({ changes: { from: at + 1, insert: '+1' }, userEvent: 'input.type' })
+    for (let i = 0; i < 10; i++) {
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    expect(linked.doc.getText()).toBe(text.replace('$x^2$', '$x^2+1$'))
+    expect(linked.hostSent.filter((m) => m.kind === 'edit.request')).toHaveLength(1)
+    await linked.session.handleWebviewMessage(
+      { kind: 'history.request', op: 'undo' },
+      linked.sessionId,
+    )
+    for (let i = 0; i < 10; i++) {
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    // undo 一次：权威文本与视图原文恢复
+    expect(linked.doc.getText()).toBe(text)
+    expect(view.state.doc.toString()).toBe(text)
+    // 装饰状态恢复：undo 回流后光标仍停在公式区间内（源码态可编辑）；
+    // 移开光标后公式回到渲染态 widget（装饰随权威文本重建）
+    expect(view.contentDOM.querySelector(`.${MATH_CLASS_NAMES.mathSource}`)).toBeTruthy()
+    view.dispatch({ selection: EditorSelection.single(0) })
+    expect(view.contentDOM.querySelector(`.${MATH_CLASS_NAMES.math}`)).toBeTruthy()
+    expect(view.contentDOM.querySelector(`.${MATH_CLASS_NAMES.mathSource}`)).toBeNull()
+    linked.controller.dispose()
   })
 })
 

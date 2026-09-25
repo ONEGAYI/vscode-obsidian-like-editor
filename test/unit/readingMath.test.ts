@@ -143,4 +143,25 @@ describe('双视图语义一致性：阅读渲染与 shared/math.ts 对拍', () 
       expect(katexCount, JSON.stringify(text)).toBe(occurrences.length)
     }
   })
+
+  it('段落内跨行 $…$：阅读渲染公式、live 显源码——已声明的已知差异钉子', async () => {
+    // 已知差异（docs/perf/2026-09-math-rendering.md）：markdown-it 的段内
+    // 联文本允许软换行跨行的 $…$（开闭定界符分行），live 行扫描以行为
+    // 单位不识别。本用例钉住两侧各自正确的呈现，防止未来语义漂移无察觉：
+    // 阅读渲染 KaTeX（段落级 inline 扫描），live 的 scanMathRanges 不产出。
+    const text = '前 $x\ny$ 后' // 同一自然段（无空行）内的跨行行内公式
+    const [para] = renderBlocks(text)
+    expect(para.querySelectorAll('.katex')).toHaveLength(1)
+    expect(para.textContent).toContain('前')
+    expect(para.textContent).toContain('后')
+    const { scanMathRanges } = await import('../../src/shared/math')
+    expect(scanMathRanges(text.split('\n'), 0)).toHaveLength(0)
+  })
+
+  it('行内 $`1+1`$ 两侧同渲染（反引号剥离一致，C5）', () => {
+    const [para] = renderBlocks('a $`1+1`$ b')
+    expect(para.querySelectorAll('.katex')).toHaveLength(1)
+    // 剥离后的 tex 进入渲染输入：annotation 为 1+1（不含反引号）
+    expect(para.querySelector('annotation')?.textContent).toBe('1+1')
+  })
 })

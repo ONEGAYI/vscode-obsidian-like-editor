@@ -13,10 +13,12 @@
 // - 行内代码 span：反引号配对内的 `$` 不参与扫描（markdown-it 的
 //   backticks 规则在数学规则之后，span 优先消费；未配对反引号按普通
 //   字符处理）。
-// - 块级 `$$`：行首（剥缩进）`$$` 开启；单行闭合要求 `$$` 后余文恰在
-//   行尾有一对 `$$`；余文含多对时按段内 `$$…$$` 处理；多行闭合在首个
-//   出现 `$$` 的行（行尾 `$$` 取行内最后一对，否则取 trim 后首对）。
-//   未闭合块不产出（稳定降级为源码）。
+// - 块级 `$$`：行首（剥缩进）`$$` 开启（开启判定 = opensMathBlockLine，
+//   liveMath 增量重建共用）；行首余文的最后一对 `$$` 恰在行尾为单行闭合
+//   形态——内容非空产出单行块、空内容（`$$  $$` / `$$$$`）按原文降级；
+//   余文含多对时按段内 `$$…$$` 处理；多行闭合在首个出现 `$$` 的行（行尾
+//   `$$` 取行内最后一对，否则取 trim 后首对）。未闭合块不产出（稳定降级
+//   为源码）。
 //
 // 本模块不依赖 vscode/DOM/CM6（node 单测直驱；宿主与 webview 双产物共用）。
 // 已知差异（记录于 docs/perf/2026-09-math-rendering.md）：markdown-it 的
@@ -191,13 +193,45 @@ function findBacktickRun(line: string, from: number, run: number): number {
 }
 
 /**
+ * 行首 `$$` 的行是否开启多行块（#59 评审 B-4/C4 的单一事实源）：
+ * `$$` 后余文的最后一对 `$$` 恰在行尾时，该行是单行闭合形态（含空内容
+ * 的 `$$  $$` / `$$$$`——与 @vscode/markdown-it-katex 的 blockMath 单行
+ * 闭合分支一致），不开启多行块；对存在但不在行尾（`$$x$$y`）仍开启
+ * （插件把该形态当多行块、tex 含行内那对 `$$`）。scanMathRanges 的
+ * 块模式与 liveMath 增量重建（trailingOpenStart）必须共用本谓词——
+ * 两处分叉会让增量窗口与全量扫描对同一文本产出不同的块结构。
+ */
+export function opensMathBlockLine(trimmedLine: string): boolean {
+  const trimmed = trimmedLine.trim()
+  if (!trimmed.startsWith('$$')) {
+    return false
+  }
+  const rest = trimmed.slice(2)
+  const pairs = [...rest.matchAll(/\$\$/g)]
+  return !(pairs.length > 0 && pairs[pairs.length - 1]!.index === rest.length - 2)
+}
+
+/**
+ * 行内公式 tex 的反引号剥离（#59 评审 C5）：`` $`1+1`$ `` 形态下反引号
+ * 是定界装饰、不进渲染输入（与 @vscode/markdown-it-katex 的 inline 规则
+ * 一致）。MathOccurrence.tex 保留定界符之间原文，live 与阅读的渲染层
+ * 经此谓词剥离——同一实现保证两视图呈现一致。
+ */
+export function stripInlineTexTicks(tex: string): string {
+  return tex.length > 2 && tex[0] === '`' && tex[tex.length - 1] === '`'
+    ? tex.slice(1, -1)
+    : tex
+}
+
+/**
  * 扫描连续行集合中的全部公式出现（跨行 `$$` 块 + 各行行内公式）。
  * firstLineStart 为首行行首的全文 offset（区块区间以全文坐标产出）。
  *
- * 块模式状态机：行首（剥缩进）`$$` 开启块，首个出现 `$$` 的行闭合；
- * 行首 `$$` 后余文含多对 `$$` 时该行按段内形态处理（与插件 blockMath 的
- * 单行判定一致）。窗口首行已在某个未闭合块内时，本扫描以非块态起步，
- * 不会把窗口内的闭合定界符误配为新块（闭合判定要求先有开启行）。
+ * 块模式状态机：行首（剥缩进）`$$` 开启块（开启判定 = opensMathBlockLine
+ * 单一事实源），首个出现 `$$` 的行闭合；行首 `$$` 后余文的最后一对 `$$`
+ * 恰在行尾时是单行闭合形态——内容非空产出单行块，空内容（`$$  $$` /
+ * `$$$$`）按原文降级不产出。窗口首行已在某个未闭合块内时，本扫描以非块
+ * 态起步，不会把窗口内的闭合定界符误配为新块（闭合判定要求先有开启行）。
  */
 export function scanMathRanges(lines: readonly string[], firstLineStart: number): MathOccurrence[] {
   if (!lines.some((line) => line.includes('$'))) {
@@ -233,24 +267,26 @@ export function scanMathRanges(lines: readonly string[], firstLineStart: number)
     if (trimmed.startsWith('$$')) {
       const rest = trimmed.slice(2)
       const pairs = [...rest.matchAll(/\$\$/g)]
-      if (pairs.length === 1 && pairs[0]!.index === rest.length - 2 && rest.slice(0, -2).trim() !== '') {
-        // 行首单行块 `$$x$$`
-        out.push({
-          from: lineStart + indent,
-          to: lineStart + line.length,
-          kind: 'block',
-          tex: rest.slice(0, -2),
-        })
+      if (pairs.length > 0 && pairs[pairs.length - 1]!.index === rest.length - 2) {
+        // 单行闭合形态（最后对恰在行尾）：pairs 恰一时内容非空产出单行块
+        // `$$x$$`，空内容（$$  $$ / $$$$）按原文降级——不产出也不开启
+        // 多行块（B-4 角案：开启会吞掉后续首个 $$ 行，与插件单行闭合语义
+        // 分叉）；多对仍按段内形态处理（与旧行为一致）
+        if (pairs.length === 1 && rest.slice(0, -2).trim() !== '') {
+          out.push({
+            from: lineStart + indent,
+            to: lineStart + line.length,
+            kind: 'block',
+            tex: rest.slice(0, -2),
+          })
+        } else if (pairs.length > 1) {
+          out.push(...scanMathInLine(line, lineStart))
+        }
         lineStart += line.length + 1
         continue
       }
-      if (pairs.length > 1) {
-        // 首行多对 `$$`：不是块级，按段内形态处理（下诉行内扫描）
-        out.push(...scanMathInLine(line, lineStart))
-        lineStart += line.length + 1
-        continue
-      }
-      // 多行块开始（rest 无 $$；rest 非空时为块首行内容）
+      // 多行块开始（opensMathBlockLine 口径：rest 无对或对不在行尾；
+      // rest 非空时为块首行内容）
       blockOpen = { from: lineStart + indent, tex: rest }
       lineStart += line.length + 1
       continue

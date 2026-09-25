@@ -12,9 +12,9 @@
 // 锚点在 convertTaskItems 中按 li 首行源文计算（#9 勾选写回的定位依据）。
 import MarkdownIt, { type Env, type StateInline, type Token } from 'markdown-it'
 import katexPlugin from '@vscode/markdown-it-katex'
-import katex from 'katex'
-import { MATH_CLASS_NAMES } from '../shared/math'
+import { MATH_CLASS_NAMES, stripInlineTexTicks } from '../shared/math'
 import { WIKILINK_CLASS_NAMES, parseWikilinkInner } from '../shared/wikilink'
+import { renderMathHtml } from './mathRenderCache'
 import { tableCellBreakLength } from './tableCells'
 
 /** 渲染环境：行首/行尾 offset 表（lineStarts[i]/lineEnds[i] 为第 i 行界） */
@@ -36,24 +36,12 @@ export const READING_MARKDOWN_CLASS_NAMES = {
 } as const
 
 /**
- * KaTeX 渲染（#59）：成功返回 KaTeX HTML，失败返回 null（调用方降级为
+ * KaTeX 渲染（#59）：经共享缓存入口 mathRenderCache.renderMathHtml（live
+ * 与阅读两通道同一 LRU，#59 评审 C2）。失败返回 null（调用方降级为
  * 原文 span——不显示英文错误消息，原文可读且源文不丢）。displayMode 的
  * 判定与 @vscode/markdown-it-katex 的 katexInline 一致（align/equation 等
  * 环境强制 display）。
  */
-function renderKatex(latex: string, displayMode: boolean): string | null {
-  try {
-    return katex.renderToString(latex, {
-      displayMode,
-      throwOnError: true,
-      // 中文等 Unicode 文本字符在数学模式下静默渲染（strict 警告不阻断）：
-      // 中文用户在公式内夹注中文是常态，不构成降级理由
-      strict: false,
-    })
-  } catch {
-    return null
-  }
-}
 
 /** HTML 转义（降级 span 的原文内容；与 markdown-it 的 default规则同覆盖面） */
 function escapeHtmlText(s: string): string {
@@ -76,19 +64,18 @@ function escapeHtmlText(s: string): string {
 function installMathRenderers(md: InstanceType<typeof MarkdownIt>): void {
   const inline = (tokens: Token[], idx: number): string => {
     const content = tokens[idx]!.content
-    // 与插件一致：$`1+1`$ 形态剥反引号
-    const tex = content.length > 2 && content[0] === '`' && content[content.length - 1] === '`'
-      ? content.slice(1, -1)
-      : content
+    // 与插件一致：$`1+1`$ 形态剥反引号（stripInlineTexTicks 与 live 渲染
+    // 共用同一实现，#59 评审 C5；renderMathHtml 内部对行内同样剥离）
+    const tex = stripInlineTexTicks(content)
     const displayMode = /\\begin\{(align|equation|gather|cd|alignat)\}/i.test(tex)
-    const html = renderKatex(tex, displayMode)
+    const html = renderMathHtml(content, displayMode)
     return html !== null
       ? `<span class="${MATH_CLASS_NAMES.math}">${html}</span>`
       : `<span class="${MATH_CLASS_NAMES.mathError}" title="${escapeHtmlText(tex)}">${escapeHtmlText(`$${tex}$`)}</span>`
   }
   const block = (tokens: Token[], idx: number): string => {
     const tex = tokens[idx]!.content
-    const html = renderKatex(tex, true)
+    const html = renderMathHtml(tex, true)
     return html !== null
       ? `<p class="katex-block ${MATH_CLASS_NAMES.math} ${MATH_CLASS_NAMES.mathBlock}">${html}</p>\n`
       : `<p class="katex-block ${MATH_CLASS_NAMES.mathError}"><code>${escapeHtmlText(`$$${tex}$$`)}</code></p>\n`
