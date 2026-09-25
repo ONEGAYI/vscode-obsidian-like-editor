@@ -126,7 +126,12 @@
 | `.vsidian-outline-slider-dot`（+ `.vsidian-outline-slider-active`） | 六档圆点（结绳串珠）：空闲珠空心（透明面 + 描边圆环）、当前珠实心——两态差异唯一来源是 `active` 类规则 | 无 | 本项目自有；实心色跟随 `--vscode-button-background` |
 | `.vsidian-outline-chevron` / `.vsidian-outline-chevron-spacer` | #67 折叠箭头按钮（有子项条目）/ 无子项条目的同宽占位（文字左缘对齐） | 无 | 本项目自有；线宽不写在 SVG 属性上（与侧栏图标同口径）；点箭头折叠/展开、点文字仍跳转 |
 | `.vsidian-outline-collapsed` | 折叠中的父节点条目（箭头旋转 -90° 朝右是两态差异唯一来源） | 无 | 本项目自有 |
-| `.vsidian-outline-hidden` | 折叠遮蔽的条目（`display:none`，类切换是唯一显隐开关；DOM 保留维持索引序） | 无 | 本项目自有 |
+| `.vsidian-outline-hidden` | 折叠遮蔽的条目（`display:none`，类切换是唯一显隐开关；DOM 保留维持索引序） | 无 | 本项目自有；#68 起搜索过滤隐藏同用此类（可见口径 = 折叠可见 ∩ 搜索保留） |
+| `.vsidian-outline-toolbar` | #68 工具条行（侧栏顶栏与滑块行之间：跳转到末尾、重置、搜索框；显隐唯一开关是 `outline-active` 类） | 无（Quiet Outline 的 function-bar 为插件私有 DOM） | 本项目自有 |
+| `.vsidian-outline-jump-bottom` / `.vsidian-outline-reset` | #68 工具条图标按钮（跳转到笔记末尾 / 重置三合一），与侧栏顶栏按钮同形态 | 无 | 本项目自有；线宽不写在 SVG 属性上（与侧栏图标同口径） |
+| `.vsidian-outline-search`（+ `::placeholder`） | #68 标题搜索输入框（flex 占余宽；配色走 `--vscode-input-*` 变量族） | 无 | 本项目自有 |
+| `mark.vsidian-outline-search-hit` | #68 命中片段高亮（只包命中子串；背景跟随 `--vscode-editor-findMatchHighlightBackground`，与正文查找命中同族视觉语言） | 无 | 本项目自有；文本层切分，与 #65 语义元素正交（mark 不包裹语义元素外层） |
+| `.vsidian-outline-nomatch` | #68 无匹配占位（有词条零命中的可读反馈，与「无标题」空态同口径弱化） | 无 | 本项目自有 |
 
 行为边界（非样式映射，随 #65 记录）：
 
@@ -138,6 +143,11 @@
 
 - 折叠状态机纯函数单一事实源在 `src/webview/outlineCollapse.ts`：「展开到 Hn」= 展开所有 `level≤n` 且有子项的父节点（非只显示 level≤n 的标题）；跨级标题自然挂靠（H1 直跟 H3 时 H3 挂 H1 下）；滑块切换 = 整体替换展开集（手动微调不保留）；滚动/跳转动态展开 = only-expand（只展开当前路径祖先链，不折叠其他）。
 - 档位（0–5）经 bridge state 全局记忆（跨文档共享）；手动折叠集合是会话内内存态（webview 重载后回到档位精确展开集）；编辑触发的条目重建经 diff 迁移保持折叠状态（重命名不扰动，规则见模块头注释）。
+
+行为边界（非样式映射，随 #68 记录）：
+
+- 搜索纯函数单一事实源在 `src/webview/outlineSearch.ts`：大小写不敏感子串匹配 plainText（剥标记口径，`**粗体**` 输「粗体」命中），不做正则；命中条目与匹配路径祖先保留，其余隐藏（hidden 类与折叠遮蔽共用）；命中链自动并入展开集（只增不减，搜索态手动折叠优先）；进入搜索时快照展开集、清空时原样回放（QO 同款语义），编辑重建时快照随展开集同款迁移，搜索态切档时快照基准同步为档位精确集。
+- 片段级高亮在文本层切分（命中子串跨语义 span 边界时各文本节点内各自成段），mark 生命周期 = 条目渲染级（词条或序列变化随重建消失）；输入即时生效无去抖；located 常驻高亮在搜索态下回退到「折叠可见 ∧ 搜索保留」的最近祖先（链上无可见代表则高亮消失）；跳转到末尾不落光标（live 选区不动、不聚焦，reading 滚到末尾锚点块），双模式零写回；重置三合一 = 清搜索词 + 档位回默认 5 + 清手动折叠。
 
 ## 悬浮提示等既有稳定类（沿用 #4/#5，与 Obsidian 无对应）
 

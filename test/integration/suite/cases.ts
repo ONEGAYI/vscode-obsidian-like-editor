@@ -473,6 +473,24 @@ interface ViewState {
     sliderActiveDotPainted: boolean
     /** #67 折叠箭头绘制证据（首个箭头中心点命中） */
     chevronPainted: boolean
+    /** #68 当前搜索词（空串 = 无过滤） */
+    searchQuery: string
+    /** #68 搜索态（词条非空） */
+    searchActive: boolean
+    /** #68 组合可见索引序列（折叠可见 ∩ 搜索保留；搜索关闭时与 visibleIndices 同值） */
+    filteredVisibleIndices: number[]
+    /** #68 工具条行绘制证据（elementFromPoint 命中工具条容器） */
+    toolbarPainted: boolean
+    /** #68 跳转到末尾按钮可访问名称 */
+    jumpBottomAriaLabel: string | null
+    /** #68 重置按钮可访问名称 */
+    resetAriaLabel: string | null
+    /** #68 搜索框 placeholder 文案 */
+    searchPlaceholder: string | null
+    /** #68 命中片段绘制证据（可见条目内 mark 命中 + computed 背景非全透明） */
+    searchHitPainted: boolean
+    /** #68 无匹配占位绘制证据 */
+    nomatchPainted: boolean
   }
 }
 
@@ -4844,6 +4862,99 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const reopened = await waitViewState('outline-long.md', (v) => v.outline?.expandLevel === 1)
     assert(reopened.outline!.visibleIndices.length >= 51 && reopened.outline!.visibleIndices.length <= 53,
       `重载后档 1 基础可见集应恢复（51–53 条，实际 ${reopened.outline!.visibleIndices.length}）`)
+
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-long.md', (v) => v.sidebar?.open === false)
+  }],
+
+  // ---- #68 大纲工具条与标题搜索 ----
+
+  ['大纲工具条与标题搜索：过滤、片段高亮绘制、快照回放、重置与跳末（#68）', async () => {
+    // 断言口径（视觉层断言必查）：
+    // - 工具条装配与绘制：toolbarPainted（elementFromPoint 命中，样式注入
+    //   失败时必失败）+ 按钮可访问名称 + placeholder 文案
+    // - 搜索语义：filteredVisibleIndices 组合可见口径对拍（档 1 折叠下
+    //   搜索命中 → 匹配路径展开可见）；清空回放进入前快照（QO 语义）
+    // - 绘制层证据：searchHitPainted（可见条目内 mark 命中 + computed
+    //   背景非全透明）与 nomatchPainted（无匹配占位真实可见）
+    // - 重置三合一与跳转到末尾：状态对拍 + locatedPainted（高亮滚进
+    //   可视区）+ locatedItemIndex 落末尾控制域 + 零写回（版本不推进）
+    await openWithEditor('outline-long.md')
+    await waitSessionReady('outline-long.md')
+    const uri = wsUri('outline-long.md').toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    const initial = await waitViewState('outline-long.md',
+      (v) => v.sidebar?.open === true && v.outline?.panelPainted === true && v.outline.items.length === 101)
+    assert(initial.outline!.toolbarPainted === true,
+      `工具条行应真实绘制（命中失败：${JSON.stringify(initial.outline)}）`)
+    assert(initial.outline!.jumpBottomAriaLabel === '跳转到笔记末尾',
+      `跳末按钮可访问名称（实际 ${String(initial.outline!.jumpBottomAriaLabel)}）`)
+    assert(initial.outline!.resetAriaLabel === '重置',
+      `重置按钮可访问名称（实际 ${String(initial.outline!.resetAriaLabel)}）`)
+    assert(initial.outline!.searchPlaceholder === '输入以搜索',
+      `搜索框 placeholder（实际 ${String(initial.outline!.searchPlaceholder)}）`)
+    assert(initial.outline!.searchActive === false, '初始应无搜索过滤')
+    assert(initial.outline!.filteredVisibleIndices.length === 101,
+      '搜索关闭时组合可见口径与折叠口径同值（101 条）')
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+
+    // 档 1（H3 折叠遮蔽）下搜索「第 45 章」：命中第 45 章 H2（89）与
+    // 「第 45 章小节」H3（90，子串命中），匹配路径自动展开——组合可见
+    // 口径 = 主标题 + 89 + 90（其余 50 章 H2 折叠可见但不保留）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.expandClick', level: 1 })
+    await waitViewState('outline-long.md', (v) => v.outline?.expandLevel === 1)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.searchInput', text: '第 45 章' })
+    const filtered = await waitViewState('outline-long.md', (v) => v.outline?.searchActive === true)
+    assert(filtered.outline!.filteredVisibleIndices.join(',') === '0,89,90',
+      `搜索「第 45 章」组合可见应为 [0,89,90]（实际 ${JSON.stringify(filtered.outline!.filteredVisibleIndices)}）`)
+    assert(filtered.outline!.searchQuery === '第 45 章', 'probe 应回报搜索词实值')
+
+    // 清空回放进入搜索前的档 1 快照（H3 重新被折叠遮蔽）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.searchInput', text: '' })
+    const restored = await waitViewState('outline-long.md', (v) => v.outline?.searchActive === false)
+    assert(restored.outline!.visibleIndices.length === 51,
+      `清空应回放档 1 快照（51 条，实际 ${restored.outline!.visibleIndices.length}）`)
+    assert(restored.outline!.filteredVisibleIndices.length === 51, '清空后组合口径与折叠口径同值')
+
+    // 搜索「第 1 章」：命中在面板顶部可视区——mark 片段高亮的绘制层证据
+    // （elementFromPoint 命中 + computed 背景非全透明）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.searchInput', text: '第 1 章' })
+    const hit = await waitViewState('outline-long.md',
+      (v) => v.outline?.searchActive === true && v.outline.searchHitPainted === true)
+    assert(hit.outline!.filteredVisibleIndices.join(',') === '0,1,2',
+      `搜索「第 1 章」应保留主标题与第 1 章路径（实际 ${JSON.stringify(hit.outline!.filteredVisibleIndices)}）`)
+    assert(hit.outline!.searchHitPainted === true,
+      `命中片段 mark 应真实绘制（命中 + computed 背景：${JSON.stringify(hit.outline)}）`)
+
+    // 无匹配：占位真实可见、组合可见口径为空、mark 不绘制
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.searchInput', text: '不存在的词条' })
+    const nomatch = await waitViewState('outline-long.md', (v) => v.outline?.nomatchPainted === true)
+    assert(nomatch.outline!.filteredVisibleIndices.length === 0, '无匹配时组合可见口径应为空')
+    assert(nomatch.outline!.searchHitPainted === false, '无匹配时不得有命中片段绘制')
+    assert(nomatch.outline!.nomatchPainted === true, '「无匹配」占位应真实可见')
+
+    // 重置三合一：清搜索词 + 档位回默认 5 + 清手动折叠（档 1 整体替换）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.toolbarClick', action: 'reset' })
+    const reset = await waitViewState('outline-long.md', (v) =>
+      v.outline?.searchActive === false && v.outline.expandLevel === 5)
+    assert(reset.outline!.filteredVisibleIndices.length === 101,
+      `重置后应全展开 101 条（实际 ${reset.outline!.filteredVisibleIndices.length}）`)
+    assert(reset.outline!.nomatchPainted === false, '重置后无匹配占位应消失')
+
+    // 跳转到末尾：located 落末尾控制域（第 50 章小节 = index 100，面板
+    // 滚动区深处——高亮行滚进可视区后命中成立）、正文文本零变化
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.toolbarClick', action: 'jump-bottom' })
+    const bottom = await waitViewState('outline-long.md', (v) => v.outline?.locatedItemIndex === 100)
+    assert(bottom.outline!.locatedText === '第 50 章小节',
+      `跳末后控制域应为最后一个标题（实际 ${String(bottom.outline!.locatedText)}）`)
+    assert(bottom.outline!.locatedPainted === true, '跳末后高亮行应滚进面板可视区并真实绘制')
+
+    // 搜索/重置/跳末全程零写回（纯视图状态）
+    const after = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(after.version === before.version && after.appliedEdits === before.appliedEdits,
+      `工具条与搜索操作不得推进版本或产生写回（${before.version}/${before.appliedEdits} → ` +
+        `${after.version}/${after.appliedEdits}）`)
 
     // 收起侧栏收尾
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
