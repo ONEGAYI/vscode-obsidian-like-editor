@@ -371,6 +371,13 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* 填充仍是可编辑文字节点，保留原生 caret/IME 的高度；仅将空格字宽归零。
+   固定此空格为等宽字体，使 1ch 精确等于空格宽度，不影响正文的字体设置。 */
+#app .cm-editor .vsidian-table-grid-padding {
+  font-family: monospace;
+  word-spacing: -1ch;
+}
+
 /* 零宽格没有可挂载原生 caret 的文字节点：仅在该格活动时将原生 caret
    隐去，并在目标格内绘制同色光标。输入仍由 CM6 源文本管线处理。 */
 #app .cm-editor .cm-content:has(.vsidian-table-grid-empty-active) {

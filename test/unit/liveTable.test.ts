@@ -616,9 +616,9 @@ describe('单元格编辑权威链路', () => {
       bubbles: true, cancelable: true, button: 0, clientX: 440, clientY: 50,
     }))
     const cursor = view.state.selection.main.head
-    expect(cursor).toBeGreaterThanOrEqual(ranges[1]!.contentFrom)
+    expect(cursor).toBeGreaterThanOrEqual(kind === 'empty' ? ranges[1]!.from : ranges[1]!.contentFrom)
     expect(cursor).toBeLessThanOrEqual(ranges[1]!.contentTo)
-    expect(view.state.selection.main.assoc).toBe(-1)
+    expect(view.state.selection.main.assoc).toBe(kind === 'empty' ? 1 : -1)
     if (kind === 'zero') {
       expect(view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')[1]!
         .querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')[1]!

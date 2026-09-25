@@ -19,6 +19,7 @@
 import { EditorSelection, EditorState, StateEffect, StateField, Transaction } from '@codemirror/state'
 import { EditorView, ViewPlugin, keymap, type ViewUpdate } from '@codemirror/view'
 import type { Command } from '@codemirror/view'
+import { deleteCharBackward } from '@codemirror/commands'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import type { TableEditOp } from '../shared/protocol'
 import { liveDecorationsField, LIVE_CLASS_NAMES, tableCompositionPreview } from './liveDecorations'
@@ -444,6 +445,33 @@ const selectGridCell: Command = (view) => {
   return true
 }
 
+/** 透明填充不应成为额外的方向键停靠点，也不能让一次退格只删到填充。 */
+const stopAtGridCellEnd: Command = (view) => {
+  if (view.compositionStarted || view.state.selection.ranges.length !== 1 || !view.state.selection.main.empty) return false
+  const head = view.state.selection.main.head
+  const cell = editableGridCellAt(view.state, head)
+  return !!cell && (head === cell.to || (head === cell.to - 1 && view.state.sliceDoc(head, cell.to) === ' '))
+}
+const deleteBeforeGridPadding: Command = (view) => {
+  if (view.compositionStarted || view.state.selection.ranges.length !== 1 || !view.state.selection.main.empty) return false
+  const head = view.state.selection.main.head
+  const cell = editableGridCellAt(view.state, head)
+  if (!cell || head !== cell.to || head <= cell.from || view.state.sliceDoc(head - 1, head) !== ' ') return false
+  view.dispatch({ selection: EditorSelection.create([EditorSelection.cursor(head - 1, 1)]) })
+  return deleteCharBackward(view)
+}
+
+/** 无尾填充的既有格在原生输入开始前补齐承载。这样用户新键入的空格
+ * 位于透明填充之前，仍按普通字符显示与删除。点击本身不改写文档。 */
+function prepareGridInputPadding(view: EditorView): void {
+  const caret = view.state.selection.main
+  if (!caret.empty) return
+  const cell = editableGridCellAt(view.state, caret.head)
+  if (!cell || caret.head !== cell.to || (cell.to > cell.from && view.state.sliceDoc(cell.to - 1, cell.to) === ' ')) return
+  view.dispatch({ changes: { from: cell.to, insert: ' ' },
+    selection: EditorSelection.create([EditorSelection.cursor(caret.head, cell.from === cell.to ? 1 : -1)]) })
+}
+
 /** 普通键入、粘贴在空白行首笔规范化；IME 的中间事务交宿主组合缓冲处理。 */
 const normalizeBlankRowInput = EditorState.transactionFilter.of((tr) => {
   if (!tr.isUserEvent('input') || tr.changes.empty || tr.startState.field(tableComposition)) return tr
@@ -600,15 +628,13 @@ export const tableEditing = [
   tableComposition,
   tableCompositionCleanup,
   EditorView.domEventHandlers({
+    beforeinput: (event, view) => {
+      if (event.inputType === 'insertText' && !event.isComposing && !view.compositionStarted) prepareGridInputPadding(view)
+    },
     compositionstart: (_event, view) => {
       // 既有文件可能含 || 零宽格。候选开始前提供文字节点，避免浏览器
       // 把组合区间附着在不可编辑 widget 外；普通点击仍不修改源文。
-      const caret = view.state.selection.main
-      const empty = caret.empty ? editableGridCellAt(view.state, caret.head) : null
-      if (empty && empty.from === empty.to) {
-        view.dispatch({ changes: { from: empty.from, insert: ' ' },
-          selection: EditorSelection.create([EditorSelection.cursor(empty.from, 1)]) })
-      }
+      prepareGridInputPadding(view)
       const timer = tableCompositionTimers.get(view)
       if (timer !== undefined) clearTimeout(timer)
       tableCompositionTimers.delete(view)
@@ -640,6 +666,7 @@ export const tableEditing = [
   protectGridCellContent,
   keepGridInputCaretInsideCell,
   stabilizeGridCaretAfterInput,
+  keymap.of([{ key: 'ArrowRight', run: stopAtGridCellEnd }, { key: 'Backspace', run: deleteBeforeGridPadding }]),
   keymap.of([{ key: 'Mod-a', run: selectGridCell }]),
   keymap.of([{ key: '|', run: tablePipeKeyHandler }]),
   keymap.of([{ key: 'Tab', run: tableTabForward, shift: tableTabBackward }]),

@@ -41,7 +41,19 @@ try {
             const selection = getSelection()
             const rect = selection?.rangeCount ? selection.getRangeAt(0).getBoundingClientRect() : null
             const box = cells[1].getBoundingClientRect()
-            return { middle: cells[1].textContent, left: cells[0].textContent.trim(), right: cells[2].textContent.trim(),
+            const walker = document.createTreeWalker(cells[1], NodeFilter.SHOW_TEXT)
+            let lastText = null
+            while (walker.nextNode()) if (walker.currentNode.textContent.length) lastText = walker.currentNode
+            let paddingWidth = 0
+            if (lastText?.textContent.endsWith(' ')) {
+              const padding = document.createRange()
+              padding.setStart(lastText, lastText.textContent.length - 1)
+              padding.setEnd(lastText, lastText.textContent.length)
+              paddingWidth = padding.getBoundingClientRect().width
+            }
+            return { middle: cells[1].textContent, caretX: rect?.x,
+              paddingWidth,
+              left: cells[0].textContent.trim(), right: cells[2].textContent.trim(),
               caretInside: cells[1].contains(selection?.focusNode),
               caretPainted: !!rect && rect.height > 0 && rect.x >= box.left && rect.x < box.right }
           }, row)
@@ -49,11 +61,22 @@ try {
         async function check(value, step) {
           const state = await snapshot()
           assert.equal(state.middle.trim(), value, `${step}: ${JSON.stringify(state)}`)
+          assert.equal(state.paddingWidth, 0, `${step} 填充空格不得占据可见宽度`)
           assert(state.caretInside && state.caretPainted, `${step} 光标必须在中格: ${JSON.stringify(state)}`)
           assert.equal(state.left, row === 0 ? '带' : '左')
           assert.equal(state.right, row === 0 ? '送' : '右')
         }
-        if (deletion !== 'empty-source') await check('', '删光后')
+        if (deletion !== 'empty-source') {
+          await check('', '删光后')
+          const empty = await snapshot()
+          for (let i = 0; i < 2; i++) {
+            await page.evaluate(() => document.activeElement.blur())
+            await cell.click()
+            const refocused = await snapshot()
+            assert.equal(refocused.middle, empty.middle, '失焦再聚焦不得修改填充空白')
+            assert.equal(refocused.caretX, empty.caretX, '重新聚焦空格后光标不得越过填充空格')
+          }
+        }
         if (mode === 'english') {
           for (let i = 1; i <= 8; i++) {
             await page.keyboard.type('s')
@@ -68,6 +91,13 @@ try {
           await cdp.send('Input.insertText', { text: '是' })
           await check('是', 'IME 确认')
         }
+        const beforeSpace = await snapshot()
+        await page.keyboard.type(' ')
+        const withSpace = await snapshot()
+        assert(withSpace.caretX > beforeSpace.caretX, '用户自己键入的空格必须仍有可见宽度')
+        await page.keyboard.press('Backspace')
+        await check(mode === 'english' ? 'ssssssss' : '是', '删除用户输入的空格')
+        await page.keyboard.press('ArrowRight')
         await page.keyboard.press('Backspace')
         await check(mode === 'english' ? 'sssssss' : '', '立即退格')
         assert.deepEqual(errors, [])

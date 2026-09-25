@@ -2041,14 +2041,14 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(doc.getText() === before, '空格 fixture 初始内容不符')
     await vscode.commands.executeCommand(CMD.postToPanel, uri,
       { kind: 'table.test.cellClick', rowIndex: 1, columnIndex: 0 })
-    const emptyAt = before.indexOf('| | 空 |') + 2
+    const emptyAt = before.indexOf('| | 空 |') + 1
     const clicked = await waitViewState('table42-empty.md', (v) => v.selectionOffset === emptyAt)
     assert(clicked.tableGrid?.selectedRowIsGrid === true, '空单元格点击后不得撤网格')
     assert(clicked.tableGrid?.selectedRowCells.length === 2, '空单元格所在行应保留两列')
     const afterClick = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
     assert(afterClick.appliedEdits === initial.appliedEdits, '空单元格点击不应写回')
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.type', text: '新' })
-    const edited = before.replace('| | 空 |', '| 新| 空 |')
+    const edited = before.replace('| | 空 |', '|新 | 空 |')
     await poll('空单元格输入写回', () => doc.getText() === edited ? true : undefined)
     const live = await waitViewState('table42-empty.md', (v) => v.text === edited)
     assert(live.tableGrid?.selectedRowIsGrid === true, '空单元格输入后仍须保持网格')
@@ -2091,7 +2091,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(empty.paint?.table?.caretGridColumn === 1,
       `点击数据行空中格后光标须在中列绘出：${JSON.stringify(empty.paint?.table)}`)
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.type', text: '空' })
-    await poll('空中格写回', () => doc.getText().includes('| 带 |  空| 末 |') ? true : undefined)
+    await poll('空中格写回', () => doc.getText().includes('| 带 |空  | 末 |') ? true : undefined)
     const latest = await waitViewState(name, (v) => v.tableGrid?.selectedRowCells[1]?.includes('空') === true)
     assert(latest.tableGrid?.selectedRowCells[2]?.includes('末') === true, '右格不得接收中格输入')
     await vscode.commands.executeCommand(CMD.postToPanel, uri,
@@ -2123,7 +2123,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(after.appliedEdits === initial.appliedEdits, '跨行选区不能改写源文')
   }],
 
-  ['中格空白连续退格后再输入仍保持表头网格样式', async () => {
+  ['中格空白连续删除后再输入仍保持表头网格样式', async () => {
     const name = 'table-middle-delete.md'
     const source = '| 带 |  | 送 |\n| --- | --- | --- |\n| 左 | 右 | 末 |\n'
     await vscode.workspace.fs.writeFile(wsUri(name), Buffer.from(source))
@@ -2134,7 +2134,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await vscode.commands.executeCommand(CMD.postToPanel, uri,
       { kind: 'table.test.cellClick', rowIndex: 0, columnIndex: 1, point: 'right-edge' })
     for (let i = 0; i < 2; i++) {
-      await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'backspace' })
+      await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'delete' })
     }
     await poll('中格空白退格后源文', () => doc.getText().startsWith('| 带 | | 送 |') ? true : undefined)
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.domType', text: '是' })

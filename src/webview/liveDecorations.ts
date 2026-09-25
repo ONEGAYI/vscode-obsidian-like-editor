@@ -207,6 +207,8 @@ const taskCheckboxDecos = [
 
 const tablePipeDeco = Decoration.mark({ class: LIVE_CLASS_NAMES.tablePipe })
 const tableEscapedPipeDeco = Decoration.mark({ class: LIVE_CLASS_NAMES.tableEscapedPipe })
+// 行尾一个 Markdown 填充空格保留文字节点供原生输入使用，但不参与可见排版。
+const tableGridPaddingDeco = Decoration.mark({ class: 'vsidian-table-grid-padding' })
 /** 仅无边界空白格的 IME 候选事务：源文暂变但沿用原网格装饰。 */
 export const tableCompositionPreview = Annotation.define<boolean>()
 export const tableCompositionSettled = Annotation.define<boolean>()
@@ -404,6 +406,9 @@ function emitTableRowMarks(
         ? tableGridCellDeco(aligns?.[col] ?? null).range(cell.from, cell.to)
         : (selection.ranges.some((range) => range.empty && range.head === cell.from)
           ? activeEmptyTableCellDeco : emptyTableCellDeco).range(cell.from))
+      if (cell.to > cell.from && doc.sliceString(cell.to - 1, cell.to) === ' ') {
+        out.push(tableGridPaddingDeco.range(cell.to - 1, cell.to))
+      }
     }
     if (cell.contentTo > cell.contentFrom) {
       const deco = tableCellDeco(header, aligns && col < aligns.length ? aligns[col]! : null)
@@ -1204,13 +1209,16 @@ const gridCellMouseSelection = EditorView.mouseSelectionStyle.of((view, event) =
   const line = view.state.doc.lineAt(view.posAtDOM(row, 0))
   const range = tableRowCellsForColumns(line.text, line.from, cells.length)?.[cells.indexOf(cell)]
   if (!range) return null
-  let from = range.contentFrom, to = range.contentTo
+  // 空格子的源码填充不属于用户内容。再次点击时落在填充前，避免把
+  // 保留的输入节点变成下一次键入文字的前置空格。
+  const empty = range.contentFrom === range.contentTo && range.from < range.to
+  let from = empty ? range.from : range.contentFrom, to = empty ? range.from : range.contentTo
   const clamp = (pos: number) => Math.max(from, Math.min(to, pos))
   const hit = (e: MouseEvent) => clamp(view.posAtCoords({ x: e.clientX, y: e.clientY }) ?? from)
   const start = hit(event)
   let anchor = event.shiftKey ? clamp(view.state.selection.main.anchor) : start
   const selection = (head: number) => anchor === head
-    ? EditorSelection.create([EditorSelection.cursor(head, head === to ? -1 : head === from ? 1 : 0)])
+    ? EditorSelection.create([EditorSelection.cursor(head, empty ? 1 : head === to ? -1 : head === from ? 1 : 0)])
     : EditorSelection.single(anchor, head)
   const word = event.detail === 2 ? view.state.wordAt(start) : null
   let startFrom = event.detail >= 3 ? from : word ? clamp(word.from) : start
@@ -1257,13 +1265,15 @@ function clampGridCellPointer(event: MouseEvent, view: EditorView): boolean {
   const range = tableRowCellsForColumns(line.text, line.from,
     row.querySelectorAll(':scope > .vsidian-table-grid-cell').length)?.[column]
   if (!range) return false
-  const from = range.contentFrom
-  const to = range.contentTo
+  const empty = range.contentFrom === range.contentTo && range.from < range.to
+  const from = empty ? range.from : range.contentFrom
+  const to = empty ? range.from : range.contentTo
   const hit = view.state.selection.main.head
   if (hit >= from && hit < to) return false
   const pos = hit < from ? from : to
-  if (hit === to && view.state.selection.main.assoc === -1) return false
-  view.dispatch({ selection: EditorSelection.create([EditorSelection.cursor(pos, pos === to ? -1 : 1)]) })
+  const assoc = empty ? 1 : pos === to ? -1 : 1
+  if (hit === to && view.state.selection.main.assoc === assoc) return false
+  view.dispatch({ selection: EditorSelection.create([EditorSelection.cursor(pos, assoc)]) })
   event.preventDefault()
   return true
 }
