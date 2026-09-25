@@ -2841,6 +2841,11 @@ export class WebviewSyncController {
     if (!panel) {
       return
     }
+    // 会话卫生：上一轮 hover 留下的悬停会话先取消（否则 pointerdown 守卫
+    // 拒绝新会话——集成用例连续驱动时必需）
+    if (this.outlineDragState) {
+      this.cancelOutlineDrag()
+    }
     const nodes = panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)
     const fromEl = nodes[from]
     const toEl = nodes[to]

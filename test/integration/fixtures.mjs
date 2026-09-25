@@ -321,6 +321,27 @@ const OUTLINE_MENU_DOC = [
   '',
 ].join('\n')
 
+// #70 拖拽排序样例：frontmatter（控制域外零变更锚点）+ 跨级（H4 挂 H2 下）
+// + 文末段无尾换行（插入补换行/前置换行的边界载体）。
+// 条目序列：0 甲(H1) 1 乙(H2) 2 丁(H4,跨级挂乙) 3 丙(H2) 4 戊(H1)
+// 子树：甲=[甲,乙,丁,丙]（乙丁丙全挂甲下）、乙=[乙,丁]、丁=[丁]、丙=[丙]、戊=[戊]
+const OUTLINE_DRAG_DOC = [
+  '---',
+  'title: 拖拽',
+  '---',
+  '',
+  '# 甲',
+  '甲内容。',
+  '## 乙',
+  '乙内容。',
+  '#### 丁',
+  '丁内容。',
+  '## 丙',
+  '丙内容。',
+  '# 戊',
+  '戊内容。',
+].join('\n')
+
 // #11 双链样例：合法四形态（按名/显式路径/别名/标题）+ 降级形态
 // （嵌入/块引用/残缺）+ 代码上下文（围栏与行内代码内不解析）
 const WIKILINKS_DOC = [
@@ -423,6 +444,7 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   writeFileSync(path.join(wsDir, 'outline-long.md'), OUTLINE_LONG_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'outline-style.md'), OUTLINE_STYLE_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'outline-menu.md'), OUTLINE_MENU_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'outline-drag.md'), OUTLINE_DRAG_DOC, 'utf8')
   writeFileSync(path.join(wsDir, '链接目标.md'), '# 链接目标\n中文目标文档内容。\n', 'utf8')
   writeFileSync(path.join(wsDir, '无扩展名目标.md'), '# 无扩展名目标\n省略扩展名解析目标。\n', 'utf8')
   mkdirSync(path.join(wsDir, '子 目录'), { recursive: true })

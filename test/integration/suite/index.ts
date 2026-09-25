@@ -17,7 +17,13 @@ export async function run(): Promise<void> {
   if (ext && !ext.isActive) {
     await ext.activate()
   }
+  // 定向重跑：VSIDIAN_TEST_CASES=子串（逗号分隔任一命中即跑）只跑匹配
+  // 用例（开发调试用；缺省跑全量）
+  const filter = process.env['VSIDIAN_TEST_CASES']
   for (const [name, fn] of cases) {
+    if (filter && !filter.split(',').some((part) => name.includes(part.trim()))) {
+      continue
+    }
     try {
       // #38：全局模式记忆（globalState）在同一集成进程内跨用例共享——
       // reading 记忆会让后续用例的新面板被恢复成阅读模式、source 记忆会

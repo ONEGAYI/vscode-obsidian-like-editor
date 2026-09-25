@@ -88,9 +88,9 @@ function stubRects(parent: HTMLElement, only?: number[]): void {
   })
 }
 
-/** 在元素上派发 pointer 事件（MouseEvent 构造——本仓处理器只读坐标；
- *  bubbles 到 document 级拖拽监听，target 链供落点命中） */
-function firePointer(el: Element, type: string, x: number, y: number): void {
+/** 在元素/document 上派发 pointer 事件（MouseEvent 构造——本仓处理器只读
+ *  坐标；bubbles 到 document 级拖拽监听，target 链供落点命中） */
+function firePointer(el: Element | Document, type: string, x: number, y: number): void {
   el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y }))
 }
 
