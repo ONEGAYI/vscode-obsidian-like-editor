@@ -1,6 +1,6 @@
 # Obsidian 选择器映射表（一期稳定样式契约）
 
-状态：工单 #6 交付物，2026-09-23；#8 补 span 级映射与阅读语义标签结构（2026-09-24）；#9 补任务勾选交互类（2026-09-24）；#10 补链接/图片映射（2026-09-24）；#12 补表格映射（2026-09-24）；#11 补双链映射（2026-09-24）；#42 补实时预览表格网格入口（2026-09-24）。依据 [ADR-0004](../adr/0004-stable-styling-contract.md)。
+状态：工单 #6 交付物，2026-09-23；#8 补 span 级映射与阅读语义标签结构（2026-09-24）；#9 补任务勾选交互类（2026-09-24）；#10 补链接/图片映射（2026-09-24）；#12 补表格映射（2026-09-24）；#11 补双链映射（2026-09-24）；#42 补实时预览表格网格入口（2026-09-24）；#59 补公式映射（2026-09-25）。依据 [ADR-0004](../adr/0004-stable-styling-contract.md)。
 
 本文记录一期已建立的稳定类名/CSS 变量入口与 Obsidian 同款选择器的核对结果，供二期自定义 CSS 片段兼容使用。**边界声明**：
 
@@ -113,6 +113,24 @@
 - 标题跳转定位双路径：目标已是本扩展面板时 reveal 面板后 `view.locate`（reading 经 #14 块挂载定位，屏外标题可定位；live 光标+滚动）；否则文本编辑器以标题行 selection reveal。标题匹配规则（ATX、trim + 空白折叠 + 大小写不敏感、跳过围栏内伪标题）写入单测固定。
 - 文件路径大小写语义随宿主平台：Windows 本地不敏感（NTFS）、远程 POSIX 严格（两类不混用）；显式路径双候选（文档相对/工作区相对）命中不同文件时必须用户选择，不静默任选（规则见 `src/host/wikilinkTarget.ts` 与其单测）。
 
+## 公式（#59）
+
+#59 起两种视图渲染 LaTeX 公式（KaTeX 0.16.47 vendored，与 VSCode 内置 Markdown 数学同源的 @vscode/markdown-it-katex 判定语义）。**形态声明**：行内 `$…$`（贴字规则：开 `$` 左侧不得是词字符/`$`/`\`，闭 `$` 右侧同理）、段内与行首 `$$…$$`（displayMode）。普通美元（`$5`）、转义 `\$`、行内代码/围栏代码内不误判；解析失败按**原文**降级（`vsidian-math-error`，源文不丢、邻近内容不受影响）。live 视图光标进入公式范围显源码（`vsidian-math-source`），离开恢复 KaTeX 排版；渲染结果与装饰实例按公式源文 LRU 缓存。
+
+| 本项目稳定类名 | 本项目用途 | Obsidian 对应选择器 | 核对结果 |
+| --- | --- | --- | --- |
+| `.vsidian-math`（live） | 行内公式渲染态 widget 外层（内含 KaTeX `.katex` 结构）；颜色继承编辑器前景 | `.cm-math`（Obsidian live 数学 token） | 语义等价（呈现级）。已验证：集成 `paint.math.visible`（绘制层命中）与 `cssProbe.liveMathFontFamily`（含 KaTeX 字体族）。Obsidian 拆分 `.cm-math-begin/end` 定界符类，本项目整体替换、无拆分类 |
+| `.vsidian-math-block`（live） | 块级公式（`$$…$$`）渲染态变体：独立成块、居中、横向滚动 | `.HyperMD-math`（块级数学行）方向 | 语义等价（块级布局）。断言：CSS 契约（`mathPaintCssContract.test.ts`）钉 `display:block` + `text-align:center` + `overflow-x:auto` |
+| `.vsidian-math-source`（live） | 光标进入公式范围后的源码显形 mark（等宽着色 + 浅底） | `.cm-hmd-math-begin` 编辑态方向 | 语义等价（编辑态）。CSS 契约钉 `--vscode-textPreformat-foreground` 着色 |
+| `.katex-block` 内 `.vsidian-math`（阅读） | markdown-it-katex 渲染的 display 容器（`<p class="katex-block">` 包 KaTeX `.katex-display`） | `.markdown-preview-view .math-block` | 语义等价（块级标签）。断言：`cssProbe.readingMathFontFamily` 含 KaTeX 字体族 |
+| `.vsidian-math-error`（两视图共用） | 解析失败的原文降级 span：错误色 + 浅红底 + 等宽字体，原文完整可读 | `.math-error` / `.katex-error` 方向 | 语义等价（降级态）。CSS 契约钉错误色变量 |
+
+行为边界（非样式映射，随 #59 记录）：
+
+- 形态学单一事实源 `src/shared/math.ts`（live 行扫描），阅读侧为 @vscode/markdown-it-katex 插件规则——两处判定逐条对齐（贴字/转义/空内容/`$$` 优先/反引号 span 排除），已知差异（跨行行内公式、块中段混围栏）记录于 `docs/perf/2026-09-math-rendering.md`，降级方向均为 live 显源码。
+- 跨行 `$$` 块表由 StateField 增量维护（docChanged 时种子重扫，选区移动零成本）；跨行 replace 装饰走 StateField（CM6 约束），widget DOM 按视口惰性。
+- 阅读侧 `$$` 块独立成块（`vsidian-reading-math` 块类，挂载即渲染、卸载即释放，高度估计 1.5× 行高起步由 ResizeObserver 实测回填）。
+
 ## 悬浮提示等既有稳定类（沿用 #4/#5，与 Obsidian 无对应）
 
 `.vsidian-suspend-banner`（冲突暂停横幅）、`.vsidian-toolbar` 与 `.vsidian-mode-toggle`（模式切换工具栏）：本项目自有 UI，无 Obsidian 对应物，不参与兼容承诺。
@@ -135,8 +153,8 @@
 ## 内部测试 CSS 验证入口
 
 - 片段：`media/css-contract-probe.css`，随 webview HTML 加载（CSP `style-src` 允许的扩展资源）。仅用无视觉影响的属性（`text-decoration-color`，在无 `text-decoration-line` 时不呈现）与探针变量。#8 追加 span 级类与阅读语义标签的探针规则（`.vsidian-strong`/`.vsidian-inline-code`/`.vsidian-code-line`/`.vsidian-reading-block strong`）；#9 追加任务 checkbox 探针规则（`.vsidian-task-checkbox`/`.vsidian-reading-task-checkbox`）；#10 追加链接/图片探针规则（`.vsidian-link`/`.vsidian-reading-block a`/`.vsidian-reading-block img.vsidian-image`）；#12 追加表格探针规则（`.vsidian-table-pipe`/`.vsidian-reading-block table`）；#11 追加双链探针规则（`.vsidian-wikilink`/`.vsidian-reading-block a.vsidian-wikilink`）。
-- 观测：`view.state` 回报的 `cssProbe` 字段（`liveHeadingDecorationColor` / `readingHeadingDecorationColor` / `readingVarProbe`；#8 追加 `liveStrongDecorationColor` / `liveInlineCodeDecorationColor` / `liveCodeLineDecorationColor` / `readingStrongDecorationColor`；#9 追加 `liveTaskCheckboxDecorationColor` / `readingTaskCheckboxDecorationColor`；#10 追加 `liveLinkDecorationColor` / `readingLinkDecorationColor` / `readingImageDecorationColor`；#12 追加 `liveTablePipeDecorationColor` / `readingTableDecorationColor`；#11 追加 `liveWikilinkDecorationColor` / `readingWikilinkDecorationColor`），由 webview 读取目标元素 computed style 填充；目标元素不存在时为 `null`。
-- 断言：集成用例「稳定样式契约」（`test/integration/suite/cases.ts`）在真实 VSCode 1.86.2 宿主内验证两种视图的类名命中与变量管道；#12 表格断言并入「表格装饰与单元格编辑写回」「阅读视图表格」用例。
+- 观测：`view.state` 回报的 `cssProbe` 字段（`liveHeadingDecorationColor` / `readingHeadingDecorationColor` / `readingVarProbe`；#8 追加 `liveStrongDecorationColor` / `liveInlineCodeDecorationColor` / `liveCodeLineDecorationColor` / `readingStrongDecorationColor`；#9 追加 `liveTaskCheckboxDecorationColor` / `readingTaskCheckboxDecorationColor`；#10 追加 `liveLinkDecorationColor` / `readingLinkDecorationColor` / `readingImageDecorationColor`；#12 追加 `liveTablePipeDecorationColor` / `readingTableDecorationColor`；#11 追加 `liveWikilinkDecorationColor` / `readingWikilinkDecorationColor`；#59 追加 `liveMathFontFamily` / `readingMathFontFamily`——取 `.katex` 层 computed font-family，KaTeX 样式/字体管线失效时回落 body 字体），由 webview 读取目标元素 computed style 填充；目标元素不存在时为 `null`。
+- 断言：集成用例「稳定样式契约」（`test/integration/suite/cases.ts`）在真实 VSCode 1.86.2 宿主内验证两种视图的类名命中与变量管道；#12 表格断言并入「表格装饰与单元格编辑写回」「阅读视图表格」用例。#59 公式断言在「live 公式渲染与绘制层」「阅读模式公式渲染」等用例（`paint.math` 绘制层 + 字体探针）。
 
 ## 已知不支持项（如实清单）
 
