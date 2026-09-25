@@ -656,6 +656,12 @@ export class WebviewSyncController {
           // 直接丢弃——版本与变更一一对应，重复应用会静默错位
           break
         }
+        if (message.changes.length === 0) {
+          // 无内容变更（#44：宿主侧已过滤空 dirty 事件，此处为第二道防线）。
+          // 直接丢弃且不占用版本号：若空事件与真实增量同版本，后者仍须应用；
+          // 也不得让暂缓态把它当成外部修改而升级为暂停。
+          break
+        }
         this.lastDocChangedVersion = message.version
         if (this.suspended) {
           // 暂停：外部增量不应用（保留本地输入，恢复时以全文对齐）

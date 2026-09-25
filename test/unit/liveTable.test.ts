@@ -1010,6 +1010,32 @@ describe('单元格编辑权威链路', () => {
     expect(linked.doc.getText()).toBe(TABLE_DOC.replace('| 苹果 | 3 |', '| 苹果\\| | 3 |'))
   })
 
+  it.each([
+    ['替换选区', true],
+    ['纯插入', false],
+  ])('格内粘贴多行文本（%s）：换行持久化为格内换行标记，表格源行不拆散', async (_name, asReplace) => {
+    const linked = await setupLinked(TABLE_DOC)
+    const view = linked.controller.getView()!
+    const at = TABLE_DOC.indexOf('苹果')
+    view.dispatch({ selection: EditorSelection.single(asReplace ? at : at) })
+    view.dispatch({
+      changes: asReplace ? { from: at, to: at + 2, insert: 'a\r\nb\nc' } : { from: at, insert: 'x\ny' },
+      userEvent: 'input.paste',
+    })
+    await settle()
+    const pasted = asReplace ? 'a<br>b<br>c' : 'x<br>y苹果'
+    const expected = TABLE_DOC.replace('| 苹果 | 3 |', `| ${pasted} | 3 |`)
+    expect(linked.doc.getText()).toBe(expected)
+    // live 网格保持完整：表格四行未被拆散降级为源码
+    expect(textsFor(buildLivePreviewDecorations(view.state.doc, view.state.selection),
+      LIVE_CLASS_NAMES.tableLine, view.state.doc.toString())).toHaveLength(4)
+    // 阅读视图仍是表格块，粘贴的换行渲染为 <br>
+    const table = splitReadingBlocks(linked.doc.getText()).find((block) => block.kind === 'table')!
+    const reading = createReadingBlockElement(table, linked.doc.getText())
+    const firstBodyCell = reading.querySelectorAll('tbody td')[0]!
+    expect(firstBodyCell.querySelectorAll('br')).toHaveLength(asReplace ? 2 : 1)
+  })
+
   it('撤销一次 = 撤销一次单元格提交（宿主权威栈回流）', async () => {
     const linked = await setupLinked(TABLE_DOC)
     const view = linked.controller.getView()!

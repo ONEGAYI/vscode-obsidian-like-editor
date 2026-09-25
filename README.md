@@ -37,7 +37,8 @@ npm install                     # 安装锁定依赖（版本全部精确锁定�
 npm run compile                 # esbuild 双产物 + tsc 类型检查
 npm run watch                   # esbuild watch
 npm run test:unit               # vitest 与启动器契约测试（无 VSCode 宿主依赖）
-npm run test:integration        # @vscode/test-electron 1.86.2 真宿主集成测试
+npm run test:browser            # Playwright 原生键盘/IME 表格光标回归（headless Chromium，首次需 npx playwright install chromium）
+npm run test:integration        # 1.86.2 真宿主集成测试（Windows 默认独立桌面，不抢前台）
 node test/integration/runInstalled.mjs  # VSIX 安装态回归（先 package 出 VSIX）
 node test/perf/runPerf.mjs      # 性能档位测量（报告写 docs/perf/data/）
 npx @vscode/vsce package --no-dependencies  # 打包 VSIX（bundle 自包含，不带 node_modules）
@@ -56,7 +57,9 @@ node test/integration/runInstalled.mjs
 Remove-Item Env:VSIDIAN_TEST_HOST_MODE
 ```
 
-前台模式会显示测试窗口，应在专用会话中使用。单测和类型检查不启动 VSCode。
+前台模式会显示测试窗口，应在专用会话中使用。单测和类型检查不启动 VSCode；`test:unit` 内的启动器契约测试含独立桌面探针（仅创建进程与桌面，不启动 VSCode），在上述同一前台模式下会自动跳过这些探针，SSH / 服务会话等无交互桌面的 Windows 环境可照常跑完其余用例。
+
+测试钩子：`VSIDIAN_TEST_HOOKS=1` 由各集成启动器注入，注册 `onegayi.vsidian._test.*` 观测命令（生产不注册）；`VSIDIAN_TEST_HOST_FAULT_MARKER` 仅供启动器契约测试受控注入 PowerShell 启动期故障（验证进程树清理），日常使用不应设置。
 
 若缓存里的 `.vscode-test/vscode-win32-x64-archive-1.86.2/data` 由人工便携版运行留下，VSCode 会优先使用其中的便携 profile；此时可能撞上正在运行的便携版实例。可在新的 worktree 执行 `npm ci` 和 `npm run test:integration`，让测试工具自动下载不含 `data` 的独立宿主，再打包 VSIX 运行安装态回归。不要把正在使用的便携版目录当作测试宿主缓存。
 

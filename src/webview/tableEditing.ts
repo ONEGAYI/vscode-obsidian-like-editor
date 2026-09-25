@@ -303,21 +303,29 @@ const protectGridCellContent = EditorState.transactionFilter.of((tr) => {
   // 附着到相邻格或不可编辑 widget；这个空格在装饰层须保持视觉透明。
   const lower = cell.from
   const upper = cell.to
+  // 格内粘贴的多行文本持久化为格内换行标记（与 Enter 的格内换行同一
+  // 语义）：换行原样入源文会拆散表格源行、整表降级为源码显示。
+  const cellInsert = (text: string): string => text.replace(/\r?\n/g, '<br>')
   const changes: Array<{ from: number; to: number; insert: string }> = []
   let clipped = false
   tr.changes.iterChanges((from, to, _fromB, _toB, insert) => {
     // 空白行首笔规范化属于结构补全，不应被本过滤器截断。
+    const normalize = (text: string): string => {
+      const out = cellInsert(text)
+      if (out !== text) clipped = true // insert 被改写也必须重写事务
+      return out
+    }
     if (from === to) {
       const at = Math.max(lower, Math.min(upper, from))
       if (at !== from) clipped = true
-      changes.push({ from: at, to: at, insert: insert.toString() })
+      changes.push({ from: at, to: at, insert: normalize(insert.toString()) })
       return
     }
     const start = from < lower ? cell.contentFrom : from
     const end = to > upper ? cell.contentTo : to
     if (start !== from || end !== to) clipped = true
     if (end >= start && (end > start || insert.length)) {
-      changes.push({ from: start, to: end, insert: insert.toString() })
+      changes.push({ from: start, to: end, insert: normalize(insert.toString()) })
     }
   })
   let clearedCell = false
@@ -714,9 +722,10 @@ function navTargetsOf(view: EditorView, forward: boolean, visibleOnly = false): 
   return targets.length > 0 ? targets : null
 }
 
-/** Tab：定位下一单元格内容首（行末环绕到下一表格行首格） */
+/** Tab：定位下一单元格内容首（行末环绕到下一表格行首格；分隔行只提供
+ *  列数信息，光标不停留其中——与方向键同一可见行导航语义） */
 export const tableTabForward: Command = (view: EditorView): boolean => {
-  const targets = navTargetsOf(view, true)
+  const targets = navTargetsOf(view, true, true)
   if (!targets) {
     return false
   }
@@ -729,9 +738,10 @@ export const tableTabForward: Command = (view: EditorView): boolean => {
   return true
 }
 
-/** Shift+Tab：定位上一单元格内容尾（行首回退到上一表格行末格） */
+/** Shift+Tab：定位上一单元格内容尾（行首回退到上一表格行末格；同样
+ *  跳过隐藏分隔行） */
 export const tableTabBackward: Command = (view: EditorView): boolean => {
-  const targets = navTargetsOf(view, false)
+  const targets = navTargetsOf(view, false, true)
   if (!targets) {
     return false
   }

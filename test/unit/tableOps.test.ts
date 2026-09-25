@@ -125,6 +125,22 @@ describe('表格 Tab/Shift+Tab 导航', () => {
     view.destroy()
   })
 
+  it('表头末格 Tab：跳过隐藏分隔行直达首个数据行首格（网格导航不显形分隔行）', () => {
+    const view = makeEditView(TABLE_DOC, TABLE_DOC.indexOf('数量') + 2)
+    expect(tableTabForward(view)).toBe(true)
+    expect(view.state.selection.main.from).toBe(TABLE_DOC.indexOf('| 苹果 |') + 2)
+    expect(view.state.doc.toString()).toBe(TABLE_DOC)
+    view.destroy()
+  })
+
+  it('首个数据行首格 Shift+Tab：跳过隐藏分隔行回表头末格内容尾', () => {
+    const view = makeEditView(TABLE_DOC, TABLE_DOC.indexOf('苹果') + 1)
+    expect(tableTabBackward(view)).toBe(true)
+    expect(view.state.selection.main.from).toBe(TABLE_DOC.indexOf('数量') + 2)
+    expect(view.state.doc.toString()).toBe(TABLE_DOC)
+    view.destroy()
+  })
+
   it('表头首格 Shift+Tab 与末行末格 Tab：返回 false 交默认（不吞输入）', () => {
     const first = makeEditView(TABLE_DOC, TABLE_DOC.indexOf('名字') + 1)
     expect(tableTabBackward(first)).toBe(false)

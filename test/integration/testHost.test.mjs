@@ -9,6 +9,11 @@ import { buildTestHostArgs, resolveTestHostMode, runTestHost } from './testHost.
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
+// 用户显式选择前台模式（如 SSH / 服务会话等无交互桌面的 Windows 环境，
+// CreateDesktop 无法工作）时跳过独立桌面专项——与集成启动器的模式开关
+// （VSIDIAN_TEST_HOST_MODE）同一语义，保证 npm run test:unit 有逃生门。
+const skipDesktop = process.platform !== 'win32' || process.env.VSIDIAN_TEST_HOST_MODE === 'foreground'
+
 // 探针及其子进程最长 4.5 秒后自行退出；失败的 RED 阶段也不会留下长驻进程。
 const childProbeScript = 'require("node:fs").writeFileSync(process.argv[1], String(process.pid)); setTimeout(() => process.exit(0), 4500)'
 const probeScript = [
@@ -44,8 +49,8 @@ test('集成测试有两种运行路径共用的宿主启动器', () => {
   assert.equal(existsSync(path.join(here, 'hiddenDesktop.ps1')), true)
 })
 
-test('开发态与安装态都接入共用宿主启动器', () => {
-  for (const launcher of ['runTest.mjs', 'runInstalled.mjs']) {
+test('开发态、安装态与空窗口激活启动器都接入共用宿主启动器', () => {
+  for (const launcher of ['runTest.mjs', 'runInstalled.mjs', 'runSettingsActivation.mjs']) {
     const source = readFileSync(path.join(here, launcher), 'utf8')
     assert.match(source, /from '\.\/testHost\.mjs'/)
     assert.match(source, /buildTestHostArgs\(/)
@@ -96,7 +101,7 @@ test('前台启动器原样传递真实进程输出和非零退出码', async ()
   assert.equal(output, 'launcher probe')
 })
 
-test('Windows 独立桌面启动器原样传递真实进程输出和非零退出码', { skip: process.platform !== 'win32' }, async () => {
+test('Windows 独立桌面启动器原样传递真实进程输出和非零退出码', { skip: skipDesktop }, async () => {
   let output = ''
   let diagnostics = ''
   const code = await runTestHost({
@@ -112,7 +117,7 @@ test('Windows 独立桌面启动器原样传递真实进程输出和非零退出
   assert.match(diagnostics, /观察期间前台 PID/)
 })
 
-test('Windows 独立桌面超时后结束本次宿主及其子进程', { skip: process.platform !== 'win32' }, async () => {
+test('Windows 独立桌面超时后结束本次宿主及其子进程', { skip: skipDesktop }, async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'vsidian-host-timeout-'))
   const markers = [path.join(dir, 'host.pid'), path.join(dir, 'child.pid')]
   const unrelated = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 4500)'], { stdio: 'ignore' })
@@ -142,7 +147,7 @@ test('Windows 独立桌面超时后结束本次宿主及其子进程', { skip: p
   }
 })
 
-test('Windows 父启动器被终止后不遗留独立桌面宿主及其子进程', { skip: process.platform !== 'win32' }, async () => {
+test('Windows 父启动器被终止后不遗留独立桌面宿主及其子进程', { skip: skipDesktop }, async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'vsidian-host-parent-'))
   const markers = [path.join(dir, 'host.pid'), path.join(dir, 'child.pid')]
   const moduleUrl = pathToFileURL(path.join(here, 'testHost.mjs')).href
@@ -161,7 +166,7 @@ test('Windows 父启动器被终止后不遗留独立桌面宿主及其子进程
   }
 })
 
-test('Windows PowerShell 在 CreateProcess 后被强制终止时清理本次进程树', { skip: process.platform !== 'win32' }, async () => {
+test('Windows PowerShell 在 CreateProcess 后被强制终止时清理本次进程树', { skip: skipDesktop }, async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'vsidian-host-wrapper-'))
   const markers = [path.join(dir, 'host.pid'), path.join(dir, 'child.pid')]
   const crashWrapperScript = `${probeScript}; setTimeout(() => process.kill(process.ppid), 350)`
@@ -186,7 +191,7 @@ test('Windows PowerShell 在 CreateProcess 后被强制终止时清理本次进�
   }
 })
 
-test('Windows PowerShell 在 CreateProcess 后抛错时清理本次进程树', { skip: process.platform !== 'win32' }, async () => {
+test('Windows PowerShell 在 CreateProcess 后抛错时清理本次进程树', { skip: skipDesktop }, async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'vsidian-host-error-'))
   const markers = [path.join(dir, 'host.pid'), path.join(dir, 'child.pid')]
   try {
@@ -212,7 +217,7 @@ test('Windows PowerShell 在 CreateProcess 后抛错时清理本次进程树', {
   }
 })
 
-test('Windows 启动器收到 SIGINT 后返回中断码并清理进程树', { skip: process.platform !== 'win32' }, async () => {
+test('Windows 启动器收到 SIGINT 后返回中断码并清理进程树', { skip: skipDesktop }, async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'vsidian-host-sigint-'))
   const markers = [path.join(dir, 'host.pid'), path.join(dir, 'child.pid')]
   const resultFile = path.join(dir, 'result.txt')

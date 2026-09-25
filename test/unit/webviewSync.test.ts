@@ -167,7 +167,12 @@ describe('外部变更与重同步', () => {
     const { bridge, sent } = makeBridge()
     const c = mount(bridge)
     init(c, 'abc', 1)
-    c.handleHostMessage({ kind: 'doc.changed', version: 5, origin: 'external', changes: [] })
+    c.handleHostMessage({
+      kind: 'doc.changed',
+      version: 5,
+      origin: 'external',
+      changes: [{ offset: 3, length: 0, text: 'd' }],
+    })
     c.getView()!.dispatch({ changes: { from: 0, insert: 'x' } })
     const req = sent.at(-1) as Extract<WebviewToHost, { kind: 'edit.request' }>
     expect(req.baseVersion).toBe(5)
@@ -652,6 +657,50 @@ describe('待发编辑与冲突恢复', () => {
 })
 
 describe('doc.changed 版本单调防线（C-4）', () => {
+  it('空 changes 的 doc.changed 被丢弃且不占用版本号（#44 webview 侧第二道防线）', () => {
+    const { bridge, sent } = makeBridge()
+    const c = mount(bridge)
+    init(c, 'abcdef', 1)
+    // 宿主侧已过滤空 dirty 事件；若未知路径仍发出无内容变更广播，webview
+    // 直接丢弃：不应用、不占用版本号
+    c.handleHostMessage({ kind: 'doc.changed', version: 2, origin: 'external', changes: [] })
+    expect(c.getView()!.state.doc.toString()).toBe('abcdef')
+    expect(sent.filter((m) => m.kind === 'conflict.report')).toHaveLength(0)
+    // 同版本的真实增量仍应正常应用（空事件不得让版本防线误吞它）
+    c.handleHostMessage({
+      kind: 'doc.changed',
+      version: 2,
+      origin: 'external',
+      changes: [{ offset: 6, length: 0, text: '!' }],
+    })
+    expect(c.getView()!.state.doc.toString()).toBe('abcdef!')
+  })
+
+  it('暂缓态收到空 changes 的 doc.changed 不得升级为暂停（#44 误暂停路径）', () => {
+    const { bridge, sent } = makeBridge()
+    const c = mount(bridge)
+    init(c, 'abcdef', 1)
+    const view = c.getView()!
+    // 第三笔与前两笔未确认区间重叠 → 进入暂缓（deferredLocal 非空），
+    // 但未暂停（无 ack fail、无真冲突）
+    view.dispatch({ changes: { from: 0, insert: 'ZZ' } })
+    view.dispatch({ changes: { from: 5, insert: 'Q' } })
+    view.dispatch({ changes: { from: 2, insert: 'X' } })
+    const reportsBefore = sent.filter((m) => m.kind === 'conflict.report').length
+    expect(reportsBefore).toBeGreaterThan(0)
+    c.handleHostMessage({ kind: 'doc.changed', version: 3, origin: 'external', changes: [] })
+    expect(sent.filter((m) => m.kind === 'conflict.report').length).toBe(reportsBefore)
+    expect(view.state.doc.toString()).toBe('ZZXabcQdef')
+    // 未暂停：同版本的真实外部增量才按既定保守语义触发暂停（快照再 +1）
+    c.handleHostMessage({
+      kind: 'doc.changed',
+      version: 3,
+      origin: 'external',
+      changes: [{ offset: 6, length: 0, text: '!' }],
+    })
+    expect(sent.filter((m) => m.kind === 'conflict.report').length).toBe(reportsBefore + 1)
+  })
+
   it('同版本重复到达的增量被丢弃：仅应用一次', () => {
     const { bridge } = makeBridge()
     const c = mount(bridge)
