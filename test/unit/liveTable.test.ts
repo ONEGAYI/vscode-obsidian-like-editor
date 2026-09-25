@@ -513,7 +513,7 @@ describe('单元格编辑权威链路', () => {
     expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(3)
     for (let i = 0; i < 3; i++) deleteCharForward(view)
     await settle()
-    expect(linked.doc.getText()).toBe(TABLE_DOC.replace('苹果', ''))
+    expect(linked.doc.getText()).toBe(TABLE_DOC.replace('| 苹果 |', '| |'))
     linked.controller.dispose()
   })
 
@@ -532,7 +532,8 @@ describe('单元格编辑权威链路', () => {
     for (let i = 0; i < 5; i++) {
       (direction === 'backward' ? deleteCharBackward : deleteCharForward)(view)
     }
-    expect(view.state.doc.toString()).toBe(TABLE_DOC)
+    expect(view.state.doc.toString()).toBe(TABLE_DOC.replace('| 苹果 |',
+      direction === 'backward' ? '|苹果 |' : '| 苹果|'))
     view.destroy()
   })
 
@@ -541,6 +542,27 @@ describe('单元格编辑权威链路', () => {
     const view = makeEditView(text, text.indexOf('苹果') + 3)
     deleteCharBackward(view)
     expect(view.state.doc.toString()).toBe(TABLE_DOC)
+    view.destroy()
+  })
+
+  it('空单元格新输入的空格也可退格删除，不能把可编辑空白当作结构标记', () => {
+    const text = TABLE_DOC.replace('苹果', '')
+    const view = makeEditView(text, text.indexOf('|  |') + 2)
+    const at = view.state.selection.main.head
+    view.dispatch({ changes: { from: at, insert: ' ' }, selection: { anchor: at + 1 }, userEvent: 'input.type' })
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe(text)
+    view.destroy()
+  })
+
+  it.each([0, 1])('省略边界管道的表头清空第 %i 格后仍保持两列', (column) => {
+    const text = 'a|b\n---|---\nc|d'
+    const at = column * 2
+    const view = makeEditView(text, at)
+    view.dispatch({ selection: EditorSelection.single(at, at + 1) })
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe((column === 0 ? '||b|' : '|a||') + '\n---|---\nc|d')
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
     view.destroy()
   })
 

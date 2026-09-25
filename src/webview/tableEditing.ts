@@ -224,8 +224,9 @@ function editableGridCellAt(state: EditorState, pos: number) {
   if (!columns) return null
   const cells = tableRowCellsForColumns(line.text, line.from, columns)
   if (!cells?.length) return null
-  return cells.find((cell) => pos >= cell.from && pos <= cell.to) ??
+  const cell = cells.find((cell) => pos >= cell.from && pos <= cell.to) ??
     (pos < cells[0]!.from ? cells[0]! : cells[cells.length - 1]!)
+  return { ...cell, cells, line }
 }
 
 /** 原生删除命令可跨过隐藏源码。格内开始的编辑只修改这一格的可见内容。 */
@@ -235,21 +236,13 @@ const protectGridCellContent = EditorState.transactionFilter.of((tr) => {
   if (ranges.length !== 1) return tr
   const cell = editableGridCellAt(tr.startState, ranges[0]!.anchor)
   if (!cell) return tr
-  // 格内空白也可编辑（包括 IME 预编辑替换）。仅在正文边界按删除键时
-  // 阻止光标继续吃掉填充空白；光标主动进入空白后仍能正常删空格。
+  // 格内空白也是可编辑内容（包括刚键入的空格及 IME 预编辑替换）；
+  // 边界取管道内侧，不用 trim 后的内容范围推断空白是否可删除。
   const lower = cell.from
   const upper = cell.to
   const changes: Array<{ from: number; to: number; insert: string }> = []
   let clipped = false
   tr.changes.iterChanges((from, to, _fromB, _toB, insert) => {
-    const cursor = ranges[0]!
-    if (tr.isUserEvent('delete') && cursor.empty && !insert.length &&
-        (cell.contentFrom === cell.contentTo ||
-         (cursor.head === cell.contentFrom && to === cursor.head && from < to) ||
-         (cursor.head === cell.contentTo && from === cursor.head && to > from))) {
-      clipped = true
-      return
-    }
     // 空白行首笔规范化属于结构补全，不应被本过滤器截断。
     if (from === to) {
       const at = Math.max(lower, Math.min(upper, from))
@@ -264,6 +257,30 @@ const protectGridCellContent = EditorState.transactionFilter.of((tr) => {
       changes.push({ from: start, to: end, insert: insert.toString() })
     }
   })
+  // 省略首尾管道的行在边缘格清空后可能丢列（a|b → |b）。只有此时
+  // 才补显式边界，在同一笔事务中保留原列数及其余格内容。
+  if (tr.isUserEvent('delete') && changes.length) {
+    let editedLine = cell.line.text
+    for (const change of [...changes].reverse()) {
+      editedLine = editedLine.slice(0, change.from - cell.line.from) + change.insert +
+        editedLine.slice(change.to - cell.line.from)
+    }
+    if (!tableRowCellsForColumns(editedLine, cell.line.from, cell.cells.length)) {
+      const column = cell.cells.findIndex((item) => item.from === cell.from)
+      const parts = cell.cells.map((item) => tr.startState.sliceDoc(item.from, item.to))
+      for (const change of [...changes].reverse()) {
+        parts[column] = parts[column]!.slice(0, change.from - cell.from) + change.insert +
+          parts[column]!.slice(change.to - cell.from)
+      }
+      const caret = Math.min(parts[column]!.length, changes[0]!.from - cell.from + changes[0]!.insert.length)
+      return {
+        changes: { from: cell.line.from, to: cell.line.to, insert: '|' + parts.join('|') + '|' },
+        selection: { anchor: cell.line.from + 1 + parts.slice(0, column).reduce((n, part) => n + part.length + 1, 0) + caret },
+        annotations: Transaction.userEvent.of(tr.annotation(Transaction.userEvent)!),
+        scrollIntoView: tr.scrollIntoView,
+      }
+    }
+  }
   if (!clipped) return tr
   if (!changes.length) return []
   const event = tr.annotation(Transaction.userEvent)

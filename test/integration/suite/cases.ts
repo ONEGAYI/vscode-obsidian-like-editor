@@ -1889,21 +1889,23 @@ export const cases: Array<[string, () => Promise<void>]> = [
     for (let i = 0; i < 3; i++) {
       await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'backspace' })
     }
-    const boundary = await waitViewState(name, (v) => v.selectionOffset === at)
-    assert(boundary.text === before, '格首退格不得删除隐藏的填充空白或管道')
+    const paddingTrimmed = before.replace('| 苹果 |', '|苹果 |')
+    const boundary = await waitViewState(name, (v) => v.text === paddingTrimmed)
+    assert(boundary.tableGrid?.visibleRows === 3, '格首退格只能删格内空白，不能越过源管道')
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'select-all' })
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'backspace' })
-    const cleared = before.replace('苹果', '')
+    const cleared = before.replace('| 苹果 |', '| |')
     await poll('仅清空当前格写回', () => doc.getText() === cleared ? true : undefined)
     for (let i = 0; i < 3; i++) {
       await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'delete' })
     }
-    const rendered = await waitViewState(name, (v) => v.text === cleared)
+    const afterPaddingDelete = before.replace('| 苹果 |', '||')
+    const rendered = await waitViewState(name, (v) => v.text === afterPaddingDelete)
     assert(rendered.tableGrid?.visibleRows === 3, '删除内容后仍须保留完整网格')
     assert(rendered.paint?.table?.cellVisible === true && rendered.paint.table.gridDisplay === 'grid',
       '删除后剩余文字须在网格绘制层可见')
     assert(await doc.save(), '清空单元格保存失败')
-    assert(await readDisk(name) === cleared, '落盘内容只能清空当前格，表格标记必须完整')
+    assert(await readDisk(name) === afterPaddingDelete, '落盘内容只能清空当前格，表格标记必须完整')
   }],
 
   ['安全表格仅绘制段首行号，格内光标与设置切换不恢复重叠编号', async () => {
@@ -1936,6 +1938,8 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await vscode.workspace.fs.writeFile(wsUri(name), Buffer.from(source))
     await openWithEditor(name)
     await waitSessionReady(name)
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
+    await waitViewState(name, (v) => v.lineGutter?.on === true)
     const uri = wsUri(name).toString()
     const doc = await vscode.workspace.openTextDocument(wsUri(name))
     const assertFirstTableNumbers = async () => {
