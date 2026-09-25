@@ -13,6 +13,15 @@ import { describe, it, expect } from 'vitest'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
 import type { WebviewToHost } from '../../src/shared/protocol'
 
+// jsdom 无布局：为 CM6 的视口测量（measureTextSize → Range.getClientRects）
+// 提供零值 polyfill，真宿主 Chromium 有真实实现
+if (typeof Range !== 'undefined' && Range.prototype.getClientRects === undefined) {
+  ;(Range.prototype as unknown as { getClientRects(): DOMRectList }).getClientRects =
+    () => [] as unknown as DOMRectList
+  ;(Range.prototype as unknown as { getBoundingClientRect(): DOMRect }).getBoundingClientRect =
+    () => new DOMRect(0, 0, 0, 0)
+}
+
 const DOC_URI = 'file:///d%3A/notes/c.md'
 
 function makeBridge() {
@@ -409,5 +418,44 @@ describe('B-1：暂停 + 组合中收到 doc.resync 的恢复', () => {
     const before = sent.filter((m) => m.kind === 'edit.request').length
     c.getView()!.dispatch({ changes: { from: 0, insert: 'x' } })
     expect(sent.filter((m) => m.kind === 'edit.request').length).toBe(before)
+  })
+})
+
+describe('组合中收到模式切换指令（view.mode.set，#38 标题栏三态）', () => {
+  // 契约：IME 组合未上屏时点击标题栏按钮切换视图——切换是纯视图操作
+  // （不 dispatch 文本变更），不得打断组合缓冲链路：组合结束后组合文本
+  // 照常提交（edit.request 携带组合前版本）、缓冲的外部增量照常 flush，
+  // 切回 live 后输入原地保留。jsdom 无法真实模拟 IME 与容器隐藏时浏览器
+  // 取消组合的行为，未上屏拼音在真实宿主的表现由人工清单 A21 验证
+  it('切换指令不打断组合缓冲：提交与 flush 照常，切回 live 输入保留', async () => {
+    const { bridge, sent } = makeBridge()
+    const c = mount(bridge)
+    init(c, 'abcdef', 1)
+    startComposition(c)
+    // 组合中先缓冲一条外部增量，再收到宿主切换指令（标题栏按钮路径）
+    c.handleHostMessage({
+      kind: 'doc.changed', version: 2, origin: 'external',
+      changes: [{ offset: 0, length: 0, text: 'Z' }],
+    })
+    c.handleHostMessage({ kind: 'view.mode.set', mode: 'reading' })
+    const viewStates = () =>
+      sent.filter((m): m is Extract<WebviewToHost, { kind: 'view.state' }> => m.kind === 'view.state')
+    expect(viewStates().at(-1)).toMatchObject({ viewMode: 'reading' })
+    // 组合结束：组合文本上屏，edit.request 照发且携带组合前版本（缓冲不推进）
+    endComposition(c)
+    commitCompositionText(c, 3, '中文')
+    const req = sent.find((m) => m.kind === 'edit.request') as Extract<
+      WebviewToHost,
+      { kind: 'edit.request' }
+    >
+    expect(req.baseVersion).toBe(1)
+    expect(req.changes).toEqual([{ offset: 3, length: 0, text: '中文' }])
+    // flush：缓冲的外部增量照常应用（切换指令不清缓冲）
+    await waitFlush()
+    expect(c.getView()!.state.doc.toString()).toBe('Zabc中文def')
+    // 切回实时预览（同一 CM6 实例）：文本原地保留
+    c.handleHostMessage({ kind: 'view.mode.set', mode: 'live' })
+    expect(viewStates().at(-1)).toMatchObject({ viewMode: 'live' })
+    expect(c.getView()!.state.doc.toString()).toBe('Zabc中文def')
   })
 })

@@ -1,5 +1,7 @@
-// 扩展激活入口：注册 CustomTextEditorProvider（priority: option，经
-// "重新打开方式"启用，不接管 .md 默认打开）与文档事件监听、测试钩子。
+// 扩展激活入口：注册 CustomTextEditorProvider（#38 起 priority: default，
+// .md 默认打开即本扩展；可经「重新打开方式」或编辑器关联设置改回原生；
+// 全局模式记忆为 source 时新开 .md 自动弹回原生编辑器）与文档事件监听、
+// 三态视图命令、测试钩子。
 // #33 起：装配 Vsidian 独立设置链路（globalState 持久化 + 纯代码 schema
 // + 设置页面板）并注册「打开设置」命令——命令不要求当前有任何文档，
 // 空窗口同样可用。

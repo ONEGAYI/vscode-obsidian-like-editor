@@ -1,0 +1,56 @@
+# CI：push(main)、PR 与手动触发的持续集成。
+# unit 跑构建、类型检查与单元契约测试；integration 在 xvfb 虚拟显示下经
+# @vscode/test-electron 以真实 VSCode 1.86.2 宿主跑集成套件（与本地
+# npm run test:integration 同链路，测试钩子环境变量由 runTest.mjs 自带）。
+# job 名 unit / integration 同时是 main 分支保护的必需状态检查，
+# 改名、增删 job 前需同步分支保护规则，否则保护会因找不到检查而挂起。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: 安装依赖
+        run: npm ci
+      - name: 构建与类型检查
+        run: npm run compile
+      - name: 单元测试
+        run: npm run test:unit
+
+  integration:
+    name: integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: 安装依赖
+        run: npm ci
+      - name: 安装 VSCode 宿主所需系统库
+        run: |
+          sudo apt-get update
+          # ubuntu 24.04 起 ALSA/GTK/ATK 库迁入 *t64 实体包，旧名只剩虚包无法安装
+          sudo apt-get install -y xvfb libnss3 libatk-bridge2.0-0t64 libdrm2 \
+            libxkbcommon0 libgbm1 libasound2t64 libgtk-3-0t64 libsecret-1-0 libxkbfile1
+      - name: 集成测试（真实 1.86.2 宿主）
+        run: xvfb-run -a npm run test:integration

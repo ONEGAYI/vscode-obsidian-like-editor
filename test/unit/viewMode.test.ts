@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-// 模式切换状态机契约（工单 #6）：
-// - live ↔ reading 切换入口：view.mode.set 消息与工具栏按钮
+// 模式切换状态机契约（工单 #6；#38 起切换入口迁移宿主标题栏命令）：
+// - live ↔ reading 切换入口：view.mode.set 消息（宿主命令驱动；
+//   webview 工具栏按钮已随 #38 移除，切换唯一入口是宿主消息）
 // - 切换不产生文本编辑历史：不 dispatch 文本变更、不发 edit.request、
 //   不触发保存（本层无从保存，等价断言为宿主消息零写回）
 // - 源码位置锚点：live 光标 offset ↔ 阅读锚点块 src-start 双向恢复
@@ -210,33 +211,19 @@ describe('源码位置锚点：live ↔ reading 双向恢复', () => {
   })
 })
 
-describe('切换入口：工具栏按钮', () => {
-  it('点击 vsidian-mode-toggle 按钮触发与消息一致的切换', () => {
+describe('切换入口迁移：webview 工具栏已移除（#38）', () => {
+  it('mount 后不存在 button.vsidian-mode-toggle（两模式下一致，工具栏仅剩 #33 设置按钮）', () => {
+    // #38 将模式切换迁移至标题栏三态命令；合并 main（#33 设置按钮）后
+    // 工具栏容器保留但只承载设置入口，反向断言收窄到模式按钮本身
     const h = makeBridge()
     const parent = document.createElement('div')
     const c = new WebviewSyncController(h.bridge)
     c.mount(parent)
     c.handleHostMessage({ kind: 'init', sessionId: 's1', docUri: DOC_URI, version: 1, text: DOC })
-    const btn = parent.querySelector<HTMLButtonElement>('button.vsidian-mode-toggle')
-    expect(btn).not.toBeNull()
-    btn!.click()
-    expect(viewState(c, h).viewMode).toBe('reading')
-    btn!.click()
-    expect(viewState(c, h).viewMode).toBe('live')
-  })
-
-  it('按钮文案随模式更新（可发现的切换入口）', () => {
-    const h = makeBridge()
-    const parent = document.createElement('div')
-    const c = new WebviewSyncController(h.bridge)
-    c.mount(parent)
-    c.handleHostMessage({ kind: 'init', sessionId: 's1', docUri: DOC_URI, version: 1, text: DOC })
-    const btn = parent.querySelector<HTMLButtonElement>('button.vsidian-mode-toggle')!
-    const liveLabel = btn.textContent
-    expect(liveLabel).toContain('阅读')
-    btn.click()
-    expect(btn.textContent).not.toBe(liveLabel)
-    expect(btn.textContent).toContain('实时预览')
+    expect(parent.querySelector('button.vsidian-mode-toggle')).toBeNull()
+    // 切到 reading 后同样不存在（模式按钮不因模式显隐回归）
+    c.handleHostMessage({ kind: 'view.mode.set', mode: 'reading' })
+    expect(parent.querySelector('button.vsidian-mode-toggle')).toBeNull()
   })
 })
 

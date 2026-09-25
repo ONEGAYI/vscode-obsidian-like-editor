@@ -26,6 +26,10 @@ try {
     userDataDir: path.join(root, '.vscode-test', 'user-data'),
     disableExtensions: true,
   })
+  // CI 的 xvfb 虚拟显示无 GPU，Electron GPU 进程反复崩溃会拖垮 webview 面板
+  if (process.env.CI) {
+    args.push('--disable-gpu')
+  }
   const mode = resolveTestHostMode()
   console.log(`[runTest] 测试宿主模式：${mode}`)
   const code = await runTestHost({

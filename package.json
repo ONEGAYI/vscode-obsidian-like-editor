@@ -26,14 +26,32 @@
             "filenamePattern": "*.markdown"
           }
         ],
-        "priority": "option"
+        "priority": "default"
       }
     ],
     "commands": [
       {
         "command": "onegayi.vsidian.toggleViewMode",
-        "title": "切换实时预览与阅读模式",
+        "title": "切换到下一视图模式",
         "category": "Vsidian"
+      },
+      {
+        "command": "onegayi.vsidian.mode.toReading",
+        "title": "切换到阅读模式",
+        "category": "Vsidian",
+        "icon": "$(book)"
+      },
+      {
+        "command": "onegayi.vsidian.mode.toSource",
+        "title": "切换到源码编辑器",
+        "category": "Vsidian",
+        "icon": "$(code)"
+      },
+      {
+        "command": "onegayi.vsidian.mode.toLive",
+        "title": "切换到实时预览",
+        "category": "Vsidian",
+        "icon": "$(edit)"
       },
       {
         "command": "onegayi.vsidian.find",
@@ -88,7 +106,26 @@
         "mac": "cmd+f",
         "when": "activeCustomEditorId == onegayi.vsidian.editor"
       }
-    ]
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "onegayi.vsidian.mode.toReading",
+          "when": "activeCustomEditorId == onegayi.vsidian.editor && vsidian.activeMode == live && !isInDiffEditor",
+          "group": "navigation"
+        },
+        {
+          "command": "onegayi.vsidian.mode.toSource",
+          "when": "activeCustomEditorId == onegayi.vsidian.editor && vsidian.activeMode == reading && !isInDiffEditor",
+          "group": "navigation"
+        },
+        {
+          "command": "onegayi.vsidian.mode.toLive",
+          "when": "(resourceExtname == .md || resourceExtname == .markdown) && !activeCustomEditorId && !activeWebviewPanelId && !isInDiffEditor",
+          "group": "navigation"
+        }
+      ]
+    }
   },
   "scripts": {
     "compile": "node esbuild.mjs && tsc --noEmit",

@@ -17,6 +17,9 @@ const CMD = {
   perfProbe: 'onegayi.vsidian._test.perfProbe',
   readingPerf: 'onegayi.vsidian._test.readingPerf',
   linkLog: 'onegayi.vsidian._test.getLinkLog',
+  // #38 三态记忆
+  getLastMode: 'onegayi.vsidian._test.getLastMode',
+  resetLastMode: 'onegayi.vsidian._test.resetLastMode',
   // #33 设置链路
   settingsPageInfo: 'onegayi.vsidian._test.settingsPageInfo',
   closeSettingsPage: 'onegayi.vsidian._test.closeSettingsPage',
@@ -148,6 +151,108 @@ async function openWithEditor(file: string, beside = false): Promise<void> {
 async function readDisk(file: string): Promise<string> {
   const bytes = await vscode.workspace.fs.readFile(wsUri(file))
   return Buffer.from(bytes).toString('utf8')
+}
+
+/** #38 全局模式记忆读取（容错语义同正式链路：无历史为 live） */
+async function getLastMode(): Promise<string> {
+  return (await vscode.commands.executeCommand(CMD.getLastMode)) as string
+}
+
+/** #38 全局模式记忆重置（模拟无历史）：globalState 在同一集成进程内共享，
+ *  runner 已在每用例前重置，用例内再 reset 用于显式声明无记忆基线 */
+async function resetLastMode(): Promise<void> {
+  await vscode.commands.executeCommand(CMD.resetLastMode)
+}
+
+/** #38 记忆断言的读回等待：1.86.2 globalState 的 storage 广播滞后会把刚
+ *  写入的值偶发回翻为旧值（环境特性，resetLastMode 注释与既有用例注记录
+ *  过同类现象；三态循环用例连续三次写记忆后断言，实测偶发读到滞后值且
+ *  回翻可持续数秒），经轮询读到期望值即通过 */
+async function waitLastMode(expected: string): Promise<void> {
+  await poll(`全局记忆为 ${expected}`, async () =>
+    (await getLastMode()) === expected ? true : undefined, 10000)
+}
+
+/** #38 合并 main 后新增：设置写入的读回确认。1.86.2 globalState 存在
+ *  跨键 storage 广播迟到回翻（同层键共享事件流）——#38 的模式记忆写入
+ *  （toggle/切换链）与设置写入（setSettings）紧邻时，恢复值可被旧值迟到
+ *  广播盖回（集成实测：#32 排版用例关行号采样后恢复 true 被回翻为 false，
+ *  后续行号用例全暗）。写入后轮询读回到期望值再放行（与 resetLastMode 的
+ *  稳定窗同款防护，作用于设置键） */
+async function waitSettings(expected: Record<string, unknown>): Promise<void> {
+  const stable = async (): Promise<boolean> => {
+    for (let i = 0; i < 2; i++) {
+      const snap = (await vscode.commands.executeCommand(CMD.getSettings)) as Record<string, unknown>
+      if (Object.entries(expected).some(([k, v]) => snap[k] !== v)) {
+        return false
+      }
+      await new Promise((r) => setTimeout(r, 250))
+    }
+    return true
+  }
+  const deadline = Date.now() + 10000
+  while (Date.now() < deadline) {
+    if (await stable()) {
+      return
+    }
+    await vscode.commands.executeCommand(CMD.setSettings, expected)
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  throw new Error(`等待超时：设置未稳定为 ${JSON.stringify(expected)}`)
+}
+
+/** 等待活动文本编辑器变为指定文档（#38：source 态切换的落位断言） */
+async function waitActiveTextEditor(file: string): Promise<vscode.TextEditor> {
+  const uri = wsUri(file).toString()
+  return poll(`活动编辑器为 ${file}`, () => {
+    const ed = vscode.window.activeTextEditor
+    return ed && ed.document.uri.toString() === uri ? ed : undefined
+  })
+}
+
+/** 等待活动 tab 变为指定文档的本扩展 custom editor（#38） */
+async function waitActiveCustomTab(file: string): Promise<void> {
+  const uri = wsUri(file).toString()
+  await poll(`活动 tab 为 Vsidian 面板 ${file}`, () => {
+    const tab = vscode.window.tabGroups.activeTabGroup.activeTab
+    return tab?.input instanceof vscode.TabInputCustom &&
+      tab.input.viewType === VIEW_TYPE &&
+      tab.input.uri.toString() === uri ? true : undefined
+  })
+}
+
+/** 打开两个 .md 的原生文本 diff 并等待活动 tab 就位（#38 D10） */
+async function openTextDiff(left: string, right: string, title: string): Promise<void> {
+  // override 只认布尔 true（1.86 扩展主机 converter 限制，见 diff 陷阱笔记）：
+  // 强制文本 diff，避免 default priority 把某一侧解析到 custom editor
+  await vscode.commands.executeCommand('vscode.diff', wsUri(left), wsUri(right), title, {
+    override: true,
+  })
+  await poll(`文本 diff 打开 ${title}`, () => {
+    const tab = vscode.window.tabGroups.activeTabGroup.activeTab
+    return tab?.input instanceof vscode.TabInputTextDiff ? true : undefined
+  })
+}
+
+/** #38 单标签修复断言：统计指定文档在全部 tabGroups 的标签数。
+ *  kind=native 数 TabInputText（原生源码态），kind=vsidian 数本扩展
+ *  TabInputCustom——三态切换任何方向完成后，同文档只应剩一种各一个。
+ *  比较与产品侧 isSameDocUri 同口径（win32 盘符大小写漂移实测存在）：
+ *  严格 toString 会漏计漂移 uri，把清理失效误判为通过 */
+function tabsOf(file: string, kind: 'native' | 'vsidian'): number {
+  const caseInsensitive = process.platform === 'win32' || process.platform === 'darwin'
+  const norm = (u: string): string => (caseInsensitive ? u.toLowerCase() : u)
+  const uri = norm(wsUri(file).toString())
+  return vscode.window.tabGroups.all
+    .flatMap((g) => g.tabs)
+    .filter((t) => {
+      const input = t.input
+      return kind === 'native'
+        ? input instanceof vscode.TabInputText && norm(input.uri.toString()) === uri
+        : input instanceof vscode.TabInputCustom &&
+            input.viewType === VIEW_TYPE &&
+            norm(input.uri.toString()) === uri
+    }).length
 }
 
 interface SessionState {
@@ -474,7 +579,7 @@ const TASK_DOC_SECOND_TOGGLED = [
 
 /** 用例表：名称 -> 执行函数 */
 export const cases: Array<[string, () => Promise<void>]> = [
-  ['激活与可选编辑器声明', async () => {
+  ['激活与默认编辑器声明（#38 后接管 .md 默认打开）', async () => {
     const ext = vscode.extensions.getExtension(EXT_ID)
     assert(ext, `扩展 ${EXT_ID} 未找到`)
     await ext!.activate()
@@ -482,16 +587,76 @@ export const cases: Array<[string, () => Promise<void>]> = [
 
     const contributes = (ext!.packageJSON as { contributes?: { customEditors?: Array<{ priority?: string; selector?: Array<{ filenamePattern?: string }> }> } }).contributes
     const editor = contributes?.customEditors?.[0]
-    assert(editor?.priority === 'option', `priority 应为 option（不接管默认打开），实际 ${editor?.priority}`)
+    assert(editor?.priority === 'default', `priority 应为 default（默认编辑器接管 .md 打开），实际 ${editor?.priority}`)
     const patterns = editor?.selector?.map((s) => s.filenamePattern) ?? []
     assert(patterns.includes('*.md'), `selector 应含 *.md，实际 ${patterns.join(',')}`)
   }],
 
-  ['默认打开 .md 仍是原生文本编辑器（不自动接管）', async () => {
-    const doc = await vscode.workspace.openTextDocument(wsUri('lf.md'))
-    await vscode.window.showTextDocument(doc)
-    assert(vscode.window.activeTextEditor !== undefined, '默认打开应得到原生 TextEditor')
-    assert(vscode.window.activeTextEditor?.document.uri.toString() === wsUri('lf.md').toString(), '活动编辑器文档不符')
+  ['标题栏三态按钮声明：三命令各一项、navigation 组、when 互斥与图标（#38）', async () => {
+    // 静态断言（contributes.menus["editor/title"] 与 commands 声明）：运行时
+    // 按钮显隐由 VSCode 按 when 求值，此处钉死声明形状。三按钮同一时刻至多
+    // 一个可见的依据是 when 条件互斥：toReading/toSource 同以
+    // activeCustomEditorId == 本编辑器 锁定 Vsidian 面板，再以 vsidian.activeMode
+    // 的 live/reading 两值区分（同一 context key 不可能同时取两值）；toLive 以
+    // !activeCustomEditorId 锁定非 custom 编辑器（.md/.markdown 源码态），与前
+    // 两者的 activeCustomEditorId 断言互斥；三条均含 !isInDiffEditor 排除对比视图
+    const ext = vscode.extensions.getExtension(EXT_ID)
+    assert(ext, `扩展 ${EXT_ID} 未找到`)
+    await ext!.activate()
+    const contributes = (ext!.packageJSON as {
+      contributes?: {
+        commands?: Array<{ command?: string; icon?: string }>
+        menus?: { 'editor/title'?: Array<{ command?: string; when?: string; group?: string }> }
+      }
+    }).contributes
+
+    const items = contributes?.menus?.['editor/title'] ?? []
+    assert(items.length === 3, `editor/title 应恰好三命令各一项，实际 ${items.length} 项`)
+    const byCommand = new Map(items.map((i) => [i.command, i]))
+    const iconByCommand = new Map((contributes?.commands ?? []).map((c) => [c.command, c.icon]))
+
+    const tri: Array<[command: string, icon: string]> = [
+      ['onegayi.vsidian.mode.toReading', '$(book)'],
+      ['onegayi.vsidian.mode.toSource', '$(code)'],
+      ['onegayi.vsidian.mode.toLive', '$(edit)'],
+    ]
+    for (const [command, icon] of tri) {
+      assert(
+        items.filter((i) => i.command === command).length === 1,
+        `${command} 在 editor/title 应恰一项`,
+      )
+      assert(byCommand.get(command)?.group === 'navigation', `${command} 应在 navigation 组，实际 ${byCommand.get(command)?.group}`)
+      assert(iconByCommand.get(command) === icon, `${command} 图标应为 ${icon}，实际 ${iconByCommand.get(command)}`)
+      assert(byCommand.get(command)?.when?.includes('!isInDiffEditor') === true, `${command} 的 when 应含 !isInDiffEditor（对比视图无按钮）`)
+    }
+
+    // 面板内两态互斥（live/reading 二值区分）
+    const readingWhen = byCommand.get('onegayi.vsidian.mode.toReading')?.when ?? ''
+    const sourceWhen = byCommand.get('onegayi.vsidian.mode.toSource')?.when ?? ''
+    assert(readingWhen.includes(`activeCustomEditorId == ${VIEW_TYPE}`), `toReading 的 when 应锁定本编辑器面板，实际 ${readingWhen}`)
+    assert(readingWhen.includes('vsidian.activeMode == live'), `toReading 的 when 应限定 live 态，实际 ${readingWhen}`)
+    assert(sourceWhen.includes(`activeCustomEditorId == ${VIEW_TYPE}`), `toSource 的 when 应锁定本编辑器面板，实际 ${sourceWhen}`)
+    assert(sourceWhen.includes('vsidian.activeMode == reading'), `toSource 的 when 应限定 reading 态，实际 ${sourceWhen}`)
+    // 源码态按钮与前两者互斥（!activeCustomEditorId + !activeWebviewPanelId 排除
+    // 一切 custom editor 与 webview panel 语境）且限定 .md/.markdown。其中
+    // !activeWebviewPanelId 排除内置 Markdown 预览（Ctrl+Shift+V 的 WebviewPanel
+    // 形态 viewType 'markdown.preview'；custom editor 形态已被 !activeCustomEditorId
+    // 排除——与 1.86 内置 markdown 扩展官方 when 子句同口径）
+    const liveWhen = byCommand.get('onegayi.vsidian.mode.toLive')?.when ?? ''
+    assert(liveWhen.includes('!activeCustomEditorId'), `toLive 的 when 应限定非 custom 编辑器（与面板内两命令互斥），实际 ${liveWhen}`)
+    assert(liveWhen.includes('!activeWebviewPanelId'), `toLive 的 when 应排除 webview panel（内置 Markdown 预览），实际 ${liveWhen}`)
+    assert(liveWhen.includes('resourceExtname == .md') && liveWhen.includes('resourceExtname == .markdown'), `toLive 的 when 应限定 .md/.markdown，实际 ${liveWhen}`)
+  }],
+
+  ['默认关联打开 .md 进入 Vsidian 面板（#38 默认编辑器）', async () => {
+    // vscode.open 不带 override 走默认关联解析（双击文件同路径）；
+    // showTextDocument 强制 EXCLUSIVE_ONLY 原生，验证不了默认关联
+    await resetLastMode()
+    await vscode.commands.executeCommand('vscode.open', wsUri('lf.md'))
+    const session = await waitSessionReady('lf.md')
+    assert(session.panels.length >= 1, '默认关联打开应进入 Vsidian 面板')
+    const view = await waitViewState('lf.md', (v) => v.text === LF_DOC)
+    assert(view.viewMode === 'live', '无记忆时新开面板应为实时预览')
   }],
 
   ['Reopen With 打开后 webview 就绪并装载全文（中文/emoji/CSP 链路）', async () => {
@@ -504,6 +669,394 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(view.text === LF_DOC, `webview 全文与源文件不一致：${JSON.stringify(view.text)}`)
     assert(view.docLength === LF_DOC.length, '全文长度（UTF-16）不一致')
   }],
+
+  // ---- 工单 #38：标题栏三态按钮 / 默认编辑器 / 全局模式记忆 / diff 防御 ----
+
+  ['三态循环：live→reading→source→live 往返，未保存内容与 dirty 全程保留（#38）', async () => {
+    await openWithEditor('mode.md')
+    await waitSessionReady('mode.md')
+    const doc = await vscode.workspace.openTextDocument(wsUri('mode.md'))
+    const diskBefore = await readDisk('mode.md')
+
+    // 一笔未保存编辑（外部 applyEdit 写权威文档并广播，面板同步）——
+    // 验证工单验收「不因纯视图切换写入 Markdown 或隐式保存」
+    const extEdit = new vscode.WorkspaceEdit()
+    extEdit.replace(wsUri('mode.md'), new vscode.Range(0, 0, 0, 0), '未保存三态段落\n\n')
+    assert(await vscode.workspace.applyEdit(extEdit), '外部修改应成功')
+    const editedText = `未保存三态段落\n\n${MODE_DOC_TEXT}`
+    await poll('编辑生效', () => (doc.getText() === editedText ? true : undefined))
+    await waitViewState('mode.md', (v) => v.text === editedText)
+    assert(doc.isDirty, '编辑后文档应 dirty（未保存）')
+
+    // live → reading：标题栏命令链路（显式目标 + editor/title 传 uri）
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toReading', wsUri('mode.md'))
+    const readingView = await waitViewState('mode.md', (v) => v.viewMode === 'reading' && v.text === editedText)
+    assert((readingView.readingBlockCount ?? 0) >= 6, `阅读块数应 >=6，实际 ${readingView.readingBlockCount}`)
+    await waitLastMode('reading')
+
+    // reading → source：活动 tab 原位切换为原生文本编辑器（openWith 新开 +
+    // 清理旧 custom tab；dirty 时保留旧标签防内容回退，见「单标签（dirty→
+    // 源码）」用例的实测裁决），活动编辑器显示未保存内容
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toSource', wsUri('mode.md'))
+    const sourceEditor = await waitActiveTextEditor('mode.md')
+    assert(sourceEditor.document.getText() === editedText, '原生编辑器应显示未保存内容')
+    assert(doc.isDirty, '切到源码编辑器后文档仍应 dirty（纯视图切换不得隐式保存）')
+    await waitLastMode('source')
+
+    // source → live：面板重建，内容与 dirty 一致、磁盘不写
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toLive', wsUri('mode.md'))
+    const session = await waitSessionReady('mode.md')
+    assert(session.panels.length >= 1, 'toLive 应重建 Vsidian 面板')
+    const liveView = await waitViewState('mode.md', (v) => v.text === editedText)
+    assert(liveView.viewMode === 'live', 'toLive 后应为实时预览')
+    assert(liveView.selectionOffset !== undefined, '返回可编辑视图应有确定的源位置（光标已装载）')
+    assert(doc.isDirty, '回到面板后文档仍应 dirty')
+    assert(await readDisk('mode.md') === diskBefore, '三态往返全程不得写磁盘')
+    await waitLastMode('live')
+  }],
+
+  ['三态循环命令：源码编辑器态执行 toggleViewMode 打开 Vsidian（#38）', async () => {
+    // 命令面板路径（不带 uri 参数）；原语义为警告提示，#38 升级为打开 Vsidian
+    const doc = await vscode.workspace.openTextDocument(wsUri('mode.md'))
+    await vscode.window.showTextDocument(doc)
+    assert(vscode.window.activeTextEditor !== undefined, '前置：原生文本编辑器活动')
+
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
+    const session = await waitSessionReady('mode.md')
+    assert(session.panels.length >= 1, '循环命令应把源码态切到 Vsidian 面板')
+    await waitViewState('mode.md', (v) => v.viewMode === 'live')
+    await waitLastMode('live')
+  }],
+
+  ['全局模式记忆：reading 记忆下关闭面板再开新文档直接进阅读模式（#38）', async () => {
+    await openWithEditor('mode.md')
+    await waitSessionReady('mode.md')
+    const modeUri = wsUri('mode.md').toString()
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toReading', wsUri('mode.md'))
+    await waitViewState('mode.md', (v) => v.viewMode === 'reading')
+    await waitLastMode('reading')
+
+    // 关闭该面板（非 dirty，安全关闭）：记忆不随面板消失
+    await vscode.commands.executeCommand('workbench.action.closeActiveEditor')
+    await poll('面板关闭与会话释放', async () => {
+      const s = (await vscode.commands.executeCommand(CMD.sessionState, modeUri)) as SessionState
+      return s?.found === false ? true : undefined
+    })
+    await waitLastMode('reading')
+
+    // 新开另一文档：resolve 恢复链路直接进 reading（面板就绪后下发）
+    await openWithEditor('lf.md')
+    await waitSessionReady('lf.md')
+    const restored = await waitViewState('lf.md', (v) => v.viewMode === 'reading')
+    assert(restored.text === LF_DOC, '恢复阅读模式的文本应为全文')
+  }],
+
+  ['全局模式记忆：source 记忆下新开 .md 弹回原生编辑器（#38 冷启动源码态）', async () => {
+    await openWithEditor('mode.md')
+    await waitSessionReady('mode.md')
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toSource', wsUri('mode.md'))
+    await waitActiveTextEditor('mode.md')
+    await waitLastMode('source')
+
+    // 记忆 source 时打开另一 .md：resolve 弹回原生编辑器（即使显式指定
+    // Vsidian——「Reopen With 选 Vsidian 被弹回」属已知代价，可经铅笔按钮切回）
+    await openWithEditor('lf.md')
+    await waitActiveTextEditor('lf.md')
+    const state = (await vscode.commands.executeCommand(CMD.sessionState, wsUri('lf.md').toString())) as SessionState
+    assert(state.found === false, '弹回路径不得装配 Vsidian 会话')
+    // 注：「弹回不改写记忆」不做跨窗口断言——1.86.2 的 globalState 存在
+    // storage 层广播滞后，跨事件窗口读取偶发被滞后值覆盖（环境特性，
+    // 非本扩展写入）；弹回分支不写记忆由 viewCycle 单测与代码路径保证
+
+    // 等弹回链的异步清理完成（resolve 早退的空 custom tab 经 void openWith +
+    // closeStale 关闭）：清理先于用例结束，未清理的空 tab 会被后续用例的
+    // openWith 重显（永不 ready），此 poll 是跨用例隔离的一部分
+    await poll('弹回残留 tab 清理', () => {
+      const stale = vscode.window.tabGroups.all
+        .flatMap((g) => g.tabs)
+        .filter((t) => t.input instanceof vscode.TabInputCustom &&
+          t.input.viewType === VIEW_TYPE &&
+          t.input.uri.toString() === wsUri('lf.md').toString())
+      return stale.length === 0 ? true : undefined
+    })
+  }],
+
+  ['多标签独立性：命令只作用于活动标签，非活动标签状态保留（#38）', async () => {
+    // 构型：一个 Vsidian 面板（syntax.md）+ 一个原生 .md 标签（mode.md）
+    // 并存。「不同文档的两个 custom tab」构型在 1.86 测试宿主下第二个面板
+    // 的 webview 创建偶发不就绪（5/7 轮复现，环境 flaky），双 Vsidian 面板
+    // 各自模式独立由 webview 每面板独立 PersistedState 的单测与人工清单
+    // A21 覆盖；本用例全程单 custom tab，验证命令按活动标签实际状态动作
+    await openWithEditor('syntax.md')
+    await waitSessionReady('syntax.md')
+    const syntaxUri = wsUri('syntax.md').toString()
+    const modeText = (await vscode.workspace.openTextDocument(wsUri('mode.md'))).getText()
+
+    // 并存一个原生 .md 标签并使其活动（syntax 面板变非活动）：
+    // 非活动面板保留自身状态可查询。retainContextWhenHidden 关闭，tab
+    // 不可见期间 webview 可能被卸载（view.state.request 无人应答），
+    // 故先在面板可见时让宿主模式缓存就位，变非活动后以宿主缓存为
+    // 观测面断言保留（CI 慢环境的 Linux 宿主曾因该竞速必超时）
+    await waitViewState('syntax.md', (v) => v.viewMode === 'live')
+    const modeDoc = await vscode.workspace.openTextDocument(wsUri('mode.md'))
+    await vscode.window.showTextDocument(modeDoc)
+    await waitActiveTextEditor('mode.md')
+    const keptLive = (await vscode.commands.executeCommand(
+      CMD.viewStateCache, syntaxUri,
+    )) as { found: boolean; viewMode?: string }
+    assert(keptLive.found && keptLive.viewMode === 'live', '非活动的 syntax 面板应保留自身状态')
+
+    // 重显 syntax 面板使其活动（openWith 对已开面板是重显，不新建 tab），
+    // toReading 只作用于 syntax；原生 mode 标签不受影响。不可见期间面板
+    // 可能经卸载重载：先以 0 轮探针（纯往返，不动文档）等待 webview 恢复
+    // 响应再下发模式命令，避免命令发给重载中的 webview 而丢失
+    await vscode.commands.executeCommand('vscode.openWith', wsUri('syntax.md'), VIEW_TYPE)
+    await waitActiveCustomTab('syntax.md')
+    await vscode.commands.executeCommand(
+      CMD.perfProbe, syntaxUri, { typingRounds: 0, scrollRounds: 0 })
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toReading', wsUri('syntax.md'))
+    await waitViewState('syntax.md', (v) => v.viewMode === 'reading')
+    const backToMode = await vscode.window.showTextDocument(modeDoc)
+    assert(backToMode.document.getText() === modeText, '原生 mode 标签不得受 syntax 的模式切换影响')
+
+    // syntax 面板活动时 toSource：非 dirty 切换，被替换的旧 tab 关闭、
+    // 会话释放（dirty 场景的单标签行为见三态循环与单标签用例组）
+    await vscode.commands.executeCommand('vscode.openWith', wsUri('syntax.md'), VIEW_TYPE)
+    await waitActiveCustomTab('syntax.md')
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toSource', wsUri('syntax.md'))
+    await waitActiveTextEditor('syntax.md')
+    await poll('syntax 面板会话释放', async () => {
+      const s = (await vscode.commands.executeCommand(CMD.sessionState, syntaxUri)) as SessionState
+      return s?.found === false ? true : undefined
+    })
+  }],
+
+  ['单标签（非 dirty）：双向切换后同文档在全部标签组仅一个标签（#38 修复验收）', async () => {
+    // 用户人工验收缺陷的直接断言：1.86 的 openWith 对「同资源不同编辑器」
+    // 是新开 tab（T1 查证 1.86.0 源码确认为既有行为，无原位替换命令可用），
+    // 修复前源码态与预览态并存两个标签——修复后编排层关闭被替换的旧 tab
+    //（Vsidian→源码关旧 custom tab；源码→Vsidian 关旧原生 tab）
+    await openWithEditor('mode.md')
+    await waitSessionReady('mode.md')
+
+    // Vsidian → 源码：旧 custom tab 关闭，仅剩一个原生 tab
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toSource', wsUri('mode.md'))
+    await waitActiveTextEditor('mode.md')
+    await poll('toSource 后旧 Vsidian 标签关闭', () =>
+      tabsOf('mode.md', 'vsidian') === 0 ? true : undefined)
+    assert(tabsOf('mode.md', 'native') === 1,
+      `toSource 后应有且仅有一个原生标签，实际 native=${tabsOf('mode.md', 'native')} vsidian=${tabsOf('mode.md', 'vsidian')}`)
+
+    // 源码 → Vsidian：旧原生 tab 关闭，仅剩一个 Vsidian tab（修复的缺失方向）
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toLive', wsUri('mode.md'))
+    await waitActiveCustomTab('mode.md')
+    await poll('toLive 后旧原生标签关闭', () =>
+      tabsOf('mode.md', 'native') === 0 ? true : undefined)
+    assert(tabsOf('mode.md', 'vsidian') === 1,
+      `toLive 后应有且仅有一个 Vsidian 标签，实际 native=${tabsOf('mode.md', 'native')} vsidian=${tabsOf('mode.md', 'vsidian')}`)
+    await waitViewState('mode.md', (v) => v.text === MODE_DOC_TEXT)
+  }],
+
+  ['单标签（dirty→源码）：保留旧 Vsidian 标签防内容回退，保存后切换复用清理（#38 用例 A）', async () => {
+    // 1.86.2 实测裁决：关闭 dirty custom tab 会把 TextDocument revert 回
+    // 磁盘内容（即使原生 tab 已打开同一文档）——dirty 保留旧标签为已知
+    // 代价（mvp.md），保存后再次切换收敛回单标签
+    await openWithEditor('mode.md')
+    await waitSessionReady('mode.md')
+    const doc = await vscode.workspace.openTextDocument(wsUri('mode.md'))
+    const diskBefore = await readDisk('mode.md')
+    const extEdit = new vscode.WorkspaceEdit()
+    extEdit.replace(wsUri('mode.md'), new vscode.Range(0, 0, 0, 0), '单标签未保存甲\n\n')
+    assert(await vscode.workspace.applyEdit(extEdit), '外部修改应成功')
+    const editedText = `单标签未保存甲\n\n${MODE_DOC_TEXT}`
+    await poll('编辑生效', () => (doc.getText() === editedText ? true : undefined))
+    await waitViewState('mode.md', (v) => v.text === editedText)
+    assert(doc.isDirty, '前置：文档应 dirty')
+
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toSource', wsUri('mode.md'))
+    const sourceEditor = await waitActiveTextEditor('mode.md')
+    assert(tabsOf('mode.md', 'native') === 1, `dirty toSource 后一个原生标签，实际 native=${tabsOf('mode.md', 'native')}`)
+    assert(tabsOf('mode.md', 'vsidian') === 1, `dirty 保留旧 Vsidian 标签（防回退已知代价），实际 vsidian=${tabsOf('mode.md', 'vsidian')}`)
+    assert(sourceEditor.document.getText() === editedText,
+      'dirty 保留下原生编辑器应显示未保存内容（不得回退）')
+    assert(doc.getText() === editedText, 'TextDocument 不得被 revert')
+    assert(doc.isDirty, 'dirty 切源码后文档仍应 dirty')
+    assert(await readDisk('mode.md') === diskBefore, '切换不得写磁盘')
+
+    // 保存后再次切换：非 dirty 清理生效，双标签收敛为单标签
+    await doc.save()
+    assert(await readDisk('mode.md') === editedText, '保存后磁盘应为编辑内容')
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toLive', wsUri('mode.md'))
+    await waitActiveCustomTab('mode.md')
+    await poll('保存后 toLive 收敛单标签', () =>
+      tabsOf('mode.md', 'native') === 0 ? true : undefined)
+    assert(tabsOf('mode.md', 'vsidian') === 1, `保存后 toLive 应仅剩一个 Vsidian 标签，实际 vsidian=${tabsOf('mode.md', 'vsidian')}`)
+    await waitViewState('mode.md', (v) => v.text === editedText && v.viewMode === 'live')
+
+    // 恢复 fixture 基线（mode.md 磁盘内容被本用例保存改写，后续用例按
+    // MODE_DOC_TEXT 断言——移除插入段并保存回基线；偏移系定位，插入段
+    // 跨两行，行系 Range 会被钳位残留换行）
+    const restore = new vscode.WorkspaceEdit()
+    restore.replace(
+      wsUri('mode.md'),
+      new vscode.Range(doc.positionAt(0), doc.positionAt('单标签未保存甲\n\n'.length)),
+      '',
+    )
+    assert(await vscode.workspace.applyEdit(restore), '恢复编辑应成功')
+    await doc.save()
+    assert(await readDisk('mode.md') === MODE_DOC_TEXT, '用例结束应恢复 mode.md 基线')
+  }],
+
+  ['单标签（dirty→预览）：保留旧原生标签防内容回退，保存后切换复用清理（#38 用例 B）', async () => {
+    // 1.86.2 实测裁决：关闭 dirty 原生 tab 同样 revert（vscode-office 陷阱 3
+    // 在本扩展构型下复现，与 custom 侧是否已持文档无关）——dirty 保留旧原生
+    // 标签为最后手段，保存后再次切换收敛回单标签
+    const doc = await vscode.workspace.openTextDocument(wsUri('mode.md'))
+    await vscode.window.showTextDocument(doc)
+    await waitActiveTextEditor('mode.md')
+    const diskBefore = await readDisk('mode.md')
+    const extEdit = new vscode.WorkspaceEdit()
+    extEdit.replace(wsUri('mode.md'), new vscode.Range(0, 0, 0, 0), '单标签未保存乙\n\n')
+    assert(await vscode.workspace.applyEdit(extEdit), '外部修改应成功')
+    const editedText = `单标签未保存乙\n\n${MODE_DOC_TEXT}`
+    await poll('编辑生效', () => (doc.getText() === editedText ? true : undefined))
+    assert(doc.isDirty, '前置：文档应 dirty')
+
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toLive', wsUri('mode.md'))
+    await waitActiveCustomTab('mode.md')
+    assert(tabsOf('mode.md', 'vsidian') === 1, `dirty toLive 后一个 Vsidian 标签，实际 vsidian=${tabsOf('mode.md', 'vsidian')}`)
+    assert(tabsOf('mode.md', 'native') === 1, `dirty 保留旧原生标签（防回退已知代价），实际 native=${tabsOf('mode.md', 'native')}`)
+    assert(doc.getText() === editedText, 'dirty 保留下 TextDocument 不得被 revert')
+    assert(doc.isDirty, 'dirty 切预览后文档仍应 dirty')
+    const view = await waitViewState('mode.md', (v) => v.text === editedText)
+    assert(view.viewMode === 'live', 'toLive 后应为实时预览')
+    assert(await readDisk('mode.md') === diskBefore, '切换不得写磁盘')
+
+    // 保存后再次切换：非 dirty 清理生效，双标签收敛为单标签
+    await doc.save()
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toSource', wsUri('mode.md'))
+    await waitActiveTextEditor('mode.md')
+    await poll('保存后 toSource 收敛单标签', () =>
+      tabsOf('mode.md', 'vsidian') === 0 ? true : undefined)
+    assert(tabsOf('mode.md', 'native') === 1, `保存后 toSource 应仅剩一个原生标签，实际 native=${tabsOf('mode.md', 'native')}`)
+    assert(vscode.window.activeTextEditor?.document.getText() === editedText, '收敛后原生编辑器显示保存内容')
+
+    // 恢复 fixture 基线（同用例 A：磁盘内容回到 MODE_DOC_TEXT 供后续用例；
+    // 偏移系定位避免跨行 Range 被钳位）
+    const restore = new vscode.WorkspaceEdit()
+    restore.replace(
+      wsUri('mode.md'),
+      new vscode.Range(doc.positionAt(0), doc.positionAt('单标签未保存乙\n\n'.length)),
+      '',
+    )
+    assert(await vscode.workspace.applyEdit(restore), '恢复编辑应成功')
+    await doc.save()
+    assert(await readDisk('mode.md') === MODE_DOC_TEXT, '用例结束应恢复 mode.md 基线')
+  }],
+
+  ['弹回防御（dirty）：source 记忆下 dirty 文档弹回不丢内容，空面板保留（#38 review-loop）', async () => {
+    // review-loop V1：bounceToSource 曾无条件 dispose 空面板——按实测口径
+    // 「1.86.2 关 dirty tab 会 revert TextDocument（custom 侧亦然）」，Hot
+    // Exit 恢复 dirty 面板或原生 dirty + Reopen With 均可达该路径。契约：
+    // dirty 时跳过 dispose（空面板保留为已知代价），内容与 dirty 不得回退；
+    // 收尾经 toSource（活动位已在原生 tab = re-affirm 路径）复用清理收敛，
+    // 顺带钉住 re-affirm 的物化与收敛契约
+    await openWithEditor('mode.md')
+    await waitSessionReady('mode.md')
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toSource', wsUri('mode.md'))
+    await waitActiveTextEditor('mode.md')
+    await waitLastMode('source')
+
+    const doc = await vscode.workspace.openTextDocument(wsUri('mode.md'))
+    const diskBefore = await readDisk('mode.md')
+    const extEdit = new vscode.WorkspaceEdit()
+    extEdit.replace(wsUri('mode.md'), new vscode.Range(0, 0, 0, 0), '弹回未保存丙\n\n')
+    assert(await vscode.workspace.applyEdit(extEdit), '外部修改应成功')
+    const editedText = `弹回未保存丙\n\n${MODE_DOC_TEXT}`
+    await poll('编辑生效', () => (doc.getText() === editedText ? true : undefined))
+    assert(doc.isDirty, '前置：文档应 dirty')
+
+    // 原生 dirty + 显式 Reopen With → Vsidian：resolve 弹回（已知代价路径）
+    await openWithEditor('mode.md')
+    await waitActiveTextEditor('mode.md')
+    const modeUri = wsUri('mode.md').toString()
+    await poll('弹回路径不装配会话（旧会话随 toSource 清理释放）', async () => {
+      const s = (await vscode.commands.executeCommand(CMD.sessionState, modeUri)) as SessionState
+      return s?.found === false ? true : undefined
+    })
+    // 弹回链（showTextDocument → dispose → 清扫）是异步 microtask + 宿主
+    // 动作，断言立即读会跑在 dispose/revert 生效前（首跑实测）——先过
+    // 稳定窗再断言终态（同 diff 用例的观察窗手法）
+    await new Promise((r) => setTimeout(r, 1200))
+    assert(doc.getText() === editedText, '弹回不得把 TextDocument revert 回磁盘内容')
+    assert(doc.isDirty, '弹回后文档仍应 dirty')
+    assert(await readDisk('mode.md') === diskBefore, '弹回不得写磁盘')
+    assert(tabsOf('mode.md', 'vsidian') === 1,
+      `dirty 弹回应保留空 Vsidian 标签（防回退代价），实际 vsidian=${tabsOf('mode.md', 'vsidian')}`)
+    assert(tabsOf('mode.md', 'native') === 1, `弹回后一个原生标签，实际 native=${tabsOf('mode.md', 'native')}`)
+
+    // 保存后 toSource（re-affirm 路径：活动位已在原生 tab）：物化原生控件
+    // 并复用清理，空面板收敛单标签
+    await doc.save()
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toSource', wsUri('mode.md'))
+    const editor = await waitActiveTextEditor('mode.md')
+    assert(editor.document.getText() === editedText, 're-affirm 后原生编辑器应显示保存内容')
+    await poll('re-affirm 清理空面板', () =>
+      tabsOf('mode.md', 'vsidian') === 0 ? true : undefined)
+
+    // 恢复 fixture 基线（偏移系定位，同用例 A/B）
+    const restore = new vscode.WorkspaceEdit()
+    restore.replace(
+      wsUri('mode.md'),
+      new vscode.Range(doc.positionAt(0), doc.positionAt('弹回未保存丙\n\n'.length)),
+      '',
+    )
+    assert(await vscode.workspace.applyEdit(restore), '恢复编辑应成功')
+    await doc.save()
+    assert(await readDisk('mode.md') === MODE_DOC_TEXT, '用例结束应恢复 mode.md 基线')
+  }],
+
+  ['diff 视图防御：三命令与循环命令均 no-op，不折叠对比（#38 D10）', async () => {
+    await resetLastMode()
+    await openTextDiff('lf.md', 'mode.md', 'diff 防御')
+
+    for (const cmd of [
+      'onegayi.vsidian.mode.toReading',
+      'onegayi.vsidian.mode.toSource',
+      'onegayi.vsidian.mode.toLive',
+      'onegayi.vsidian.toggleViewMode',
+    ]) {
+      await vscode.commands.executeCommand(cmd, wsUri('lf.md'))
+    }
+    // 异步动作落地窗口（no-op 时无动作，留观察窗防误报通过）
+    await new Promise((r) => setTimeout(r, 800))
+
+    const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab
+    assert(activeTab?.input instanceof vscode.TabInputTextDiff, '活动标签应仍为对比视图')
+    const customTabs = vscode.window.tabGroups.all
+      .flatMap((g) => g.tabs)
+      .filter((t) => t.input instanceof vscode.TabInputCustom)
+    assert(customTabs.length === 0, 'diff 语境不得创建任何 Vsidian 面板')
+    // 注：no-op 不写记忆不做跨窗口断言（1.86.2 globalState 广播滞后会偶发
+    // 覆盖读取，环境特性）；reject 分支无 writeRemembered 由代码路径保证
+  }],
+
+  ['diff 弹回防御：source 记忆下 diff 语境的 resolve 不弹回（#38 D10）', async () => {
+    // 先经真实命令链路把记忆写成 source
+    await openWithEditor('mode.md')
+    await waitSessionReady('mode.md')
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toSource', wsUri('mode.md'))
+    await waitActiveTextEditor('mode.md')
+    await waitLastMode('source')
+
+    // 打开含 lf.md 的文本 diff，再显式 resolve lf.md 的 Vsidian 面板：
+    // lf.md 处于 diff 标签 → 弹回被跳过、正常装配（diff 完整性优先）
+    await openTextDiff('lf.md', 'mode.md', 'diff 弹回')
+    await openWithEditor('lf.md')
+    const session = await waitSessionReady('lf.md')
+    assert(session.panels.length >= 1, 'diff 语境下应跳过弹回、正常装配面板')
+  }],
+
 
   ['注入编辑写回 TextDocument 并保存后磁盘回读一致（中文/emoji）', async () => {
     await openWithEditor('lf.md')
@@ -1039,8 +1592,9 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const diskMid = await readDisk('mode.md')
     assert(diskMid === diskBefore, '切换不得写磁盘')
 
-    // 切回实时预览：内容与光标语义保留
-    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
+    // 切回实时预览：内容与光标语义保留（三态命令显式指定目标，#38 起循环
+    // 命令在 reading 态会切源码编辑器，回 live 须用显式命令）
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toLive')
     const backView = await poll('切回实时预览', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'live' ? v : undefined
@@ -1082,8 +1636,9 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(readingView.readingBlockCount === 3, `锚点文档应 3 块，实际 ${readingView.readingBlockCount}`)
     assert(readingView.text.includes('最后段落结束'), '阅读视图文本同步')
 
-    // 切回实时预览：光标恢复到锚点块源 start（对应段落与光标，非百分比）
-    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
+    // 切回实时预览：光标恢复到锚点块源 start（对应段落与光标，非百分比；
+    // #38 起回 live 用显式命令，循环命令在 reading 态会切源码编辑器）
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toLive')
     const backView = await poll('恢复光标', async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return v?.viewMode === 'live' && v.selectionOffset === target ? v : undefined
@@ -2361,8 +2916,9 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(v.find!.index === 2, `会话保活：当前序号仍为 2，实际 ${v.find!.index}`)
     assert(v.readingAnchorStart === para2Start, `阅读锚点应为当前匹配块 start，实际 ${v.readingAnchorStart}`)
 
-    // 切回 live：选区恢复到当前匹配（源锚点映射，非块首）
-    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
+    // 切回 live：选区恢复到当前匹配（源锚点映射，非块首；#38 起回 live 用
+    // 显式命令，循环命令在 reading 态会切源码编辑器）
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toLive')
     v = await poll('切回 live 恢复', async () => {
       const s = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
       return s?.viewMode === 'live' && s.find?.open === true ? s : undefined
@@ -2597,9 +3153,11 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(state.appliedEdits === 0, `歧义/缺失链路不得产生 applyEdit，实际 ${state.appliedEdits}`)
     assert(state.version === versionBefore, `版本不得变化（${versionBefore} → ${state.version}）`)
 
-    // 大小写语义随宿主平台：Windows 本地（NTFS 语义）大小写不敏感命中
-    //（面板此前未退场——以上拦截意图不打开编辑器）
-    await injectWikilink(uri, process.platform === 'win32' ? 'casenote' : 'CaseNote')
+    // 大小写语义随宿主平台：两平台注入同名小写 'casenote'——Windows 本地
+    //（NTFS 语义）不敏感命中 CaseNote.md；POSIX 宿主严格匹配为 not-found
+    //（注入端不得按平台翻转：精确名 'CaseNote' 在严格语义下必然命中打开，
+    // 与下方 not-found 断言矛盾，Linux 宿主上必超时）
+    await injectWikilink(uri, 'casenote')
     if (process.platform === 'win32') {
       await poll('大小写不敏感目标被打开', () =>
         vscode.window.activeTextEditor?.document.uri.toString() === wsUri('CaseNote.md').toString()
@@ -2901,8 +3459,8 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const session1 = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
     assert(session1.version === session0.version, `阅读模式命令不得改变版本（${session0.version} → ${session1.version}）`)
     assert(session1.appliedEdits === session0.appliedEdits, `阅读模式命令不得产生写回，实际 ${session1.appliedEdits}`)
-    // 切回 live 验证面板仍可用
-    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
+    // 切回 live 验证面板仍可用（#38 起回 live 用显式命令）
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toLive')
     await waitViewState('table13.md', (v) => v.viewMode === 'live')
   }],
 
@@ -2951,8 +3509,10 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(s0.appliedEdits === 0, `切换后不得产生写回，实际 ${s0.appliedEdits}`)
     const doc = await vscode.workspace.openTextDocument(wsUri('typography.md'))
     assert(!doc.isDirty, '切换不得触发保存')
-    // 还原默认行号开启（跨用例状态清理，同 #34 既有用例约定）
+    // 还原默认行号开启（跨用例状态清理，同 #34 既有用例约定）；恢复值经
+    // waitSettings 读回确认，防 storage 迟到回翻把 false 盖回（见其注释）
     await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
+    await waitSettings({ 'editor.lineNumbers': true })
     await waitViewState('typography.md', (v) => v.lineGutter?.on === true)
   }],
 
@@ -3331,8 +3891,10 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(reading.lineGutter?.on === true, '阅读模式下设置开关态保持（切回恢复的依据）')
     console.log(`[#34] 阅读模式：viewMode=${reading.viewMode}，reading 块活跃渲染，liveWrapper 整体隐藏（行号不可见）`)
 
-    // 阅读期间保持设置开；切回 live 后行号按设置恢复且从 1 起
-    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
+    // 阅读期间保持设置开；切回 live 后行号按设置恢复且从 1 起。
+    // #38 起 toggleViewMode 为三态循环（reading 态下一次是 source），此处
+    // 显式指定 toLive（合并 main 后 #34 用例的三态适配）
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toLive', wsUri('mode.md'))
     const back = await waitViewState('mode.md', (v) => v.viewMode === 'live' && (v.lineGutter?.count ?? 0) > 0)
     assert(back.lineGutter!.first === '1', `切回 live 后行号应恢复从 1 起，实际 ${String(back.lineGutter!.first)}`)
     assert(back.lineGutter!.last === String(back.lineCount),

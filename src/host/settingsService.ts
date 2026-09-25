@@ -92,6 +92,12 @@ export class SettingsService {
    * 2. overlay 合并后持久化；写失败返回 storage 失败且不通知
    * 3. 成功后以新快照通知全部监听者（宿主层在此接广播到编辑器面板）
    */
+  /** 已知环境特性（记录，#38 合并实测）：1.86.2 的 globalState 存在跨键
+   *  storage 广播迟到回翻——本方法写入后，紧邻的其他键写入（如 #38 模式
+   *  记忆）可触发旧值广播把刚写入的 overlay 盖回旧值。生产触发条件苛刻
+   *  （设置保存与模式切换近乎同时），后果为单次开关回退、用户可再操作，
+   *  不做写后自愈；集成测试侧经 cases.ts 的 waitSettings 与 runner 的每
+   *  用例设置重置防护（读回校验，同 resetLastMode 的稳定窗先例） */
   async apply(patch: unknown): Promise<SettingsApplyResult> {
     const current = this.getSnapshot()
     const result = applySettingsPatch(this.getDefinitions(), current, patch)

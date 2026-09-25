@@ -98,12 +98,15 @@ describe('工具栏设置入口（#33）', () => {
     expect(sent).toContainEqual({ kind: 'settings.open' })
   })
 
-  it('模式按钮仍在（工具栏并存两个入口）', () => {
+  it('模式按钮已迁移，工具栏仅剩设置入口（#38 合并语义）', () => {
+    // #33 基线上工具栏并存模式按钮与设置按钮；#38 将模式切换迁移至编辑器
+    // 标题栏三态命令，工具栏只保留设置按钮（both-mains 融合后的契约）
     const { bridge } = makeBridge()
     const parent = document.createElement('div')
     const c = new WebviewSyncController(bridge)
     c.mount(parent)
-    expect(parent.querySelector('.vsidian-toolbar button.vsidian-mode-toggle')).toBeTruthy()
+    expect(parent.querySelector('.vsidian-toolbar button.vsidian-settings-toggle')).toBeTruthy()
+    expect(parent.querySelector('.vsidian-toolbar button.vsidian-mode-toggle')).toBeNull()
   })
 })
 

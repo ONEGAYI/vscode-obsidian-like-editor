@@ -2,9 +2,9 @@
 
 VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 
-> 当前状态：**MVP 主要功能已实施，整体验收未结**。双视图编辑器、增量写回、任务、链接与图片、双链、表格和查找已落地；本联合分支整合 #32–#34 的基础排版、独立设置页和行号，以及 #45 后台集成宿主、#44 IME 同步修复、#42 逐格编辑、#43 表格控件与拖排和双语建表命令。#26–#27 等人工与跨环境事项仍按验证清单跟进。
+> 当前状态：**MVP 主要功能已实施，整体验收未结**。双视图编辑器、增量写回、任务、链接与图片、双链、表格和查找已落地；#32 统一两模式基础排版基线，#33 独立设置页，#34 实时预览源文件行号（设置页可开关）；#38 落地标题栏三态切换（实时预览 → 阅读 → 源码编辑器循环）、`.md` 默认编辑器接管、全局模式记忆（globalState）与 diff 语境防御；本联合分支整合 #45 后台集成宿主、#44 IME 同步修复、#42 表格逐格编辑网格、#43 表格控件与拖排和双语建表命令。#21–#25、#28、#30 跟进规格票验收缺口，#26–#27 等人工与跨环境事项仍按验证清单跟进。
 >
-> 本联合分支自动化套件为 897 项 Vitest 单测、11 项启动器契约测试、31 项原生浏览器输入回归，以及开发态与 VSIX 安装态共用的 88 项真实 VSCode 1.86.2 宿主集成用例（另有空窗口激活实测路径）。单元格删除边界、跨行拖选标记保护、中格退格后的网格绘制、Tab 可见行导航、格内粘贴换行、多表行号和中文候选写回均有回归保护，执行记录见人工验证清单；这不代表真实 IME、物理鼠标和视觉效果已由用户验收。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能数据与待验项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 和 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
+> 自动化套件为 897 项 Vitest 单测、11 项启动器契约测试、31 项原生浏览器输入回归，以及开发态与 VSIX 安装态共用的 88 项真实 VSCode 1.86.2 宿主集成用例（另有空窗口激活实测路径）。单元格删除边界、跨行拖选标记保护、中格退格后的网格绘制、Tab 可见行导航、格内粘贴换行、多表行号和中文候选写回均有回归保护，执行记录见人工验证清单；这不代表真实 IME、物理鼠标和视觉效果已由用户验收。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能数据与待验项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 和 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
 
 ## 约定
 
@@ -41,6 +41,9 @@ vsidian/
 ├── .agents/               # agent 技能与本地配置
 │   └── skills/ # 已部署 agent 技能
 │       └── file-tree/ # file-tree 技能部署实例
+├── .github/               # GitHub 平台配置
+│   └── workflows/ # Actions 工作流目录
+│       └── ci.yml # GitHub CI 工作流
 ├── .gitignore             # Git 忽略规则
 ├── .scratch/              # MVP 开票草稿，临时目录
 ├── .vscode/               # VSCode 工作区配置
@@ -95,6 +98,7 @@ vsidian/
 │   │   ├── settingsPage.ts       # 独立设置页面板装配
 │   │   ├── settingsService.ts    # 宿主设置服务
 │   │   ├── textEditorProvider.ts # 自定义文本编辑器提供者
+│   │   ├── viewCycle.ts          # 三态视图编排纯逻辑
 │   │   └── wikilinkTarget.ts     # 宿主侧双链目标解析纯逻辑（#11）
 │   ├── shared/      # 两端共享纯逻辑
 │   │   ├── changeMapping.ts # 变更重定位纯函数
@@ -189,6 +193,7 @@ vsidian/
 │       ├── tableStructure.test.ts          # 表格结构操作纯函数契约（#13）
 │       ├── taskInteraction.test.ts         # 任务勾选交互契约测试（#9）
 │       ├── taskToggle.test.ts              # 任务勾选解析纯函数契约测试
+│       ├── viewCycle.test.ts               # 三态视图编排契约测试
 │       ├── viewMode.test.ts                # 模式切换状态机契约测试
 │       ├── webviewSync.test.ts             # webview 同步契约
 │       ├── wikilinkInteraction.test.ts     # 双链交互契约测试（#11）
