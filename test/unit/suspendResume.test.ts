@@ -455,4 +455,28 @@ describe('暂停/暂缓态本地输入的即时快照（#21）', () => {
     await vi.advanceTimersByTimeAsync(600)
     expect(conflictReports(sent)).toHaveLength(before + 1)
   })
+
+  it('组合结束后滞留的暂缓集：组合外下一笔输入恢复逐笔快照（#49 守卫）', async () => {
+    vi.useFakeTimers()
+    const { bridge, sent } = makeBridge()
+    const { c } = mount(bridge)
+    init(c, 'abcdef', 1)
+    const view = c.getView()!
+    // 在途 A（未 ack）→ 组合中候选触碰 A 进入暂缓（#49：组合期间不上报）
+    view.dispatch({ changes: { from: 0, insert: 'ZZ' } })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.dispatch({ changes: { from: 1, insert: '拼' }, userEvent: 'input.type.compose' })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await vi.advanceTimersByTimeAsync(20) // flush：deferredLocal 因在途 A 滞留
+    expect(conflictReports(sent)).toHaveLength(0)
+    // 组合外新输入（仍触碰暂缓区间）：composing === false，恢复逐笔上报，
+    // 组合外的取回兜底不随 #49 放宽
+    view.dispatch({ changes: { from: 1, insert: 'X' } })
+    expect(conflictReports(sent)).toHaveLength(1)
+    expect(conflictReports(sent)[0]).toMatchObject({ text: 'ZX拼Zabcdef' })
+    // 后续每笔继续逐笔刷新（无防抖空窗）
+    view.dispatch({ changes: { from: 1, insert: 'Y' } })
+    expect(conflictReports(sent)).toHaveLength(2)
+    expect(conflictReports(sent).at(-1)).toMatchObject({ text: 'ZYX拼Zabcdef' })
+  })
 })

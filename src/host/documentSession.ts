@@ -10,7 +10,9 @@
 //   保留输入片段（conflictFragments / conflict.report 快照）、拒绝后续
 //   写回、经 onNotice 提示，恢复走 resumePanel（doc.resync 重置，#4）
 // - 自家编辑的 onDidChangeTextDocument 回流识别为确认（edit.ack），其余
-//   一切文档变更广播给面板（doc.changed），避免回显死循环
+//   一切文档变更广播给面板（doc.changed），避免回显死循环；面板存在
+//   「已应用未确认」pending 时外部广播先暂存、确认后有序补发（#48，
+//   保证 webview 收到 ack(E) → doc.changed(X) 的参考系一致序列）
 // - 请求串行处理：同一时刻只有一个 applyEdit 在途，后续请求基于推进后的
 //   版本重定位，消除并发窗口
 // - 面板关闭/断连（onDidDispose → detachPanel）时存在未确认输入必须通知，
@@ -157,6 +159,13 @@ export class DocumentSession {
   /** 兜底确认记录（C-4）：applyEdit resolve 后回流迟到时，回流到达按
    *  (version, changes) 匹配识别为自家确认，不作为外部变更重复广播 */
   private readonly confirmedEchoes: { version: number; changes: SerChange[] }[] = []
+  /** #48 已应用未确认窗口的外部广播暂存：面板 pending 存在已应用未确认
+   *  条目时，外部增量的坐标参考系（权威文本已含该编辑）与 webview 的
+   *  ackedChain（不含）不一致——先行广播会让 webview 逆穿 unconfirmed
+   *  时把该编辑的偏移计算两次（不重叠时静默错位 len(E)，重叠时误判冲突
+   *  暂停）。暂存到 pending 确认后按 version 有序补发，保证 webview 收到
+   *  ack(E) → doc.changed(X) 的参考系一致序列，其既有状态机自然正确。 */
+  private readonly pendingExternal: { version: number; changes: SerChange[] }[] = []
   /** 换行协调：webview 侧统一 LF 坐标，宿主侧负责与权威文本的 CRLF 双向转换 */
   private readonly newline = new NewlineCoordinator()
   private queue: Promise<void> = Promise.resolve()
@@ -234,6 +243,12 @@ export class DocumentSession {
       }
     }
     this.panels.delete(sessionId)
+    // #48 收口说明：此处不立即补发暂存的外部增量。被关闭面板可能持有
+    // 「已应用未确认」pending（编辑已在权威文档中，其余面板尚未见过）：
+    // 先补发更高 version 的外部增量会让随后到达的本笔回流（version 更低）
+    // 被 webview 版本单调防线丢弃、增量落点错位。补发由后续路径完成：
+    // apply 成功时本笔回流以外部变更身份有序入队（排在本批暂存量之前）
+    // 带动补发，失败时由 processEditRequest 的失败分支收口。
   }
 
   dispose(): void {
@@ -241,6 +256,7 @@ export class DocumentSession {
     this.panels.clear()
     this.versionLog.length = 0
     this.confirmedEchoes.length = 0
+    this.pendingExternal.length = 0
     this.imageInFlight.clear()
     this.imageCache.clear()
   }
@@ -466,11 +482,9 @@ export class DocumentSession {
           return
         }
       }
-      for (const panel of this.panels.values()) {
-        if (panel.ready) {
-          panel.port.send({ kind: 'doc.changed', version, changes: lfChanges, origin: 'external' })
-        }
-      }
+      // 外部变更广播（#48）：存在「已应用未确认」pending 的窗口期先暂存，
+      // 由确认路径（回流匹配 / applyEdit resolve 兜底）补发
+      this.queueExternalBroadcast(version, lfChanges)
     } finally {
       this.newline.rebuild(this.doc.getText())
     }
@@ -621,6 +635,10 @@ export class DocumentSession {
         text: this.newline.toLfText(this.doc.getText()),
       })
       this.notifyConflict(panel)
+      // #48 收口：与写回失败分支保持同一收口语义。请求串行化（全局队列）
+      // 下本分支运行时不可能是任何 apply 窗口，暂存队列为空，此调用为
+      // 防御性补发
+      this.flushPendingExternal()
       return
     }
     const pending: PendingEdit = { seq: message.seq, changes: mapped, confirmed: false }
@@ -628,7 +646,14 @@ export class DocumentSession {
     const ok = await this.doc.applyChanges(mapped)
     const entry = panel.pending.find((p) => p === pending)
     if (!entry) {
-      return // 已被其他路径处理
+      // 已被其他路径处理（resumePanel 清空 pending 等）。apply 失败时该编辑
+      // 不进权威文档、不会有回流事件来触发补发，暂存的外部增量只能在此
+      // 收口；成功时本笔回流将以外部变更身份按 version 有序入队，自然
+      // 带动补发（见 queueExternalBroadcast 的有序插入）
+      if (!ok) {
+        this.flushPendingExternal()
+      }
+      return
     }
     if (!ok) {
       // 写回通道失败：编辑未进入权威文档，同样保留输入并暂停（不虚报成功）
@@ -644,6 +669,10 @@ export class DocumentSession {
         text: this.newline.toLfText(this.doc.getText()),
       })
       this.notifyConflict(panel)
+      // #48 收口：失败 ack 已发（本面板将进入暂停、忽略后续外部增量），
+      // 暂存的外部增量立即可见给其余面板——不会有回流事件来触发补发，
+      // 不在此收口将滞留至下一次外部变更或任意 confirmPending
+      this.flushPendingExternal()
       return
     }
     if (!entry.confirmed) {
@@ -709,6 +738,10 @@ export class DocumentSession {
       }
     }
     panel.pending.length = 0
+    // #48 收口说明：暂存外部增量的补发不在此处统一执行——两个调用点的
+    // 失败 ack 在 suspendPanel 返回后才发出，先补发会让失败面板以含失败
+    // 编辑的未确认参考系应用外部增量（短暂错位）；由调用点在 ack 发出后
+    // 收口（见 processEditRequest）
   }
 
   /** 恢复面板写回：清空快照并以权威全文重置 webview（doc.resync 兼作恢复信号） */
@@ -792,15 +825,61 @@ export class DocumentSession {
     this.sendAck(panel, { kind: 'edit.ack', seq: pending.seq, ok: true, version })
     // 其他面板需要看到这次变更（split 多实例广播），坐标转换为 LF 形态
     const lfChanges = this.newline.hostChangesToLf(pending.changes)
+    this.broadcastExternal(version, lfChanges, panel)
+    // #48：确认后参考系一致（本面板 ack 已发、其他面板已见本笔广播），
+    // 暂存的外部增量可按序补发
+    this.flushPendingExternal()
+  }
+
+  /** 广播一笔外部变更（doc.changed）给全部 ready 面板；exclude 排除变更
+   *  发起面板（其以 edit.ack 获知本笔）。暂停面板照发：webview 侧忽略
+   *  并在恢复时以全文对齐（版本单调防线不受过期增量影响）。 */
+  private broadcastExternal(version: number, changes: SerChange[], exclude?: PanelEntry): void {
     for (const other of this.panels.values()) {
-      if (other !== panel && other.ready) {
+      if (other !== exclude && other.ready) {
         other.port.send({
           kind: 'doc.changed',
           version,
-          changes: lfChanges,
+          changes,
           origin: 'external',
         })
       }
+    }
+  }
+
+  /** 外部增量广播入口（#48）：无「已应用未确认」pending 时立即广播（与
+   *  原行为一致）；否则按 version 有序暂存，由 pending 确认路径补发。
+   *  有序插入兜住迟到回流（编辑回流晚于外部回流被处理）的乱序到达。 */
+  private queueExternalBroadcast(version: number, lfChanges: SerChange[]): void {
+    let index = this.pendingExternal.length
+    while (index > 0 && this.pendingExternal[index - 1]!.version > version) {
+      index--
+    }
+    this.pendingExternal.splice(index, 0, { version, changes: lfChanges })
+    this.flushPendingExternal()
+  }
+
+  /** 暂存的外部增量是否已可广播：所有面板均无已应用未确认的 pending 条目 */
+  private hasUnconfirmedPending(): boolean {
+    for (const panel of this.panels.values()) {
+      if (panel.pending.some((p) => !p.confirmed)) {
+        return true
+      }
+    }
+    return false
+  }
+
+  /** 补发暂存的外部增量（#48）：仅在无未确认 pending 时执行，按 version
+   *  有序广播给全部 ready 面板（暂停面板在 webview 侧忽略，版本单调防线
+   *  保证恢复时全文对齐不受过期增量影响）。原位清空（splice）保持数组
+   *  引用稳定，广播期间重入的入队写进同一数组、不会重复消费。 */
+  private flushPendingExternal(): void {
+    if (this.pendingExternal.length === 0 || this.hasUnconfirmedPending()) {
+      return
+    }
+    const queued = this.pendingExternal.splice(0)
+    for (const item of queued) {
+      this.broadcastExternal(item.version, item.changes)
     }
   }
 
