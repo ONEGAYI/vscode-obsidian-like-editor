@@ -177,6 +177,8 @@ body {
   flex: 0 0 auto;
   width: 0;
   box-sizing: border-box;
+  /* #69 右键菜单浮层的定位锚（菜单 absolute 挂在侧栏内，坐标相对侧栏） */
+  position: relative;
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
@@ -519,6 +521,118 @@ body {
 
 .vsidian-sidebar .vsidian-outline-item.vsidian-outline-hidden {
   display: none;
+}
+
+/* ---- #69 右键菜单：自绘浮层（挂侧栏内 absolute）、级联子菜单、重命名 ----
+   菜单项一律 button（键盘 Tab/Enter/空格可达）；子菜单显隐唯一开关是
+   父项宿主的 :hover/:focus-within 规则（无 JS 展开状态——键盘聚焦父项
+   时子菜单同样展开，可达性由 CSS 承载）。颜色跟随 VSCode 菜单变量
+   （menu-background/selectionBackground 等），无变量主题回退半透明值 */
+.vsidian-sidebar .vsidian-outline-menu {
+  position: absolute;
+  z-index: 30;
+  min-width: 160px;
+  max-width: calc(100% - 8px);
+  box-sizing: border-box;
+  padding: 4px;
+  background: var(--vscode-menu-background, rgba(37, 37, 38, 0.98));
+  border: 1px solid var(--vscode-menu-border, rgba(128, 128, 128, 0.4));
+  border-radius: 5px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+  color: var(--vscode-menu-foreground, var(--vscode-editor-foreground));
+}
+
+.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-host {
+  position: relative; /* 级联子菜单 left:100% 的定位锚 */
+}
+
+.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-item {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 10px;
+  font-size: var(--vsidian-outline-font-size, 12px);
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: inherit;
+}
+
+.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-item:not(:disabled):hover {
+  background: var(--vscode-menu-selectionBackground, rgba(9, 71, 113, 0.55));
+  color: var(--vscode-menu-selectionForeground, inherit);
+  outline: none;
+}
+
+.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-item:not(:disabled):focus-visible {
+  background: var(--vscode-menu-selectionBackground, rgba(9, 71, 113, 0.55));
+  color: var(--vscode-menu-selectionForeground, inherit);
+  outline: none;
+}
+
+.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 破坏性命令（删除）红字：danger 类是唯一差异来源 */
+.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-danger {
+  color: var(--vscode-errorForeground, #f48771);
+}
+
+/* 子菜单指示箭头（▸）：随父项文字右侧（margin-left:auto 不适用 block
+   布局，用前置空隙） */
+.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-cue {
+  margin-left: 1.5em;
+  opacity: 0.7;
+}
+
+/* 级联子菜单：默认隐藏，父项宿主 hover/focus-within 展开（显隐唯一开关）。
+   left:100% 挂父项右侧；超出侧栏右缘时由菜单容器 max-width 约束行宽 */
+.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-submenu {
+  display: none;
+  position: absolute;
+  left: 100%;
+  top: -5px; /* 对齐父项宿主的菜单容器 padding（4px）+1px 边框 */
+  min-width: 150px;
+  box-sizing: border-box;
+  padding: 4px;
+  background: var(--vscode-menu-background, rgba(37, 37, 38, 0.98));
+  border: 1px solid var(--vscode-menu-border, rgba(128, 128, 128, 0.4));
+  border-radius: 5px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+}
+
+.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-host:hover .vsidian-outline-menu-submenu {
+  display: block;
+}
+
+.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-host:focus-within .vsidian-outline-menu-submenu {
+  display: block;
+}
+
+/* 重命名行内编辑态：条目内容区被 input 替换（原文可含行内标记）。
+   撑满条目剩余宽度、继承条目字号；VSCode 输入框三变量 */
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-rename-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  height: 20px;
+  padding: 0 4px;
+  font-size: var(--vsidian-outline-font-size, 12px);
+  font-family: inherit;
+  line-height: 18px;
+  color: var(--vscode-input-foreground, inherit);
+  background: var(--vscode-input-background, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--vscode-input-border, rgba(128, 128, 128, 0.5));
+  border-radius: 2px;
+  outline: none;
 }
 
 /* 侧栏顶栏按钮（#54「大纲」）：与主编辑区顶栏图标按钮同形态（透明底、

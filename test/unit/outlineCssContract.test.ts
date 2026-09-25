@@ -250,3 +250,77 @@ describe('折叠箭头与折叠隐藏（#67）', () => {
       .toMatch(/width:\s*18px/)
   })
 })
+
+// ---- #69 右键菜单与重命名：浮层定位、菜单项、级联子菜单、编辑态 ----
+
+describe('右键菜单浮层（#69）', () => {
+  it('侧栏 position:relative（菜单 absolute 锚定的前提）', () => {
+    // declaration 过滤：@media (reduced-motion) 内同名选择器不参与（只一个主块带 position）
+    expect(rule('#app .vsidian-sidebar', /position:\s*relative/))
+      .toMatch(/position:\s*relative/)
+  })
+
+  it('菜单容器 absolute 浮层：背景跟随 VSCode 菜单变量、边框圆角、z-index 抬升', () => {
+    const menu = rule('.vsidian-sidebar .vsidian-outline-menu')
+    expect(menu).toMatch(/position:\s*absolute/)
+    expect(menu).toMatch(/background:\s*var\(--vscode-menu-background/)
+    expect(menu).toMatch(/border:\s*1px solid var\(--vscode-menu-border/)
+    expect(menu).toMatch(/z-index:\s*30/)
+    expect(menu).toMatch(/min-width:\s*160px/)
+  })
+
+  it('菜单项按钮：全宽块状、透明底、指针形态', () => {
+    const item = rule('.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-item')
+    expect(item).toMatch(/display:\s*block/)
+    expect(item).toMatch(/width:\s*100%/)
+    expect(item).toMatch(/background:\s*transparent/)
+    expect(item).toMatch(/border:\s*none/)
+    expect(item).toMatch(/cursor:\s*pointer/)
+    expect(item).toMatch(/text-align:\s*left/)
+  })
+
+  it('菜单项 hover/focus 高亮：两态规则存在（键盘可达的视觉反馈）', () => {
+    const hover = rule('.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-item:not(:disabled):hover')
+    expect(hover).toMatch(/background:\s*var\(--vscode-menu-selectionBackground|list-hoverBackground/)
+    expect(css, 'focus-visible 规则应存在').toMatch(
+      /\.vsidian-outline-menu-item:not\(:disabled\):focus-visible/,
+    )
+  })
+
+  it('禁用项弱化（递归展开在无子项条目上）：透明度与默认指针', () => {
+    const disabled = rule('.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-item:disabled')
+    expect(disabled).toMatch(/opacity:\s*0\.4/)
+    expect(disabled).toMatch(/cursor:\s*default/)
+  })
+
+  it('删除项 danger 红字（破坏性命令的视觉差异锚点）', () => {
+    const danger = rule('.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-danger')
+    expect(danger).toMatch(/color:\s*var\(--vscode-errorForeground/)
+  })
+
+  it('级联子菜单默认隐藏，父项 hover/focus-within 展开（CSS 显隐唯一开关）', () => {
+    const hidden = rule('.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-submenu')
+    expect(hidden).toMatch(/display:\s*none/)
+    expect(hidden).toMatch(/position:\s*absolute/)
+    expect(hidden).toMatch(/left:\s*100%/)
+    const hover = rule('.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-host:hover .vsidian-outline-menu-submenu')
+    expect(hover).toMatch(/display:\s*block/)
+    const focus = rule('.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-host:focus-within .vsidian-outline-menu-submenu')
+    expect(focus).toMatch(/display:\s*block/)
+  })
+
+  it('父项宿主 relative（子菜单 left:100% 的定位锚）', () => {
+    expect(rule('.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-host'))
+      .toMatch(/position:\s*relative/)
+  })
+
+  it('重命名输入框：撑满条目、继承字号、VSCode 输入框边框变量', () => {
+    const input = rule('.vsidian-sidebar .vsidian-outline-item .vsidian-outline-rename-input')
+    expect(input).toMatch(/width:\s*100%/)
+    expect(input).toMatch(/min-width:\s*0/)
+    expect(input).toMatch(/font-size:\s*var\(--vsidian-outline-font-size,\s*12px\)/)
+    expect(input).toMatch(/background:\s*var\(--vscode-input-background/)
+    expect(input).toMatch(/border:\s*1px solid var\(--vscode-input-border/)
+    expect(input).toMatch(/color:\s*var\(--vscode-input-foreground/)
+  })
+})

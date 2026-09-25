@@ -341,6 +341,12 @@ describe('isWebviewToHost', () => {
           sliderPainted: true,
           sliderActiveDotPainted: true,
           chevronPainted: true,
+          // #69 菜单观测（必填：同上）
+          menuOpen: false,
+          menuTargetIndex: null,
+          menuPainted: false,
+          submenuVisible: false,
+          renamingIndex: null,
         },
       }),
     ).toBe(true)
@@ -365,6 +371,11 @@ describe('isWebviewToHost', () => {
           sliderPainted: false,
           sliderActiveDotPainted: false,
           chevronPainted: false,
+          menuOpen: false,
+          menuTargetIndex: null,
+          menuPainted: false,
+          submenuVisible: false,
+          renamingIndex: null,
         },
       }),
     ).toBe(true)
@@ -511,12 +522,14 @@ describe('isWebviewToHost', () => {
     expect(isWebviewToHost({
       ...base,
       outline: { ...legal, expandLevel: 0, visibleIndices: [0, 1, 3],
-        sliderPainted: true, sliderActiveDotPainted: true, chevronPainted: false },
+        sliderPainted: true, sliderActiveDotPainted: true, chevronPainted: false,
+        menuOpen: false, menuTargetIndex: null, menuPainted: false, submenuVisible: false, renamingIndex: null },
     })).toBe(true)
     expect(isWebviewToHost({
       ...base,
       outline: { ...legal, expandLevel: 5, visibleIndices: [], sliderPainted: false,
-        sliderActiveDotPainted: false, chevronPainted: false },
+        sliderActiveDotPainted: false, chevronPainted: false,
+        menuOpen: false, menuTargetIndex: null, menuPainted: false, submenuVisible: false, renamingIndex: null },
     })).toBe(true)
     // 非法：档位越界（-1、6）、小数、字符串
     for (const level of [-1, 6, 2.5, '2']) {
@@ -556,6 +569,91 @@ describe('isWebviewToHost', () => {
     expect(isHostToWebview({ kind: 'outline.test.chevronClick', index: -1 })).toBe(false)
     expect(isHostToWebview({ kind: 'outline.test.chevronClick', index: '0' })).toBe(false)
     expect(isHostToWebview({ kind: 'outline.test.chevronClick' })).toBe(false)
+  })
+
+  it('clipboard.write 消息校验（#69）：text 直写或 linkHeading 由宿主拼标题链接', () => {
+    expect(isWebviewToHost({ kind: 'clipboard.write', text: '标题文本' })).toBe(true)
+    expect(isWebviewToHost({ kind: 'clipboard.write', text: '' })).toBe(true)
+    expect(isWebviewToHost({
+      kind: 'clipboard.write',
+      linkHeading: { docUri: 'file:///d%3A/notes/a.md', heading: '剥标记标题' },
+    })).toBe(true)
+    // 非法：text 非字符串
+    expect(isWebviewToHost({ kind: 'clipboard.write', text: 7 })).toBe(false)
+    expect(isWebviewToHost({ kind: 'clipboard.write' })).toBe(false)
+    // 非法：linkHeading 字段缺失/类型不对
+    expect(isWebviewToHost({ kind: 'clipboard.write', linkHeading: {} })).toBe(false)
+    expect(isWebviewToHost({
+      kind: 'clipboard.write',
+      linkHeading: { docUri: 1, heading: 'x' },
+    })).toBe(false)
+    expect(isWebviewToHost({
+      kind: 'clipboard.write',
+      linkHeading: { docUri: 'file:///a.md', heading: null },
+    })).toBe(false)
+  })
+
+  it('outline.test.contextMenu / menuClick / menuClose / renameKey 测试钩子消息校验（#69）', () => {
+    expect(isHostToWebview({ kind: 'outline.test.contextMenu', index: 0 })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.contextMenu', index: 4, extra: 1 })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.contextMenu', index: -1 })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.contextMenu', index: 1.5 })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.contextMenu' })).toBe(false)
+    // menuClick：command 为已知菜单命令字符串
+    expect(isHostToWebview({ kind: 'outline.test.menuClick', command: 'delete' })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.menuClick', command: 'copyLink' })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.menuClick', command: 'unknown' })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.menuClick', command: 7 })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.menuClick' })).toBe(false)
+    // menuClose：无参
+    expect(isHostToWebview({ kind: 'outline.test.menuClose' })).toBe(true)
+    // renameKey：text 字符串 + enter/escape
+    expect(isHostToWebview({ kind: 'outline.test.renameKey', text: '新名', key: 'enter' })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.renameKey', text: '', key: 'escape' })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.renameKey', text: 'x', key: 'tab' })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.renameKey', text: 7, key: 'enter' })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.renameKey', key: 'enter' })).toBe(false)
+  })
+
+  it('view.state 的 outline 观测（#69）：菜单开合/重命名字段校验', () => {
+    const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
+    const legal = {
+      active: true,
+      togglePainted: false,
+      panelPainted: false,
+      toggleIconSizePx: null,
+      panelScrollHeightPx: null,
+      panelClientHeightPx: null,
+      items: [] as unknown[],
+      toggleAriaLabel: null,
+      panelAriaLabel: null,
+      locatedItemIndex: null,
+      locatedText: null,
+      locatedPainted: false,
+      expandLevel: 5,
+      visibleIndices: [] as number[],
+      sliderPainted: false,
+      sliderActiveDotPainted: false,
+      chevronPainted: false,
+      menuOpen: false,
+      menuTargetIndex: null,
+      menuPainted: false,
+      submenuVisible: false,
+      renamingIndex: null,
+    }
+    // 合法：菜单打开态 + 目标索引 + 绘制布尔 + 重命名索引
+    expect(isWebviewToHost({
+      ...base,
+      outline: { ...legal, menuOpen: true, menuTargetIndex: 2, menuPainted: true, renamingIndex: 2 },
+    })).toBe(true)
+    // 非法：menuOpen/menuPainted/submenuVisible 非布尔
+    expect(isWebviewToHost({ ...base, outline: { ...legal, menuOpen: 1 } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, menuPainted: 'x' } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, submenuVisible: null } })).toBe(false)
+    // 非法：menuTargetIndex/renamingIndex 非 null 非非负整数
+    expect(isWebviewToHost({ ...base, outline: { ...legal, menuTargetIndex: -1 } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, menuTargetIndex: 1.5 } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, renamingIndex: '0' } })).toBe(false)
   })
 
   it('表格绘制样本校验：可见性和边框计算值类型必须可信', () => {

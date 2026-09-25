@@ -1093,3 +1093,43 @@ describe('#10 image.request：会话解析、去重与结果回发', () => {
     expect((results[0] as { reason?: string }).reason).toBe('read-error')
   })
 })
+
+describe('#69 clipboard.write：两变体路由到注入端口', () => {
+  it('text 变体直写 writeClipboard（原样文本，不拼接）', async () => {
+    const s = setup()
+    const written: string[] = []
+    const links: unknown[] = []
+    const id = s.session.attachPanel({
+      send: () => undefined,
+      writeClipboard: (text) => written.push(text),
+      writeHeadingLinkClipboard: (docUri, heading) => links.push([docUri, heading]),
+    })
+    await s.send(id, { kind: 'clipboard.write', text: '标题\n多行' })
+    expect(written).toEqual(['标题\n多行'])
+    expect(links).toEqual([])
+  })
+
+  it('linkHeading 变体路由 writeHeadingLinkClipboard（docUri + 剥标记标题）', async () => {
+    const s = setup()
+    const written: unknown[] = []
+    const links: Array<[string, string]> = []
+    const id = s.session.attachPanel({
+      send: () => undefined,
+      writeClipboard: (text) => written.push(text),
+      writeHeadingLinkClipboard: (docUri, heading) => links.push([docUri, heading]),
+    })
+    await s.send(id, {
+      kind: 'clipboard.write',
+      linkHeading: { docUri: 'file:///d%3A/notes/a.md', heading: '重点 结论' },
+    })
+    expect(links).toEqual([['file:///d%3A/notes/a.md', '重点 结论']])
+    expect(written).toEqual([])
+  })
+
+  it('未注入端口的面板静默忽略（可选端口，无副作用）', async () => {
+    const s = setup()
+    const id = s.session.attachPanel({ send: () => undefined })
+    await s.send(id, { kind: 'clipboard.write', text: 'x' })
+    // 无异常即通过
+  })
+})
