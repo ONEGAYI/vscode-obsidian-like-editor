@@ -12,6 +12,10 @@
 # workflow_dispatch 用于补跑：Release 已存在但 marketplace job 失败时（如本次
 # v0.1.0 下载步骤缺仓库上下文的事故），填标签名手动重发，无需重推 tag——
 # release job 只在真实 tag 推送时执行，dispatch 只跑 marketplace。
+#
+# 踩坑记录：给已注册的 workflow 新增触发器后，GitHub 注册实体可能滞留旧解析
+# （dispatch 报 422 "does not have trigger"）；对文件做任意字节变更推送到
+# 默认分支可强制重解析。本注释即为此保留。
 name: Release
 
 on:
