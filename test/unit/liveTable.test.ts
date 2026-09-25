@@ -566,6 +566,16 @@ describe('单元格编辑权威链路', () => {
     view.destroy()
   })
 
+  it('删除隐藏转义符会暴露额外列时保留原文，不破坏安全表格', () => {
+    const text = '| a\\|b | c |\n| --- | --- |\n| d | e |'
+    const at = text.indexOf('\\')
+    const view = makeEditView(text, at + 1)
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe(text)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
+    view.destroy()
+  })
+
   it('Home 落到表格源行首后退格不能吞掉前一行分隔声明', () => {
     const view = makeEditView(TABLE_DOC, TABLE_DOC.indexOf('| 苹果 |'))
     deleteCharBackward(view)

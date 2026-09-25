@@ -272,9 +272,13 @@ const protectGridCellContent = EditorState.transactionFilter.of((tr) => {
         parts[column] = parts[column]!.slice(0, change.from - cell.from) + change.insert +
           parts[column]!.slice(change.to - cell.from)
       }
+      const canonical = '|' + parts.join('|') + '|'
+      // 删除转义符或代码定界符可能暴露格内管道。补边界仍不能保持列数时
+      // 拒绝这笔删除，避免把当前格拆成额外列。
+      if (!tableRowCellsForColumns(canonical, cell.line.from, cell.cells.length)) return []
       const caret = Math.min(parts[column]!.length, changes[0]!.from - cell.from + changes[0]!.insert.length)
       return {
-        changes: { from: cell.line.from, to: cell.line.to, insert: '|' + parts.join('|') + '|' },
+        changes: { from: cell.line.from, to: cell.line.to, insert: canonical },
         selection: { anchor: cell.line.from + 1 + parts.slice(0, column).reduce((n, part) => n + part.length + 1, 0) + caret },
         annotations: Transaction.userEvent.of(tr.annotation(Transaction.userEvent)!),
         scrollIntoView: tr.scrollIntoView,
