@@ -212,6 +212,10 @@ export type WebviewToHost =
       liveImageCount?: number
       /** live 视口内双链数（#11；范围外 widget 与范围内 mark 共用类名） */
       liveWikilinkCount?: number
+      /** #59：live 视口内公式渲染数（范围外 KaTeX widget 与降级 span 共用类名） */
+      liveMathCount?: number
+      /** #59：阅读挂载块内公式数（KaTeX span / 降级 span） */
+      readingMathCount?: number
       /** 阅读挂载块内链接数（#10；屏外块不创建，无 DOM） */
       readingLinkCount?: number
       /** 阅读挂载块内图片数（#10） */
@@ -370,6 +374,11 @@ export interface CssProbeReport {
   liveWikilinkDecorationColor: string | null
   /** #11：阅读双链经 `.vsidian-reading-block a.vsidian-wikilink` 命中的属性值 */
   readingWikilinkDecorationColor: string | null
+  /** #59：live 公式内层 `.katex` 的 computed font-family（katex.min.css 生效
+   *  时含 KaTeX 字体族；样式/CSP 失效时回落 body 字体——字体管线观测位） */
+  liveMathFontFamily?: string | null
+  /** #59：阅读公式内层 `.katex` 的 computed font-family（同上） */
+  readingMathFontFamily?: string | null
 }
 
 /** #34 行号栏观测（view.state 扩展字段）：开关生效态与视口内渲染结果。
@@ -436,6 +445,18 @@ export interface PaintProbe {
     columnTopBorderWidth: string | null
     columnBottomBorderWidth: string | null
     columnBackgroundColor: string | null
+  }
+  /** #59 公式绘制：当前激活视图内首个公式的实际可见性与计数。
+   *  jsdom 无布局（rect 恒 0），visible 恒 false，只作真宿主集成断言依据；
+   *  live 态探 live 侧 .vsidian-math，reading 态探阅读容器（另一侧
+   *  display:none 的 rect 全 0，不作依据）。无公式时整个字段缺省。 */
+  math?: {
+    /** 首个公式的 rect 有面积且 elementFromPoint 命中其所在容器 */
+    visible: boolean
+    /** 该公式外层 computed display（'none' = 未绘制） */
+    display: string | null
+    /** 当前激活视图内 .vsidian-math / .vsidian-math-error 元素数 */
+    count: number
   }
 }
 
@@ -628,6 +649,12 @@ function isPaintProbe(v: unknown): v is PaintProbe {
       isNullOrString(v.table.columnTopBorderWidth) &&
       isNullOrString(v.table.columnBottomBorderWidth) &&
       isNullOrString(v.table.columnBackgroundColor)
+    )) &&
+    (v.math === undefined || (
+      isObject(v.math) &&
+      typeof v.math.visible === 'boolean' &&
+      isNullOrString(v.math.display) &&
+      isNonNegativeInt(v.math.count)
     ))
   )
 }
@@ -730,7 +757,9 @@ function isCssProbeReport(v: unknown): v is CssProbeReport {
     isNullOrString(v.liveTablePipeDecorationColor) &&
     isNullOrString(v.readingTableDecorationColor) &&
     isNullOrString(v.liveWikilinkDecorationColor) &&
-    isNullOrString(v.readingWikilinkDecorationColor)
+    isNullOrString(v.readingWikilinkDecorationColor) &&
+    (v.liveMathFontFamily === undefined || isNullOrString(v.liveMathFontFamily)) &&
+    (v.readingMathFontFamily === undefined || isNullOrString(v.readingMathFontFamily))
   )
 }
 
@@ -871,6 +900,8 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.liveLinkCount === undefined || isNonNegativeInt(v.liveLinkCount)) &&
         (v.liveImageCount === undefined || isNonNegativeInt(v.liveImageCount)) &&
         (v.liveWikilinkCount === undefined || isNonNegativeInt(v.liveWikilinkCount)) &&
+        (v.liveMathCount === undefined || isNonNegativeInt(v.liveMathCount)) &&
+        (v.readingMathCount === undefined || isNonNegativeInt(v.readingMathCount)) &&
         (v.readingLinkCount === undefined || isNonNegativeInt(v.readingLinkCount)) &&
         (v.readingImageCount === undefined || isNonNegativeInt(v.readingImageCount)) &&
         (v.readingWikilinkCount === undefined || isNonNegativeInt(v.readingWikilinkCount)) &&

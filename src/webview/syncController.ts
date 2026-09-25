@@ -56,6 +56,8 @@ import {
 } from './findSession'
 import { liveDecorationsField, livePreviewDecorations, LIVE_CLASS_NAMES, tableCompositionSettled } from './liveDecorations'
 import { createLinkInteractions, WIKILINK_CLASS_NAMES } from './liveLinks'
+import { liveMath } from './liveMath'
+import { MATH_CLASS_NAMES } from '../shared/math'
 import { ImageResourceManager } from './imageResource'
 import { runPerfProbe } from './perfProbe'
 import { runReadingPerfProbe } from './readingProbe'
@@ -1103,6 +1105,13 @@ export class WebviewSyncController {
       liveWikilinkCount: content
         ? content.querySelectorAll(`.${WIKILINK_CLASS_NAMES.wikilink}`).length
         : 0,
+      // #59 公式观测（live：视口内 KaTeX widget/降级 span；reading：挂载块内）
+      liveMathCount: content
+        ? content.querySelectorAll(`.${MATH_CLASS_NAMES.math}, .${MATH_CLASS_NAMES.mathError}`).length
+        : 0,
+      readingMathCount: readingActive
+        ? this.readingContainer!.querySelectorAll(`.${MATH_CLASS_NAMES.math}, .${MATH_CLASS_NAMES.mathError}`).length
+        : 0,
       readingLinkCount: readingActive
         ? this.readingContainer!.querySelectorAll('a').length
         : 0,
@@ -1437,6 +1446,12 @@ export class WebviewSyncController {
     const readingWikilink = this.readingContainer?.querySelector(
       `.vsidian-reading-block a.${WIKILINK_CLASS_NAMES.wikilink}`,
     ) ?? null
+    // #59 公式字体观测：katex.min.css 生效时 .katex 的 computed font-family
+    // 含 KaTeX 字体族（CSP/样式注入失效时回落 body 字体——集成断言依据）
+    const liveMathKatex = this.liveWrapper?.querySelector('.vsidian-math .katex') ?? null
+    const readingMathKatex = this.readingContainer?.querySelector('.vsidian-reading-block .katex') ?? null
+    const readFont = (el: Element | null): string | null =>
+      el ? getComputedStyle(el).fontFamily || null : null
     const read = (el: Element | null): string | null =>
       el ? getComputedStyle(el).textDecorationColor : null
     let readingVarProbe: string | null = null
@@ -1465,6 +1480,9 @@ export class WebviewSyncController {
       // #11 双链样式入口探针（live widget/mark / reading a）
       liveWikilinkDecorationColor: read(liveWikilink),
       readingWikilinkDecorationColor: read(readingWikilink),
+      // #59 公式字体探针（live widget / reading 块内的 KaTeX 层）
+      liveMathFontFamily: readFont(liveMathKatex),
+      readingMathFontFamily: readFont(readingMathKatex),
     }
   }
 
@@ -2517,6 +2535,39 @@ export class WebviewSyncController {
     } catch {
       caretColor = null
     }
+    // #59 公式绘制探针：按当前激活视图取首个公式元素（隐藏侧 display:none
+    // 的 rect 全 0 不作依据）；rect 有面积且 elementFromPoint 命中才算画出来
+    const mathScope = this.viewMode === 'reading' ? this.readingContainer : view.contentDOM
+    const mathEl = mathScope?.querySelector<HTMLElement>(
+      `.${MATH_CLASS_NAMES.math}, .${MATH_CLASS_NAMES.mathError}`,
+    ) ?? null
+    let mathVisible = false
+    let mathDisplay: string | null = null
+    if (mathEl) {
+      mathDisplay = getComputedStyle(mathEl).display
+      try {
+        const rect = mathEl.getBoundingClientRect()
+        if (rect.width > 0 && rect.height > 0) {
+          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+          if (hit && mathEl.contains(hit)) {
+            mathVisible = true
+          }
+        }
+      } catch {
+        // jsdom 无布局与 elementFromPoint；真宿主才能证明实际可见。
+      }
+    }
+    const math = mathEl
+      ? {
+          visible: mathVisible,
+          display: mathDisplay,
+          count: mathScope
+            ? mathScope.querySelectorAll(
+                `.${MATH_CLASS_NAMES.math}, .${MATH_CLASS_NAMES.mathError}`,
+              ).length
+            : 0,
+        }
+      : undefined
     return {
       textVisible,
       scrollerDisplay: view.scrollDOM ? getComputedStyle(view.scrollDOM).display : null,
@@ -2545,6 +2596,7 @@ export class WebviewSyncController {
         columnBottomBorderWidth: columnLastStyle?.borderBottomWidth ?? null,
         columnBackgroundColor: columnStyle?.backgroundColor ?? null,
       },
+      math,
     }
   }
 
@@ -2642,6 +2694,9 @@ export class WebviewSyncController {
         },
         images: this.images!,
       }),
+      // #59 公式：跨行块表（StateField 增量）+ 视口装饰（光标进入显源码、
+      // 离开恢复 KaTeX 排版；渲染与装饰实例均按源文缓存）
+      liveMath,
       // 表格单元格输入钩子（#12）：表格行内键入 | 转义写回 \|；
       // 编辑面即 CM6 源文本行，同步链路复用本控制器的标准出站路径
       tableEditing,
