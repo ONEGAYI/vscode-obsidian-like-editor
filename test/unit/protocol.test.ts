@@ -303,8 +303,9 @@ describe('isWebviewToHost', () => {
 
   it('view.state 的 outline 观测（#54）：合法样本接受、字段非法拒绝', () => {
     const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
-    // 合法：active 布尔；绘制命中布尔；items 每项 level 1-6 整数 + 字符串
-    // 文字 + 非负行号；背景计算值字符串或 null；名称字符串或 null
+    // 合法：active 布尔；绘制命中布尔；图标尺寸与滚动几何 null 或非负数
+    // （jsdom 无布局时 null）；items 每项 level 1-6 整数 + 字符串文字 +
+    // 非负行号；名称字符串或 null
     expect(
       isWebviewToHost({
         ...base,
@@ -312,6 +313,9 @@ describe('isWebviewToHost', () => {
           active: true,
           togglePainted: true,
           panelPainted: true,
+          toggleIconSizePx: 16,
+          panelScrollHeightPx: 1328,
+          panelClientHeightPx: 570,
           items: [
             { level: 1, text: '文档主标题', line: 1 },
             { level: 2, text: '', line: 5 },
@@ -328,14 +332,32 @@ describe('isWebviewToHost', () => {
           active: false,
           togglePainted: false,
           panelPainted: false,
+          toggleIconSizePx: null,
+          panelScrollHeightPx: null,
+          panelClientHeightPx: null,
           items: [],
           toggleAriaLabel: null,
           panelAriaLabel: null,
         },
       }),
     ).toBe(true)
-    // 非法：active 非布尔 / level 超界（0、7、非整数） / text 非字符串 / line 负数
+    // 非法：active 非布尔 / 图标尺寸非 null 负数 / level 超界（0、7、
+    // 非整数） / text 非字符串 / line 负数
     expect(isWebviewToHost({ ...base, outline: { active: 1 } })).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: {
+          active: true,
+          toggleIconSizePx: -16,
+          panelScrollHeightPx: null,
+          panelClientHeightPx: null,
+          items: [],
+          toggleAriaLabel: null,
+          panelAriaLabel: null,
+        },
+      }),
+    ).toBe(false)
     expect(
       isWebviewToHost({
         ...base,

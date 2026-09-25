@@ -699,7 +699,14 @@ export class DocumentSession {
    *  应用未确认」pending），E 实际应用的版本是区间内唯一缺失的版本号。
    *  取该值广播/确认，保证随后按 version 有序补发的暂存增量不被 webview
    *  的 C-4 单调防线丢弃。推导不出（版本号无一缺失，如回流被合并成单
-   *  事件）时退回当前版本，维持既有兜底语义。 */
+   * 事件）时退回当前版本，维持既有兜底语义。
+   *
+   *  排序假设（换宿主适配层需重新验证）：apply 窗口内落地的外部变更，其
+   *  回流事件先于 applyEdit 的 resolve 送达本会话——扩展宿主的同通道 RPC
+   *  按序投递、onDidChangeTextDocument 事件同步派发共同保证这一先后。
+   *  该假设成立，「resolve 时点的 versionLog」才完整覆盖窗口内除 E 外的
+   *  全部外部版本，缺失值才是 E 的实际版本；反之（回流晚于 resolve）会把
+   *  外部变更的版本误判给 E。 */
   private fallbackConfirmVersion(versionBeforeApply: number): number {
     const logged = new Set(this.versionLog.map((g) => g.version))
     for (let v = versionBeforeApply + 1; v < this.doc.version; v++) {

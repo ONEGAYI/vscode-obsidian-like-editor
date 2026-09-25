@@ -46,6 +46,7 @@ import {
   docInput,
   FM_SCAN_LIMIT,
   frontmatterRange,
+  headingLevelOf,
   markdownTreeParser,
   visitRange,
   type SourceRange,
@@ -460,19 +461,6 @@ export function selectionTouchesRange(selection: EditorSelection, from: number, 
     }
   }
   return false
-}
-
-/** ATXHeading{1..6} / SetextHeading{1..2} → 级别；其余 null */
-function headingLevelOf(name: string): number | null {
-  let m = /^ATXHeading([1-6])$/.exec(name)
-  if (m) {
-    return Number(m[1])
-  }
-  m = /^SetextHeading([1-2])$/.exec(name)
-  if (m) {
-    return Number(m[1])
-  }
-  return null
 }
 
 /** 名为 name 的直接子节点（mark 查找用） */

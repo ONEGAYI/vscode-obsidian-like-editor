@@ -436,6 +436,9 @@ interface ViewState {
     active: boolean
     togglePainted: boolean
     panelPainted: boolean
+    toggleIconSizePx: number | null
+    panelScrollHeightPx: number | null
+    panelClientHeightPx: number | null
     items: Array<{ level: number; text: string; line: number }>
     toggleAriaLabel: string | null
     panelAriaLabel: string | null
@@ -4360,6 +4363,12 @@ export const cases: Array<[string, () => Promise<void>]> = [
       `大纲按钮应真实可见（命中失败：${JSON.stringify(opened.outline)}）`)
     assert(opened.outline!.panelPainted === true,
       `大纲面板应真实绘制（elementFromPoint 应命中面板：${JSON.stringify(opened.outline)}）`)
+    // 图标尺寸 16px（P1-2 回归）：尺寸规则的类名曾写错（.vsidian-toolbar-actions
+    // vs DOM 实际 .vsidian-sidebar-toolbar-actions），选择器永不匹配时 SVG 回退
+    // 默认尺寸溢出 24px 按钮盒——computed 尺寸直接钉住「用户看到的图标大小」
+    assert(Math.abs((opened.outline!.toggleIconSizePx ?? -1) - 16) < 0.01,
+      `大纲按钮图标应为 16px（选择器命中与规则生效的 computed 证据），` +
+        `实际 ${String(opened.outline!.toggleIconSizePx)}`)
     assert(opened.outline!.panelAriaLabel === '大纲',
       `大纲面板可访问名称应为「大纲」，实际 ${String(opened.outline!.panelAriaLabel)}`)
     assert(opened.paint?.textVisible === true, '展开态正文应仍可见')
@@ -4484,5 +4493,41 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // 收起侧栏收尾
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
     await waitViewState('outline.md', (v) => v.sidebar?.open === false)
+  }],
+
+  ['长大纲面板可滚动：高度受宿主约束、超长内容溢出可滚（评审修复）', async () => {
+    // P1-1 回归（视觉层断言）：修复前面板无高度约束（height:auto 长到内容
+    // 高度），被宿主 overflow:hidden 裁剪——clientHeight==scrollHeight 使
+    // overflow-y 永不激活，末条不可达，且面板中心点落到宿主可视区外使
+    // panelPainted 误报 false（探针盲区，随本修复消解）。约束生效的另一半：
+    // 条目不收缩（flex:0 0 auto），否则条目被压扁后内容总高不溢出、滚动
+    // 依旧失效（overflow:hidden 使 flex item 的 min-height:auto 为 0）。
+    // 断言口径：scrollHeight > clientHeight 证明高度被宿主 flex 链约束、
+    // 条目未收缩且内容溢出（overflow-y:auto 由此激活滚动）；panelPainted
+    // 证明面板在可视区内真实绘制；条目计数证明长大纲数据完整。
+    await openWithEditor('outline-long.md')
+    await waitSessionReady('outline-long.md')
+    const uri = wsUri('outline-long.md').toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    const opened = await waitViewState('outline-long.md',
+      (v) => v.sidebar?.open === true && v.outline?.panelPainted === true)
+    const scrollHeight = opened.outline!.panelScrollHeightPx
+    const clientHeight = opened.outline!.panelClientHeightPx
+    assert(scrollHeight !== null && clientHeight !== null,
+      `长面板滚动几何应可读（scrollHeight/clientHeight 不为 null）：${JSON.stringify(opened.outline)}`)
+    assert(clientHeight > 0, `面板可视高度应为正（实际 ${clientHeight}）`)
+    assert(scrollHeight! > clientHeight! + 500,
+      `长大纲（101 标题）面板内容应显著溢出可视区（scrollHeight ${scrollHeight} 应比 ` +
+        `clientHeight ${clientHeight} 大 500px 以上；相等说明高度约束失效或条目被压扁，` +
+        `条目数 ${opened.outline!.items.length}）`)
+    assert(opened.outline!.items.length === 101,
+      `长大纲条目应为 101 项（1 主标题 + 50 章 + 50 小节），实际 ${opened.outline!.items.length}`)
+    assert(opened.outline!.items[100]!.text === '第 50 章小节',
+      `末条应为「第 50 章小节」，实际 ${JSON.stringify(opened.outline!.items[100])}`)
+    assert(opened.paint?.textVisible === true, '长大纲展开态正文应仍可见')
+
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-long.md', (v) => v.sidebar?.open === false)
   }],
 ]

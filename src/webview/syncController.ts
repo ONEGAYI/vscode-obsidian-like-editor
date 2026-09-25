@@ -348,7 +348,9 @@ export class WebviewSyncController {
   private outlineItems: OutlineItem[] = []
   /** 大纲计算时的文档快照（Text 不可变，引用比较即版本失效判定） */
   private outlineDoc: Text | null = null
-  /** 可见时的大纲去抖刷新句柄（250ms 尾随：连续输入只在停顿后全量解析一次） */
+  /** 可见时的大纲去抖刷新句柄（250ms 尾随去抖：定时器随每次调用重置，
+   *  连续输入只在停顿 250ms 后解析一次——节流（定时器不重置）会让连续
+   *  输入每 250ms 解析一次，不是注释声称的语义） */
   private outlineTimer: ReturnType<typeof setTimeout> | undefined
 
   // ---- 查找会话状态（#14）----
@@ -1832,10 +1834,10 @@ export class WebviewSyncController {
   }
 
   /** 文档变化后的去抖刷新调度：仅可见时开启，避免不可见面板伴随每次按键
-   *  全量解析；连续输入只在停顿后解析一次 */
+   *  解析；连续输入只在停顿后解析一次（尾随去抖：定时器随每次调用重置） */
   private scheduleOutlineRefresh(): void {
     if (this.outlineTimer !== undefined) {
-      return
+      clearTimeout(this.outlineTimer)
     }
     this.outlineTimer = setTimeout(() => {
       this.outlineTimer = undefined
@@ -1845,17 +1847,25 @@ export class WebviewSyncController {
 
   /**
    * 大纲新鲜度校准（与 #14 查找的 findEnsureFresh 同模式）：Text 引用比较
-   * 判过期，过期则全文解析。序列（级别 + 文字）未变时只更新数据（行号），
-   * 不重建条目 DOM——正文编辑不触碰大纲 DOM。
+   * 判过期，过期则解析。解析复用 liveDecorationsField 维护的增量解析树
+   * （TreeFragment.applyChanges + addTree 随每笔文档事务增量更新，见
+   * liveDecorations.ts）：该树与当前 state.doc 同步，大纲直接取用，不在
+   * 去抖定时器里再做一次全量 parse（10 万行文档全量解析约 256ms，是
+   * 主线程卡顿级；增量树的语义等价由单测对照钉住）。field 恒随
+   * livePreviewDecorations 装配（extensions 无条件注册），取不到时由
+   * extractOutline 内部回退全量解析（防御路径）。序列（级别 + 文字）
+   * 未变时只更新数据（行号），不重建条目 DOM——正文编辑不触碰大纲 DOM。
    */
   private outlineEnsureFresh(): void {
-    const doc = this.view?.state.doc
-    if (!doc || this.outlineDoc === doc) {
+    const view = this.view
+    const doc = view?.state.doc
+    if (!view || !doc || this.outlineDoc === doc) {
       return
     }
     const firstRender = this.outlineDoc === null // 从未渲染：首场必落 DOM（含空态占位）
     this.outlineDoc = doc
-    const items = extractOutline(doc)
+    const tree = view.state.field(liveDecorationsField, false)?.tree
+    const items = extractOutline(doc, tree)
     const changed = firstRender || !outlineItemsEqual(items, this.outlineItems)
     this.outlineItems = items
     if (changed && this.outlinePanelEl) {
@@ -2841,17 +2851,51 @@ export class WebviewSyncController {
   /**
    * #54 大纲观测：面板态与绘制层证据（语义见 protocol.ts OutlineProbe）。
    * 回报前先做新鲜度校准（所有 view.state 回报路径统一走这里）：Text 引用
-   * 未变时零成本，过期则全文解析一次。命中字段走 elementFromPoint——侧栏
-   * 展开 + 面板 active + 显隐样式表规则生效（display:none/零尺寸时命中失败），
-   * DOM 存在性探不出样式失效。jsdom 无布局与 CSS 引擎：命中恒 false，
-   * 名称在未装配时为 null，真宿主断言见集成。
+   * 未变时零成本，过期则解析一次（复用 liveDecorationsField 的增量树）。
+   * 命中字段走 elementFromPoint——侧栏展开 + 面板 active + 显隐样式表规则
+   * 生效（display:none/零尺寸时命中失败），DOM 存在性探不出样式失效。
+   * 图标尺寸与滚动几何为 computed/布局度量（长面板裁剪时中心点在宿主外、
+   * 命中失败，scrollHeight > clientHeight 证明高度约束生效）。jsdom 无布局
+   * 与 CSS 引擎：命中恒 false、度量容错为 null，名称在未装配时为 null，
+   * 真宿主断言见集成。
    */
   private collectOutline(): OutlineProbe {
     this.outlineEnsureFresh()
+    const iconSizeOf = (el: HTMLElement | null | undefined): number | null => {
+      const svg = el?.querySelector('svg')
+      if (!svg) {
+        return null
+      }
+      try {
+        const value = getComputedStyle(svg).width
+        const px = value === '' ? NaN : Number.parseFloat(value)
+        return Number.isFinite(px) ? px : null
+      } catch {
+        return null
+      }
+    }
+    const panel = this.outlinePanelEl
+    const dimensionOf = (
+      el: HTMLElement | null | undefined,
+      key: 'scrollHeight' | 'clientHeight',
+    ): number | null => {
+      if (!el) {
+        return null
+      }
+      try {
+        const value = el[key]
+        return Number.isFinite(value) ? value : null
+      } catch {
+        return null
+      }
+    }
     return {
       active: this.outlineActive,
       togglePainted: hitPaintedElement(this.outlineToggleBtn),
-      panelPainted: hitPaintedElement(this.outlinePanelEl, this.outlinePanelEl),
+      panelPainted: hitPaintedElement(panel, panel),
+      toggleIconSizePx: iconSizeOf(this.outlineToggleBtn),
+      panelScrollHeightPx: dimensionOf(panel, 'scrollHeight'),
+      panelClientHeightPx: dimensionOf(panel, 'clientHeight'),
       items: this.outlineItems.map((item) => ({ ...item })),
       toggleAriaLabel: this.outlineToggleBtn?.getAttribute('aria-label') ?? null,
       panelAriaLabel: this.outlinePanelEl?.getAttribute('aria-label') ?? null,

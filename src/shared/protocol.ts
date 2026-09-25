@@ -594,6 +594,14 @@ export interface OutlineProbe {
   togglePainted: boolean
   /** 大纲面板容器中心点命中面板内（面板内容真实绘制，非 display:none） */
   panelPainted: boolean
+  /** 大纲按钮图标 computed 宽度 px（预期 16px：选择器写错或样式失效时
+   *  SVG 回退默认尺寸溢出按钮盒，可测出死选择器回归） */
+  toggleIconSizePx: number | null
+  /** 大纲面板 scrollHeight px（内容总高；无布局为 null） */
+  panelScrollHeightPx: number | null
+  /** 大纲面板 clientHeight px（可视高；scrollHeight > clientHeight 即
+   *  面板高度被宿主约束且内容溢出——overflow-y:auto 由此激活滚动） */
+  panelClientHeightPx: number | null
   /** 全文标题序列（级别 1–6 / 文字 / 起始行 1 基） */
   items: Array<{ level: number; text: string; line: number }>
   /** 大纲按钮可访问名称 */
@@ -603,7 +611,8 @@ export interface OutlineProbe {
 }
 
 /** 表格结构操作码校验（#13） */
-function isTableEditOp(v: unknown): v is TableEditOp {  return (
+function isTableEditOp(v: unknown): v is TableEditOp {
+  return (
     v === 'insertRowAbove' ||
     v === 'insertRowBelow' ||
     v === 'deleteRow' ||
@@ -700,13 +709,17 @@ function isOutlineItems(v: unknown): v is OutlineProbe['items'] {
   )
 }
 
-/** #54 大纲观测校验：active/命中布尔、items 序列、名称字符串或 null */
+/** #54 大纲观测校验：active/命中布尔、图标尺寸与滚动几何（null 或非负数）、
+ *  items 序列、名称字符串或 null */
 function isOutlineProbe(v: unknown): v is OutlineProbe {
   return (
     isObject(v) &&
     typeof v.active === 'boolean' &&
     typeof v.togglePainted === 'boolean' &&
     typeof v.panelPainted === 'boolean' &&
+    (v.toggleIconSizePx === null || isNonNegativeNumber(v.toggleIconSizePx)) &&
+    (v.panelScrollHeightPx === null || isNonNegativeNumber(v.panelScrollHeightPx)) &&
+    (v.panelClientHeightPx === null || isNonNegativeNumber(v.panelClientHeightPx)) &&
     isOutlineItems(v.items) &&
     isNullOrString(v.toggleAriaLabel) &&
     isNullOrString(v.panelAriaLabel)

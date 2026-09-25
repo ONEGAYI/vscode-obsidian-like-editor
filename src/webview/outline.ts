@@ -2,13 +2,22 @@
 //
 // 数据源单一职责：extractOutline 以 CM6 全文文本（webview LF 坐标，含未
 // 保存编辑）为唯一依据，经 markdownTreeParser（与 liveDecorations 同一
-// 解析器、同一 frontmatter 判定）全文解析产出标题序列——与视口渲染无关、
-// 与 live/reading 模式无关（CM6 doc 在两模式下都是权威文本模型）。
+// 解析器、同一 frontmatter 判定）产出标题序列——与视口渲染无关、与
+// live/reading 模式无关（CM6 doc 在两模式下都是权威文本模型）。解析树
+// 可由调用方传入（syncController 复用 liveDecorationsField 的增量树，
+// 免去大文档的全量 parse；树与文档须来自同一 state）。
 //
 // 本期边界：只展示标题顺序与层级；点击跳转、折叠、当前标题高亮不在范围。
 import type { Text } from '@codemirror/state'
 import type { SyntaxNode, Tree } from '@lezer/common'
-import { docInput, FM_SCAN_LIMIT, frontmatterRange, markdownTreeParser, visitRange } from './markdownDoc'
+import {
+  docInput,
+  FM_SCAN_LIMIT,
+  frontmatterRange,
+  headingLevelOf,
+  markdownTreeParser,
+  visitRange,
+} from './markdownDoc'
 
 /** 大纲条目（全文标题序列的一项） */
 export interface OutlineItem {
@@ -31,20 +40,6 @@ export const OUTLINE_CLASS_NAMES = {
 
 /** 大纲面板可访问名称（按钮 aria-label 与面板 aria-label 共用文案） */
 export const OUTLINE_LABEL = '大纲'
-
-/** ATXHeading{1..6} / SetextHeading{1..2} → 级别；其余 null（与
- *  liveDecorations.headingLevelOf 同语义） */
-function headingLevelOf(name: string): number | null {
-  let m = /^ATXHeading([1-6])$/.exec(name)
-  if (m) {
-    return Number(m[1])
-  }
-  m = /^SetextHeading([1-2])$/.exec(name)
-  if (m) {
-    return Number(m[1])
-  }
-  return null
-}
 
 /** 名为 name 的直接子节点（mark 查找用） */
 function childNamed(node: SyntaxNode, name: string): SyntaxNode | null {
@@ -78,13 +73,17 @@ function stripAtxClosing(raw: string): string {
  * 全文大纲提取：标题序列（级别 + 文字 + 起始行）。frontmatter 头块内的
  * 伪标题排除（判定与 live 装饰/阅读切块同源，两视图语义一致）；代码围栏
  * 内不产生标题节点，天然排除。跨级与同名标题逐项保留。
+ *
+ * tree 为可选的外部解析树（须与 doc 同一 state）：传入时直接取用（增量
+ * 解析复用入口，syncController 传 liveDecorationsField 维护的增量树），
+ * 省略时内部全量解析。增量树与全量解析的语义等价由对照单测钉住。
  */
-export function extractOutline(doc: Text): OutlineItem[] {
+export function extractOutline(doc: Text, tree?: Tree): OutlineItem[] {
   const items: OutlineItem[] = []
   const fm = frontmatterRange(doc.sliceString(0, Math.min(doc.length, FM_SCAN_LIMIT)))
-  const tree: Tree = markdownTreeParser.parse(docInput(doc))
+  const parsed: Tree = tree ?? markdownTreeParser.parse(docInput(doc))
   const from = fm ? fm.end : 0
-  visitRange(tree, from, doc.length, (node) => {
+  visitRange(parsed, from, doc.length, (node) => {
     if (fm && node.from < fm.end) {
       return // frontmatter 区域内的节点不产条目（头块按源码呈现）
     }

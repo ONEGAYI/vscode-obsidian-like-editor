@@ -101,6 +101,23 @@ export function visitRange(
   rec(tree.topNode, [])
 }
 
+/**
+ * ATXHeading{1..6} / SetextHeading{1..2} → 级别；其余 null。标题级判定的
+ * 单一事实源（live 装饰与大纲共用，两处语义须一致——曾为两份重复实现，
+ * 漂移会造成装饰与大纲的层级判定分叉）。
+ */
+export function headingLevelOf(name: string): number | null {
+  let m = /^ATXHeading([1-6])$/.exec(name)
+  if (m) {
+    return Number(m[1])
+  }
+  m = /^SetextHeading([1-2])$/.exec(name)
+  if (m) {
+    return Number(m[1])
+  }
+  return null
+}
+
 /** node 的子节点中与 [from, to] 相交者（升序） */
 function intersectingChildren(node: SyntaxNode, from: number, to: number): SyntaxNode[] {
   const out: SyntaxNode[] = []

@@ -7,7 +7,7 @@
 //   会话的 findEnsureFresh 同模式）；数据未变不重建 DOM
 // - 面板切换是纯视图状态：零 edit.request、文本不变、经 bridge state 持久化
 // - outline.test.click 测试钩子驱动与用户点击同一处理器
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
 import type { WebviewToHost } from '../../src/shared/protocol'
 
@@ -207,6 +207,34 @@ describe('编辑后大纲随当前文本更新（含未保存编辑）', () => {
     ])
     const d = outlineDom(parent)
     expect(d.itemTexts()).toContain('新增标题')
+  })
+
+  it('连续输入期间不重算，停顿 250ms 后解析一次（真尾随去抖：定时器随按键重置）', () => {
+    // 定时器路径契约（P1-3 回归）：此前实现是节流（定时器不随按键重置），
+    // 连续输入每 250ms 触发一次解析——注释声称的「停顿后解析一次」失守。
+    // 现有测试全走 view.state 校准路径，定时器路径零覆盖故未暴露。
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const h = makeBridge()
+      const { c, parent } = mountOutline(h)
+      openSidebar(c)
+      const d = outlineDom(parent)
+      expect(d.itemTexts()).toEqual(EXPECTED_ITEMS.map(([, text]) => text))
+      // 连续输入：每次按键间隔 100ms（小于 250ms 去抖窗口），期间推进
+      // 时钟模拟真实时间流逝——尾随去抖须每次重置定时器，一直不触发
+      for (let i = 1; i <= 5; i++) {
+        const doc = c.getView()!.state.doc
+        c.getView()!.dispatch({ changes: { from: doc.length, insert: `## 连续输入标题${i}\n` } })
+        vi.advanceTimersByTime(100)
+        expect(d.itemTexts(), `第 ${i} 次按键后仍在连续输入窗口内，面板不得重算`)
+          .toEqual(EXPECTED_ITEMS.map(([, text]) => text))
+      }
+      // 停顿超过 250ms：尾随触发一次解析，最后一次输入的内容入大纲
+      vi.advanceTimersByTime(250)
+      expect(d.itemTexts()).toContain('连续输入标题5')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('修改既有标题文字后，大纲对应条目更新', () => {

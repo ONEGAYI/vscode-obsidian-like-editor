@@ -4,9 +4,13 @@
 //   （@codemirror/lang-markdown），同一 frontmatter 判定（markdownDoc）
 // - 伪标题排除：代码围栏内、frontmatter 内的 # 行不成标题
 // - 层级与顺序保真：跨级标题、同名标题逐项保留，不合并不丢行
+// - 增量解析复用（P1-3）：外部传入 liveDecorationsField 维护的增量树时，
+//   大文档编辑序列上与全量解析逐项一致——这是 syncController 复用增量树
+//   免去去抖定时器内全量 parse 的正确性前提
 import { describe, it, expect } from 'vitest'
-import { Text } from '@codemirror/state'
+import { EditorState, Text } from '@codemirror/state'
 import { extractOutline, outlineItemsEqual } from '../../src/webview/outline'
+import { liveDecorationsField } from '../../src/webview/liveDecorations'
 
 const text = (s: string): Text => Text.of(s.split('\n'))
 
@@ -221,5 +225,97 @@ describe('outlineItemsEqual：DOM 重建判据', () => {
     expect(outlineItemsEqual(base, extractOutline(text('# 甲\n\n## 丙\n')))).toBe(false)
     expect(outlineItemsEqual(base, extractOutline(text('# 甲\n')))).toBe(false)
     expect(outlineItemsEqual([], [])).toBe(true)
+  })
+})
+
+describe('extractOutline：增量树复用的正确性对照（P1-3）', () => {
+  /** 增量树（liveDecorationsField 随事务维护）与全量解析的大纲对拍 */
+  function assertIncrementalMatchesFull(state: EditorState): void {
+    const incremental = extractOutline(state.doc, state.field(liveDecorationsField).tree)
+    const full = extractOutline(state.doc)
+    expect(incremental, '增量树产出的大纲应与全量解析逐项一致').toEqual(full)
+  }
+
+  it('传入外部树时直接取用（与全量解析同结果）', () => {
+    const doc = text('# 甲\n\n## 乙\n\nSetext 丙\n===\n')
+    const state = EditorState.create({ doc, extensions: [liveDecorationsField] })
+    expect(extractOutline(doc, state.field(liveDecorationsField).tree))
+      .toEqual(extractOutline(doc))
+  })
+
+  it('大文档编辑序列：增量树的大纲与全量解析始终一致', () => {
+    // 大文档（数千行 + 数百标题）上做结构性编辑序列：每步对拍增量树与
+    // 全量解析的大纲。syncController 的去抖刷新复用该增量树（免去 10 万行
+    // 级文档约 256ms 的全量 parse），等价性在此钉住。
+    const lines: string[] = []
+    for (let i = 1; i <= 300; i++) {
+      lines.push(`# 章 ${i}`, '', `第 ${i} 章正文第一段。`, '', `第 ${i} 章正文第二段。`, '')
+      if (i % 3 === 0) {
+        lines.push(`## 节 ${i}-1`, '', `节 ${i}-1 正文。`, '')
+      }
+      if (i % 50 === 0) {
+        lines.push('```text', '# 围栏内伪标题', '```', '')
+      }
+    }
+    let state = EditorState.create({ doc: Text.of(lines), extensions: [liveDecorationsField] })
+    assertIncrementalMatchesFull(state)
+
+    const lineOf = (needle: string): number => {
+      for (let n = 1; n <= state.doc.lines; n++) {
+        if (state.doc.line(n).text.includes(needle)) {
+          return n
+        }
+      }
+      throw new Error(`找不到 ${needle}`)
+    }
+
+    // 1. 文末追加新标题
+    state = state.update({ changes: { from: state.doc.length, insert: '\n## 文末新增标题\n' } }).state
+    assertIncrementalMatchesFull(state)
+    // 2. 修改中部既有标题文字
+    {
+      const l = state.doc.line(lineOf('章 100'))
+      state = state.update({ changes: { from: l.from + 2, to: l.to, insert: '改写后的第一百章' } }).state
+    }
+    assertIncrementalMatchesFull(state)
+    // 3. 删除一个标题行（含其换行）
+    {
+      const l = state.doc.line(lineOf('节 300-1'))
+      state = state.update({ changes: { from: l.from, to: Math.min(l.to + 1, state.doc.length) } }).state
+    }
+    assertIncrementalMatchesFull(state)
+    // 4. 普通行改标题 / 标题改普通行（前缀形态切换）
+    {
+      const l = state.doc.line(lineOf('第 5 章正文第一段'))
+      state = state.update({ changes: { from: l.from, insert: '### ' } }).state
+    }
+    assertIncrementalMatchesFull(state)
+    {
+      const l = state.doc.line(lineOf('章 7'))
+      state = state.update({ changes: { from: l.from, to: l.from + 2 } }).state
+    }
+    assertIncrementalMatchesFull(state)
+    // 5. 文档头加 frontmatter（头块内伪标题排除路径）
+    state = state.update({ changes: { from: 0, insert: '---\ntitle: 头块\n# 头块内伪标题\n---\n\n' } }).state
+    assertIncrementalMatchesFull(state)
+    // 6. 移除 frontmatter（头块变普通文本）
+    {
+      const end = state.doc.line(4).to + 1
+      state = state.update({ changes: { from: 0, to: end } }).state
+    }
+    assertIncrementalMatchesFull(state)
+    // 7. ATX 标题行下补下划线（Setext 语义竞争：上行由段落变 Setext 标题）
+    {
+      const l = state.doc.line(lineOf('第 10 章正文第一段'))
+      state = state.update({ changes: { from: l.to + 1, insert: '===\n' } }).state
+    }
+    assertIncrementalMatchesFull(state)
+    // 8. 大段插入（中部整章插入）
+    {
+      const l = state.doc.line(lineOf('章 200'))
+      const chunk = ['# 插入的整章', '', '插入章正文。', '', '## 插入章的小节', '', '小节正文。', '', ''].join('\n')
+      state = state.update({ changes: { from: l.from, insert: chunk } }).state
+    }
+    assertIncrementalMatchesFull(state)
   })
 })

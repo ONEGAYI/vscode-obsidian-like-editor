@@ -193,8 +193,13 @@ body {
   min-width: 0;
 }
 
-/* 侧栏面板区域：本期留空容器（#54 起接入内容），不产生滚动 */
+/* 侧栏面板区域（#54 起承载大纲面板）：flex 列容器把面板高度钳制在侧栏
+   剩余空间内（与 .vsidian-main 对正文容器的约束同构）——面板以
+   flex:1 + min-height:0 在此约束内滚动，无此约束时面板长到内容高度，
+   overflow-y 永不激活（超长大纲被裁到不可达，P1-1 回归） */
 #app .vsidian-sidebar .vsidian-sidebar-panel {
+  display: flex;
+  flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
@@ -265,8 +270,10 @@ body {
 /* ---- #54 大纲面板 ----
    显隐唯一开关是侧栏容器的 vsidian-outline-active 类（与 #53 的
    sidebar-open 类同模式）：默认 display:none，active 时 flex 列 + 纵向
-   滚动（超长大纲不撑破侧栏）。条目按级别缩进（用户可见的层级表达），
-   长标题单行省略。 */
+   滚动。滚动成立的前提（P1-1）：面板作为 .vsidian-sidebar-panel 的
+   flex 成员，高度被宿主钳制在侧栏剩余空间内（flex:1 + min-height:0
+   允许收缩），overflow-y 才有 scrollHeight > clientHeight 的滚动余量。
+   条目按级别缩进（用户可见的层级表达），长标题单行省略。 */
 #app .vsidian-sidebar .vsidian-outline-panel {
   display: none;
 }
@@ -274,6 +281,7 @@ body {
 #app .vsidian-sidebar.vsidian-outline-active .vsidian-outline-panel {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
   overflow-y: auto;
   min-height: 0;
   box-sizing: border-box;
@@ -281,6 +289,11 @@ body {
 }
 
 .vsidian-sidebar .vsidian-outline-item {
+  /* flex 列面板内不收缩（P1-1 的另一半）：条目 overflow:hidden 使 flex
+     item 的 min-height:auto 解析为 0，缺此声明时高度约束生效后长面板的
+     条目被均匀压扁（行高 < 22px）、内容总高不再溢出容器，overflow-y
+     依旧永不激活 */
+  flex: 0 0 auto;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -347,7 +360,7 @@ body {
   outline: none;
 }
 
-#app .vsidian-sidebar .vsidian-toolbar-actions button svg {
+#app .vsidian-sidebar .vsidian-sidebar-toolbar-actions button svg {
   width: 16px;
   height: 16px;
   display: block;
