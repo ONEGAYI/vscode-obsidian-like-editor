@@ -1068,6 +1068,39 @@ console.log(`[原生输入] mermaid ${mermaidPassed} 项通过`)
         return b && !b.classList.contains('vsidian-code-card-copy-done')
       }, null, { timeout: 4000 })
 
+      // 5d) 折叠（#82）：点击 chevron → 整块收起（行消失、头部保留、
+      //     收起态 chevron 转向）；再点展开恢复
+      const chevron = header.locator('.vsidian-code-card-fold')
+      await chevron.click()
+      await page.waitForFunction(() =>
+        document.querySelectorAll('.cm-line.vsidian-code-card-line').length === 0)
+      const collapsedState = await page.evaluate(() => ({
+        headers: document.querySelectorAll('.vsidian-code-card-header').length,
+        collapsed: document.querySelector('.vsidian-code-card-fold')?.classList.contains('vsidian-code-card-fold-collapsed'),
+      }))
+      assert.equal(collapsedState.headers, 1, '收起后头部横带保留')
+      assert.equal(collapsedState.collapsed, true, '收起态 chevron 应带转向类')
+      await chevron.click()
+      await page.waitForFunction(() =>
+        document.querySelectorAll('.cm-line.vsidian-code-card-line').length === 3)
+
+      // 5e) 键盘进入已折叠块 → 临时展开；离开后恢复收起
+      await chevron.click()
+      await page.waitForFunction(() =>
+        document.querySelectorAll('.cm-line.vsidian-code-card-line').length === 0)
+      await page.locator('.cm-content .cm-line', { hasText: '前文' }).first().click()
+      await page.keyboard.press('End')
+      await page.keyboard.press('ArrowDown')
+      await page.waitForFunction(() =>
+        document.querySelectorAll('.cm-line.vsidian-code-card-line').length === 3,
+        null, { timeout: 5000 }).catch(() => undefined)
+      for (let i = 0; i < 6; i++) await page.keyboard.press('ArrowDown')
+      await page.waitForFunction(() =>
+        document.querySelectorAll('.cm-line.vsidian-code-card-line').length === 0,
+        null, { timeout: 5000 })
+      const finalFold = await states()
+      assert.equal(finalFold.headers.length, 1, '折叠往返后头部保留')
+
       // 6) 最终文本与手工构造逐字节一致；无页面异常
       const expected = ['前文', '', '```js', 'const a = 1;x', '```', '', '后文', ''].join('\n')
       assert.equal((await states()).text, expected, '全部交互后文本必须逐字节一致')

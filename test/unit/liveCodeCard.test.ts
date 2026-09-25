@@ -12,6 +12,8 @@ import {
   buildCodeCardDecorations,
   codeCardConfigFacet,
   codeCardDecorations,
+  codeCardFoldField,
+  codeCardFoldToggle,
 } from '../../src/webview/liveCodeCard'
 import { liveDecorationsField } from '../../src/webview/liveDecorations'
 import { mermaidFencesField } from '../../src/webview/liveMermaid'
@@ -40,11 +42,29 @@ function decos(text: string, anchor: number, config?: { card?: boolean; lineNumb
         copyButton: config?.copyButton ?? true,
         highlight: true,
       }),
+      codeCardFoldField,
       codeCardDecorations,
     ],
     selection: EditorSelection.single(anchor),
   })
   return itemsOf(state.field(codeCardDecorations))
+}
+
+/** 折叠态直驱：先建状态再派发折叠切换 effect（foldAt 为围栏起始 offset） */
+function decosFolded(text: string, anchor: number, foldAt: number): { items: Item[]; folded: ReadonlySet<number> } {
+  let state = EditorState.create({
+    doc: text,
+    extensions: [
+      liveDecorationsField,
+      mermaidFencesField,
+      codeCardConfigFacet.of({ card: true, lineNumbers: true, copyButton: true, highlight: true }),
+      codeCardFoldField,
+      codeCardDecorations,
+    ],
+    selection: EditorSelection.single(anchor),
+  })
+  state = state.update({ effects: codeCardFoldToggle.of(foldAt) }).state
+  return { items: itemsOf(state.field(codeCardDecorations)), folded: state.field(codeCardFoldField) }
 }
 
 function itemsOf(set: import('@codemirror/view').DecorationSet): Item[] {
@@ -330,6 +350,129 @@ describe('复制按钮（#81）', () => {
     const items = decos(text, text.indexOf('a'))
     const widgets = items.filter((i) => i.widget).map((i) => i.widget!)
     expect(widgets.map((w) => w.copy)).toEqual([false, true])
+  })
+})
+
+describe('折叠（#82）', () => {
+  it('折叠后：整块收起为单个 replace（含闭围栏行换行），行类/行号/围栏清空均不发射，头部保留且收起态无复制按钮', () => {
+    const { items, folded } = decosFolded(DOC, 0, FENCE_FROM)
+    expect(folded.has(FENCE_FROM)).toBe(true)
+    const hides = items.filter((i) => i.hide)
+    expect(hides).toHaveLength(1)
+    const open = lineOf(DOC, OPEN_LINE)
+    const close = lineOf(DOC, CLOSE_LINE)
+    expect(hides[0]!.from).toBe(open.from)
+    expect(hides[0]!.to).toBe(Math.min(close.to + 1, DOC.length))
+    expect(items.filter((i) => i.cls?.includes(CODE_CARD_CLASS_NAMES.line))).toHaveLength(0)
+    expect(items.filter((i) => i.ln)).toHaveLength(0)
+    const header = items.find((i) => i.widget)!.widget!
+    expect(header.folded).toBe(true)
+    expect(header.copy).toBe(false)
+  })
+
+  it('光标进入已折叠块 → 临时展开（行类/行号/头部恢复，折叠状态保留）', () => {
+    const { folded } = decosFolded(DOC, 0, FENCE_FROM)
+    void folded
+    // 重建一个光标在块内的折叠状态
+    let state = EditorState.create({
+      doc: DOC,
+      extensions: [
+        liveDecorationsField, mermaidFencesField,
+        codeCardConfigFacet.of({ card: true, lineNumbers: true, copyButton: true, highlight: true }),
+        codeCardFoldField, codeCardDecorations,
+      ],
+      selection: EditorSelection.single(0),
+    })
+    state = state.update({ effects: codeCardFoldToggle.of(FENCE_FROM) }).state
+    state = state.update({ selection: EditorSelection.single(FENCE_FROM + 6) }).state
+    const items = itemsOf(state.field(codeCardDecorations))
+    expect(items.filter((i) => i.hide)).toHaveLength(0) // 编辑态：围栏显形（未折叠遮挡）
+    expect(items.filter((i) => i.cls?.includes(CODE_CARD_CLASS_NAMES.line))).toHaveLength(5)
+    expect(items.find((i) => i.widget)!.widget!.folded).toBe(false)
+    expect(state.field(codeCardFoldField).has(FENCE_FROM)).toBe(true)
+  })
+
+  it('光标离开已折叠块 → 恢复收起', () => {
+    let state = EditorState.create({
+      doc: DOC,
+      extensions: [
+        liveDecorationsField, mermaidFencesField,
+        codeCardConfigFacet.of({ card: true, lineNumbers: true, copyButton: true, highlight: true }),
+        codeCardFoldField, codeCardDecorations,
+      ],
+      selection: EditorSelection.single(FENCE_FROM + 6),
+    })
+    state = state.update({ effects: codeCardFoldToggle.of(FENCE_FROM) }).state
+    state = state.update({ selection: EditorSelection.single(0) }).state
+    const items = itemsOf(state.field(codeCardDecorations))
+    expect(items.filter((i) => i.hide)).toHaveLength(1)
+    expect(items.find((i) => i.widget)!.widget!.folded).toBe(true)
+  })
+
+  it('再次切换（展开）：折叠状态清除，回到常规呈现态', () => {
+    let state = EditorState.create({
+      doc: DOC,
+      extensions: [
+        liveDecorationsField, mermaidFencesField,
+        codeCardConfigFacet.of({ card: true, lineNumbers: true, copyButton: true, highlight: true }),
+        codeCardFoldField, codeCardDecorations,
+      ],
+      selection: EditorSelection.single(0),
+    })
+    state = state.update({ effects: codeCardFoldToggle.of(FENCE_FROM) }).state
+    state = state.update({ effects: codeCardFoldToggle.of(FENCE_FROM) }).state
+    expect(state.field(codeCardFoldField).has(FENCE_FROM)).toBe(false)
+    const items = itemsOf(state.field(codeCardDecorations))
+    expect(items.filter((i) => i.cls?.includes(CODE_CARD_CLASS_NAMES.line))).toHaveLength(5)
+    expect(items.filter((i) => i.hide)).toHaveLength(2) // 回到围栏行清空
+  })
+
+  it('折叠随编辑位置映射：块前插入一行后折叠仍生效', () => {
+    let state = EditorState.create({
+      doc: DOC,
+      extensions: [
+        liveDecorationsField, mermaidFencesField,
+        codeCardConfigFacet.of({ card: true, lineNumbers: true, copyButton: true, highlight: true }),
+        codeCardFoldField, codeCardDecorations,
+      ],
+      selection: EditorSelection.single(0),
+    })
+    state = state.update({ effects: codeCardFoldToggle.of(FENCE_FROM) }).state
+    state = state.update({ changes: { from: 0, to: 0, insert: '新行\n' } }).state
+    const newFenceFrom = state.doc.toString().indexOf('```js')
+    expect(newFenceFrom).toBeGreaterThan(FENCE_FROM)
+    expect(state.field(codeCardFoldField).has(newFenceFrom)).toBe(true)
+    expect(itemsOf(state.field(codeCardDecorations)).find((i) => i.widget)!.widget!.folded).toBe(true)
+  })
+
+  it('围栏被删除 → 折叠条目修剪（不自愈到后来者）', () => {
+    let state = EditorState.create({
+      doc: DOC,
+      extensions: [
+        liveDecorationsField, mermaidFencesField,
+        codeCardConfigFacet.of({ card: true, lineNumbers: true, copyButton: true, highlight: true }),
+        codeCardFoldField, codeCardDecorations,
+      ],
+      selection: EditorSelection.single(0),
+    })
+    state = state.update({ effects: codeCardFoldToggle.of(FENCE_FROM) }).state
+    // 删除整个围栏块（开围栏行行首到闭围栏行行尾 + 换行）
+    const close = lineOf(DOC, CLOSE_LINE)
+    state = state.update({ changes: { from: FENCE_FROM, to: Math.min(close.to + 1, DOC.length), insert: '' } }).state
+    expect(state.field(codeCardFoldField).size).toBe(0)
+  })
+
+  it('折叠 chevron：toDOM 常驻按钮、收起态类与 aria', () => {
+    const expanded = new CodeCardHeaderWidget('JavaScript', 'javascript', false, 'let a')
+    const collapsed = new CodeCardHeaderWidget('JavaScript', 'javascript', false, 'let a', true)
+    expect(expanded.eq(collapsed)).toBe(false)
+    const dom = collapsed.toDOM()
+    const chevron = dom.querySelector(`button.${CODE_CARD_CLASS_NAMES.fold}`)!
+    expect(chevron).not.toBeNull()
+    expect(chevron.classList.contains(CODE_CARD_CLASS_NAMES.foldCollapsed)).toBe(true)
+    const expandedDom = expanded.toDOM()
+    expect(expandedDom.querySelector(`.${CODE_CARD_CLASS_NAMES.fold}`)).not.toBeNull()
+    expect(expandedDom.querySelector(`.${CODE_CARD_CLASS_NAMES.fold}`)!.classList.contains(CODE_CARD_CLASS_NAMES.foldCollapsed)).toBe(false)
   })
 })
 

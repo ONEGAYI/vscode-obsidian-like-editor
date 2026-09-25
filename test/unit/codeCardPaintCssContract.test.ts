@@ -67,4 +67,16 @@ describe('代码块卡片 CSS 契约（#79）', () => {
       rule('#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-copy-done .vsidian-code-card-copy-icon-check'),
     ).toMatch(/display:\s*inline-flex/)
   })
+
+  it('折叠 chevron：常驻可见、收起态转向 -90°、收起时头部补底边圆角（#82）', () => {
+    const chevron = rule('#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-fold')
+    expect(chevron).toMatch(/display:\s*inline-flex/)
+    expect(chevron).not.toMatch(/visibility:\s*hidden/)
+    expect(
+      rule('#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-fold-collapsed svg'),
+    ).toMatch(/transform:\s*rotate\(-90deg\)/)
+    expect(
+      rule('#app .cm-editor .cm-scroller .vsidian-code-card-header:has(> .vsidian-code-card-header-actions > .vsidian-code-card-fold-collapsed)'),
+    ).toMatch(/border-radius:\s*6px/)
+  })
 })

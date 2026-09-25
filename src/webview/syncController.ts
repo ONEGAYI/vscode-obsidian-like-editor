@@ -27,7 +27,7 @@
 import { Annotation, ChangeSet, Compartment, EditorSelection, EditorState, Prec, type Extension, type Text } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { liveLineNumbers, paintedLineNumbers } from './liveLineNumbers'
-import { CODE_CARD_CLASS_NAMES, codeCardConfigFacet, codeCardCopyRequest, liveCodeCard, type CodeCardConfig } from './liveCodeCard'
+import { CODE_CARD_CLASS_NAMES, codeCardConfigFacet, codeCardCopyRequest, codeCardFoldField, liveCodeCard, type CodeCardConfig } from './liveCodeCard'
 import {
   isHostToWebview,
   type CssProbeReport,
@@ -1089,6 +1089,16 @@ export class WebviewSyncController {
         const scope = this.viewMode === 'reading' ? this.readingContainer : this.view?.contentDOM
         const buttons = scope?.querySelectorAll<HTMLButtonElement>(
           `.${CODE_CARD_CLASS_NAMES.copy}`,
+        )
+        buttons?.[message.index]?.click()
+        break
+      }
+      case 'codecard.test.fold': {
+        // 测试钩子（#82）：按序号点击卡片头部折叠 chevron（驱动与用户点击
+        // 相同的处理器链路：effect → codeCardFoldField 视图态切换）
+        const scope = this.viewMode === 'reading' ? this.readingContainer : this.view?.contentDOM
+        const buttons = scope?.querySelectorAll<HTMLButtonElement>(
+          `.${CODE_CARD_CLASS_NAMES.fold}`,
         )
         buttons?.[message.index]?.click()
         break
@@ -2702,11 +2712,12 @@ export class WebviewSyncController {
     })
   }
 
-  /** 卡片扩展装配（#79–#81）：facet + 装饰 StateField + 复制请求转发监听。
-   *  初次装配与设置热重配共用，保证监听器在默认配置下同样在场 */
+  /** 卡片扩展装配（#79–#82）：facet + 折叠状态 + 装饰 StateField + 复制
+   *  请求转发监听。初次装配与设置热重配共用，保证监听器在默认配置下同样在场 */
   private codeCardExtension() {
     return [
       codeCardConfigFacet.of(this.codeCardConfig),
+      codeCardFoldField,
       liveCodeCard,
       // #81 复制请求转发：零写回事务携带 effect → codeblock.copy 出站
       EditorView.updateListener.of((update) => {
@@ -3070,6 +3081,10 @@ export class WebviewSyncController {
         // DOM 常驻才能被此计数与宿主点击钩子命中）
         copyCount: codeScope
           ? codeScope.querySelectorAll(`.${CODE_CARD_CLASS_NAMES.copy}`).length
+          : 0,
+        // #82 收起态头部数（chevron -collapsed 计数）
+        foldedCount: codeScope
+          ? codeScope.querySelectorAll(`.${CODE_CARD_CLASS_NAMES.foldCollapsed}`).length
           : 0,
       }
       : undefined

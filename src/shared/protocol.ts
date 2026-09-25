@@ -76,6 +76,9 @@ export type HostToWebview =
   /** 测试钩子（#81）：按序号点击卡片头部复制按钮（驱动与用户点击相同的
    *  处理器链路：effect → codeblock.copy 出站 → 宿主剪贴板写入） */
   | { kind: 'codecard.test.copy'; index: number }
+  /** 测试钩子（#82）：按序号点击卡片头部折叠 chevron（驱动与用户点击相同
+   *  的处理器链路：effect → codeCardFoldField 视图态切换） */
+  | { kind: 'codecard.test.fold'; index: number }
   /** 图片解析结果（#10）：reqId 对应 image.request。ok 时 src 为可直接作
    *  img.src 的地址——工作区文件经 asWebviewUri 的 webview 资源 URI
    *  （本地与远程工作区同通道）；失败附原因码供错误态与重试呈现 */
@@ -518,6 +521,8 @@ export interface PaintProbe {
     lineNumberTexts?: string[] | null
     /** #81 呈现态复制按钮在场数（编辑态所在块不发射按钮） */
     copyCount?: number
+    /** #82 视口内收起态头部数（chevron -collapsed 计数） */
+    foldedCount?: number
   }
   /** #55 标题行绘制观测：视口内已挂载的 .vsidian-heading-inview 行的
    *  distinct 计算值（box-shadow 应为 'none'、border-left-width 应为
@@ -858,7 +863,8 @@ function isPaintProbe(v: unknown): v is PaintProbe {
       isNonNegativeInt(v.code.cardLineCount) &&
       (v.code.lineNumberTexts === undefined || v.code.lineNumberTexts === null ||
         (Array.isArray(v.code.lineNumberTexts) && v.code.lineNumberTexts.every(isString))) &&
-      (v.code.copyCount === undefined || isNonNegativeInt(v.code.copyCount))
+      (v.code.copyCount === undefined || isNonNegativeInt(v.code.copyCount)) &&
+      (v.code.foldedCount === undefined || isNonNegativeInt(v.code.foldedCount))
     )) &&
     (v.heading === undefined || v.heading === null || (
       isObject(v.heading) &&
@@ -1257,6 +1263,8 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
         isNonNegativeInt(v.index)
       )
     case 'codecard.test.copy':
+      return isNonNegativeInt(v.index)
+    case 'codecard.test.fold':
       return isNonNegativeInt(v.index)
     case 'image.result':
       if (!isPositiveInt(v.reqId)) {

@@ -75,12 +75,15 @@ export const codeCardFoldField = StateField.define<ReadonlySet<number>>({
   create: () => new Set<number>(),
   update(value, tr) {
     let next = value
+    let changed = false
     for (const eff of tr.effects) {
       if (eff.is(codeCardFoldToggle)) {
-        next = new Set(next)
-        if (!next.delete(eff.value)) {
-          next.add(eff.value)
+        const toggled = new Set(next)
+        if (!toggled.delete(eff.value)) {
+          toggled.add(eff.value)
         }
+        next = toggled
+        changed = true
       }
     }
     if (tr.docChanged) {
@@ -89,20 +92,22 @@ export const codeCardFoldField = StateField.define<ReadonlySet<number>>({
         mapped.add(tr.changes.mapPos(pos, 1))
       }
       next = mapped
+      changed = true
     }
-    if (next !== value) {
-      // 修剪：不再是任何围栏起始位置的条目（围栏被删/改写后自愈）
-      const fences = tr.state.field(mermaidFencesField, false)
-      if (fences) {
-        const starts = new Set(fences.spans.map((s) => s.from))
-        const pruned = new Set<number>()
-        for (const pos of next) {
-          if (starts.has(pos)) {
-            pruned.add(pos)
-          }
+    if (!changed) {
+      return value
+    }
+    // 修剪：不再是任何围栏起始位置的条目（围栏被删/改写后自愈）
+    const fences = tr.state.field(mermaidFencesField, false)
+    if (fences) {
+      const starts = new Set(fences.spans.map((s) => s.from))
+      const pruned = new Set<number>()
+      for (const pos of next) {
+        if (starts.has(pos)) {
+          pruned.add(pos)
         }
-        next = pruned
       }
+      next = pruned
     }
     return next
   },
@@ -139,6 +144,7 @@ export class CodeCardHeaderWidget extends WidgetType {
     readonly languageId: string | null,
     readonly copy: boolean,
     readonly code: string,
+    readonly folded = false,
   ) {
     super()
   }
@@ -148,7 +154,8 @@ export class CodeCardHeaderWidget extends WidgetType {
       other.label === this.label &&
       other.languageId === this.languageId &&
       other.copy === this.copy &&
-      other.code === this.code
+      other.code === this.code &&
+      other.folded === this.folded
     )
   }
 
@@ -161,6 +168,7 @@ export class CodeCardHeaderWidget extends WidgetType {
     label.textContent = this.label
     const actions = document.createElement('span')
     actions.className = CODE_CARD_CLASS_NAMES.headerActions
+    actions.appendChild(buildFoldButton(this.folded))
     if (this.copy) {
       actions.appendChild(buildCopyButton(this.code))
     }
@@ -171,6 +179,35 @@ export class CodeCardHeaderWidget extends WidgetType {
   ignoreEvent(): boolean {
     return false
   }
+}
+
+/** 折叠 chevron（#82）：两态常驻（收起态转向）；点击派发零写回折叠切换
+ *  effect（携带围栏起始位置）。mousedown 阻断 CM6 落位（同复制按钮）。 */
+function buildFoldButton(folded: boolean): HTMLButtonElement {
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.className = folded
+    ? `${CODE_CARD_CLASS_NAMES.fold} ${CODE_CARD_CLASS_NAMES.foldCollapsed}`
+    : CODE_CARD_CLASS_NAMES.fold
+  btn.setAttribute('aria-label', folded ? '展开代码块' : '折叠代码块')
+  btn.setAttribute('aria-expanded', folded ? 'false' : 'true')
+  btn.title = folded ? '展开代码块' : '折叠代码块'
+  btn.innerHTML =
+    '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" ' +
+    'stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"></path></svg>'
+  btn.addEventListener('mousedown', (event) => {
+    event.preventDefault()
+  })
+  btn.addEventListener('click', () => {
+    const root = btn.closest(`.${CODE_CARD_CLASS_NAMES.header}`) as HTMLElement | null
+    const view = root ? EditorView.findFromDOM(root) : EditorView.findFromDOM(btn)
+    if (view) {
+      // 块 widget 的 posAtDOM 即其挂点位置 = 围栏起始 offset
+      const pos = view.posAtDOM(root ?? btn)
+      view.dispatch({ effects: codeCardFoldToggle.of(pos) })
+    }
+  })
+  return btn
 }
 
 /** 复制按钮 DOM（#81）：悬停显现由 CSS 承担；点击派发零写回 effect，
@@ -202,7 +239,7 @@ function buildCopyButton(code: string): HTMLButtonElement {
   btn.addEventListener('click', () => {
     // findFromDOM 只认携带 cmTile 的节点（本版本 CM6 的 Tile.get 语义）：
     // 按钮自身是头部 widget 的子孙、无标记，须从头部根节点查找
-    const root = btn.closest(`.${CODE_CARD_CLASS_NAMES.header}`)
+    const root = btn.closest(`.${CODE_CARD_CLASS_NAMES.header}`) as HTMLElement | null
     const view = root ? EditorView.findFromDOM(root) : EditorView.findFromDOM(btn)
     if (view) {
       view.dispatch({ effects: codeCardCopyRequest.of(code) })
@@ -235,12 +272,13 @@ function headerDeco(
   languageId: string | null,
   copy: boolean,
   code: string,
+  folded: boolean,
 ): ReturnType<typeof Decoration.widget> {
-  const key = `${label}\u0000${languageId ?? ''}\u0000${copy ? 1 : 0}\u0000${code}`
+  const key = `${label}\u0000${languageId ?? ''}\u0000${copy ? 1 : 0}\u0000${code}\u0000${folded ? 1 : 0}`
   let deco = headerDecos.get(key)
   if (!deco) {
     deco = Decoration.widget({
-      widget: new CodeCardHeaderWidget(label, languageId, copy, code),
+      widget: new CodeCardHeaderWidget(label, languageId, copy, code, folded),
       block: true,
       side: -1,
     })
@@ -304,6 +342,7 @@ export function buildCodeCardDecorations(
   fm: { end: number } | null,
   fences: readonly FenceSpan[],
   config: Pick<CodeCardConfig, 'lineNumbers' | 'copyButton'> = { lineNumbers: true, copyButton: true },
+  folded: ReadonlySet<number> = new Set<number>(),
 ): Array<Range<Decoration>> {
   const out: Array<Range<Decoration>> = []
   for (const fence of fences) {
@@ -319,9 +358,16 @@ export function buildCodeCardDecorations(
     const trimmed = fence.info.trim()
     const label = lang?.displayName ?? (trimmed === '' ? 'Plain text' : trimmed)
     const editing = selectionTouchesRange(selection, fence.from, fence.to)
-    // 复制按钮：设置开启且非编辑态（编辑态隐藏，规格 #81）
-    const copy = config.copyButton && !editing
-    out.push(headerDeco(label, lang?.id ?? null, copy, fence.code).range(fence.from, fence.from))
+    // 折叠收起（#82）：光标在块内时临时展开；收起态无复制按钮（规格）
+    const isFolded = folded.has(fence.from) && !editing
+    const copy = config.copyButton && !editing && !isFolded
+    out.push(headerDeco(label, lang?.id ?? null, copy, fence.code, isFolded).range(fence.from, fence.from))
+    if (isFolded) {
+      // 整块收起：replace 覆盖开围栏行行首到闭围栏行行尾含换行（行完全
+      // 消失，仅留上方头部横带）；行类/行号/围栏清空装饰均不再发射
+      out.push(fenceHideDeco.range(openLine.from, Math.min(closeLine.to + 1, doc.length)))
+      continue
+    }
     for (let n = openLine.number; n <= closeLine.number; n++) {
       const line = doc.line(n)
       const cls = [
@@ -347,7 +393,7 @@ export function buildCodeCardDecorations(
   return out
 }
 
-/** 卡片装饰 StateField：docChanged / 选区变化 / 配置变化时对围栏表全量重建 */
+/** 卡片装饰 StateField：docChanged / 选区变化 / 配置或折叠状态变化时对围栏表全量重建 */
 export const codeCardDecorations = StateField.define<DecorationSet>({
   create(state) {
     const decoField = state.field(liveDecorationsField, false)
@@ -356,7 +402,10 @@ export const codeCardDecorations = StateField.define<DecorationSet>({
       return RangeSet.empty
     }
     return RangeSet.of(
-      buildCodeCardDecorations(state.doc, state.selection, decoField.fm, fences.spans, state.facet(codeCardConfigFacet)),
+      buildCodeCardDecorations(
+        state.doc, state.selection, decoField.fm, fences.spans,
+        state.facet(codeCardConfigFacet), state.field(codeCardFoldField, false) ?? new Set<number>(),
+      ),
       true,
     )
   },
@@ -365,7 +414,8 @@ export const codeCardDecorations = StateField.define<DecorationSet>({
       return RangeSet.empty
     }
     const configChanged = tr.startState.facet(codeCardConfigFacet) !== tr.state.facet(codeCardConfigFacet)
-    if (!tr.docChanged && tr.selection === undefined && !configChanged) {
+    const foldChanged = tr.startState.field(codeCardFoldField, false) !== tr.state.field(codeCardFoldField, false)
+    if (!tr.docChanged && tr.selection === undefined && !configChanged && !foldChanged) {
       return value
     }
     const decoField = tr.state.field(liveDecorationsField, false)
@@ -374,7 +424,10 @@ export const codeCardDecorations = StateField.define<DecorationSet>({
       return RangeSet.empty
     }
     return RangeSet.of(
-      buildCodeCardDecorations(tr.state.doc, tr.state.selection, decoField.fm, fences.spans, tr.state.facet(codeCardConfigFacet)),
+      buildCodeCardDecorations(
+        tr.state.doc, tr.state.selection, decoField.fm, fences.spans,
+        tr.state.facet(codeCardConfigFacet), tr.state.field(codeCardFoldField, false) ?? new Set<number>(),
+      ),
       true,
     )
   },

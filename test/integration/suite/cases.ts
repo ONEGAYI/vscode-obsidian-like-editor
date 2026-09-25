@@ -449,6 +449,8 @@ interface ViewState {
       lineNumberTexts?: string[] | null
       /** #81 呈现态复制按钮在场数 */
       copyCount?: number
+      /** #82 收起态头部数 */
+      foldedCount?: number
     }
     /** #55：标题行左缘绘制观测（distinct computed 值；无挂载标题行为 null） */
     heading?: {
@@ -4923,6 +4925,34 @@ export const cases: Array<[string, () => Promise<void>]> = [
       return text === 'hello' ? true : undefined
     })
     assert(await readDisk('code-card.md') === diskBefore, '复制不得改写源文')
+    // #82 折叠：点击 text 块 chevron（第 2 张）→ 整块收起（行从 DOM 消失，
+    // 头部保留、收起块无复制按钮）；卡片行 15 → 12
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'codecard.test.fold', index: 1,
+    })
+    const folded = await waitViewState('code-card.md', (v) =>
+      v.paint?.code?.foldedCount === 1 && v.paint.code.cardLineCount === 12)
+    assert(folded.paint?.code?.headerCount === 4, '收起后头部横带保留')
+    assert(folded.paint?.code?.copyCount === 3, '收起块不发射复制按钮')
+    // 光标进入已折叠块 → 临时展开（折叠状态保留）
+    const hello = folded.text.indexOf('hello')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: hello + 1,
+    })
+    await waitViewState('code-card.md', (v) =>
+      v.paint?.code?.foldedCount === 0 && v.paint.code.cardLineCount === 15)
+    // 离开 → 恢复收起；再次点击 chevron → 常驻展开
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: 0,
+    })
+    await waitViewState('code-card.md', (v) =>
+      v.paint?.code?.foldedCount === 1 && v.paint.code.cardLineCount === 12)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'codecard.test.fold', index: 1,
+    })
+    await waitViewState('code-card.md', (v) =>
+      v.paint?.code?.foldedCount === 0 && v.paint.code.cardLineCount === 15)
+    assert(await readDisk('code-card.md') === diskBefore, '折叠交互不得改写源文')
     // 设置总开关：关闭 → 卡片消失；重开 → 恢复（Compartment 热重配）
     await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.card': false })
     await waitViewState('code-card.md', (v) => v.paint?.code === undefined)
