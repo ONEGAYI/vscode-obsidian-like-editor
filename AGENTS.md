@@ -155,6 +155,7 @@ vsidian/
 │   │   ├── runPerf.mjs    # 性能测量启动器（#5）
 │   │   └── suite.ts       # 性能测量套件（#5）
 │   └── unit/        # vitest 单元契约测试
+│       ├── appliedUnackedRace.test.ts      # 已应用未确认竞态契约测试
 │       ├── changeMapping.test.ts           # 变更重定位契约
 │       ├── compositionBuffer.test.ts       # 组合期间缓冲契约测试
 │       ├── conflictRetention.test.ts       # 冲突保留与暂停契约测试
