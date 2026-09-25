@@ -66,6 +66,7 @@ import { READING_MARKDOWN_CLASS_NAMES } from './readingMarkdown'
 import {
   buildOutlineDom,
   extractOutline,
+  OUTLINE_CLASS_NAMES,
   type OutlineItem,
   outlineItemsEqual,
   renderOutlineItems,
@@ -2899,6 +2900,36 @@ export class WebviewSyncController {
         return null
       }
     }
+    /** #65 样式透传绘制证据：computed 字重/字体族/颜色。条目 400 与显式
+     *  粗体段 700 的对照是「字重只认显式标记」的用户可见差异；条目与正文
+     *  标题的颜色对照是主题色同源证据（同变量族解析同值）。目标元素不在
+     *  （无条目/无标记/无标题行）或取值失败时为 null（jsdom 无 CSS 引擎） */
+    const outlineStyle = () => {
+      const read = (el: Element | null, prop: 'fontWeight' | 'fontFamily' | 'color'): string | null => {
+        if (!el) {
+          return null
+        }
+        try {
+          const value = getComputedStyle(el)[prop]
+          return typeof value === 'string' && value !== '' ? value : null
+        } catch {
+          return null
+        }
+      }
+      const panel = this.outlinePanelEl ?? null
+      const item = panel?.querySelector(`.${OUTLINE_CLASS_NAMES.item}`) ?? null
+      const strong = panel?.querySelector(`.${OUTLINE_CLASS_NAMES.item} .${OUTLINE_CLASS_NAMES.span.strong}`) ?? null
+      const code = panel?.querySelector(`.${OUTLINE_CLASS_NAMES.item} .${OUTLINE_CLASS_NAMES.span.code}`) ?? null
+      const heading = this.liveWrapper?.querySelector('.vsidian-heading-line') ?? null
+      return {
+        itemFontWeight: read(item, 'fontWeight'),
+        strongFontWeight: read(strong, 'fontWeight'),
+        codeFontFamily: read(code, 'fontFamily'),
+        itemFontFamily: read(item, 'fontFamily'),
+        itemColor: read(item, 'color'),
+        headingColor: read(heading, 'color'),
+      }
+    }
     return {
       active: this.outlineActive,
       togglePainted: hitPaintedElement(this.outlineToggleBtn),
@@ -2906,9 +2937,13 @@ export class WebviewSyncController {
       toggleIconSizePx: iconSizeOf(this.outlineToggleBtn),
       panelScrollHeightPx: dimensionOf(panel, 'scrollHeight'),
       panelClientHeightPx: dimensionOf(panel, 'clientHeight'),
-      items: this.outlineItems.map((item) => ({ ...item })),
+      items: this.outlineItems.map((item) => ({
+        ...item,
+        spans: item.spans.map((span) => ({ ...span })),
+      })),
       toggleAriaLabel: this.outlineToggleBtn?.getAttribute('aria-label') ?? null,
       panelAriaLabel: this.outlinePanelEl?.getAttribute('aria-label') ?? null,
+      style: outlineStyle(),
     }
   }
 

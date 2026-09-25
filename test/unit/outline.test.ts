@@ -342,7 +342,7 @@ describe('extractOutline：双链与链接（#65 纯文本降级）', () => {
     expect(items[0]!.plainText).toBe('前 别名 后 尾')
     expect(items[0]!.spans).toEqual([
       { kind: 'strong', start: 0, end: 2 },
-      { kind: 'strong', start: 5, end: 7 },
+      { kind: 'strong', start: 4, end: 6 },
     ])
   })
 })

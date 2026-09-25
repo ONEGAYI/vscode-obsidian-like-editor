@@ -579,13 +579,27 @@ export interface SidebarProbe {
   settingsAriaLabel: string | null
 }
 
+/** #65 大纲条目行内标记类型（白名单 = 正文已支持的行内标记子集；
+ *  高亮/公式/行内颜色待正文支持后按同一机制接入，此处不预留松散类型） */
+export type OutlineSpanKind = 'strong' | 'emphasis' | 'code' | 'strike'
+
+/** #65 大纲条目行内标记区间：kind + plainText 内偏移（start 含、end 不含） */
+export interface OutlineSpanInfo {
+  kind: OutlineSpanKind
+  start: number
+  end: number
+}
+
 /**
  * 大纲观测（#54）：面板态与绘制层证据。命中类字段（*Painted）走
  * elementFromPoint——面板只有真实绘制（侧栏展开 + 面板 active + 样式表
  * 显隐规则生效）时才可能命中，样式失效（如 CSP 拦截注入）时 DOM 存在但
  * 命中失败。items 是全文标题序列（数据源 = CM6 全文解析，含未保存编辑；
- * 与视口渲染和 live/reading 模式无关）。jsdom 无布局与 CSS 引擎：命中恒
- * false，名称容错为 null（probe 未装配时字段缺省），真宿主断言见集成。
+ * 与视口渲染和 live/reading 模式无关）。#65 起 items 携带行内样式透传
+ * 信息（plainText 剥标记可见文本 + spans 白名单标记区间），style 为
+ * 条目与标记 span 的 computed 字重/字体族/颜色（绘制层证据；jsdom 无
+ * CSS 引擎时字段为 null，真宿主断言见集成）。jsdom 无布局与 CSS 引擎：
+ * 命中恒 false，名称容错为 null（probe 未装配时字段缺省）。
  */
 export interface OutlineProbe {
   /** 大纲面板 active 态（状态机实值；侧栏收起时面板同样不可见） */
@@ -602,12 +616,28 @@ export interface OutlineProbe {
   /** 大纲面板 clientHeight px（可视高；scrollHeight > clientHeight 即
    *  面板高度被宿主约束且内容溢出——overflow-y:auto 由此激活滚动） */
   panelClientHeightPx: number | null
-  /** 全文标题序列（级别 1–6 / 文字 / 起始行 1 基） */
-  items: Array<{ level: number; text: string; line: number }>
+  /** 全文标题序列（级别 1–6 / 原文 / 剥标记可见文本 / 标记区间 / 起始行 1 基） */
+  items: Array<{
+    level: number
+    text: string
+    plainText: string
+    spans: OutlineSpanInfo[]
+    line: number
+  }>
   /** 大纲按钮可访问名称 */
   toggleAriaLabel: string | null
   /** 大纲面板可访问名称（role=region + aria-label） */
   panelAriaLabel: string | null
+  /** #65 样式透传绘制证据（computed）：条目常规字重与显式标记加重的对照、
+   *  行内代码等宽字体族、条目层级色与正文标题层级色的同源对照 */
+  style?: {
+    itemFontWeight: string | null
+    strongFontWeight: string | null
+    codeFontFamily: string | null
+    itemFontFamily: string | null
+    itemColor: string | null
+    headingColor: string | null
+  }
 }
 
 /** 表格结构操作码校验（#13） */
@@ -694,7 +724,19 @@ function isSidebarProbe(v: unknown): v is SidebarProbe {
   )
 }
 
-/** #54 大纲条目序列校验：level 1–6 整数、text 字符串（可为空）、line 正整数 */
+/** #65 大纲标记区间校验：白名单 kind + 非负整数偏移 + 区间不倒置 */
+function isOutlineSpan(v: unknown): v is OutlineSpanInfo {
+  return (
+    isObject(v) &&
+    (v.kind === 'strong' || v.kind === 'emphasis' || v.kind === 'code' || v.kind === 'strike') &&
+    isNonNegativeInt(v.start) &&
+    isNonNegativeInt(v.end) &&
+    (v.start as number) <= (v.end as number)
+  )
+}
+
+/** #54/#65 大纲条目序列校验：level 1–6 整数、text/plainText 字符串（可为
+ *  空）、spans 白名单区间数组、line 正整数 */
 function isOutlineItems(v: unknown): v is OutlineProbe['items'] {
   return (
     Array.isArray(v) &&
@@ -704,13 +746,16 @@ function isOutlineItems(v: unknown): v is OutlineProbe['items'] {
         typeof item.level === 'number' && Number.isInteger(item.level) &&
         item.level >= 1 && item.level <= 6 &&
         isString(item.text) &&
+        isString(item.plainText) &&
+        Array.isArray(item.spans) && item.spans.every(isOutlineSpan) &&
         typeof item.line === 'number' && Number.isInteger(item.line) && item.line >= 1,
     )
   )
 }
 
-/** #54 大纲观测校验：active/命中布尔、图标尺寸与滚动几何（null 或非负数）、
- *  items 序列、名称字符串或 null */
+/** #54/#65 大纲观测校验：active/命中布尔、图标尺寸与滚动几何（null 或非负
+ *  数）、items 序列、名称字符串或 null、style 绘制证据（缺省或字段字符串
+ *  或 null） */
 function isOutlineProbe(v: unknown): v is OutlineProbe {
   return (
     isObject(v) &&
@@ -722,7 +767,16 @@ function isOutlineProbe(v: unknown): v is OutlineProbe {
     (v.panelClientHeightPx === null || isNonNegativeNumber(v.panelClientHeightPx)) &&
     isOutlineItems(v.items) &&
     isNullOrString(v.toggleAriaLabel) &&
-    isNullOrString(v.panelAriaLabel)
+    isNullOrString(v.panelAriaLabel) &&
+    (v.style === undefined || (
+      isObject(v.style) &&
+      isNullOrString(v.style.itemFontWeight) &&
+      isNullOrString(v.style.strongFontWeight) &&
+      isNullOrString(v.style.codeFontFamily) &&
+      isNullOrString(v.style.itemFontFamily) &&
+      isNullOrString(v.style.itemColor) &&
+      isNullOrString(v.style.headingColor)
+    ))
   )
 }
 

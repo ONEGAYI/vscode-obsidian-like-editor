@@ -89,7 +89,7 @@ describe('大纲条目按级别缩进（用户可见的层级表达）', () => {
 
 describe('侧栏顶栏按钮（#54）', () => {
   it('按钮为透明图标按钮，与主编辑区顶栏同形态（悬停高亮跟随 VSCode 变量）', () => {
-    const btn = rule('#app .vsidian-sidebar .vsidian-toolbar button')
+    const btn = rule('#app .vsidian-sidebar .vsidian-sidebar-toolbar button')
     expect(btn).toMatch(/background:\s*transparent/)
     expect(btn).toMatch(/border:\s*none/)
     expect(css, '悬停高亮规则应存在').toMatch(
