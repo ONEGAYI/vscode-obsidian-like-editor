@@ -432,7 +432,10 @@ export class DocumentSession {
    * 自家 applyEdit 的回流在此被识别为确认并发 ack；其余视为外部变更广播。
    */
   handleDocChanged(changes: SerChange[], version: number): void {
-    if (this.disposed) {
+    // VSCode 的 dirty 状态变化也触发 onDidChangeTextDocument：没有内容变更，
+    // 版本不推进。它不属于文本同步，不能进入版本日志或广播为外部修改；
+    // 否则 IME 会缓冲这个空事件，确认时把待发候选误判为外部冲突。
+    if (this.disposed || changes.length === 0) {
       return
     }
     // 一切 LF 转换都基于变更前的行尾位置表（changes/pending 坐标均指变更前

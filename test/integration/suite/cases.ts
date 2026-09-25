@@ -776,6 +776,27 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(conflictAfter.suspended === false, '恢复后不应处于暂停')
   }],
 
+  ['真实 DOM 中文候选连续替换确认后正常写回并保存', async () => {
+    const filename = 'ime-dom-commit.md'
+    await vscode.workspace.fs.writeFile(wsUri(filename), Buffer.from('A文B\n'))
+    await openWithEditor(filename)
+    await waitSessionReady(filename)
+    const uri = wsUri(filename).toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri(filename))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sync.test.composition', phase: 'start', text: '' })
+    for (const candidate of ['n', 'ni', 'nih', 'nihao', '你好']) {
+      await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sync.test.composition', phase: 'update', text: 'A' + candidate + 'B' })
+      await waitViewState(filename, (v) => v.text === 'A' + candidate + 'B\n')
+    }
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sync.test.composition', phase: 'end', text: '你好' })
+    await poll('中文候选确认后权威文档一致', () => doc.getText() === 'A你好B\n' ? true : undefined)
+    const state = await waitViewState(filename, (v) => v.text === 'A你好B\n')
+    assert(state.suspended !== true, '真实 DOM 中文候选确认不得暂停写回')
+    assert(await doc.save(), '中文文本应正常落盘')
+    const bytes = await vscode.workspace.fs.readFile(wsUri(filename))
+    assert(Buffer.from(bytes).toString('utf8') === 'A你好B\n', '保存后回读中文一致')
+  }],
+
   ['外部替换与过期本地删除同区间：真实 1.86 宿主保留外部文本并暂停（#44）', async () => {
     await openWithEditor('ime-escape.md')
     const initial = await waitSessionReady('ime-escape.md')

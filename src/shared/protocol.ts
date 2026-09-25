@@ -108,6 +108,8 @@ export type HostToWebview =
   | { kind: 'table.test.drag'; sourceIndex: number; targetSlot: number }
   /** 测试钩子（#21）：在真实 webview 的 CM6 中输入，验证暂停态即时留存。 */
   | { kind: 'sync.test.edit'; offset: number; text: string; closeAfter?: boolean }
+  /** 测试钩子：组合候选写入首行 DOM，经过 CM6 MutationObserver 的真实输入链。 */
+  | { kind: 'sync.test.composition'; phase: 'start' | 'update' | 'end'; text: string }
   /** 测试钩子：真实 webview DOM 的渲染链接 mousedown。 */
   | { kind: 'link.test.mousedown'; target: 'wikilink' | 'link'; index: number; ctrlKey?: boolean }
   /** 设置快照（#33）：当前生效设置的全量键值对。两个消费方向——设置页
@@ -1022,6 +1024,8 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
     case 'sync.test.edit':
       return isNonNegativeInt(v.offset) && isString(v.text) &&
         (v.closeAfter === undefined || typeof v.closeAfter === 'boolean')
+    case 'sync.test.composition':
+      return (v.phase === 'start' || v.phase === 'update' || v.phase === 'end') && isString(v.text)
     case 'link.test.mousedown':
       return (v.target === 'wikilink' || v.target === 'link') && isNonNegativeInt(v.index) &&
         (v.ctrlKey === undefined || typeof v.ctrlKey === 'boolean')

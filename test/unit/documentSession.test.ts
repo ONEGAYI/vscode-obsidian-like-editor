@@ -148,6 +148,23 @@ async function readyPanel(s: ReturnType<typeof setup>, sessionId: string): Promi
 }
 
 describe('ready 握手与 init', () => {
+  it('dirty 状态的空内容事件不广播，也不挤掉内容版本日志', async () => {
+    const s = setup('abc')
+    const id = s.attach()
+    await readyPanel(s, id)
+    await s.doc.applyChanges([{ offset: 0, length: 0, text: 'X' }])
+    await s.doc.applyChanges([{ offset: 0, length: 0, text: 'Y' }])
+    s.sent.get(id)!.length = 0
+    for (let i = 0; i < 300; i++) s.session.handleDocChanged([], s.doc.version)
+    expect(s.sent.get(id)).toEqual([])
+    await s.send(id, {
+      kind: 'edit.request', sessionId: id, docUri: DOC_URI,
+      seq: 1, baseVersion: 1, changes: [{ offset: 3, length: 0, text: '尾' }],
+    })
+    expect(s.doc.content).toBe('YXabc尾')
+    expect(s.sent.get(id)!.at(-1)).toMatchObject({ kind: 'edit.ack', ok: true })
+  })
+
   it('ready 后发送 init：sessionId、docUri、全文与版本', async () => {
     const s = setup('# 你好\n')
     const id = s.attach()

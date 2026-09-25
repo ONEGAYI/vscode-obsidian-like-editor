@@ -824,6 +824,25 @@ export class WebviewSyncController {
         }
         break
       }
+      case 'sync.test.composition': {
+        const view = this.view
+        if (!view || this.viewMode !== 'live') break
+        if (message.phase === 'start') {
+          view.focus()
+          view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+        } else if (message.phase === 'update') {
+          const line = view.contentDOM.querySelector('.cm-line')
+          if (line) {
+            line.replaceChildren(document.createTextNode(message.text))
+            const node = line.firstChild!
+            document.getSelection()?.setBaseAndExtent(node, message.text.length, node, message.text.length)
+            view.contentDOM.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertCompositionText', data: message.text, isComposing: true }))
+          }
+        } else {
+          view.contentDOM.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: message.text }))
+        }
+        break
+      }
       case 'link.test.mousedown': {
         if (this.view && this.viewMode === 'live') {
           const selector = message.target === 'wikilink'

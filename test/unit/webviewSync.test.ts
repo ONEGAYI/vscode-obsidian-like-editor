@@ -12,6 +12,11 @@ import type { HostToWebview, SerChange, WebviewToHost } from '../../src/shared/p
 
 const DOC_URI = 'file:///d%3A/notes/a.md'
 
+// DOM 输入用例会经过 CM6 的异步测量；jsdom 没有布局，提供空测量结果。
+if (Range.prototype.getClientRects === undefined) {
+  Range.prototype.getClientRects = () => [] as unknown as DOMRectList
+}
+
 function makeBridge() {
   const sent: WebviewToHost[] = []
   let state: Record<string, unknown> | undefined
@@ -383,7 +388,7 @@ class InlineDoc implements HostDocumentPort {
   content: string
   ver = 1
   private listener: ((changes: SerChange[], version: number) => void) | undefined
-  constructor(text: string) {
+  constructor(text: string, private readonly dirtyStateEvent = false) {
     this.content = text
   }
   onDocChanged(cb: (changes: SerChange[], version: number) => void): void {
@@ -405,6 +410,8 @@ class InlineDoc implements HostDocumentPort {
     this.content = out
     this.ver++
     this.listener?.(changes, this.ver)
+    // VSCode 首次变脏会在内容事件后再发 contentChanges=[]、同版本的状态事件。
+    if (this.dirtyStateEvent && this.ver === 2) this.listener?.([], this.ver)
     return true
   }
   async undo(): Promise<boolean> {
@@ -416,8 +423,8 @@ class InlineDoc implements HostDocumentPort {
 }
 
 /** Controller ↔ DocumentSession 配对（C-2 与文档边角用例共用的端到端基建） */
-function setupPair(text: string) {
-  const doc = new InlineDoc(text)
+function setupPair(text: string, dirtyStateEvent = false) {
+  const doc = new InlineDoc(text, dirtyStateEvent)
   const toWebview: HostToWebview[] = []
   const session = new DocumentSession(doc, { docUri: DOC_URI })
   doc.onDocChanged((changes, version) => session.handleDocChanged(changes, version))
@@ -447,6 +454,46 @@ function setupPair(text: string) {
 }
 
 describe('C-2 端到端：未确认期间连续输入经宿主重定位后与本地一致', () => {
+  it('空白表头 DOM 候选确认后保存中文', async () => {
+    const { doc, controller, session, sessionId, settle } = setupPair('|  |  |\n| --- | --- |\n|  |  |', true)
+    const view = controller.getView()!
+    view.dispatch({ selection: { anchor: 2 } })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    for (const candidate of ['n', 'ni', 'nih', 'nihao', '你好']) {
+      const node = view.contentDOM.querySelector('.vsidian-table-grid-cell')!
+      node.textContent = ' ' + candidate + ' '
+      view.contentDOM.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertCompositionText', data: candidate, isComposing: true }))
+      await settle()
+    }
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '你好' }))
+    await settle()
+    expect(view.state.doc.toString()).toBe('| 你好 |  |\n| --- | --- |\n|  |  |')
+    expect(doc.content).toBe(view.state.doc.toString())
+    expect(session.getConflictState(sessionId)?.suspended).toBe(false)
+    controller.dispose()
+  })
+  it.each([true, false])('真实 DOM 候选连续替换并确认中文后可以继续写回（逐候选 ack=%s）', async (ackEachCandidate) => {
+    const { doc, controller, session, sessionId, settle } = setupPair('正文', true)
+    const view = controller.getView()!
+    view.dispatch({ selection: { anchor: 2 } })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    for (const candidate of ['n', 'ni', 'nih', 'nihao', '你好']) {
+      const node = view.contentDOM.querySelector('.cm-line')!.firstChild!
+      node.textContent = '正文' + candidate
+      view.contentDOM.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertCompositionText', data: candidate, isComposing: true }))
+      if (ackEachCandidate) await settle()
+      else await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '你好' }))
+    await settle()
+    expect(view.state.doc.toString()).toBe('正文你好')
+    expect(doc.content).toBe('正文你好')
+    expect(session.getConflictState(sessionId)?.suspended).toBe(false)
+    view.dispatch({ changes: { from: 4, insert: '！' } })
+    await settle()
+    expect(doc.content).toBe('正文你好！')
+    controller.dispose()
+  })
   it('IME Esc 留下拼音：多轮组合和确认回流交错后继续写回', async () => {
     const { doc, controller, settle } = setupPair('正文')
     const view = controller.getView()!

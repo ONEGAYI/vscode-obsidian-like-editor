@@ -9,6 +9,14 @@ import {
 
 const validChange: SerChange = { offset: 3, length: 0, text: '中文' }
 
+it('DOM 组合测试钩子只接受明确阶段和字符串候选', () => {
+  for (const phase of ['start', 'update', 'end']) {
+    expect(isHostToWebview({ kind: 'sync.test.composition', phase, text: '中文' })).toBe(true)
+  }
+  expect(isHostToWebview({ kind: 'sync.test.composition', phase: 'unknown', text: '中文' })).toBe(false)
+  expect(isHostToWebview({ kind: 'sync.test.composition', phase: 'update', text: null })).toBe(false)
+})
+
 describe('isWebviewToHost', () => {
   it('接受合法 ready', () => {
     expect(isWebviewToHost({ kind: 'ready' })).toBe(true)
