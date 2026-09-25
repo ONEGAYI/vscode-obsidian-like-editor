@@ -77,10 +77,17 @@ try {
             assert.equal(refocused.caretX, empty.caretX, '重新聚焦空格后光标不得越过填充空格')
           }
         }
-        for (let i = 0; i < 3; i++) {
-          await page.keyboard.press('ArrowLeft')
-          if (deletion !== 'empty-source') await check('', '清空后按左方向键')
-        }
+        await page.keyboard.press('ArrowLeft')
+        const leftFocused = await page.evaluate((row) => {
+          const left = document.querySelectorAll('.vsidian-table-grid-row')[row].querySelectorAll('.vsidian-table-grid-cell')[0]
+          return left.contains(getSelection()?.focusNode)
+        }, row)
+        assert(leftFocused, '中格格首左移应把真实光标移到左格')
+        await page.keyboard.type('x')
+        assert.equal((await snapshot()).left, row === 0 ? '带x' : '左x', '左移后文字须输入左格')
+        await page.keyboard.press('Backspace')
+        await page.keyboard.press('ArrowRight')
+        if (deletion !== 'empty-source') await check('', '从左格向右回到空中格')
         if (mode === 'english') {
           for (let i = 1; i <= 8; i++) {
             await page.keyboard.type('s')
@@ -95,6 +102,10 @@ try {
           await cdp.send('Input.insertText', { text: '是' })
           await check('是', 'IME 确认')
         }
+        await page.keyboard.press('ArrowLeft')
+        await check(mode === 'english' ? 'ssssssss' : '是', '格内向左逐字移动')
+        await page.keyboard.press('ArrowRight')
+        await check(mode === 'english' ? 'ssssssss' : '是', '格内向右逐字移动')
         const beforeSpace = await snapshot()
         await page.keyboard.type(' ')
         const withSpace = await snapshot()
@@ -102,6 +113,15 @@ try {
         await page.keyboard.press('Backspace')
         await check(mode === 'english' ? 'ssssssss' : '是', '删除用户输入的空格')
         await page.keyboard.press('ArrowRight')
+        const rightFocused = await page.evaluate((row) => {
+          const right = document.querySelectorAll('.vsidian-table-grid-row')[row].querySelectorAll('.vsidian-table-grid-cell')[2]
+          return right.contains(getSelection()?.focusNode)
+        }, row)
+        assert(rightFocused, '中格格尾右移应把真实光标移到右格')
+        await page.keyboard.type('x')
+        assert.equal((await snapshot()).right, row === 0 ? 'x送' : 'x右', '右移后文字须输入右格')
+        await page.keyboard.press('Backspace')
+        await page.keyboard.press('ArrowLeft')
         await page.keyboard.press('Backspace')
         await check(mode === 'english' ? 'sssssss' : '', '立即退格')
         assert.deepEqual(errors, [])

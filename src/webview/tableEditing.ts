@@ -445,19 +445,26 @@ const selectGridCell: Command = (view) => {
   return true
 }
 
-/** 透明填充不应成为额外的方向键停靠点，也不能让一次退格只删到填充。 */
-const stopAtGridCellStart: Command = (view) => {
+/** 在可编辑边界直接导航到相邻格，跳过透明填充和隐藏管道。 */
+function moveAcrossGridCell(view: EditorView, forward: boolean): boolean {
   if (view.compositionStarted || view.state.selection.ranges.length !== 1 || !view.state.selection.main.empty) return false
   const head = view.state.selection.main.head
   const cell = editableGridCellAt(view.state, head)
-  return !!cell && head === cell.from
+  if (!cell) return false
+  const end = cell.to > cell.from && view.state.sliceDoc(cell.to - 1, cell.to) === ' ' ? cell.to - 1 : cell.to
+  if (forward ? head < end : head > cell.contentFrom) return false
+  const target = navTargetsOf(view, forward)?.[0]
+  if (target === undefined) return true
+  const next = editableGridCellAt(view.state, target)
+  if (!next) return false
+  const empty = next.contentFrom === next.contentTo
+  const at = empty ? next.from : forward ? next.contentFrom
+    : next.to > next.from && view.state.sliceDoc(next.to - 1, next.to) === ' ' ? next.to - 1 : next.to
+  view.dispatch({ selection: EditorSelection.create([EditorSelection.cursor(at, empty || forward ? 1 : -1)]),
+    scrollIntoView: true, userEvent: 'select' })
+  return true
 }
-const stopAtGridCellEnd: Command = (view) => {
-  if (view.compositionStarted || view.state.selection.ranges.length !== 1 || !view.state.selection.main.empty) return false
-  const head = view.state.selection.main.head
-  const cell = editableGridCellAt(view.state, head)
-  return !!cell && (head === cell.to || (head === cell.to - 1 && view.state.sliceDoc(head, cell.to) === ' '))
-}
+/** 退格直接删除可见内容，不先消耗透明填充。 */
 const deleteBeforeGridPadding: Command = (view) => {
   if (view.compositionStarted || view.state.selection.ranges.length !== 1 || !view.state.selection.main.empty) return false
   const head = view.state.selection.main.head
@@ -673,8 +680,8 @@ export const tableEditing = [
   keepGridInputCaretInsideCell,
   stabilizeGridCaretAfterInput,
   keymap.of([
-    { key: 'ArrowLeft', run: stopAtGridCellStart },
-    { key: 'ArrowRight', run: stopAtGridCellEnd },
+    { key: 'ArrowLeft', run: (view) => moveAcrossGridCell(view, false) },
+    { key: 'ArrowRight', run: (view) => moveAcrossGridCell(view, true) },
     { key: 'Backspace', run: deleteBeforeGridPadding },
   ]),
   keymap.of([{ key: 'Mod-a', run: selectGridCell }]),
