@@ -408,6 +408,96 @@ body {
   border-radius: 4px;
 }
 
+/* ---- #68 大纲工具条行（侧栏顶栏与滑块行之间：跳转到末尾、重置、搜索框）----
+   显隐唯一开关是侧栏容器的 outline-active 类（与面板/滑块行同模式）。
+   按钮与侧栏顶栏按钮同形态（透明底、悬停高亮跟随 VSCode 变量）；搜索框
+   占余宽（flex:1 + min-width:0——长词条不撑破侧栏），配色走 VSCode 输入
+   变量族。可访问口径：按钮 aria-label + 搜索框 aria-label 与 placeholder */
+#app .vsidian-sidebar .vsidian-outline-toolbar {
+  display: none;
+}
+
+#app .vsidian-sidebar.vsidian-outline-active .vsidian-outline-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  width: var(--vsidian-sidebar-width, 280px);
+  box-sizing: border-box;
+  height: 26px;
+  margin: 2px 0 0;
+  padding: 0 10px;
+}
+
+#app .vsidian-sidebar .vsidian-outline-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  cursor: pointer;
+  color: var(--vscode-editor-foreground);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+}
+
+#app .vsidian-sidebar .vsidian-outline-toolbar button:hover,
+#app .vsidian-sidebar .vsidian-outline-toolbar button:focus-visible {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
+  outline: none;
+}
+
+#app .vsidian-sidebar .vsidian-outline-toolbar button svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+#app .vsidian-sidebar .vsidian-outline-toolbar .vsidian-outline-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 22px;
+  box-sizing: border-box;
+  margin-left: 2px;
+  padding: 0 6px;
+  color: var(--vscode-input-foreground, inherit);
+  background: var(--vscode-input-background, rgba(128, 128, 128, 0.12));
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: inherit;
+  outline: none;
+}
+
+#app .vsidian-sidebar .vsidian-outline-toolbar .vsidian-outline-search:focus {
+  border-color: var(--vscode-focusBorder, #4fc1ff);
+}
+
+#app .vsidian-sidebar .vsidian-outline-toolbar .vsidian-outline-search::placeholder {
+  color: var(--vscode-input-placeholderForeground, rgba(128, 128, 128, 0.7));
+}
+
+/* #68 命中片段高亮：mark 只包命中子串（文本层切分，与语义元素正交）。
+   背景跟随查找高亮变量（与正文查找命中同族视觉语言）；无变量主题回退
+   半透明橙——样式失效时 mark 无背景可被集成 computed 断言捕获 */
+.vsidian-sidebar .vsidian-outline-item mark.vsidian-outline-search-hit {
+  background: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 146, 25, 0.35));
+  color: inherit;
+  border-radius: 2px;
+  padding: 0;
+}
+
+/* #68 无匹配占位：有词条零命中的可读反馈（与「无标题」空态同口径弱化） */
+.vsidian-sidebar .vsidian-outline-nomatch {
+  opacity: 0.7;
+  padding: 8px 10px;
+  font-size: var(--vsidian-outline-font-size, 12px);
+}
+
 /* ---- #67 折叠滑块行（结绳记事：六圆点 + 横线串联）----
    显隐唯一开关是侧栏容器的 outline-active 类（与面板同模式）。六档：
    0=No-Expand（全部折叠只露顶层）、1–5=展开到 H1–H5（展开所有 level≤n

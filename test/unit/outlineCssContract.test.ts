@@ -250,3 +250,54 @@ describe('折叠箭头与折叠隐藏（#67）', () => {
       .toMatch(/width:\s*18px/)
   })
 })
+
+// ---- #68 工具条与标题搜索：工具条行、按钮形态、搜索框、片段高亮、无匹配占位 ----
+
+describe('大纲工具条行（#68）', () => {
+  it('工具条行显隐唯一开关是侧栏容器的 outline-active 类（默认隐藏，与面板同模式）', () => {
+    const hidden = rule('#app .vsidian-sidebar .vsidian-outline-toolbar')
+    expect(hidden).toMatch(/display:\s*none/)
+    const shown = rule('#app .vsidian-sidebar.vsidian-outline-active .vsidian-outline-toolbar')
+    expect(shown).toMatch(/display:\s*flex/)
+  })
+
+  it('按钮为透明图标按钮（与侧栏顶栏按钮同形态：透明底、无边框、悬停高亮）', () => {
+    const btn = rule('#app .vsidian-sidebar .vsidian-outline-toolbar button')
+    expect(btn).toMatch(/background:\s*transparent/)
+    expect(btn).toMatch(/border:\s*none/)
+    expect(css, '悬停高亮规则应存在').toMatch(
+      /#app \.vsidian-sidebar \.vsidian-outline-toolbar button:hover/,
+    )
+    // 图标尺寸钉住（选择器命中 DOM 实际结构；类名写错时 SVG 回退默认尺寸）
+    expect(rule('#app .vsidian-sidebar .vsidian-outline-toolbar button svg'))
+      .toMatch(/width:\s*16px/)
+  })
+
+  it('搜索输入框占余宽（flex:1）且不撑破侧栏（min-width:0），VSCode 输入变量配色', () => {
+    const input = rule('#app .vsidian-sidebar .vsidian-outline-toolbar .vsidian-outline-search')
+    expect(input).toMatch(/flex:\s*1\s+1\s+auto/)
+    expect(input).toMatch(/min-width:\s*0/)
+    expect(input).toMatch(/background:\s*var\(--vscode-input-background/)
+    expect(input).toMatch(/color:\s*var\(--vscode-input-foreground/)
+  })
+
+  it('搜索框占位文案弱化（placeholder 前景变量）', () => {
+    expect(css, 'placeholder 规则应存在').toMatch(
+      /\.vsidian-sidebar \.vsidian-outline-toolbar \.vsidian-outline-search::placeholder/,
+    )
+  })
+})
+
+describe('搜索片段高亮与无匹配占位（#68）', () => {
+  it('命中片段 mark：查找高亮变量配色的背景规则（样式失效时无背景可被 computed 断言捕获）', () => {
+    const mark = rule('.vsidian-sidebar .vsidian-outline-item mark.vsidian-outline-search-hit')
+    expect(mark).toMatch(/background:\s*var\(--vscode-editor-findMatchHighlightBackground/)
+    expect(mark).toMatch(/color:\s*inherit/)
+  })
+
+  it('无匹配占位：弱化文字（用户可读的「无匹配」反馈，与空态同口径）', () => {
+    const nomatch = rule('.vsidian-sidebar .vsidian-outline-nomatch')
+    expect(nomatch).toMatch(/opacity:\s*0\.7/)
+    expect(nomatch).toMatch(/padding:\s*8px 10px/)
+  })
+})

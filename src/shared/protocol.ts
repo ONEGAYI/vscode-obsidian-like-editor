@@ -125,6 +125,12 @@ export type HostToWebview =
   /** 测试钩子（#67）：点击第 index 个真实条目的折叠箭头，驱动与用户点击
    *  同一委托处理器（单条折叠/展开，不触发跳转） */
   | { kind: 'outline.test.chevronClick'; index: number }
+  /** 测试钩子（#68）：向真实搜索输入框设值并派发 input 事件，驱动与用户
+   *  输入同一处理器（搜索过滤与片段高亮即时重算，纯视图零写回） */
+  | { kind: 'outline.test.searchInput'; text: string }
+  /** 测试钩子（#68）：点击工具条真实按钮（跳转到末尾 / 重置），驱动与
+   *  用户点击同一处理器（纯视图滚动 / 三合一重置，零写回） */
+  | { kind: 'outline.test.toolbarClick'; action: 'jump-bottom' | 'reset' }
   /** 测试钩子（#21）：在真实 webview 的 CM6 中输入，验证暂停态即时留存。 */
   | { kind: 'sync.test.edit'; offset: number; text: string; closeAfter?: boolean }
   /** 测试钩子：组合候选写入首行 DOM，经过 CM6 MutationObserver 的真实输入链。 */
@@ -673,6 +679,29 @@ export interface OutlineProbe {
   /** #67 折叠箭头绘制证据：首个箭头中心点命中自身（有子项条目的箭头
    *  真实绘制；无标题/无子项文档或 jsdom 无布局时为 false） */
   chevronPainted: boolean
+  /** #68 当前搜索词（工具条输入框实值；空串 = 无过滤） */
+  searchQuery: string
+  /** #68 搜索态（searchQuery 非空；搜索关闭时过滤口径为恒真） */
+  searchActive: boolean
+  /** #68 组合可见口径的条目索引序列（折叠可见 ∩ 搜索保留；搜索关闭时
+   *  与 visibleIndices 同值——用户实际可见集的权威口径） */
+  filteredVisibleIndices: number[]
+  /** #68 工具条行绘制证据：elementFromPoint 命中工具条容器（侧栏展开 +
+   *  面板 active + 样式表显隐规则生效；jsdom 无布局恒 false） */
+  toolbarPainted: boolean
+  /** #68 跳转到末尾按钮可访问名称 */
+  jumpBottomAriaLabel: string | null
+  /** #68 重置按钮可访问名称 */
+  resetAriaLabel: string | null
+  /** #68 搜索框 placeholder 文案（「输入以搜索」） */
+  searchPlaceholder: string | null
+  /** #68 命中片段绘制证据：首个可见条目内的 mark 中心点命中自身且
+   *  computed 背景非全透明（片段高亮真实绘制；无搜索/无命中或 jsdom
+   *  无布局时为 false） */
+  searchHitPainted: boolean
+  /** #68 无匹配占位绘制证据：占位元素中心点命中自身（有词条零命中的
+   *  「无匹配」真实可见；无占位或 jsdom 无布局时为 false） */
+  nomatchPainted: boolean
 }
 
 /** 表格结构操作码校验（#13） */
@@ -788,11 +817,12 @@ function isOutlineItems(v: unknown): v is OutlineProbe['items'] {
   )
 }
 
-/** #54/#65/#66/#67 大纲观测校验：active/命中布尔、图标尺寸与滚动几何（null 或
+/** #54/#65/#66/#67/#68 大纲观测校验：active/命中布尔、图标尺寸与滚动几何（null 或
  *  非负数）、items 序列、名称字符串或 null、style 绘制证据（缺省或字段字符
  *  串或 null）、located 索引（null 或非负整数）/文字（字符串或 null）/绘制
  *  命中布尔、#67 档位（0–5 整数）/可见索引序列（非负整数数组）/滑块与箭头
- *  绘制命中布尔 */
+ *  绘制命中布尔、#68 搜索词（字符串）/搜索态布尔/组合可见索引序列/工具条
+ *  绘制命中布尔/按钮与占位文案（字符串或 null）/命中片段与占位绘制命中布尔 */
 function isOutlineProbe(v: unknown): v is OutlineProbe {
   return (
     isObject(v) &&
@@ -822,7 +852,16 @@ function isOutlineProbe(v: unknown): v is OutlineProbe {
     Array.isArray(v.visibleIndices) && v.visibleIndices.every(isNonNegativeInt) &&
     typeof v.sliderPainted === 'boolean' &&
     typeof v.sliderActiveDotPainted === 'boolean' &&
-    typeof v.chevronPainted === 'boolean'
+    typeof v.chevronPainted === 'boolean' &&
+    isString(v.searchQuery) &&
+    typeof v.searchActive === 'boolean' &&
+    Array.isArray(v.filteredVisibleIndices) && v.filteredVisibleIndices.every(isNonNegativeInt) &&
+    typeof v.toolbarPainted === 'boolean' &&
+    isNullOrString(v.jumpBottomAriaLabel) &&
+    isNullOrString(v.resetAriaLabel) &&
+    isNullOrString(v.searchPlaceholder) &&
+    typeof v.searchHitPainted === 'boolean' &&
+    typeof v.nomatchPainted === 'boolean'
   )
 }
 
@@ -1297,6 +1336,10 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
         v.level >= 0 && v.level <= 5
     case 'outline.test.chevronClick':
       return isNonNegativeInt(v.index)
+    case 'outline.test.searchInput':
+      return isString(v.text)
+    case 'outline.test.toolbarClick':
+      return v.action === 'jump-bottom' || v.action === 'reset'
     case 'sync.test.edit':
       return isNonNegativeInt(v.offset) && isString(v.text) &&
         (v.closeAfter === undefined || typeof v.closeAfter === 'boolean')

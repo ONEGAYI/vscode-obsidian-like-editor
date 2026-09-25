@@ -67,10 +67,12 @@ import {
   applyOutlineSliderState,
   buildOutlineDom,
   buildOutlineSlider,
+  buildOutlineToolbar,
   extractOutline,
   OUTLINE_CLASS_NAMES,
   type OutlineItem,
   type OutlineSliderDom,
+  type OutlineToolbarDom,
   outlineItemsEqual,
   outlineSliderLevelAt,
   renderOutlineItems,
@@ -78,6 +80,7 @@ import {
 import {
   migrateOutlineExpanded,
   normalizeOutlineExpandLevel,
+  OUTLINE_EXPAND_LEVEL_DEFAULT,
   outlineCollapseFacts,
   type OutlineCollapseFacts,
   outlineExpandAncestors,
@@ -87,6 +90,13 @@ import {
   outlineRepresentativeIndex,
   outlineVisibleIndices,
 } from './outlineCollapse'
+import {
+  outlineFilteredVisibleIndices,
+  outlineSearchExpandSet,
+  outlineSearchFilter,
+  type OutlineSearchFilter,
+  outlineSearchRepresentativeIndex,
+} from './outlineSearch'
 import { locateOutlineIndex } from './outlineLocate'
 import { resolveStaleTaskToggle } from './taskToggle'
 import { VirtualReadingView } from './readingVirtualView'
@@ -406,6 +416,19 @@ export class WebviewSyncController {
   /** 上次高亮滚动落点（代表索引）：同索引不重复滚（用户手动滚面板不打扰） */
   private outlineLastScrolledRep: number | null = null
 
+  // ---- 大纲工具条与标题搜索（#68）----
+  /** 工具条 DOM（跳末按钮 + 重置按钮 + 搜索输入框；行为装配在本类） */
+  private outlineToolbar: OutlineToolbarDom | undefined
+  /** 当前搜索词（工具条输入框实值；空串 = 无过滤。输入即时生效无去抖
+   *  ——标题序列量级小，QO 同款按键即时重算口径） */
+  private outlineSearchQuery = ''
+  /** 进入搜索前的展开集快照（空→非空时机取、清空时原样回放；编辑重建
+   *  时随展开集同款迁移；搜索态切档时基准同步为档位精确集） */
+  private outlineExpandedBeforeSearch: ReadonlySet<number> | null = null
+  /** 搜索过滤缓存（kept/ranges/matchedIndices/noMatch；null = 无搜索态）。
+   *  序列重建与词条变化时经 applyOutlineSearch 重算 */
+  private outlineSearchState: OutlineSearchFilter | null = null
+
   // ---- 查找会话状态（#14）----
   /** 查找是纯只读视图状态：不写 TextDocument、不入撤销栈、零出站消息。
    *  匹配基于 webview 全文文本模型（CM6 doc），屏外内容同样命中 */
@@ -708,6 +731,7 @@ export class WebviewSyncController {
     this.outlineToggleBtn = undefined
     this.outlinePanelEl = undefined
     this.outlineSlider = undefined
+    this.outlineToolbar = undefined
     this.sidebarEl?.remove()
     this.sidebarEl = undefined
     this.mainEl?.remove()
@@ -903,6 +927,26 @@ export class WebviewSyncController {
         itemEl
           ?.querySelector<HTMLButtonElement>(`.${OUTLINE_CLASS_NAMES.chevron}`)
           ?.click()
+        break
+      }
+      case 'outline.test.searchInput': {
+        // 测试钩子（#68）：向真实搜索输入框设值并派发 input 事件（与用户
+        // 输入同一处理器；搜索过滤与片段高亮即时重算，纯视图零写回）
+        const input = this.outlineToolbar?.search
+        if (input) {
+          input.value = message.text
+          input.dispatchEvent(new Event('input', { bubbles: true }))
+        }
+        break
+      }
+      case 'outline.test.toolbarClick': {
+        // 测试钩子（#68）：点击工具条真实按钮（与用户点击同一处理器；
+        // 跳转到末尾 = 纯视图滚动，重置 = 三合一回到面板初始态）
+        if (message.action === 'jump-bottom') {
+          this.outlineToolbar?.jumpBottom.click()
+        } else if (message.action === 'reset') {
+          this.outlineToolbar?.reset.click()
+        }
         break
       }
       case 'table.test.key': {
@@ -1980,10 +2024,19 @@ export class WebviewSyncController {
     slider.row.addEventListener('pointerup', endSliderDrag)
     slider.row.addEventListener('pointercancel', endSliderDrag)
     this.outlineSlider = slider
+    // #68 工具条行：侧栏顶栏与滑块行之间（跳转到末尾、重置、搜索框）。
+    // 按钮与输入均为纯视图操作（零写回、零出站、不入撤销栈）；搜索输入
+    // 即时生效（input 事件直调，无去抖）
+    const toolbar = buildOutlineToolbar()
+    toolbar.jumpBottom.addEventListener('click', () => this.outlineJumpToBottom())
+    toolbar.reset.addEventListener('click', () => this.resetOutline())
+    toolbar.search.addEventListener('input', () => this.setOutlineSearch(toolbar.search.value))
+    this.outlineToolbar = toolbar
     const panelHost = document.createElement('div')
     panelHost.className = 'vsidian-sidebar-panel'
     panelHost.appendChild(panel)
     sidebar.appendChild(bar)
+    sidebar.appendChild(toolbar.row)
     sidebar.appendChild(slider.row)
     sidebar.appendChild(panelHost)
     return sidebar
@@ -2105,12 +2158,31 @@ export class WebviewSyncController {
       // 首场——重载恢复实测路径）：没有可迁移的折叠状态，按档位精确集
       // 初始化（手动折叠是会话态，重载后从这里重置）
       this.outlineExpanded = outlineExpandSetForLevel(items, this.outlineExpandLevel)
+      // #68：同场景没有可迁移的搜索快照，快照与档位精确集对齐（清空
+      // 回放与档位指示一致）
+      if (this.outlineExpandedBeforeSearch !== null) {
+        this.outlineExpandedBeforeSearch = outlineExpandSetForLevel(items, this.outlineExpandLevel)
+      }
     } else {
       this.outlineExpanded = migrateOutlineExpanded(prevItems, items, prevExpanded)
+      // #68：搜索展开快照随编辑同款迁移（重命名/增删不扰动清空回放的
+      // 目标视图——快照与展开集是同一坐标系的两个视图）
+      if (this.outlineExpandedBeforeSearch !== null) {
+        this.outlineExpandedBeforeSearch = migrateOutlineExpanded(
+          prevItems,
+          items,
+          this.outlineExpandedBeforeSearch,
+        )
+      }
     }
     if (changed && this.outlinePanelEl) {
-      renderOutlineItems(this.outlinePanelEl, items, this.outlineFacts.hasChildren)
-      this.applyOutlineCollapseDom()
+      // #68 搜索态：重建后按当前词条重算过滤（新序列的命中链并入展开集）
+      if (this.outlineSearchState !== null) {
+        this.applyOutlineSearch()
+      } else {
+        renderOutlineItems(this.outlinePanelEl, items, this.outlineFacts.hasChildren)
+        this.applyOutlineCollapseDom()
+      }
     } else if (this.outlineExpanded !== prevExpanded) {
       // 序列未变但展开集合被迁移修正（safeFilter 等）：状态类跟随
       this.applyOutlineCollapseDom()
@@ -2128,11 +2200,24 @@ export class WebviewSyncController {
   // located（高亮，施加在可见代表上——被遮蔽时为第一个可见祖先）。
 
   /** 滑块选档：档位记录 + 展开集整体替换为档位精确集（手动微调不保留），
-   *  圆点 active 类与可访问状态同步，高亮代表可能变化（重施加） */
+   *  圆点 active 类与可访问状态同步，高亮代表可能变化（重施加）。
+   *  #68 搜索态：档位精确集作为新基准（清空回放的快照同步替换——回放
+   *  后与档位指示一致），展开集再并入命中祖先链（命中路径保持可见） */
   private setOutlineExpandLevel(level: number): void {
     const next = Math.max(0, Math.min(5, Math.floor(level)))
     this.outlineExpandLevel = next
-    this.outlineExpanded = outlineExpandSetForLevel(this.outlineItems, next)
+    const base = outlineExpandSetForLevel(this.outlineItems, next)
+    const search = this.outlineSearchState
+    if (search !== null) {
+      if (this.outlineExpandedBeforeSearch !== null) {
+        this.outlineExpandedBeforeSearch = base
+      }
+      this.outlineExpanded = new Set(
+        outlineSearchExpandSet(this.outlineItems, base, search.matchedIndices),
+      )
+    } else {
+      this.outlineExpanded = base
+    }
     if (this.outlineSlider) {
       applyOutlineSliderState(this.outlineSlider, next)
     }
@@ -2158,24 +2243,43 @@ export class WebviewSyncController {
   }
 
   /** 折叠可见性落 DOM：hidden/collapsed 类与箭头 aria-expanded（条目 DOM
-   *  与 outlineItems 同序的不变式下按序 toggle；toggle 幂等） */
+   *  与 outlineItems 同序的不变式下按序 toggle；toggle 幂等）。
+   *  #68 搜索态下 hidden = 折叠遮蔽 ∨ 搜索过滤（组合可见口径，同一
+   *  display:none 类承载），无匹配时挂「无匹配」占位 */
   private applyOutlineCollapseDom(): void {
     const panel = this.outlinePanelEl
     if (!panel) {
       return
     }
     const hidden = outlineHiddenFlags(this.outlineItems, this.outlineExpanded)
+    const search = this.outlineSearchState
     const nodes = panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)
     for (let i = 0; i < nodes.length; i++) {
       const el = nodes[i]!
       const isParent = this.outlineFacts.hasChildren[i] === true
       const collapsed = isParent && !this.outlineExpanded.has(i)
       el.classList.toggle(OUTLINE_CLASS_NAMES.collapsed, collapsed)
-      el.classList.toggle(OUTLINE_CLASS_NAMES.hidden, hidden[i] === true)
+      el.classList.toggle(
+        OUTLINE_CLASS_NAMES.hidden,
+        hidden[i] === true || (search !== null && !search.kept[i]),
+      )
       const chevron = el.querySelector<HTMLButtonElement>(`.${OUTLINE_CLASS_NAMES.chevron}`)
       if (chevron) {
         chevron.setAttribute('aria-expanded', String(!collapsed))
       }
+    }
+    // 「无匹配」占位：有词条但零命中（空序列的「无标题」占位由
+    // renderOutlineItems 承担，两者互斥）；renderOutlineItems 重建会清掉
+    // 占位元素，此处在每条折叠落 DOM 路径上幂等补挂
+    const nomatch = search !== null && search.noMatch && this.outlineItems.length > 0
+    let placeholder = panel.querySelector<HTMLElement>(`.${OUTLINE_CLASS_NAMES.nomatch}`)
+    if (nomatch && !placeholder) {
+      placeholder = document.createElement('div')
+      placeholder.className = OUTLINE_CLASS_NAMES.nomatch
+      placeholder.textContent = '无匹配'
+      panel.appendChild(placeholder)
+    } else if (!nomatch && placeholder) {
+      placeholder.remove()
     }
   }
 
@@ -2299,16 +2403,26 @@ export class WebviewSyncController {
    *  序号 toggle；toggle 幂等，未变化条目零 DOM 写入）。#67 起高亮施加在
    *  「可见代表」上：located 条目被折叠遮蔽时为第一个可见祖先
    *  （outlineRepresentativeIndex；only-expand 已尽量让自身可见，回退
-   *  仅在手动折叠/档位切换遮蔽路径生效）。代表变化时高亮行滚进面板
+   *  仅在手动折叠/档位切换遮蔽路径生效）。#68 搜索态下代表口径加上过滤
+   *  （折叠可见 ∧ 搜索保留，outlineSearchRepresentativeIndex；链上无
+   *  可见代表则高亮消失——不强加到无关条目）。代表变化时高亮行滚进面板
    *  可视区（scrollIntoView nearest——已可见零滚动，同代表不重复滚） */
   private applyOutlineHighlight(): void {
     const panel = this.outlinePanelEl
     if (!panel) {
       return
     }
+    const search = this.outlineSearchState
     const rep = this.outlineLocatedIndex === null
       ? null
-      : outlineRepresentativeIndex(this.outlineItems, this.outlineExpanded, this.outlineLocatedIndex)
+      : search === null
+        ? outlineRepresentativeIndex(this.outlineItems, this.outlineExpanded, this.outlineLocatedIndex)
+        : outlineSearchRepresentativeIndex(
+          this.outlineItems,
+          this.outlineExpanded,
+          search.kept,
+          this.outlineLocatedIndex,
+        )
     let index = 0
     for (const el of panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)) {
       el.classList.toggle(OUTLINE_CLASS_NAMES.located, index === rep)
@@ -2323,6 +2437,108 @@ export class WebviewSyncController {
       this.outlineLastScrolledRep = rep
     }
   }
+
+  // ---- 大纲工具条与标题搜索（#68）----
+  // 纯视图状态（零写回、零出站、不入撤销栈）：搜索词是会话内内存态（不
+  // 持久化、不跨文档保留）。语义见 outlineSearch.ts 模块头；可见口径 =
+  // 折叠可见 ∩ 搜索过滤；进入搜索时快照展开集、清空时原样回放（QO 同款）。
+
+  /** 搜索态判定（词条非空即活跃；空输入等于无过滤） */
+  private outlineSearchActive(): boolean {
+    return this.outlineSearchQuery !== ''
+  }
+
+  /** 搜索词变更入口（工具条输入框 input 事件；输入即时生效无去抖）：
+   *  空→非空取展开快照；非空→空回放快照并清除；词条变化重算过滤并把
+   *  命中祖先链并入当前展开集（只增不减——搜索态手动折叠不被覆盖） */
+  private setOutlineSearch(query: string): void {
+    const wasActive = this.outlineSearchActive()
+    const nextActive = query !== ''
+    if (!wasActive && nextActive) {
+      this.outlineExpandedBeforeSearch = new Set(this.outlineExpanded)
+    }
+    if (wasActive && !nextActive) {
+      const snapshot = this.outlineExpandedBeforeSearch
+      this.outlineExpandedBeforeSearch = null
+      if (snapshot) {
+        this.outlineExpanded = new Set(snapshot)
+      }
+    }
+    this.outlineSearchQuery = query
+    this.applyOutlineSearch()
+  }
+
+  /** 搜索态全量落 DOM：重算过滤缓存 → 展开集并入命中祖先链 → 条目重渲染
+   *  （带片段高亮；mark 生命周期 = 渲染级，词条或序列变化即随重建消失）
+   *  → 折叠/过滤 hidden 类与「无匹配」占位 → 高亮代表重施加。
+   *  搜索关闭时清缓存并重渲染（去掉 mark），回放的展开集已就位 */
+  private applyOutlineSearch(): void {
+    if (!this.outlineSearchActive()) {
+      this.outlineSearchState = null
+      if (this.outlinePanelEl) {
+        renderOutlineItems(this.outlinePanelEl, this.outlineItems, this.outlineFacts.hasChildren)
+      }
+      this.applyOutlineCollapseDom()
+      this.applyOutlineHighlight()
+      return
+    }
+    const filter = outlineSearchFilter(this.outlineItems, this.outlineSearchQuery)
+    this.outlineSearchState = filter
+    this.outlineExpanded = new Set(
+      outlineSearchExpandSet(this.outlineItems, this.outlineExpanded, filter.matchedIndices),
+    )
+    if (this.outlinePanelEl) {
+      renderOutlineItems(
+        this.outlinePanelEl,
+        this.outlineItems,
+        this.outlineFacts.hasChildren,
+        filter.ranges,
+      )
+    }
+    this.applyOutlineCollapseDom()
+    this.applyOutlineHighlight()
+  }
+
+  /** #68 跳转到笔记末尾：滚动正文到文档末尾（live = 末尾滚进视口下缘、
+   *  reading = 滚动到末尾锚点块），不落光标（live 选区不动、不聚焦——
+   *  纯滚动语义），零写回；高亮即时落位末尾控制域（不等滚动事件） */
+  private outlineJumpToBottom(): void {
+    const view = this.view
+    const doc = view?.state.doc
+    if (!view || !doc) {
+      return
+    }
+    this.suspendOutlineLinking()
+    if (this.viewMode === 'reading' && this.readingView) {
+      const start = this.readingView.anchorStartFor(doc.length) ?? doc.length
+      this.modeAnchor = start
+      this.readingView.scrollToSrcStart(start)
+      this.reassertReadingAnchor(start, 2)
+    } else {
+      this.modeAnchor = doc.length
+      view.dispatch({ effects: EditorView.scrollIntoView(doc.length, { y: 'end' }) })
+    }
+    this.outlineLocatedIndex = locateOutlineIndex(this.outlineItems, doc.lines)
+    if (this.outlineLocatedIndex !== null) {
+      this.revealOutlineIndex(this.outlineLocatedIndex)
+    }
+    this.applyOutlineHighlight()
+  }
+
+  /** #68 重置三合一：清空搜索词（快照作废，不回放——重置即回初始态）、
+   *  档位回默认 5（展开集整体替换为档位精确集，手动折叠随之清空）、
+   *  输入框同步清空。全程纯视图零写回 */
+  private resetOutline(): void {
+    if (this.outlineExpandedBeforeSearch !== null) {
+      this.outlineExpandedBeforeSearch = null
+    }
+    this.setOutlineSearch('')
+    if (this.outlineToolbar) {
+      this.outlineToolbar.search.value = ''
+    }
+    this.setOutlineExpandLevel(OUTLINE_EXPAND_LEVEL_DEFAULT)
+  }
+
   // ---- 查找会话（#14）----
   // UI 形态：webview 内浮动层（custom editor webview 不可用 VSCode 原生
   // find 控件）。入口：Mod-F 拦截、宿主 view.find.open（命令面板共用）、
@@ -3370,6 +3586,7 @@ export class WebviewSyncController {
         headingColor: read(heading, 'color'),
       }
     }
+    const visibleIndices = outlineVisibleIndices(this.outlineItems, this.outlineExpanded)
     return {
       active: this.outlineActive,
       togglePainted: hitPaintedElement(this.outlineToggleBtn),
@@ -3394,11 +3611,32 @@ export class WebviewSyncController {
       // #67 折叠观测：档位实值 + 可见索引序列（折叠可见性断言权威口径）+
       // 滑块行/当前档圆点/折叠箭头的绘制层证据
       expandLevel: this.outlineExpandLevel,
-      visibleIndices: outlineVisibleIndices(this.outlineItems, this.outlineExpanded),
+      visibleIndices: visibleIndices,
       sliderPainted: hitPaintedElement(this.outlineSlider?.row, this.outlineSlider?.row),
       sliderActiveDotPainted: this.collectOutlineSliderActiveDotPainted(),
       chevronPainted: hitPaintedElement(
         this.outlinePanelEl?.querySelector<HTMLElement>(`.${OUTLINE_CLASS_NAMES.chevron}`) ?? null,
+        this.outlinePanelEl,
+      ),
+      // #68 搜索与工具条观测：词条实值/组合可见口径（搜索关闭时与
+      // visibleIndices 同值）+ 工具条行、命中片段、无匹配占位的绘制证据
+      // 与控件可访问名称（jsdom 无布局：命中恒 false，真宿主断言见集成）
+      searchQuery: this.outlineSearchQuery,
+      searchActive: this.outlineSearchActive(),
+      filteredVisibleIndices: this.outlineSearchState === null
+        ? visibleIndices
+        : outlineFilteredVisibleIndices(
+          this.outlineItems,
+          this.outlineExpanded,
+          this.outlineSearchState.kept,
+        ),
+      toolbarPainted: hitPaintedElement(this.outlineToolbar?.row, this.outlineToolbar?.row),
+      jumpBottomAriaLabel: this.outlineToolbar?.jumpBottom.getAttribute('aria-label') ?? null,
+      resetAriaLabel: this.outlineToolbar?.reset.getAttribute('aria-label') ?? null,
+      searchPlaceholder: this.outlineToolbar?.search.getAttribute('placeholder') ?? null,
+      searchHitPainted: this.collectOutlineSearchHitPainted(),
+      nomatchPainted: hitPaintedElement(
+        this.outlinePanelEl?.querySelector<HTMLElement>(`.${OUTLINE_CLASS_NAMES.nomatch}`) ?? null,
         this.outlinePanelEl,
       ),
     }
@@ -3428,6 +3666,22 @@ export class WebviewSyncController {
       return false
     }
     return paintedWithVisibleBackground(dot)
+  }
+
+  /** #68 命中片段绘制证据：首个非隐藏条目内的 mark 中心点命中自身且
+   *  computed 背景非全透明（片段高亮规则真实绘制——mark 无背景规则时
+   *  视觉上不可区分，computed 捕获；无搜索/无命中或 jsdom 无布局恒
+   *  false，真宿主断言见集成） */
+  private collectOutlineSearchHitPainted(): boolean {
+    const panel = this.outlinePanelEl
+    if (!panel) {
+      return false
+    }
+    const mark = panel.querySelector<HTMLElement>(
+      `.${OUTLINE_CLASS_NAMES.item}:not(.${OUTLINE_CLASS_NAMES.hidden}) ` +
+      `mark.${OUTLINE_CLASS_NAMES.searchHit}`,
+    )
+    return !!mark && paintedWithVisibleBackground(mark)
   }
 
   /** 暂停提示横幅：说明输入已保留、写回已暂停，提供取回与恢复按钮 */

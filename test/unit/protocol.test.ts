@@ -341,6 +341,16 @@ describe('isWebviewToHost', () => {
           sliderPainted: true,
           sliderActiveDotPainted: true,
           chevronPainted: true,
+          // #68 搜索与工具条观测（必填）
+          searchQuery: '',
+          searchActive: false,
+          filteredVisibleIndices: [0, 1],
+          toolbarPainted: true,
+          jumpBottomAriaLabel: '跳转到笔记末尾',
+          resetAriaLabel: '重置',
+          searchPlaceholder: '输入以搜索',
+          searchHitPainted: false,
+          nomatchPainted: false,
         },
       }),
     ).toBe(true)
@@ -365,6 +375,15 @@ describe('isWebviewToHost', () => {
           sliderPainted: false,
           sliderActiveDotPainted: false,
           chevronPainted: false,
+          searchQuery: '甲',
+          searchActive: true,
+          filteredVisibleIndices: [],
+          toolbarPainted: false,
+          jumpBottomAriaLabel: null,
+          resetAriaLabel: null,
+          searchPlaceholder: null,
+          searchHitPainted: true,
+          nomatchPainted: true,
         },
       }),
     ).toBe(true)
@@ -506,6 +525,16 @@ describe('isWebviewToHost', () => {
       locatedItemIndex: null,
       locatedText: null,
       locatedPainted: false,
+      // #68 必填字段（本测试的 spread 断言自动携带）
+      searchQuery: '',
+      searchActive: false,
+      filteredVisibleIndices: [] as number[],
+      toolbarPainted: false,
+      jumpBottomAriaLabel: null,
+      resetAriaLabel: null,
+      searchPlaceholder: null,
+      searchHitPainted: false,
+      nomatchPainted: false,
     }
     // 合法：档位 0-5 整数、可见索引非负整数数组、三个绘制命中布尔
     expect(isWebviewToHost({
@@ -556,6 +585,91 @@ describe('isWebviewToHost', () => {
     expect(isHostToWebview({ kind: 'outline.test.chevronClick', index: -1 })).toBe(false)
     expect(isHostToWebview({ kind: 'outline.test.chevronClick', index: '0' })).toBe(false)
     expect(isHostToWebview({ kind: 'outline.test.chevronClick' })).toBe(false)
+  })
+
+  it('view.state 的 outline 观测（#68）：搜索与工具条字段校验', () => {
+    const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
+    const legal = {
+      active: true,
+      togglePainted: false,
+      panelPainted: false,
+      toggleIconSizePx: null,
+      panelScrollHeightPx: null,
+      panelClientHeightPx: null,
+      items: [] as unknown[],
+      toggleAriaLabel: null,
+      panelAriaLabel: null,
+      locatedItemIndex: null,
+      locatedText: null,
+      locatedPainted: false,
+      expandLevel: 5,
+      visibleIndices: [] as number[],
+      sliderPainted: false,
+      sliderActiveDotPainted: false,
+      chevronPainted: false,
+    }
+    // 合法：词条字符串 + 搜索态布尔 + 组合可见索引数组 + 绘制布尔 + 名称/占位文案
+    expect(isWebviewToHost({
+      ...base,
+      outline: { ...legal, searchQuery: '标题', searchActive: true,
+        filteredVisibleIndices: [0, 2], toolbarPainted: true,
+        jumpBottomAriaLabel: '跳转到笔记末尾', resetAriaLabel: '重置',
+        searchPlaceholder: '输入以搜索', searchHitPainted: true, nomatchPainted: false },
+    })).toBe(true)
+    // 非法：searchQuery 非字符串 / searchActive 非布尔
+    expect(isWebviewToHost({ ...base, outline: { ...legal, searchQuery: 1, searchActive: false,
+      filteredVisibleIndices: [], toolbarPainted: false, jumpBottomAriaLabel: null,
+      resetAriaLabel: null, searchPlaceholder: null, searchHitPainted: false, nomatchPainted: false } }))
+      .toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, searchQuery: '', searchActive: 1,
+      filteredVisibleIndices: [], toolbarPainted: false, jumpBottomAriaLabel: null,
+      resetAriaLabel: null, searchPlaceholder: null, searchHitPainted: false, nomatchPainted: false } }))
+      .toBe(false)
+    // 非法：filteredVisibleIndices 非数组 / 含负数 / 含非整数
+    expect(isWebviewToHost({ ...base, outline: { ...legal, searchQuery: '', searchActive: false,
+      filteredVisibleIndices: '0,1', toolbarPainted: false, jumpBottomAriaLabel: null,
+      resetAriaLabel: null, searchPlaceholder: null, searchHitPainted: false, nomatchPainted: false } }))
+      .toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, searchQuery: '', searchActive: false,
+      filteredVisibleIndices: [0, -1], toolbarPainted: false, jumpBottomAriaLabel: null,
+      resetAriaLabel: null, searchPlaceholder: null, searchHitPainted: false, nomatchPainted: false } }))
+      .toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, searchQuery: '', searchActive: false,
+      filteredVisibleIndices: [1.5], toolbarPainted: false, jumpBottomAriaLabel: null,
+      resetAriaLabel: null, searchPlaceholder: null, searchHitPainted: false, nomatchPainted: false } }))
+      .toBe(false)
+    // 非法：绘制字段非布尔、名称/占位文案非字符串非 null
+    expect(isWebviewToHost({ ...base, outline: { ...legal, searchQuery: '', searchActive: false,
+      filteredVisibleIndices: [], toolbarPainted: 1, jumpBottomAriaLabel: null,
+      resetAriaLabel: null, searchPlaceholder: null, searchHitPainted: false, nomatchPainted: false } }))
+      .toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, searchQuery: '', searchActive: false,
+      filteredVisibleIndices: [], toolbarPainted: false, jumpBottomAriaLabel: 7,
+      resetAriaLabel: null, searchPlaceholder: null, searchHitPainted: false, nomatchPainted: false } }))
+      .toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, searchQuery: '', searchActive: false,
+      filteredVisibleIndices: [], toolbarPainted: false, jumpBottomAriaLabel: null,
+      resetAriaLabel: null, searchPlaceholder: true, searchHitPainted: false, nomatchPainted: false } }))
+      .toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, searchQuery: '', searchActive: false,
+      filteredVisibleIndices: [], toolbarPainted: false, jumpBottomAriaLabel: null,
+      resetAriaLabel: null, searchPlaceholder: null, searchHitPainted: 'x', nomatchPainted: false } }))
+      .toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, searchQuery: '', searchActive: false,
+      filteredVisibleIndices: [], toolbarPainted: false, jumpBottomAriaLabel: null,
+      resetAriaLabel: null, searchPlaceholder: null, searchHitPainted: false, nomatchPainted: null } }))
+      .toBe(false)
+  })
+
+  it('outline.test.searchInput / outline.test.toolbarClick 测试钩子消息校验（#68）', () => {
+    expect(isHostToWebview({ kind: 'outline.test.searchInput', text: '' })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.searchInput', text: '标题', extra: 1 })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.searchInput', text: 7 })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.searchInput' })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.toolbarClick', action: 'jump-bottom' })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.toolbarClick', action: 'reset', extra: 1 })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.toolbarClick', action: 'top' })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.toolbarClick' })).toBe(false)
   })
 
   it('表格绘制样本校验：可见性和边框计算值类型必须可信', () => {
