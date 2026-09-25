@@ -19,6 +19,7 @@ import {
   isWebviewToHost,
   type HostToWebview,
   type SerChange,
+  type SettingsPayload,
   type WebviewToHost,
 } from '../shared/protocol'
 import { mapChangeThroughChanges } from '../shared/changeMapping'
@@ -48,6 +49,12 @@ export interface PanelPort {
   openWikilink?(intent: { target: string; srcStart: number; srcEnd: number }): void
   /** #10 图片资源解析（vscode 层注入：classifyImageTarget + asWebviewUri） */
   resolveImage?(src: string): Promise<ImageResolution>
+  /** #33 打开 Vsidian 设置页（vscode 层注入：createWebviewPanel；设置页
+   *  不依赖文档会话，与 link.activate 同为面板级 UI 意图端口） */
+  openSettings?(): void
+  /** #33 设置快照拉取（vscode 层注入：SettingsService.getSnapshot；面板
+   *  init 后的 settings.get 以 settings.snapshot 响应） */
+  requestSettings?(): SettingsPayload
 }
 
 /** 会话通知（#4）：冲突暂停、复制请求、面板关闭时存在未确认输入等需要
@@ -231,6 +238,21 @@ export class DocumentSession {
     switch (message.kind) {
       case 'sync.test.close':
         // 仅由测试模式的 provider 消费；若绕过面板入口则无副作用。
+        return Promise.resolve()
+      case 'settings.open':
+        // #33 打开设置页：不依赖文档状态（无文档语义在宿主层闭合），
+        // 暂停态同样放行（与 link.activate 同口径的只读交互）
+        panel.port.openSettings?.()
+        return Promise.resolve()
+      case 'settings.get':
+        // #33 设置快照拉取：响应权威快照（webview 不持久化设置）
+        if (panel.port.requestSettings) {
+          panel.port.send({ kind: 'settings.snapshot', values: panel.port.requestSettings() })
+        }
+        return Promise.resolve()
+      case 'settings.set':
+        // #33 设置保存只在设置页 webview 链路（settingsPage 模块）处理，
+        // 编辑器面板不会发出；到达此处无副作用
         return Promise.resolve()
       case 'ready': {
         const wasReady = panel.ready

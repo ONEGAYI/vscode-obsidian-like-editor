@@ -18,6 +18,23 @@ body {
   height: 100%;
   /* 查找面板（.vsidian-find）以此为定位包含块（#14） */
   position: relative;
+  /* ---- #32 两模式共享排版基线（ADR-0004 公开变量入口）----
+     字体三件套跟随 VSCode 编辑器设置：webview 由宿主注入
+     --vscode-editor-font-family / -font-size 并随设置即时更新；
+     --vscode-editor-line-height 宿主不注入（#32 真宿主实测），回退
+     1.5（数字行高，随字号自动缩放）。live 的 .cm-scroller 与 reading
+     的 .vsidian-view-reading 共同消费这组变量，保证模式切换时正文
+     基础排版（字体族/字号/行高/左留白）一致。
+     --vsidian-content-padding-inline 为正文文本左缘基线留白（两模式共用的
+     页面留白）。行号开启时的布局（用户修订 #32 旧契约）：行号列 + 固定
+     间距 + 主体文字总宽 = 行号关闭时的正文宽度——列不外扩、正文向右
+     内缩，间距随 VSCode UI 字号缩放（--vsidian-ln-gap）。 */
+  --vsidian-content-font-family: var(--vscode-editor-font-family, monospace);
+  --vsidian-content-font-size: var(--vscode-editor-font-size, 14px);
+  --vsidian-content-line-height: var(--vscode-editor-line-height, 1.5);
+  --vsidian-content-padding-inline: 24px;
+  /* 行号列与正文的固定间距：响应 VSCode UI 字号（界面元素大小） */
+  --vsidian-ln-gap: calc(var(--vscode-font-size, 13px) * 2);
 }
 
 #app .cm-editor {
@@ -25,13 +42,58 @@ body {
 }
 
 #app .cm-editor .cm-scroller {
-  font-family: var(--vscode-editor-font-family);
-  font-size: var(--vscode-editor-font-size);
-  line-height: var(--vscode-editor-line-height);
+  font-family: var(--vsidian-content-font-family);
+  font-size: var(--vsidian-content-font-size);
+  line-height: var(--vsidian-content-line-height);
+  /* #32 正文左缘基线留白（与 reading 容器共用变量；水平方向 padding
+     不影响 CM6 垂直视口估算与滚动回收） */
+  padding: 0 var(--vsidian-content-padding-inline);
+}
+
+/* #32 CM6 baseTheme 默认 .cm-line 有 padding: 0 2px 0 6px——归零左侧
+   内边距，使正文文本左缘落在 scroller 基线留白上（与 reading 块左缘
+   对齐）。列表深度缩进（-d2..-d8）规则在文件后部，同特异性按源序胜出，
+   缩进不受影响 */
+#app .cm-editor .cm-scroller .cm-line {
+  padding-left: 0;
 }
 
 #app .cm-editor.cm-focused {
   outline: none;
+}
+
+/* ---- #34 行号列：流内布局（用户修订 #32 旧契约）----
+   行号列 + 固定间距（--vsidian-ln-gap，响应 UI 字号）+ 主体文字的总宽 =
+   行号关闭时的正文宽度：列在 scroller 内容流内、随位数自适应宽度，
+   不外扩也不覆盖正文，正文左缘相应右移（向右内缩）；关闭行号时
+   Compartment 卸载整列，正文回到 --vsidian-content-padding-inline 基线。
+   CM6 Gutter 以 JS 内联样式设 position: sticky（横向滚动钉住），在流内
+   静态位（留白带右缘）与包含块钳制一致，无需干预。 */
+#app .cm-editor .cm-scroller .cm-gutters {
+  margin-right: var(--vsidian-ln-gap);
+  background-color: transparent;
+  border: none;
+  color: var(--vscode-editorLineNumber-foreground, rgba(127, 127, 127, 0.6));
+  /* 行号非可编辑内容：禁选，避免拖选正文时把行号一并选中 */
+  user-select: none;
+}
+
+/* 行号单元格：字号公式 min(0.75 × 正文基准, 12px)；列宽随位数自适应，
+   无降级机制（旧 24px 留白带内的 scaleX 压缩随带宽约束一并移除）。
+   垂直锚定首个视觉行（CM6 原生行为）：单元格高度与源码行块同步（软换行
+   时为多视觉行总高），垂直居中（flex + align-items: center）会把数字放到
+   折行块中心——折 2 行低半行、折 3 行低整行。改为顶部锚定 + 半差补偿
+   （数字行框与正文同用 1.5 行高比，补偿量 = (正文行高 − 行号行高) / 2）
+   使数字与首视觉行文字垂直居中；标题等高行会偏高数像素（补偿按常规行
+   计算），与 CM6 原生行号行为一致，取舍见 A23。 */
+#app .cm-editor .cm-scroller .cm-lineNumbers .cm-gutterElement {
+  padding-top: calc(
+    (1.5 * var(--vsidian-content-font-size) - 1.5 * min(0.75 * var(--vsidian-content-font-size), 12px)) / 2
+  );
+  padding-right: 0;
+  text-align: right;
+  white-space: nowrap;
+  font-size: min(calc(var(--vsidian-content-font-size, 14px) * 0.75), 12px);
 }
 
 /* 标题实时预览（#5 切片）：类名为稳定样式入口（ADR-0004），字号/字重
@@ -47,6 +109,12 @@ body {
 #app .cm-editor .cm-scroller .vsidian-heading-line-4 { font-size: 1.1em; }
 #app .cm-editor .cm-scroller .vsidian-heading-line-5 { font-size: 1em; }
 #app .cm-editor .cm-scroller .vsidian-heading-line-6 { font-size: 1em; }
+
+/* ---- 编辑器铬件明暗主题（CSP 修复后 baseTheme 复活的配套）----
+   光标与选区颜色不在此覆盖：syncController 以 darkCompartment 声明
+   明暗（初始按 body 主题 class 判定，宿主切换主题热跟随），CM6
+   baseTheme 内建变体接管（light: caret black / dark: caret white），
+   本扩展不硬编码颜色（#34 验收决议） */
 
 /* 间接装饰（视口内纯样式，不改变高度）：标题行左缘强调与光标所在标题行的强调提示。
    --vsidian-heading-accent 为稳定 CSS 变量入口（ADR-0004），外部片段可覆盖 */
@@ -69,6 +137,17 @@ body {
 
 #app .vsidian-view-live {
   height: 100%;
+}
+
+/* #33 设置入口按钮：与模式按钮同一视觉规格（仅新增规则，不动既有排版） */
+.vsidian-toolbar .vsidian-settings-toggle {
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size, 13px);
+  padding: 1px 10px;
+  cursor: pointer;
+  color: var(--vscode-button-secondaryForeground);
+  background-color: var(--vscode-button-secondaryBackground);
+  border: none;
 }
 
 /* ---- Live Preview 语法装饰（#8：标题之外的覆盖语法）----
@@ -266,11 +345,14 @@ body {
 /* ---- 阅读视图（#6 基础版，#8 完整 Markdown 显示）----
    .vsidian-view-reading 为阅读视图稳定容器类（Obsidian 对应 .markdown-preview-view）。
    公开 CSS 变量入口（外部片段可覆盖）：--vsidian-reading-font-size / -max-width /
-   -line-height / -code-background */
+   -line-height / -code-background；#32 起前两者缺省值改引共享基线
+   （--vsidian-content-*，见 #app 变量组），容器字体族与正文左留白同引
+   共享基线——两模式正文基础排版由此统一。760px 限宽保留且块级居左
+   （margin: 0 0 0.75em，非居中），左缘始终 = 基线留白，不随窗口宽变化 */
 #app .vsidian-view-reading {
-  --vsidian-reading-font-size: 15px;
+  --vsidian-reading-font-size: var(--vsidian-content-font-size);
   --vsidian-reading-max-width: 760px;
-  --vsidian-reading-line-height: 1.6;
+  --vsidian-reading-line-height: var(--vsidian-content-line-height);
   --vsidian-reading-code-background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.12));
   height: calc(100% - 30px);
   overflow-y: auto;
@@ -278,7 +360,8 @@ body {
      overflow-anchor 防止两套锚定对同一布局变化叠加补偿（实测会滚飞） */
   overflow-anchor: none;
   box-sizing: border-box;
-  padding: 12px 24px 40vh;
+  padding: 12px var(--vsidian-content-padding-inline) 40vh;
+  font-family: var(--vsidian-content-font-family);
   font-size: var(--vsidian-reading-font-size);
   line-height: var(--vsidian-reading-line-height);
 }
@@ -329,10 +412,14 @@ body {
   outline-offset: 1px;
 }
 
-/* ---- #8：markdown-it 语义标签的阅读样式 ---- */
+/* ---- #8：markdown-it 语义标签的阅读样式 ----
+   #32 起 pre/td 不再叠加 0.92em 缩放：该补偿产生于正文固定 15px 的旧基线
+   （等宽字符在 15px 正文下视觉偏大），基线跟随编辑器字号后失去依据，
+   且 live 侧对应元素（.vsidian-code-line / .vsidian-table-line，行级类
+   不得改字号——行高不变式）无缩放，保留会造成模式切换的字号跳变。
+   代码/表格的等宽字体（有意语义差异）保持不变 */
 #app .vsidian-view-reading .vsidian-reading-block pre {
   font-family: var(--vscode-editor-font-family, monospace);
-  font-size: 0.92em;
   margin: 0;
   padding: 8px 12px;
   border-radius: 4px;
@@ -405,7 +492,6 @@ body {
 
 #app .vsidian-view-reading .vsidian-reading-table td {
   font-family: var(--vscode-editor-font-family, monospace);
-  font-size: 0.92em;
 }
 
 #app .vsidian-view-reading .vsidian-reading-frontmatter pre {

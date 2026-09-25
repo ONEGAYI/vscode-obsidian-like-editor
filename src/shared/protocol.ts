@@ -5,6 +5,11 @@
 //
 // 设计依据：探索笔记 02 §5（协议设计建议）、§6（陷阱清单）。
 
+import type { SettingsPayload } from './settings'
+
+/** 设置快照类型随协议消息透出（载荷单一事实源仍在 shared/settings） */
+export type { SettingsPayload }
+
 /** 一次变更：把全文 [offset, offset+length) 替换为 text（与 contentChanges 同构） */
 export interface SerChange {
   offset: number
@@ -97,6 +102,14 @@ export type HostToWebview =
   | { kind: 'sync.test.edit'; offset: number; text: string; closeAfter?: boolean }
   /** 测试钩子：真实 webview DOM 的渲染链接 mousedown。 */
   | { kind: 'link.test.mousedown'; target: 'wikilink' | 'link'; index: number; ctrlKey?: boolean }
+  /** 设置快照（#33）：当前生效设置的全量键值对。两个消费方向——设置页
+   *  ready 后请求-响应回填（settings.get）；编辑器面板 init 后主动拉取。
+   *  values 整体下发而非逐项布尔：#34 起新增设置项不需要改协议形态 */
+  | { kind: 'settings.snapshot'; values: SettingsPayload }
+  /** 设置变更通知（#33）：任一设置项保存成功后广播到全部已打开 Vsidian
+   *  编辑器面板与设置页（含变更发起页面）。values 仍为全量快照；消费方按
+   *  需读取关心的键（#34 场景：editor.lineNumbers 触发 CM6 扩展热重配） */
+  | { kind: 'settings.changed'; values: SettingsPayload }
 
 /** webview → 宿主消息 */
 export type WebviewToHost =
@@ -188,6 +201,14 @@ export type WebviewToHost =
       imageStates?: ImageStateCounts
       /** 查找会话观测（#14）：首次打开后回报（未打开过时缺省） */
       find?: FindSessionProbe
+      /** 当前生效设置快照（#33 起缓存宿主下发的值；#34 行号等设置的观测面） */
+      settings?: SettingsPayload
+      /** #34 行号栏观测（设置开关态与视口内渲染结果；旧 webview 缺省） */
+      lineGutter?: LineGutterProbe
+      /** #32 排版一致性探针（两模式基础排版对照采样；旧 webview 缺省） */
+      typography?: TypographyProbe
+      /** 绘制层探针（P0 回归）：正文可见性与 CM6 注入样式存活观测 */
+      paint?: PaintProbe
     }
       /** 阅读视图性能探针回报（#7）：滚动往返期间的挂载/回收与解析观测 */
   | {
@@ -231,6 +252,17 @@ export type WebviewToHost =
   /** 图片资源解析请求（#10）：非 http(s) 直连的工作区图源经宿主解析为
    *  webview 可加载地址（reqId 会话面板内自增，对应 image.result） */
   | { kind: 'image.request'; sessionId: string; docUri: string; reqId: number; src: string }
+  /** 打开 Vsidian 设置页（#33）：编辑器工具栏「设置」按钮 → 宿主
+   *  createWebviewPanel。无 sessionId/docUri——打开设置页不依赖任何文档
+   *  会话（无文档打开时同样可用） */
+  | { kind: 'settings.open' }
+  /** 请求设置快照（#33）：设置页 ready 后与编辑器面板 init 后拉取当前值，
+   *  宿主以 settings.snapshot 响应（webview 不持久化设置，权威在宿主） */
+  | { kind: 'settings.get' }
+  /** 保存设置（#33）：设置页上送变更键值对（批，原子生效）。宿主按定义
+   *  校验：通过才持久化并广播 settings.changed；拒绝时向来源设置页回
+   *  settings.snapshot 以权威值恢复显示 */
+  | { kind: 'settings.set'; values: SettingsPayload }
   /** 性能探针回报（#5）：快照为 DOM 计数，输入延迟含 rAF 稳定等待 */
   | {
       kind: 'perf.report'
@@ -319,6 +351,83 @@ export interface CssProbeReport {
   readingWikilinkDecorationColor: string | null
 }
 
+/** #34 行号栏观测（view.state 扩展字段）：开关生效态与视口内渲染结果。
+ *  口径注意：采集不判 viewMode——reading 态 liveWrapper 仅 display:none
+ *  而 DOM 仍在，count/first/last 仍统计隐藏的 live gutter（与 TypographyProbe
+ *  对隐藏侧的显式声明同理），不得据此断言"reading 态行号在渲染"。 */
+export interface LineGutterProbe {
+  /** 设置开关生效态（快照缺键时为定义默认 true） */
+  on: boolean
+  /** `.cm-lineNumbers .cm-gutterElement` 数（CM6 原生视口有界，远小于全文行数） */
+  count: number
+  /** 首个行号单元格文本（源行编号起点观测；栏未装配为 null） */
+  first: string | null
+  /** 末个行号单元格文本（视口尾行号观测；栏未装配为 null） */
+  last: string | null
+}
+
+/**
+ * 绘制层探针（view.state 扩展字段）：守护"正文真的可见"这一用户级事实。
+ * 由来（P0）：CSP `style-src` 未放行内联样式时，CM6（style-mod）注入的
+ * baseTheme 样式表被浏览器拒绝（el.sheet 为 null），.cm-scroller 退化
+ * block——无行号时与 flex 视觉等价从未暴露，行号栏加入后 gutter 与正文
+ * 上下堆叠、正文被推出视口。既有用例只断言 DOM 数量与几何 x 坐标，均
+ * 存活于该缺陷之上，故补此探针断言绘制层。
+ * jsdom 无布局能力（rect 恒 0），textVisible 恒 false，不作单测断言依据。
+ */
+export interface PaintProbe {
+  /** 首个含文本行：首字符 rect 在视口内且 elementFromPoint 命中内容区。
+   *  覆盖物（冲突暂停横幅、查找面板等绝对定位元素）遮挡首 8 行文本时同样
+   *  返回 false——失败排障时先排除覆盖物再怀疑 CSP 样式失效 */
+  textVisible: boolean
+  /** `.cm-scroller` computed display：CM6 baseTheme 存活时为 'flex' */
+  scrollerDisplay: string | null
+  /** 行号栏 computed user-select（'none' = 禁选；栏未装配为 null） */
+  gutterUserSelect: string | null
+  /** CM6 明暗声明当前激活态（EditorView.darkTheme facet 实值）。随宿主
+   *  body 主题 class 动态跟随；激活后 baseTheme 内建变体接管 caret 等
+   *  颜色——本扩展不硬编码光标色（深色主题黑底黑光标回归的观测位） */
+  darkTheme: boolean
+  /** `.cm-content` computed caret-color（'rgb(...)' 文本）。未启用
+   *  drawSelection 时 CM6 光标即原生 caret，颜色由 baseTheme 明暗变体
+   *  决定（light=black / dark=white）；jsdom 无 CSS 引擎为 null */
+  caretColor: string | null
+}
+
+/** #32 排版一致性探针：正文基础排版四项样本（null = 元素缺失/不可读） */
+export interface TypographySample {
+  /** computed font-family（浏览器归一化串） */
+  fontFamily: string | null
+  fontSizePx: number | null
+  /** computed line-height 换算 px；'normal'（未解析为长度）为 null */
+  lineHeightPx: number | null
+  /** 正文文本左缘相对滚动容器左缘（几何口径，含中间层 padding/border；
+   *  display:none 侧 rect 全 0，不可作断言依据——各模式态取各自激活侧） */
+  textInsetPx: number | null
+}
+
+/** #32 排版一致性探针：继承型元素样本（列表/引用/表格——行高与缩进属
+ *  各自语义，只对照字体族与字号） */
+export interface TypographyInheritSample {
+  fontFamily: string | null
+  fontSizePx: number | null
+}
+
+/** #32 排版一致性探针（view.state 可选字段）：两模式基础排版对照采样。
+ *  各侧样本只在对应模式激活态断言（隐藏侧几何口径 textInsetPx 无意义）。 */
+export interface TypographyProbe {
+  /** live 正文：.cm-content（scroller 基线字体作用面，视口常驻） */
+  live: TypographySample | null
+  /** reading 正文：首个阅读块内段落（虚拟化下须已挂载） */
+  reading: TypographySample | null
+  liveList: TypographyInheritSample | null
+  readingList: TypographyInheritSample | null
+  liveQuote: TypographyInheritSample | null
+  readingQuote: TypographyInheritSample | null
+  liveTable: TypographyInheritSample | null
+  readingTable: TypographyInheritSample | null
+}
+
 /** live 侧语法装饰统计（#8：装饰集合计数，覆盖标题/行内/块级/任务/降级观测） */
 export interface LiveSyntaxProbe {
   /** 标题行数（#5 类） */
@@ -403,8 +512,81 @@ function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
+/** #33 设置载荷校验：键 → 标量值（boolean/number/string）。协议层只约束
+ *  形态（键值对可序列化）；键是否已定义、值是否符合类型语义由
+ *  shared/settings 的定义校验判定——两层职责分离 */
+function isSettingsPayload(v: unknown): v is SettingsPayload {
+  if (!isObject(v)) {
+    return false
+  }
+  for (const key of Object.keys(v)) {
+    const value = v[key]
+    if (typeof value !== 'boolean' && typeof value !== 'number' && typeof value !== 'string') {
+      return false
+    }
+  }
+  return true
+}
+
 function isNonNegativeInt(v: unknown): boolean {
   return typeof v === 'number' && Number.isInteger(v) && v >= 0
+}
+
+/** #34 行号栏观测校验：on 布尔、count 非负整数、first/last 字符串或 null */
+function isLineGutterProbe(v: unknown): v is LineGutterProbe {
+  return (
+    isObject(v) &&
+    typeof v.on === 'boolean' &&
+    isNonNegativeInt(v.count) &&
+    (v.first === null || isString(v.first)) &&
+    (v.last === null || isString(v.last))
+  )
+}
+
+/** 绘制层探针校验：textVisible/darkTheme 布尔；display/userSelect/caretColor 字符串或 null */
+function isPaintProbe(v: unknown): v is PaintProbe {
+  return (
+    isObject(v) &&
+    typeof v.textVisible === 'boolean' &&
+    isNullOrString(v.scrollerDisplay) &&
+    isNullOrString(v.gutterUserSelect) &&
+    typeof v.darkTheme === 'boolean' &&
+    isNullOrString(v.caretColor)
+  )
+}
+
+/** #32 排版样本校验：字体族字符串或 null、字号/行高/几何 inset 非负数或 null */
+function isTypographySample(v: unknown): v is TypographySample {
+  return (
+    isObject(v) &&
+    isNullOrString(v.fontFamily) &&
+    (v.fontSizePx === null || isNonNegativeNumber(v.fontSizePx)) &&
+    (v.lineHeightPx === null || isNonNegativeNumber(v.lineHeightPx)) &&
+    (v.textInsetPx === null || isNonNegativeNumber(v.textInsetPx))
+  )
+}
+
+function isTypographyInheritSample(v: unknown): v is TypographyInheritSample {
+  return (
+    isObject(v) &&
+    isNullOrString(v.fontFamily) &&
+    (v.fontSizePx === null || isNonNegativeNumber(v.fontSizePx))
+  )
+}
+
+/** #32 排版一致性探针校验：八个采样位各为 null（元素缺失/不可读）或合法样本 */
+function isTypographyProbe(v: unknown): v is TypographyProbe {
+  return (
+    isObject(v) &&
+    (v.live === null || isTypographySample(v.live)) &&
+    (v.reading === null || isTypographySample(v.reading)) &&
+    (v.liveList === null || isTypographyInheritSample(v.liveList)) &&
+    (v.readingList === null || isTypographyInheritSample(v.readingList)) &&
+    (v.liveQuote === null || isTypographyInheritSample(v.liveQuote)) &&
+    (v.readingQuote === null || isTypographyInheritSample(v.readingQuote)) &&
+    (v.liveTable === null || isTypographyInheritSample(v.liveTable)) &&
+    (v.readingTable === null || isTypographyInheritSample(v.readingTable))
+  )
 }
 
 function isPositiveInt(v: unknown): boolean {
@@ -562,6 +744,12 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
       )
     case 'sync.test.close':
       return isString(v.sessionId) && isString(v.docUri)
+    case 'settings.open':
+      return true
+    case 'settings.get':
+      return true
+    case 'settings.set':
+      return isSettingsPayload(v.values)
     case 'conflict.action':
       return (
         isString(v.sessionId) &&
@@ -602,7 +790,11 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.readingImageCount === undefined || isNonNegativeInt(v.readingImageCount)) &&
         (v.readingWikilinkCount === undefined || isNonNegativeInt(v.readingWikilinkCount)) &&
         (v.imageStates === undefined || isImageStateCounts(v.imageStates)) &&
-        (v.find === undefined || isFindSessionProbe(v.find))
+        (v.find === undefined || isFindSessionProbe(v.find)) &&
+        (v.settings === undefined || isSettingsPayload(v.settings)) &&
+        (v.lineGutter === undefined || isLineGutterProbe(v.lineGutter)) &&
+        (v.paint === undefined || isPaintProbe(v.paint)) &&
+        (v.typography === undefined || isTypographyProbe(v.typography))
       )
     case 'reading.perf.report':
       return (
@@ -761,6 +953,10 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
     case 'link.test.mousedown':
       return (v.target === 'wikilink' || v.target === 'link') && isNonNegativeInt(v.index) &&
         (v.ctrlKey === undefined || typeof v.ctrlKey === 'boolean')
+    case 'settings.snapshot':
+      return isSettingsPayload(v.values)
+    case 'settings.changed':
+      return isSettingsPayload(v.values)
     default:
       return false
   }

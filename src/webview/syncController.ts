@@ -24,16 +24,27 @@
 //   （不再发送 edit.request、忽略 doc.changed）；doc.resync 兼作恢复信号
 // - seq 持久化：经 bridge.setState 保存，webview 重载（retainContextWhenHidden
 //   关闭导致的状态重建）后继续编号，宿主按 seq 幂等去重
-import { Annotation, ChangeSet, EditorState, type Extension, type Text } from '@codemirror/state'
-import { EditorView, keymap } from '@codemirror/view'
+import { Annotation, ChangeSet, Compartment, EditorState, type Extension, type Text } from '@codemirror/state'
+import { EditorView, keymap, lineNumbers } from '@codemirror/view'
 import {
   isHostToWebview,
   type CssProbeReport,
   type FindSessionProbe,
+  type LineGutterProbe,
   type LiveSyntaxProbe,
+  type PaintProbe,
   type ReadingSyntaxProbe,
   type SerChange,
+  type TypographyInheritSample,
+  type TypographyProbe,
+  type TypographySample,
+  type WebviewToHost,
 } from '../shared/protocol'
+import {
+  SHOW_LINE_NUMBERS_DEFAULT,
+  SHOW_LINE_NUMBERS_KEY,
+  type SettingsPayload,
+} from '../shared/settings'
 import {
   FIND_CLASS_NAMES,
   computeFindMatches,
@@ -61,6 +72,7 @@ function scheduleFrame(fn: () => void): void {
     setTimeout(fn, 16)
   }
 }
+
 
 /** webview 与宿主的通信通道（由 acquireVsCodeApi 适配） */
 export interface VsCodeBridge {
@@ -257,7 +269,7 @@ function conflictsWithLocal(
 
 interface BufferedIncremental {
   version: number
-  /** 原始增量（权威变更前系；入队时点的参考系） */
+  /** 增量（权威变更前系；入队时点的参考系） */
   changes: SerChange[]
   /** 入队时逆穿当时已确认链得到的 baseVersion 系增量；null = 与当时已确认
    *  编辑二义，无法安全逆映射（flush 时按冲突暂停处理）。
@@ -288,6 +300,7 @@ export class WebviewSyncController {
   private readingView: VirtualReadingView | undefined
   /** 图片资源管理器（#10：双视图共用；经宿主通道解析工作区图源） */
   private images: ImageResourceManager | undefined
+  private toolbar: HTMLElement | undefined
 
   // ---- 查找会话状态（#14）----
   /** 查找是纯只读视图状态：不写 TextDocument、不入撤销栈、零出站消息。
@@ -308,6 +321,28 @@ export class WebviewSyncController {
   private findDoc: Text | null = null
   /** document 级键盘拦截（Mod-F 打开 / Esc 关闭），dispose 时移除 */
   private docKeydown: ((e: KeyboardEvent) => void) | undefined
+
+  // ---- 设置状态（#33）----
+  /** 宿主下发的当前设置快照缓存（#34 行号等设置的消费源）；webview 不
+   *  持久化设置——每次装载（init）后经 settings.get 向宿主拉取 */
+  private settings: SettingsPayload | undefined
+
+  // ---- 行号栏状态（#34）----
+  /** 行号开关生效态：mount 时按定义默认装配（默认开），设置快照/变更
+   *  到达后经 Compartment 热重配——不重建 EditorView */
+  private lineNumbersOn = SHOW_LINE_NUMBERS_DEFAULT
+  /** 行号扩展的运行时开关通道（extensions 装配点） */
+  private readonly lineNumbersCompartment = new Compartment()
+
+  // ---- 宿主主题明暗自适应（不硬编码 dark，也不硬编码颜色）----
+  /** CM6 明暗声明通道：跟随 webview body 的主题 class（vscode-dark 等），
+   *  激活 baseTheme 内建变体（light: caret black / dark: caret white 等），
+   *  本扩展不写任何光标/选区颜色 */
+  private readonly darkCompartment = new Compartment()
+  /** 上次应用值（跳过等值 reconfigure；undefined = 尚未应用过） */
+  private hostDarkApplied: boolean | undefined
+  /** body 主题 class 观察者：宿主切换明暗主题时热跟随 */
+  private hostThemeObserver: MutationObserver | undefined
 
   // ---- 冲突暂停状态（#4）----
   /** 暂停写回：保留本地文本、忽略外部增量、不再发送 edit.request */
@@ -363,6 +398,7 @@ export class WebviewSyncController {
       return
     }
     this.extraExtensions = extraExtensions
+    this.toolbar = this.buildToolbar()
     this.banner = this.buildBanner()
     this.findPanel = this.buildFindPanel()
     this.liveWrapper = document.createElement('div')
@@ -466,6 +502,7 @@ export class WebviewSyncController {
         srcEnd: Number.isInteger(srcEnd) ? srcEnd : srcStart,
       })
     })
+    parent.appendChild(this.toolbar)
     parent.appendChild(this.banner)
     parent.appendChild(this.liveWrapper)
     parent.appendChild(this.readingContainer)
@@ -489,10 +526,14 @@ export class WebviewSyncController {
       }
     }
     document.addEventListener('keydown', this.docKeydown, true)
+    // 宿主明暗主题热跟随：body class 由 VSCode 随主题实时更新
+    this.hostThemeObserver = new MutationObserver(() => this.applyHostTheme())
+    this.hostThemeObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] })
     this.view = new EditorView({
       parent: this.liveWrapper,
       state: EditorState.create({ doc: '', extensions: this.extensions() }),
     })
+    this.hostDarkApplied = isVscodeDarkBody()
     this.applyModeDom(this.viewMode)
     this.bridge.postMessage({ kind: 'ready' })
   }
@@ -506,6 +547,8 @@ export class WebviewSyncController {
       clearTimeout(this.flushTimer)
       this.flushTimer = undefined
     }
+    this.hostThemeObserver?.disconnect()
+    this.hostThemeObserver = undefined
     if (this.docKeydown) {
       document.removeEventListener('keydown', this.docKeydown, true)
       this.docKeydown = undefined
@@ -514,6 +557,8 @@ export class WebviewSyncController {
     this.view = undefined
     this.banner?.remove()
     this.banner = undefined
+    this.toolbar?.remove()
+    this.toolbar = undefined
     this.findPanel?.remove()
     this.findPanel = undefined
     this.findInputEl = undefined
@@ -544,6 +589,18 @@ export class WebviewSyncController {
         // init 后主动回报一次视图状态（含持久化恢复的模式）：宿主的模式
         // 缓存尽早建立，重载场景（retainContextWhenHidden 关闭）不留窗口
         this.reportViewState()
+        // 拉取当前设置快照（#33）：权威在宿主，webview 不持久化——每次
+        // 装载（含重载）都拉取；宿主以 settings.snapshot 响应
+        this.bridge.postMessage({ kind: 'settings.get' })
+        break
+      case 'settings.snapshot':
+      case 'settings.changed':
+        // 设置快照与变更广播共用同一处理（#33）：snapshot 为设置页请求-
+        // 响应与编辑器拉取的回填，changed 为保存成功的全量广播；缓存后由
+        // #34 等消费方按需读取关心的键（editor.lineNumbers 经 Compartment
+        // 热重配，缺键回默认、非法形态忽略）
+        this.settings = message.values
+        this.applyLineNumbersSetting()
         break
       case 'edit.ack': {
         if (this.suspended) {
@@ -857,7 +914,9 @@ export class WebviewSyncController {
         readingAnchorTopPx = el.getBoundingClientRect().top - box.top + this.readingContainer.scrollTop
       }
     }
-    this.bridge.postMessage({
+    // #32：typography 为 view.state 正式可选字段（协议校验器见
+    // shared/protocol.ts 的 isTypographyProbe）
+    const state: Extract<WebviewToHost, { kind: 'view.state' }> = {
       kind: 'view.state',
       text: doc?.toString() ?? '',
       docLength: doc?.length ?? 0,
@@ -905,7 +964,15 @@ export class WebviewSyncController {
       // 服务双视图，隐藏侧的 DOM 不代表用户可见状态）
       imageStates: this.collectImageStates(),
       find: this.collectFindProbe(),
-    })
+      typography: this.collectTypography(),
+      // #33 设置快照缓存（宿主下发过才有值；缺省向后兼容）
+      settings: this.settings,
+      // #34 行号栏观测（开关态与视口内渲染结果）
+      lineGutter: this.collectLineGutter(),
+      // 绘制层探针（P0 回归）：正文可见性 / CM6 注入样式存活 / 行号禁选
+      paint: this.collectPaint(),
+    }
+    this.bridge.postMessage(state)
   }
 
   /**
@@ -1243,6 +1310,57 @@ export class WebviewSyncController {
     }
   }
 
+  /** #32 排版一致性采样：两模式正文/列表/引用/表格的 computed 基础排版。
+   *  只读 DOM 与计算样式，不触发布局写入；隐藏侧（display:none）computed
+   *  字体族/字号仍可读（继承链有效），几何口径 textInsetPx 无意义（rect
+   *  全 0）——断言端须在对应模式激活态取各自样本。 */
+  private collectTypography(): TypographyProbe {
+    const scroller = this.liveWrapper?.querySelector<HTMLElement>('.cm-scroller') ?? null
+    const readBase = (el: HTMLElement | null, anchor: HTMLElement | null): TypographySample | null => {
+      if (!el) {
+        return null
+      }
+      const cs = getComputedStyle(el)
+      const fontPx = Number.parseFloat(cs.fontSize)
+      const linePx = Number.parseFloat(cs.lineHeight)
+      return {
+        fontFamily: cs.fontFamily || null,
+        fontSizePx: Number.isFinite(fontPx) ? fontPx : null,
+        lineHeightPx: Number.isFinite(linePx) ? linePx : null,
+        textInsetPx: anchor
+          ? el.getBoundingClientRect().left - anchor.getBoundingClientRect().left
+          : null,
+      }
+    }
+    const readInherit = (el: HTMLElement | null): TypographyInheritSample | null => {
+      if (!el) {
+        return null
+      }
+      const cs = getComputedStyle(el)
+      const fontPx = Number.parseFloat(cs.fontSize)
+      return {
+        fontFamily: cs.fontFamily || null,
+        fontSizePx: Number.isFinite(fontPx) ? fontPx : null,
+      }
+    }
+    return {
+      live: readBase(
+        this.liveWrapper?.querySelector<HTMLElement>('.cm-content') ?? null,
+        scroller,
+      ),
+      reading: readBase(
+        this.readingContainer?.querySelector<HTMLElement>('.vsidian-reading-block p') ?? null,
+        this.readingContainer ?? null,
+      ),
+      liveList: readInherit(this.liveWrapper?.querySelector<HTMLElement>('.vsidian-list-line') ?? null),
+      readingList: readInherit(this.readingContainer?.querySelector<HTMLElement>('.vsidian-reading-block li') ?? null),
+      liveQuote: readInherit(this.liveWrapper?.querySelector<HTMLElement>('.vsidian-quote-line') ?? null),
+      readingQuote: readInherit(this.readingContainer?.querySelector<HTMLElement>('.vsidian-reading-block blockquote') ?? null),
+      liveTable: readInherit(this.liveWrapper?.querySelector<HTMLElement>('.vsidian-table-line') ?? null),
+      readingTable: readInherit(this.readingContainer?.querySelector<HTMLElement>('.vsidian-reading-table td') ?? null),
+    }
+  }
+
   /** live 侧语法装饰统计（#8 双视图一致性观测）：直接装饰集合级计数 */
   private collectLiveSyntax(): LiveSyntaxProbe {
     const counts = {
@@ -1359,6 +1477,21 @@ export class WebviewSyncController {
     })
   }
 
+  /** webview 工具栏：仅承载 #33 设置按钮（打开宿主级 Vsidian 设置页面板，
+   *  webview 无权自建面板，必须经 settings.open 出站）。#6 的模式切换按钮
+   *  已按 #38 迁移至编辑器标题栏三态命令，不再在正文上方渲染 */
+  private buildToolbar(): HTMLElement {
+    const bar = document.createElement('div')
+    bar.className = 'vsidian-toolbar'
+    const settingsBtn = document.createElement('button')
+    settingsBtn.type = 'button'
+    settingsBtn.className = 'vsidian-settings-toggle'
+    settingsBtn.textContent = '设置'
+    settingsBtn.setAttribute('aria-label', '打开 Vsidian 设置')
+    settingsBtn.addEventListener('click', () => this.bridge.postMessage({ kind: 'settings.open' }))
+    bar.appendChild(settingsBtn)
+    return bar
+  }
   // ---- 查找会话（#14）----
   // UI 形态：webview 内浮动层（custom editor webview 不可用 VSCode 原生
   // find 控件）。入口：Mod-F 拦截、宿主 view.find.open（命令面板共用）、
@@ -1871,6 +2004,119 @@ export class WebviewSyncController {
     })
   }
 
+  // ---- 行号栏（#34）----
+
+  /**
+   * 应用行号设置（settings.snapshot / settings.changed 到达时）：
+   * - 源文件行号语义：CM6 对 \r\n→\n 的规范化不改行数，lineNumbers() 从
+   *   doc 直算即源文件行号——不写换行映射代码（共享笔记 34 号推论）
+   * - 缺键回定义默认（向后兼容）；非布尔形态忽略（协议是宽标量容器，
+   *   类型语义校验归宿主，webview 侧防御）
+   * - 经 Compartment.reconfigure 增删扩展，EditorView 不重建；阅读模式
+   *   天然无行号（gutter 挂在 liveWrapper 内的 EditorView 上，reading
+   *   时整体隐藏），切回 live 按本状态恢复
+   */
+  private applyLineNumbersSetting(): void {
+    const raw = this.settings?.[SHOW_LINE_NUMBERS_KEY]
+    const on = typeof raw === 'boolean' ? raw : SHOW_LINE_NUMBERS_DEFAULT
+    if (on === this.lineNumbersOn) {
+      return
+    }
+    this.lineNumbersOn = on
+    this.view?.dispatch({
+      effects: this.lineNumbersCompartment.reconfigure(on ? lineNumbers() : []),
+    })
+  }
+
+  /** 行号栏观测（#34 view.state 扩展字段）。过滤 CM6 的隐藏测量探针
+   *  单元格（visibility:hidden、用于测量 gutter 文本宽度的 dummy——真实
+   *  宿主与 jsdom 均存在，不是行号） */
+  private collectLineGutter(): LineGutterProbe {
+    const view = this.view
+    if (!view || !this.lineNumbersOn) {
+      return { on: this.lineNumbersOn, count: 0, first: null, last: null }
+    }
+    const texts = Array.from(
+      view.dom.querySelectorAll('.cm-lineNumbers .cm-gutterElement'),
+    )
+      .filter((el) => (el as HTMLElement).style.visibility !== 'hidden')
+      .map((el) => el.textContent ?? '')
+    return {
+      on: this.lineNumbersOn,
+      count: texts.length,
+      first: texts.length > 0 ? texts[0] : null,
+      last: texts.length > 0 ? texts[texts.length - 1] : null,
+    }
+  }
+
+  /**
+   * 绘制层探针（P0 回归，语义见 protocol.ts PaintProbe）：首个含文本行的
+   * 首字符命中测试落在内容区内（DOM 数量与几何坐标探针测不出的"真的
+   * 可见"），附带 CM6 baseTheme 存活与行号禁选观测。
+   */
+  private collectPaint(): PaintProbe {
+    const view = this.view
+    const contentEl = view?.dom.querySelector<HTMLElement>('.cm-content')
+    if (!view || !contentEl) {
+      return {
+        textVisible: false,
+        scrollerDisplay: null,
+        gutterUserSelect: null,
+        darkTheme: false,
+        caretColor: null,
+      }
+    }
+    // elementFromPoint/几何 rect 依赖真实布局：jsdom（单测宿主）无布局能力
+    // 且 elementFromPoint 缺失，任何异常都视为不可见（PaintProbe 语义注记：
+    // jsdom 下 textVisible 恒 false，只作真宿主集成断言依据）
+    let textVisible = false
+    try {
+      for (const line of Array.from(view.dom.querySelectorAll<HTMLElement>('.cm-line')).slice(0, 8)) {
+        const tn = Array.from(line.getElementsByTagName('*'))
+          .flatMap((el) => Array.from(el.childNodes))
+          .find((n) => n.nodeType === 3 && (n.nodeValue ?? '').trim().length > 0)
+        const direct = Array.from(line.childNodes).find(
+          (n) => n.nodeType === 3 && (n.nodeValue ?? '').trim().length > 0,
+        )
+        const textNode = (tn ?? direct) as ChildNode | undefined
+        if (!textNode || !textNode.nodeValue) {
+          continue
+        }
+        const r = document.createRange()
+        r.setStart(textNode as unknown as Node, 0)
+        r.setEnd(textNode as unknown as Node, 1)
+        const cr = r.getBoundingClientRect()
+        if (cr.width <= 0 || cr.height <= 0) {
+          continue
+        }
+        const hit = document.elementFromPoint(cr.x + cr.width / 2, cr.y + cr.height / 2)
+        if (hit && contentEl.contains(hit)) {
+          textVisible = true
+          break
+        }
+      }
+    } catch {
+      textVisible = false
+    }
+    const guttersEl = view.dom.querySelector<HTMLElement>('.cm-gutters')
+    // 光标取证：本扩展未启用 drawSelection，CM6 光标即原生 caret，颜色
+    // 由 baseTheme 明暗变体决定（light=black / dark=white）。darkTheme 取
+    // facet 实值（jsdom 可读），caretColor 取计算值（jsdom 无 CSS 引擎为 null）
+    let caretColor: string | null = null
+    try {
+      caretColor = getComputedStyle(contentEl).caretColor || null
+    } catch {
+      caretColor = null
+    }
+    return {
+      textVisible,
+      scrollerDisplay: view.scrollDOM ? getComputedStyle(view.scrollDOM).display : null,
+      gutterUserSelect: guttersEl ? getComputedStyle(guttersEl).userSelect : null,
+      darkTheme: view.state.facet(EditorView.darkTheme),
+      caretColor,
+    }
+  }
+
   /** 暂停提示横幅：说明输入已保留、写回已暂停，提供取回与恢复按钮 */
   private buildBanner(): HTMLElement {
     const banner = document.createElement('div')
@@ -1911,9 +2157,28 @@ export class WebviewSyncController {
     }
   }
 
+  /** 宿主明暗主题跟随：body class 变化时热重配 dark 声明（等值跳过） */
+  private applyHostTheme(): void {
+    const dark = isVscodeDarkBody()
+    if (dark === this.hostDarkApplied || !this.view) {
+      return
+    }
+    this.hostDarkApplied = dark
+    this.view.dispatch({
+      effects: this.darkCompartment.reconfigure(EditorView.darkTheme.of(dark)),
+    })
+  }
+
   private extensions() {
     return [
       EditorView.lineWrapping,
+      // 宿主明暗主题声明：初始按 body 主题 class 判定，切换时热重配
+      // （applyHostTheme）。baseTheme 内建变体接管 caret 等颜色——不硬编码
+      this.darkCompartment.of(EditorView.darkTheme.of(isVscodeDarkBody())),
+      // 行号栏（#34）：源文件行号经 Compartment 装配（设置开关热重配，
+      // mount 时按定义默认开）；列在流内、与正文以固定间距相隔的布局
+      // 见 main.css 的 #34 段（行号列宽随位数自适应，无降级机制）
+      this.lineNumbersCompartment.of(this.lineNumbersOn ? lineNumbers() : []),
       // 标题实时预览装饰（#5 切片）：直接装饰（StateField）+ 间接装饰
       // （ViewPlugin 按 visibleRanges），见 liveDecorations.ts 头注释
       livePreviewDecorations,
@@ -2043,4 +2308,13 @@ export class WebviewSyncController {
       }),
     ]
   }
+}
+
+/** VSCode webview 明暗主题判定：深色（vscode-dark）与暗色高对比
+ *  （vscode-high-contrast）为暗；浅色（vscode-light）与亮色高对比
+ *  （vscode-high-contrast-light）为亮。body class 由 VSCode 随主题
+ *  实时更新，观察者见 WebviewSyncController.applyHostTheme */
+export function isVscodeDarkBody(body: HTMLElement = document.body): boolean {
+  const cl = body.classList
+  return cl.contains('vscode-dark') || cl.contains('vscode-high-contrast')
 }

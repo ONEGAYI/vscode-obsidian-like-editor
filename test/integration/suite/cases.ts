@@ -17,8 +17,16 @@ const CMD = {
   perfProbe: 'onegayi.vsidian._test.perfProbe',
   readingPerf: 'onegayi.vsidian._test.readingPerf',
   linkLog: 'onegayi.vsidian._test.getLinkLog',
+  // #38 三态记忆
   getLastMode: 'onegayi.vsidian._test.getLastMode',
   resetLastMode: 'onegayi.vsidian._test.resetLastMode',
+  // #33 设置链路
+  settingsPageInfo: 'onegayi.vsidian._test.settingsPageInfo',
+  closeSettingsPage: 'onegayi.vsidian._test.closeSettingsPage',
+  installSettingsFixture: 'onegayi.vsidian._test.installSettingsFixture',
+  getSettings: 'onegayi.vsidian._test.getSettings',
+  setSettings: 'onegayi.vsidian._test.setSettings',
+  injectSettingsPageMessage: 'onegayi.vsidian._test.injectSettingsPageMessage',
 }
 
 const wsDir = process.env['WORKSPACE_DIR'] ?? ''
@@ -163,6 +171,34 @@ async function resetLastMode(): Promise<void> {
 async function waitLastMode(expected: string): Promise<void> {
   await poll(`全局记忆为 ${expected}`, async () =>
     (await getLastMode()) === expected ? true : undefined, 10000)
+}
+
+/** #38 合并 main 后新增：设置写入的读回确认。1.86.2 globalState 存在
+ *  跨键 storage 广播迟到回翻（同层键共享事件流）——#38 的模式记忆写入
+ *  （toggle/切换链）与设置写入（setSettings）紧邻时，恢复值可被旧值迟到
+ *  广播盖回（集成实测：#32 排版用例关行号采样后恢复 true 被回翻为 false，
+ *  后续行号用例全暗）。写入后轮询读回到期望值再放行（与 resetLastMode 的
+ *  稳定窗同款防护，作用于设置键） */
+async function waitSettings(expected: Record<string, unknown>): Promise<void> {
+  const stable = async (): Promise<boolean> => {
+    for (let i = 0; i < 2; i++) {
+      const snap = (await vscode.commands.executeCommand(CMD.getSettings)) as Record<string, unknown>
+      if (Object.entries(expected).some(([k, v]) => snap[k] !== v)) {
+        return false
+      }
+      await new Promise((r) => setTimeout(r, 250))
+    }
+    return true
+  }
+  const deadline = Date.now() + 10000
+  while (Date.now() < deadline) {
+    if (await stable()) {
+      return
+    }
+    await vscode.commands.executeCommand(CMD.setSettings, expected)
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  throw new Error(`等待超时：设置未稳定为 ${JSON.stringify(expected)}`)
 }
 
 /** 等待活动文本编辑器变为指定文档（#38：source 态切换的落位断言） */
@@ -317,6 +353,35 @@ interface ViewState {
     index: number
     currentFrom: number | null
     currentTo: number | null
+  }
+  /** #32 排版一致性探针（view.state 可选字段，协议正式校验）：
+   *  各侧样本只在对应模式激活态断言（隐藏侧几何口径无意义） */
+  typography?: {
+    live: { fontFamily: string | null; fontSizePx: number | null; lineHeightPx: number | null; textInsetPx: number | null } | null
+    reading: { fontFamily: string | null; fontSizePx: number | null; lineHeightPx: number | null; textInsetPx: number | null } | null
+    liveList: { fontFamily: string | null; fontSizePx: number | null } | null
+    readingList: { fontFamily: string | null; fontSizePx: number | null } | null
+    liveQuote: { fontFamily: string | null; fontSizePx: number | null } | null
+    readingQuote: { fontFamily: string | null; fontSizePx: number | null } | null
+    liveTable: { fontFamily: string | null; fontSizePx: number | null } | null
+    readingTable: { fontFamily: string | null; fontSizePx: number | null } | null
+  }
+  /** #33 设置快照缓存（宿主 snapshot/changed 下发后非空） */
+  settings?: Record<string, unknown>
+  /** #34 行号栏观测（first/last 为视口内首/末行号单元格文本） */
+  lineGutter?: {
+    on: boolean
+    count: number
+    first: string | null
+    last: string | null
+  }
+  /** 绘制层探针（P0 回归）：正文可见性 / CM6 注入样式存活 / 行号禁选 / 明暗声明与光标实值 */
+  paint?: {
+    textVisible: boolean
+    scrollerDisplay: string | null
+    gutterUserSelect: string | null
+    darkTheme: boolean
+    caretColor: string | null
   }
 }
 
@@ -2911,5 +2976,704 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // 切回 live 验证面板仍可用（#38 起回 live 用显式命令）
     await vscode.commands.executeCommand('onegayi.vsidian.mode.toLive')
     await waitViewState('table13.md', (v) => v.viewMode === 'live')
+  }],
+
+  // ---- 工单 #32：两模式基础排版统一（共享 CSS 变量基线）----
+  // 断言口径：同一文档（typography.md）在 live / reading 两态各取一次
+  // view.state 的 typography 探针，对照激活侧样本的计算值一致；隐藏侧的
+  // 几何口径（textInsetPx）不可用，各模式态只取各自激活侧。
+
+  ['两模式正文基础排版一致：字体族/字号/行高/左留白（#32）', async () => {
+    await openWithEditor('typography.md')
+    await waitSessionReady('typography.md')
+    const uri = wsUri('typography.md').toString()
+    // 行号开启时 live 正文向右内缩（行号列+固定间距占宽，#34 流内列布局），
+    // 左留白对照须在行号关闭态进行（此时两模式正文同处 --vsidian-content-
+    // padding-inline 基线）；字体族/字号/行高不受布局影响
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': false })
+    const live = await waitViewState('typography.md', (v) =>
+      v.viewMode === 'live' &&
+      v.lineGutter?.on === false &&
+      v.typography?.live != null &&
+      v.typography.live.fontSizePx != null &&
+      v.typography.live.lineHeightPx != null &&
+      v.typography.live.textInsetPx != null)
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
+    const reading = await waitViewState('typography.md', (v) =>
+      v.viewMode === 'reading' &&
+      v.typography?.reading != null &&
+      v.typography.reading.fontSizePx != null &&
+      v.typography.reading.lineHeightPx != null &&
+      v.typography.reading.textInsetPx != null)
+    const l = live.typography!.live!
+    const r = reading.typography!.reading!
+    // 实测值输出（人工验收记录 A21 的数据来源）
+    console.log(`[#32] 正文排版 live: font=${l.fontFamily} size=${l.fontSizePx}px line=${l.lineHeightPx}px inset=${l.textInsetPx}px`)
+    console.log(`[#32] 正文排版 reading: font=${r.fontFamily} size=${r.fontSizePx}px line=${r.lineHeightPx}px inset=${r.textInsetPx}px`)
+    assert(l.fontFamily === r.fontFamily,
+      `正文字体族不一致：live=${l.fontFamily}，reading=${r.fontFamily}`)
+    assert(Math.abs(l.fontSizePx! - r.fontSizePx!) < 0.5,
+      `正文字号不一致：live=${l.fontSizePx}px，reading=${r.fontSizePx}px`)
+    assert(Math.abs(l.lineHeightPx! - r.lineHeightPx!) < 0.5,
+      `正文行高不一致：live=${l.lineHeightPx}px，reading=${r.lineHeightPx}px`)
+    assert(l.textInsetPx! > 0 && Math.abs(l.textInsetPx! - r.textInsetPx!) < 0.5,
+      `正文左留白不一致：live=${l.textInsetPx}px，reading=${r.textInsetPx}px（须为同一正留白且 >0）`)
+    // 模式切换零写回（工单验收：不修改源文、不产生保存/撤销历史）
+    const s0 = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(s0.appliedEdits === 0, `切换后不得产生写回，实际 ${s0.appliedEdits}`)
+    const doc = await vscode.workspace.openTextDocument(wsUri('typography.md'))
+    assert(!doc.isDirty, '切换不得触发保存')
+    // 还原默认行号开启（跨用例状态清理，同 #34 既有用例约定）；恢复值经
+    // waitSettings 读回确认，防 storage 迟到回翻把 false 盖回（见其注释）
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
+    await waitSettings({ 'editor.lineNumbers': true })
+    await waitViewState('typography.md', (v) => v.lineGutter?.on === true)
+  }],
+
+  ['两模式列表/引用/表格基础排版一致（#32）', async () => {
+    await openWithEditor('typography.md')
+    await waitSessionReady('typography.md')
+    const live = await waitViewState('typography.md', (v) =>
+      v.viewMode === 'live' &&
+      v.typography?.liveList != null &&
+      v.typography?.liveQuote != null &&
+      v.typography?.liveTable != null)
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
+    const reading = await waitViewState('typography.md', (v) =>
+      v.viewMode === 'reading' &&
+      v.typography?.readingList != null &&
+      v.typography?.readingQuote != null &&
+      v.typography?.readingTable != null)
+    const lt = live.typography!
+    const rt = reading.typography!
+    console.log(`[#32] 列表 live: font=${lt.liveList!.fontFamily} size=${lt.liveList!.fontSizePx}px / reading: font=${rt.readingList!.fontFamily} size=${rt.readingList!.fontSizePx}px`)
+    console.log(`[#32] 引用 live: font=${lt.liveQuote!.fontFamily} size=${lt.liveQuote!.fontSizePx}px / reading: font=${rt.readingQuote!.fontFamily} size=${rt.readingQuote!.fontSizePx}px`)
+    console.log(`[#32] 表格 live: font=${lt.liveTable!.fontFamily} size=${lt.liveTable!.fontSizePx}px / reading: font=${rt.readingTable!.fontFamily} size=${rt.readingTable!.fontSizePx}px`)
+    for (const [name, a, b] of [
+      ['列表', lt.liveList!, rt.readingList!],
+      ['引用', lt.liveQuote!, rt.readingQuote!],
+      ['表格', lt.liveTable!, rt.readingTable!],
+    ] as const) {
+      assert(a.fontFamily === b.fontFamily,
+        `${name}字体族不一致：live=${a.fontFamily}，reading=${b.fontFamily}`)
+      assert(Math.abs(a.fontSizePx! - b.fontSizePx!) < 0.5,
+        `${name}字号不一致：live=${a.fontSizePx}px，reading=${b.fontSizePx}px`)
+    }
+  }],
+
+  ['两模式同级标题基础排版一致（#32）', async () => {
+    await openWithEditor('typography.md')
+    await waitSessionReady('typography.md')
+    const live = await waitViewState('typography.md', (v) => v.viewMode === 'live' && (v.headingFontPx ?? 0) > 0)
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
+    const reading = await waitViewState('typography.md', (v) => v.viewMode === 'reading' && (v.headingFontPx ?? 0) > 0)
+    console.log(`[#32] 一级标题字号 live=${live.headingFontPx}px，reading=${reading.headingFontPx}px（基线×同倍率）`)
+    assert(Math.abs(live.headingFontPx! - reading.headingFontPx!) < 0.5,
+      `一级标题字号不一致：live=${live.headingFontPx}px，reading=${reading.headingFontPx}px（同级标题须同基线同倍率）`)
+  }],
+
+  ['编辑器字号变更两模式按同一规则响应（#32）', async () => {
+    await openWithEditor('typography.md')
+    await waitSessionReady('typography.md')
+    const before = await waitViewState('typography.md', (v) => v.viewMode === 'live' && (v.typography?.live?.fontSizePx ?? 0) > 0)
+    const beforeSize = before.typography!.live!.fontSizePx!
+    try {
+      // 两模式基线同引 --vsidian-content-font-size → --vscode-editor-font-size：
+      // 宿主向 webview 注入的该变量随配置即时更新（真宿主实测 14px → 18px）
+      await vscode.workspace.getConfiguration('editor').update('fontSize', 18, vscode.ConfigurationTarget.Workspace)
+      await poll('live 字号随配置更新', async () => {
+        const v = (await vscode.commands.executeCommand(CMD.viewState, wsUri('typography.md').toString(), 0)) as ViewState | undefined
+        const size = v?.typography?.live?.fontSizePx
+        return typeof size === 'number' && Math.abs(size - 18) <= 0.5 ? v : undefined
+      })
+      await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
+      const reading = await poll('reading 字号随配置更新', async () => {
+        const v = (await vscode.commands.executeCommand(CMD.viewState, wsUri('typography.md').toString(), 0)) as ViewState | undefined
+        const size = v?.typography?.reading?.fontSizePx
+        return v?.viewMode === 'reading' && typeof size === 'number' && Math.abs(size - 18) <= 0.5 ? v : undefined
+      })
+      console.log(`[#32] 编辑器字号 ${beforeSize}px → 18px：live 与 reading 正文均同步为 ${reading.typography!.reading!.fontSizePx}px`)
+    } finally {
+      await vscode.workspace.getConfiguration('editor').update('fontSize', undefined, vscode.ConfigurationTarget.Workspace)
+    }
+  }],
+
+  // ---- #33：独立设置页与设置数据链路 ----
+
+  ['设置页：无文档时命令面板可打开、关闭后可重开（#33）', async () => {
+    // 无文档前提：runner 每例结束 closeAllEditors，此处再显式兜底
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors')
+    const info0 = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as { open: boolean }
+    assert(info0.open === false, '初始应无设置页打开')
+
+    // 命令路径（命令面板入口）：不要求当前有任何 Vsidian 编辑器
+    await vscode.commands.executeCommand('onegayi.vsidian.openSettings')
+    const info = await poll('设置页打开', async () => {
+      const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
+        | { open: boolean; ready: boolean }
+        | undefined
+      return i?.open ? i : undefined
+    })
+    // webview 装载完成（ready 握手：页面已发 settings.get 拉取权威快照）
+    await poll('设置页 webview 就绪', async () => {
+      const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
+        | { ready: boolean }
+        | undefined
+      return i?.ready ? true : undefined
+    })
+    assert(info.open === true, '设置页应处于打开状态')
+
+    await vscode.commands.executeCommand(CMD.closeSettingsPage)
+    await poll('设置页关闭', async () => {
+      const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
+        | { open: boolean }
+        | undefined
+      return i && !i.open ? true : undefined
+    })
+
+    // 关闭后重开（生命周期）：再次打开得到新面板且 ready 握手重新完成
+    await vscode.commands.executeCommand('onegayi.vsidian.openSettings')
+    await poll('设置页重开并就绪', async () => {
+      const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
+        | { open: boolean; ready: boolean }
+        | undefined
+      return i?.open && i.ready ? true : undefined
+    })
+    await vscode.commands.executeCommand(CMD.closeSettingsPage)
+  }],
+
+  ['设置页：工具栏消息入口打开、标题归属 Vsidian、不改文档与撤销历史（#33）', async () => {
+    await openWithEditor('lf.md')
+    await waitSessionReady('lf.md')
+    const uri = wsUri('lf.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('lf.md'))
+    // lf.md 被早前用例编辑保存过（未还原）：以打开时的权威文本为基线，
+    // 不假设 fixture 原文
+    const original = doc.getText()
+
+    // 先落一笔真实编辑（驱动撤销历史存在），再开/关设置页
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'sync.test.edit',
+      offset: 0,
+      text: '# ',
+    })
+    const editedText = `# ${original}`
+    await poll('编辑写入权威', () => (doc.getText() === editedText ? true : undefined))
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+
+    // 工具栏入口（webview「设置」按钮产生的 settings.open 消息，经同一
+    // 校验与 provider 拦截入口注入）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'settings.open' })
+    const info = await poll('设置页经工具栏消息打开', async () => {
+      const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
+        | { open: boolean; ready: boolean; title: string }
+        | undefined
+      return i?.open ? i : undefined
+    })
+    // 标题与界面归属 Vsidian（面板标题即命令面板/页头呈现）
+    assert(info.title === 'Vsidian 设置', `设置页标题应归属 Vsidian，实际 ${info.title}`)
+    await poll('设置页 webview 就绪', async () => {
+      const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
+        | { ready: boolean }
+        | undefined
+      return i?.ready ? true : undefined
+    })
+
+    // 打开期间文档零变更
+    const duringOpen = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(doc.getText() === editedText, '打开设置页不得修改当前文档')
+    assert(duringOpen.version === before.version, `打开设置页不得推进文档版本（${before.version} → ${duringOpen.version}）`)
+    assert(duringOpen.appliedEdits === before.appliedEdits, '打开设置页不得产生写回')
+
+    // 关闭设置页后：文档不变、撤销历史仍在（undo 一次回退此前编辑）
+    await vscode.commands.executeCommand(CMD.closeSettingsPage)
+    await poll('设置页关闭', async () => {
+      const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
+        | { open: boolean }
+        | undefined
+      return i && !i.open ? true : undefined
+    })
+    assert(doc.getText() === editedText, '关闭设置页不得修改当前文档')
+    // 设置页关闭后焦点回落的目标不受控（C-5：undo 守卫要求活动 tab 为本
+    // 文档的 custom editor），先 reveal 再请求撤销
+    await vscode.commands.executeCommand('vscode.openWith', wsUri('lf.md'), VIEW_TYPE)
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('撤销历史保留', () => (doc.getText() === original ? true : undefined))
+    await doc.save()
+  }],
+
+  ['设置链路：有效值保存回读、无效值拒绝、快照到达与广播已开编辑器（#33）', async () => {
+    // fixture 定义经运行时注册并入（生产注册表为空——空状态页面的依据）
+    const install = (await vscode.commands.executeCommand(CMD.installSettingsFixture)) as { ok: boolean }
+    assert(install.ok === true, 'fixture 定义注册失败')
+
+    // 有效值保存并回读（真实宿主 globalState 持久层）
+    const okSet = (await vscode.commands.executeCommand(CMD.setSettings, { 'test.flag': true })) as { ok: boolean }
+    assert(okSet.ok === true, '有效值应保存成功')
+    const snap = (await vscode.commands.executeCommand(CMD.getSettings)) as Record<string, unknown>
+    assert(snap['test.flag'] === true, `保存后回读应为 true，实际 ${String(snap['test.flag'])}`)
+
+    // 无效值与未知键按定义拒绝（快照不被污染）
+    const badType = (await vscode.commands.executeCommand(CMD.setSettings, { 'test.flag': 1 })) as { ok: boolean }
+    assert(badType.ok === false, '类型不符的值必须被拒绝')
+    const unknown = (await vscode.commands.executeCommand(CMD.setSettings, { 'unknown.key': true })) as { ok: boolean }
+    assert(unknown.ok === false, '未知键必须被拒绝')
+    const snap2 = (await vscode.commands.executeCommand(CMD.getSettings)) as Record<string, unknown>
+    assert(snap2['test.flag'] === true, '拒绝的保存不得改变快照')
+
+    // init 拉取链路：后打开的编辑器面板装载时收到当前设置（settings.get）。
+    // 用 untouched.md（无任何用例编辑它）保证全新面板 init，不受前序用例
+    // 的面板状态影响
+    await openWithEditor('untouched.md')
+    await waitSessionReady('untouched.md')
+    const pulled = await waitViewState('untouched.md', (v) => v.settings?.['test.flag'] === true)
+    assert(pulled.settings?.['test.flag'] === true, '面板装载后应拉取到当前设置快照')
+
+    // 广播链路：宿主保存变更 → 已打开编辑器面板收到 settings.changed
+    await vscode.commands.executeCommand(CMD.setSettings, { 'test.flag': false })
+    const broadcast = await waitViewState('untouched.md', (v) => v.settings?.['test.flag'] === false)
+    assert(broadcast.settings?.['test.flag'] === false, '设置变更应广播到已打开编辑器面板')
+
+    // 设置页 webview → 宿主正式处理链路（注入与真实消息同一入口）：
+    // settings.set 经设置页消息处理入口保存成功
+    await vscode.commands.executeCommand('onegayi.vsidian.openSettings')
+    await poll('设置页就绪', async () => {
+      const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
+        | { open: boolean; ready: boolean }
+        | undefined
+      return i?.open && i.ready ? true : undefined
+    })
+    await vscode.commands.executeCommand(CMD.injectSettingsPageMessage, {
+      kind: 'settings.set',
+      values: { 'test.flag': true },
+    })
+    await poll('设置页链路保存生效', async () => {
+      const s = (await vscode.commands.executeCommand(CMD.getSettings)) as Record<string, unknown>
+      return s['test.flag'] === true ? true : undefined
+    })
+    // 广播同样把变更带回已打开编辑器
+    // 设置页打开期间其他面板可能被遮挡卸载（VSCode 默认卸载隐藏 webview），
+    // 广播以「面板可见时」为准：关闭设置页使编辑器面板恢复（必要时重载）
+    // 后，经 init 后的 settings.get 拉取链路看到最新值
+    await vscode.commands.executeCommand(CMD.closeSettingsPage)
+    const revived = await waitViewState('untouched.md', (v) => v.settings?.['test.flag'] === true)
+    assert(revived.settings?.['test.flag'] === true, '设置页链路的保存应经拉取/广播到达编辑器面板')
+
+    // 清理：恢复 fixture 默认值
+    await vscode.commands.executeCommand(CMD.setSettings, { 'test.flag': false })
+    await vscode.commands.executeCommand(CMD.closeSettingsPage)
+  }],
+
+  // ---- #34：实时预览源文件行号 ----
+
+  ['实时预览默认显示从 1 起的源文件行号（结构混合与软换行不新增行号）', async () => {
+    await openWithEditor('linenumbers.md')
+    await waitSessionReady('linenumbers.md')
+    const view = await waitViewState('linenumbers.md', (v) => (v.lineGutter?.count ?? 0) > 0)
+    const g = view.lineGutter!
+    // 首个源行行号为 1（默认开启；空行同样编号）
+    assert(g.on === true, '行号默认应开启（定义默认 true）')
+    assert(g.first === '1', `首个行号应为 1，实际 ${String(g.first)}`)
+    // 行号数与源行数一致（视口覆盖小文档全文），软换行只增加视觉行
+    assert(g.count === view.lineCount,
+      `行号数应等于源行数 ${view.lineCount}，实际 ${g.count}`)
+    assert(g.last === String(view.lineCount),
+      `末行号应为源行数 ${view.lineCount}，实际 ${String(g.last)}`)
+    // 软换行解耦观测：视觉行数 ≥ 源行数（长段折行时渲染行更多）
+    assert(view.renderedLines >= view.lineCount,
+      `视觉行 ${view.renderedLines} 不应少于源行 ${view.lineCount}`)
+    console.log(`[#34] linenumbers.md：源行 ${view.lineCount}，行号 1..${String(g.last)}，视觉行 ${view.renderedLines}`)
+  }],
+
+  ['CRLF 文档行号与源文件行一致（规范化不改行数）', async () => {
+    await openWithEditor('crlf.md')
+    await waitSessionReady('crlf.md')
+    const view = await waitViewState('crlf.md', (v) => (v.lineGutter?.count ?? 0) > 0)
+    const doc = await vscode.workspace.openTextDocument(wsUri('crlf.md'))
+    // webview LF 坐标行数 == 宿主 CRLF 文档行数（\r\n→\n 规范化不改行数）
+    assert(view.lineCount === doc.lineCount,
+      `webview 行数 ${view.lineCount} 应等于宿主 TextDocument 行数 ${doc.lineCount}`)
+    const g = view.lineGutter!
+    assert(g.first === '1', `首个行号应为 1，实际 ${String(g.first)}`)
+    assert(g.last === String(view.lineCount),
+      `末行号应为 ${view.lineCount}，实际 ${String(g.last)}`)
+    console.log(`[#34] crlf.md：宿主 lineCount=${doc.lineCount}，行号 1..${String(g.last)}`)
+  }],
+
+  ['增删行与撤销重做后行号随源文更新', async () => {
+    await openWithEditor('untouched.md')
+    await waitSessionReady('untouched.md')
+    const uri = wsUri('untouched.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('untouched.md'))
+    const original = doc.getText()
+    const before = await waitViewState('untouched.md', (v) => (v.lineGutter?.count ?? 0) > 0)
+    const beforeLines = before.lineCount
+    assert(before.lineGutter!.last === String(beforeLines), '初始行号应与源行一致')
+
+    // 行首插入两行（sync.test.edit 走与用户输入同一写回链路）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'sync.test.edit',
+      offset: 0,
+      text: '新行甲\n新行乙\n',
+    })
+    const afterInsert = await poll('插入后行号随动', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines + 2 && v.lineGutter?.last === String(beforeLines + 2)
+        ? v
+        : undefined
+    })
+    assert(afterInsert.lineGutter!.first === '1', '插入后首行行号仍为 1')
+    await poll('编辑写入权威', () => (doc.getText() === `新行甲\n新行乙\n${original}` ? true : undefined))
+
+    // 撤销：行号回落（宿主权威栈回流走 external 路径）
+    await vscode.commands.executeCommand('vscode.openWith', wsUri('untouched.md'), VIEW_TYPE)
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('撤销后行号回落', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines && v.lineGutter?.last === String(beforeLines) ? v : undefined
+    })
+    // 重做：行号恢复推进
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'redo' })
+    await poll('重做后行号恢复', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines + 2 ? v : undefined
+    })
+    // 还原文档（再 undo 一次回到 fixture 原文，避免污染后续用例的行数假设）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('还原 fixture 原文', () => (doc.getText() === original ? true : undefined))
+    if (doc.isDirty) {
+      await doc.save()
+    }
+  }],
+
+  ['设置页开关行号：已开编辑器立即生效、新面板拉取持久值、不改源文', async () => {
+    // 两个已开面板（当前 + beside）：开关变更须同时到达
+    await openWithEditor('lf.md')
+    await waitSessionReady('lf.md')
+    await openWithEditor('untouched.md', true)
+    await waitSessionReady('untouched.md')
+    const uriA = wsUri('lf.md').toString()
+    await waitViewState('lf.md', (v) => v.lineGutter?.on === true)
+    await waitViewState('untouched.md', (v) => v.lineGutter?.on === true)
+    const docA = await vscode.workspace.openTextDocument(wsUri('lf.md'))
+    const textBefore = docA.getText()
+    const sessionBefore = (await vscode.commands.executeCommand(CMD.sessionState, uriA)) as SessionState
+
+    // 关闭：经设置服务的正式保存链路（与设置页 settings.set 同一入口）
+    const off = (await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': false })) as { ok: boolean }
+    assert(off.ok === true, '关闭行号的设置保存应成功')
+    const snap = (await vscode.commands.executeCommand(CMD.getSettings)) as Record<string, unknown>
+    assert(snap['editor.lineNumbers'] === false, `保存后回读应为 false，实际 ${String(snap['editor.lineNumbers'])}`)
+    const gA = await waitViewState('lf.md', (v) => v.lineGutter?.on === false)
+    const gB = await waitViewState('untouched.md', (v) => v.lineGutter?.on === false)
+    assert(gA.lineGutter!.count === 0 && gB.lineGutter!.count === 0, '关闭后行号 DOM 应移除')
+
+    // 开关行号不改源文、不产生写回与撤销历史
+    assert(docA.getText() === textBefore, '开关行号不得修改文档内容')
+    const sessionAfter = (await vscode.commands.executeCommand(CMD.sessionState, uriA)) as SessionState
+    assert(sessionAfter.version === sessionBefore.version,
+      `开关行号不得推进文档版本（${sessionBefore.version} → ${sessionAfter.version}）`)
+    assert(sessionAfter.appliedEdits === sessionBefore.appliedEdits, '开关行号不得产生写回')
+
+    // 持久化口径：关闭全部面板后重开——新面板经 init 后 settings.get 拉到
+    // 持久值（真实重启读取的是同一 globalState 键，人工验证条目覆盖重启）
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors')
+    await openWithEditor('lf.md')
+    await waitSessionReady('lf.md')
+    const reopened = await waitViewState('lf.md', (v) => v.lineGutter?.on === false)
+    assert(reopened.lineGutter!.count === 0, '重开面板应拉取到持久化的关闭状态')
+
+    // 恢复默认开启（后续用例与人工验收的默认态）
+    const on = (await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })) as { ok: boolean }
+    assert(on.ok === true, '恢复行号的设置保存应成功')
+    const restored = await waitViewState('lf.md', (v) => v.lineGutter?.on === true && (v.lineGutter?.count ?? 0) > 0)
+    assert(restored.lineGutter!.first === '1', '恢复后行号应从 1 起')
+    console.log(`[#34] 开关链路：两面板即时生效，重开面板拉取持久值 false，恢复后 count=${restored.lineGutter!.count}`)
+  }],
+
+  ['切换阅读模式无行号、切回实时预览按设置恢复', async () => {
+    await openWithEditor('mode.md')
+    await waitSessionReady('mode.md')
+    const live = await waitViewState('mode.md', (v) => v.viewMode === 'live' && (v.lineGutter?.count ?? 0) > 0)
+    assert(live.lineGutter!.first === '1', 'live 初始行号从 1 起')
+
+    // 阅读模式：liveWrapper 整体隐藏（行号随之不可见），阅读视图是独立
+    // DOM 子树（EditorView 挂在 liveWrapper 内），天然不渲染任何行号栏
+    await vscode.commands.executeCommand('onegayi.vsidian.toggleViewMode')
+    const reading = await waitViewState('mode.md', (v) => v.viewMode === 'reading')
+    assert(reading.typography?.reading != null, '阅读视图应活跃渲染（其 DOM 子树不含行号栏）')
+    assert(reading.lineGutter?.on === true, '阅读模式下设置开关态保持（切回恢复的依据）')
+    console.log(`[#34] 阅读模式：viewMode=${reading.viewMode}，reading 块活跃渲染，liveWrapper 整体隐藏（行号不可见）`)
+
+    // 阅读期间保持设置开；切回 live 后行号按设置恢复且从 1 起。
+    // #38 起 toggleViewMode 为三态循环（reading 态下一次是 source），此处
+    // 显式指定 toLive（合并 main 后 #34 用例的三态适配）
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toLive', wsUri('mode.md'))
+    const back = await waitViewState('mode.md', (v) => v.viewMode === 'live' && (v.lineGutter?.count ?? 0) > 0)
+    assert(back.lineGutter!.first === '1', `切回 live 后行号应恢复从 1 起，实际 ${String(back.lineGutter!.first)}`)
+    assert(back.lineGutter!.last === String(back.lineCount),
+      `切回后末行号应为 ${back.lineCount}，实际 ${String(back.lineGutter!.last)}`)
+  }],
+
+  ['大文档行号 DOM 有界、流内列不覆盖正文且开关正文内缩（#34 布局契约）', async () => {
+    await openWithEditor('large.md')
+    await waitSessionReady('large.md')
+    const uri = wsUri('large.md').toString()
+    // 初始视口在顶部：行号 DOM 有界（远小于 10 万行）
+    const top = await waitViewState('large.md', (v) => (v.lineGutter?.count ?? 0) > 0)
+    const topG = top.lineGutter!
+    assert(topG.count > 0 && topG.count < 2000,
+      `行号 DOM 应有界（视口级），实际 ${topG.count}`)
+    assert(topG.first === '1', '顶部行号从 1 起')
+    // 流内列布局（用户修订 #32 旧契约）：开启行号时正文左缘 = 页面留白 +
+    // 行号列 + 固定间距，即比关闭态右移（列宽随位数自适应，无降级机制）
+    const insetOn = top.typography?.live?.textInsetPx
+    assert(typeof insetOn === 'number' && insetOn > 24,
+      `开启行号时正文左缘应右移到留白之外（> 24px），实际 ${String(insetOn)}`)
+
+    // 滚动到底部：行号达 6 位（10 万行），列宽自适应变宽、正文相应再内缩。
+    // 经正式定位消息 view.locate 驱动（scrollIntoView 官方滚动路径）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate',
+      offset: Math.max(0, top.docLength - 1),
+    })
+    const bottom = await waitViewState('large.md', (v) =>
+      (v.lineGutter?.last ?? '').length >= 6 && v.lineGutter?.on === true)
+    const insetBottom = bottom.typography?.live?.textInsetPx
+    assert(typeof insetBottom === 'number' && Math.abs(insetBottom - insetOn!) < 1,
+      `滚动全程列宽应稳定（CM6 按文档最大行号预留列宽，正文内缩量恒定：` +
+        `${insetOn} → ${String(insetBottom)}）——列宽自适应取代 scaleX 压缩的收益`)
+
+    // 滚回顶部：列宽随位数回落，正文内缩量回到顶部档
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: 0 })
+    const backTop = await waitViewState('large.md', (v) => v.lineGutter?.first === '1' && (v.lineGutter?.count ?? 0) > 0)
+    const insetBack = backTop.typography?.live?.textInsetPx
+    assert(typeof insetBack === 'number' && Math.abs(insetBack - insetOn!) < 1,
+      `滚回顶部后正文内缩量应回落（${insetOn} → ${String(insetBack)}）`)
+
+    // 关闭行号：列整体卸载，正文回到 24px 页面留白基线（= 阅读模式基线）
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': false })
+    const off = await waitViewState('large.md', (v) => v.lineGutter?.on === false && v.lineGutter?.count === 0)
+    const insetOff = off.typography?.live?.textInsetPx
+    assert(typeof insetOff === 'number' && Math.abs(insetOff - 24) < 1,
+      `关闭行号后正文左缘应回到 24px 基线（实际 ${String(insetOff)}）`)
+    // 恢复默认开启
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
+    await waitViewState('large.md', (v) => v.lineGutter?.on === true && (v.lineGutter?.count ?? 0) > 0)
+    console.log(`[#34] large.md：顶部 DOM=${topG.count}（有界），开启内缩 ${insetOn}px 恒定（列宽按 10 万行 6 位预留，滚动无回流），关闭基线 ${insetOff}px`)
+  }],
+
+  ['文档中部插入/粘贴多行与删除表格行后行号随源文更新', async () => {
+    await openWithEditor('linenumbers.md')
+    await waitSessionReady('linenumbers.md')
+    const uri = wsUri('linenumbers.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('linenumbers.md'))
+    const original = doc.getText()
+    // 跨用例状态防御：前序用例（开关/大文档）会切换行号设置，卸载期间的
+    // 隐藏面板可能错过后续广播——openWith reveal 的可能是幸存面板（实测
+    // sessionId 为用例 1 的 panel-1）。显式确保开启：apply 对同值补丁仍会
+    // 广播，幸存面板据此对齐当前全局值（与用例 4 的「恢复默认开启」同款
+    // 清理动作）
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
+    const before = await waitViewState('linenumbers.md', (v) => (v.lineGutter?.count ?? 0) > 0)
+    const beforeLines = before.lineCount
+    assert(before.lineGutter!.last === String(beforeLines), '初始行号应与源行一致')
+
+    // 中部插入多行（列表区行首）：行号整体推进
+    const midOffset = original.indexOf('- 列表项甲\n')
+    assert(midOffset > 0, 'fixture 应包含列表行（中部插入锚点）')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'sync.test.edit',
+      offset: midOffset,
+      text: '中部新行一\n中部新行二\n中部新行三\n',
+    })
+    const afterMid = await poll('中部插入后行号随动', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines + 3 && v.lineGutter?.last === String(beforeLines + 3) ? v : undefined
+    })
+    assert(afterMid.lineGutter!.first === '1', '中部插入后首行行号仍为 1')
+
+    // 粘贴多行（单事务大块插入，与用户粘贴同一 CM6 事务链路）：行号按新增行数推进
+    const pasteText = Array.from({ length: 6 }, (_, i) => `粘贴第 ${i + 1} 行`).join('\n') + '\n'
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'sync.test.edit',
+      offset: afterMid.docLength,
+      text: pasteText,
+    })
+    await poll('粘贴多行后行号随动', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines + 9 && v.lineGutter?.last === String(beforeLines + 9) ? v : undefined
+    })
+    // 等宿主写回完成（后续删除锚点按权威文本计算：中部插入使表格行 offset 后移）
+    await poll('编辑写入权威', () =>
+      doc.getText().includes('中部新行一\n') && doc.getText().endsWith(pasteText) ? true : undefined)
+
+    // 删除行：定位到表格数据行后执行宿主表格命令（webview 经 CM6 事务真实删除整行）
+    const tableRowOffset = doc.getText().indexOf('| 甲格 | 乙格 |')
+    assert(tableRowOffset > 0, 'fixture 应包含表格数据行（删除锚点）')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate',
+      offset: tableRowOffset + 2,
+    })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'table.command',
+      op: 'deleteRow',
+    })
+    await poll('删除行后行号回落', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines + 8 && v.lineGutter?.last === String(beforeLines + 8) ? v : undefined
+    })
+
+    // 三笔编辑逐次撤销（一笔 edit.request = 宿主撤销一次）：行号逐步回落至原文
+    await vscode.commands.executeCommand('vscode.openWith', wsUri('linenumbers.md'), VIEW_TYPE)
+    const undoSteps = [beforeLines + 9, beforeLines + 3, beforeLines]
+    for (const expected of undoSteps) {
+      await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+      await poll(`撤销后行号回落到 ${expected}`, async () => {
+        const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+        return v?.lineCount === expected && v.lineGutter?.last === String(expected) ? v : undefined
+      })
+    }
+    await poll('还原 fixture 原文', () => (doc.getText() === original ? true : undefined))
+    if (doc.isDirty) {
+      await doc.save()
+    }
+  }],
+
+  ['外部变更（宿主 WorkspaceEdit）增删行后行号与源文同步', async () => {
+    await openWithEditor('untouched.md')
+    await waitSessionReady('untouched.md')
+    const doc = await vscode.workspace.openTextDocument(wsUri('untouched.md'))
+    const original = doc.getText()
+    const before = await waitViewState('untouched.md', (v) => (v.lineGutter?.count ?? 0) > 0)
+    const beforeLines = before.lineCount
+
+    // 外部插入两行（模拟另一编辑器/其他扩展修改同一文件）：增量回流后行号随动。
+    // Position 为 0 基行号：原文档末行（空行）是 line(beforeLines-1)，其行首即文末
+    const insert = new vscode.WorkspaceEdit()
+    insert.insert(wsUri('untouched.md'), new vscode.Position(beforeLines - 1, 0), '外部行甲\n外部行乙\n')
+    assert(await vscode.workspace.applyEdit(insert), '外部插入应成功')
+    const afterInsert = await poll('外部插入后行号随动', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, wsUri('untouched.md').toString(), 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines + 2 && v.lineGutter?.last === String(beforeLines + 2) ? v : undefined
+    })
+    // 独立断言 lineGutter 观测面（不依赖 text 断言）：开关态、首末行号、视口计数
+    const g = afterInsert.lineGutter!
+    assert(g.on === true, `外部变更后行号开关应保持，实际 ${String(g.on)}`)
+    assert(g.first === '1', `首行行号应为 1，实际 ${String(g.first)}`)
+    assert(g.count === beforeLines + 2, `小文档行号计数应等于源行数 ${beforeLines + 2}，实际 ${g.count}`)
+    assert(doc.lineCount === beforeLines + 2, `宿主行数应同步为 ${beforeLines + 2}，实际 ${doc.lineCount}`)
+
+    // 外部删除这两行（插入区间恰为两个新行 + 其后的末空行行首边界）：行号回落
+    const remove = new vscode.WorkspaceEdit()
+    remove.delete(wsUri('untouched.md'), new vscode.Range(beforeLines - 1, 0, beforeLines + 1, 0))
+    assert(await vscode.workspace.applyEdit(remove), '外部删除应成功')
+    const afterDelete = await poll('外部删除后行号回落', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, wsUri('untouched.md').toString(), 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines && v.lineGutter?.last === String(beforeLines) ? v : undefined
+    })
+    assert(afterDelete.lineGutter!.on === true, '外部变更不得改变行号开关态')
+    await poll('外部删除落盘还原', () => (doc.getText() === original ? true : undefined))
+    if (doc.isDirty) {
+      await doc.save()
+    }
+    console.log(`[#34] 外部变更：插入后行号 1..${beforeLines + 2}，删除后回落 1..${beforeLines}`)
+  }],
+
+  ['CRLF 文档增删行后行号仍与源行一致', async () => {
+    await openWithEditor('crlf.md')
+    await waitSessionReady('crlf.md')
+    const uri = wsUri('crlf.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('crlf.md'))
+    const original = doc.getText()
+    const before = await waitViewState('crlf.md', (v) => (v.lineGutter?.count ?? 0) > 0)
+    const beforeLines = before.lineCount
+    assert(beforeLines === doc.lineCount, `初始两系行数应一致（${beforeLines} vs ${doc.lineCount}）`)
+
+    // 行首插入两行（webview LF 坐标）：行号随动，写回后宿主文本保持 CRLF 保真
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'sync.test.edit',
+      offset: 0,
+      text: '新 CRLF 行甲\n新 CRLF 行乙\n',
+    })
+    const afterInsert = await poll('CRLF 插入后行号随动', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines + 2 && v.lineGutter?.last === String(beforeLines + 2) ? v : undefined
+    })
+    assert(afterInsert.lineGutter!.first === '1', 'CRLF 插入后首行行号仍为 1')
+    await poll('CRLF 写回保真', () =>
+      doc.getText().startsWith('新 CRLF 行甲\r\n新 CRLF 行乙\r\n') ? true : undefined)
+
+    // 撤销插入（宿主权威栈回流走 external 路径）：行号回落
+    await vscode.commands.executeCommand('vscode.openWith', wsUri('crlf.md'), VIEW_TYPE)
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('CRLF 撤销后行号回落', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines && v.lineGutter?.last === String(beforeLines) ? v : undefined
+    })
+
+    // 外部变更（宿主 WorkspaceEdit）追加 CRLF 行：行号随动且行数与宿主一致
+    const extEdit = new vscode.WorkspaceEdit()
+    extEdit.insert(wsUri('crlf.md'), new vscode.Position(beforeLines, 0), '外部 CRLF 行\r\n')
+    assert(await vscode.workspace.applyEdit(extEdit), '外部 CRLF 插入应成功')
+    const afterExternal = await poll('CRLF 外部变更后行号随动', async () => {
+      const v = (await vscode.commands.executeCommand(CMD.viewState, uri, 0)) as ViewState | undefined
+      return v?.lineCount === beforeLines + 1 && v.lineGutter?.last === String(beforeLines + 1) ? v : undefined
+    })
+    assert(afterExternal.lineCount === doc.lineCount,
+      `外部变更后行数应与宿主一致（${afterExternal.lineCount} vs ${doc.lineCount}）`)
+
+    // 还原（撤销外部变更）并落盘
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('CRLF 还原原文', () => (doc.getText() === original ? true : undefined))
+    if (doc.isDirty) {
+      await doc.save()
+    }
+  }],
+
+  // ---- #34 补充（P0 回归）：行号开启时正文真的可见 ----
+
+  ['绘制层探针：行号开启时正文可见、CM6 注入样式存活、行号禁选（P0 回归）', async () => {
+    // 由来：CSP style-src 未放行内联样式 → CM6 注入样式表被拒 → scroller
+    // 退化 block → #34 行号栏与正文上下堆叠、正文被推出视口。既有 DOM
+    // 数量/几何 x 坐标断言全部存活于该缺陷之上，唯有绘制层断言能拦住。
+    await openWithEditor('linenumbers.md')
+    await waitSessionReady('linenumbers.md')
+    const on = await waitViewState('linenumbers.md', (v) => (v.lineGutter?.count ?? 0) > 0)
+    assert(on.lineGutter?.on === true, '行号应默认开启')
+    assert(on.paint?.textVisible === true,
+      `行号开启时正文应可见（textVisible=${String(on.paint?.textVisible)}，` +
+        `scrollerDisplay=${String(on.paint?.scrollerDisplay)}）`)
+    assert(on.paint?.scrollerDisplay === 'flex',
+      `CM6 注入样式应存活（scroller display 应为 flex，实际 ${String(on.paint?.scrollerDisplay)}；` +
+        '若为 block 说明 CSP 拦截了 style-mod 注入的样式表）')
+    assert(on.paint?.gutterUserSelect === 'none',
+      `行号栏应禁选（user-select 应为 none，实际 ${String(on.paint?.gutterUserSelect)}）`)
+    // 光标明暗自适应（深色主题黑底黑光标回归）：断言 dark 声明与 caret
+    // 变体联动，不依赖测试宿主默认主题——浅色/深色宿主下均自洽成立
+    const dark = on.paint?.darkTheme
+    const caret = on.paint?.caretColor ?? null
+    console.log(`[P0] darkTheme=${String(dark)}，caret-color=${String(caret)}`)
+    assert(typeof dark === 'boolean', `dark 声明应为布尔（实际 ${String(dark)}）`)
+    assert(caret !== null, 'caret-color 计算值应可读（caretColor 不应为 null）')
+    if (dark) {
+      assert(caret === 'rgb(255, 255, 255)' || caret === '#ffffff' || caret === '#fff',
+        `dark 声明激活时 caret 应为 baseTheme dark 变体 white（实际 ${caret}；` +
+          '非白说明明暗声明未接管 caret 颜色——黑底黑光标回归）')
+    } else {
+      assert(caret === 'rgb(0, 0, 0)' || caret === '#000000' || caret === '#000',
+        `light 声明时 caret 应为 baseTheme light 变体 black（实际 ${caret}）`)
+    }
+
+    // 差分自证：关闭行号后正文仍可见（度量在两态下均有效）
+    const okSet = (await vscode.commands.executeCommand(CMD.setSettings, {
+      'editor.lineNumbers': false,
+    })) as { ok: boolean }
+    assert(okSet.ok === true, '关闭行号设置应成功')
+    const off = await waitViewState('linenumbers.md', (v) => v.lineGutter?.on === false)
+    assert(off.paint?.textVisible === true, '行号关闭后正文应仍可见（度量校准）')
+    // 还原默认开启，避免影响后续用例（与 #34 既有用例同款跨用例状态清理）
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
+    await waitViewState('linenumbers.md', (v) => v.lineGutter?.on === true)
   }],
 ]

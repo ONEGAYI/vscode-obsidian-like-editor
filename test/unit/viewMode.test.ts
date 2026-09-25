@@ -212,17 +212,17 @@ describe('源码位置锚点：live ↔ reading 双向恢复', () => {
 })
 
 describe('切换入口迁移：webview 工具栏已移除（#38）', () => {
-  it('mount 后不存在 .vsidian-toolbar 与 button.vsidian-mode-toggle（两模式下一致）', () => {
+  it('mount 后不存在 button.vsidian-mode-toggle（两模式下一致，工具栏仅剩 #33 设置按钮）', () => {
+    // #38 将模式切换迁移至标题栏三态命令；合并 main（#33 设置按钮）后
+    // 工具栏容器保留但只承载设置入口，反向断言收窄到模式按钮本身
     const h = makeBridge()
     const parent = document.createElement('div')
     const c = new WebviewSyncController(h.bridge)
     c.mount(parent)
     c.handleHostMessage({ kind: 'init', sessionId: 's1', docUri: DOC_URI, version: 1, text: DOC })
-    expect(parent.querySelector('.vsidian-toolbar')).toBeNull()
     expect(parent.querySelector('button.vsidian-mode-toggle')).toBeNull()
-    // 切到 reading 后同样不存在（工具栏不因模式显隐回归）
+    // 切到 reading 后同样不存在（模式按钮不因模式显隐回归）
     c.handleHostMessage({ kind: 'view.mode.set', mode: 'reading' })
-    expect(parent.querySelector('.vsidian-toolbar')).toBeNull()
     expect(parent.querySelector('button.vsidian-mode-toggle')).toBeNull()
   })
 })

@@ -1,6 +1,7 @@
 {
   "name": "vsidian",
   "displayName": "Vsidian",
+  "icon": "media/vsidian-icon.png",
   "description": "在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验",
   "version": "0.1.0",
   "publisher": "onegayi",
@@ -85,6 +86,11 @@
       {
         "command": "onegayi.vsidian.table.deleteColumn",
         "title": "表格：删除列",
+        "category": "Vsidian"
+      },
+      {
+        "command": "onegayi.vsidian.openSettings",
+        "title": "打开设置",
         "category": "Vsidian"
       }
     ],
