@@ -24,7 +24,7 @@ import type { SyntaxNode, Tree } from '@lezer/common'
 import type { TableEditOp } from '../shared/protocol'
 import { liveDecorationsField, LIVE_CLASS_NAMES, snapGridSelectionHead, tableCompositionPreview } from './liveDecorations'
 import { chainAt } from './markdownDoc'
-import { needsPipeEscapeAt, parseTableDelimiter, planBlankRowCellInput, tableRowCellsForColumns, tableCellBreaks } from './tableCells'
+import { escapeCellText, needsPipeEscapeAt, parseTableDelimiter, planBlankRowCellInput, tableRowCellsForColumns, tableCellBreaks } from './tableCells'
 import { planTableEdit, planTableRowMove, tableCellNavTarget, type TableRowInfo } from './tableStructure'
 import { createTableControls } from './tableControls'
 import { planCreateTable } from './tableCreate'
@@ -403,18 +403,6 @@ function planGridSelectionEdit(
     }
   }
   return { changes, selection }
-}
-
-/** 替换/粘贴进单元格的文本持久化形式：换行写为 `<br>`（一格一源行），
- *  裸管道前置反斜杠（已转义的 `\|` 不重复转义）。键入 `|` 有
- *  tablePipeKeyHandler 逐位置判定转义，粘贴路径在此补齐——裸管道
- *  入源文会拆散列结构。行内代码 span 内的管道同样转义（保守口径：
- *  结构安全优先，罕见形态下视觉多一枚转义符可接受）。 */
-function escapeCellText(text: string): string {
-  return text
-    .replace(/\r?\n/g, '<br>')
-    .replace(/(\\*)\|/g, (all, slashes: string) =>
-      slashes.length % 2 === 0 ? `${slashes}\\|` : all)
 }
 
 /** 选区级事务重写：单 change 事务（选区替换 / 删除的常态）按规划重写，

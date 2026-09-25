@@ -191,7 +191,7 @@ describe('needsPipeEscapeAt：键入 | 的转义判定', () => {
   })
 })
 
-describe('escapeCellText：写回内容转义', () => {
+describe('escapeCellText：写回内容持久化（换行 + 转义，单一事实源）', () => {
   it('裸管道转义为 \\|', () => {
     expect(escapeCellText('a|b')).toBe('a\\|b')
   })
@@ -200,12 +200,26 @@ describe('escapeCellText：写回内容转义', () => {
     expect(escapeCellText('a\\|b')).toBe('a\\|b')
   })
 
+  it('反斜杠奇偶判定：双反斜杠后的管道仍是裸管道需转义，三反斜杠后不转义', () => {
+    expect(escapeCellText('a\\\\|b')).toBe('a\\\\\\|b')
+    expect(escapeCellText('a\\\\\\|b')).toBe('a\\\\\\|b')
+  })
+
   it('行内代码内的管道不转义（GFM 渲染为代码内容）', () => {
     expect(escapeCellText('`x|y`')).toBe('`x|y`')
     expect(escapeCellText('前缀 `x|y` 后缀 | 尾')).toBe('前缀 `x|y` 后缀 \\| 尾')
   })
 
-  it('无管道文本原样返回', () => {
+  it('换行持久化为 <br>（一格一源行；评审 N-1 统一后键入/粘贴/跨格替换同口径）', () => {
+    expect(escapeCellText('x\ny')).toBe('x<br>y')
+    expect(escapeCellText('x\r\ny')).toBe('x<br>y')
+  })
+
+  it('换行转换先于转义判定：含 <br> 后的文本仍按 span 口径转义', () => {
+    expect(escapeCellText('x|y\n`z|w`')).toBe('x\\|y<br>`z|w`')
+  })
+
+  it('无管道文本换行仍转换、纯文本原样返回', () => {
     expect(escapeCellText('普通内容 **加粗**')).toBe('普通内容 **加粗**')
   })
 })

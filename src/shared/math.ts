@@ -266,8 +266,10 @@ export function scanMathRanges(lines: readonly string[], firstLineStart: number)
     const indent = line.length - line.trimStart().length
     if (trimmed.startsWith('$$')) {
       const rest = trimmed.slice(2)
-      const pairs = [...rest.matchAll(/\$\$/g)]
-      if (pairs.length > 0 && pairs[pairs.length - 1]!.index === rest.length - 2) {
+      // 开启判定唯一入口 opensMathBlockLine（评审 N-2：不再内联同构条件，
+      // 改谓词时只改一处）；「单行闭合形态」即其否命题
+      if (!opensMathBlockLine(trimmed)) {
+        const pairs = [...rest.matchAll(/\$\$/g)]
         // 单行闭合形态（最后对恰在行尾）：pairs 恰一时内容非空产出单行块
         // `$$x$$`，空内容（$$  $$ / $$$$）按原文降级——不产出也不开启
         // 多行块（B-4 角案：开启会吞掉后续首个 $$ 行，与插件单行闭合语义
@@ -285,8 +287,7 @@ export function scanMathRanges(lines: readonly string[], firstLineStart: number)
         lineStart += line.length + 1
         continue
       }
-      // 多行块开始（opensMathBlockLine 口径：rest 无对或对不在行尾；
-      // rest 非空时为块首行内容）
+      // 多行块开始（rest 无对或对不在行尾；rest 非空时为块首行内容）
       blockOpen = { from: lineStart + indent, tex: rest }
       lineStart += line.length + 1
       continue

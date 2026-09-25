@@ -14,6 +14,7 @@ import {
   buildMathDecorationRanges,
   liveMath,
   mathBlockDecorations,
+  mathBlockExtendStats,
   mathBlocksField,
   mathRenderStats,
   mathWidgetDeco,
@@ -224,14 +225,24 @@ describe('跨行块表：StateField 增量维护', () => {
     expect(incremental).toEqual(full)
   })
 
-  it('未闭合 $$ 长尾的延伸熔断：超过上限即停，行为等价于未闭合降级（C3）', () => {
-    // 行 1 开块 + 超过熔断上限的普通行长尾：延伸在 MATH_BLOCK_EXTEND_LIMIT
-    // 行后停止（成本从平方级降为线性），块表不产出、不崩溃
+  it('未闭合 $$ 长尾的延伸熔断：窗口内开块后延伸有界，行为等价于未闭合降级（C3）', () => {
+    // 行 1 开块 + 超过熔断上限的普通行长尾；击键在开块行邻近（回溯窗口
+    // 覆盖行 1 的开启符）→ 增量延伸按批推进并在 MATH_BLOCK_EXTEND_LIMIT
+    // 行熔断（批次数有上界），块表不产出、不崩溃，且与全量扫描一致。
+    // 块表空结果本身无法区分「熔断停止」与「从未延伸」，故断言批次 > 0
+    // 与批次 ≤ 上限/批大小（评审 N-3：原用例击键在文末，窗口不含开启行，
+    // 延伸循环零次执行）
     const lines = ['$$', ...Array.from({ length: MATH_BLOCK_EXTEND_LIMIT + 600 }, (_, i) => `text ${i}`)]
     let state = EditorState.create({ doc: lines.join('\n'), extensions: [mathBlocksField] })
     expect([...state.field(mathBlocksField)]).toHaveLength(0) // 全量扫描：未闭合
-    state = state.update({ changes: { from: state.doc.length, insert: 'x' } }).state
-    expect([...state.field(mathBlocksField)]).toHaveLength(0) // 增量：熔断后同样降级
+    const at = state.doc.line(2).from + 2 // 击键在开块行邻近，窗口内含行 1
+    state = state.update({ changes: { from: at, insert: 'x' } }).state
+    expect(mathBlockExtendStats.batches).toBeGreaterThan(0) // 真实进入延伸
+    expect(mathBlockExtendStats.batches).toBeLessThanOrEqual(Math.ceil(MATH_BLOCK_EXTEND_LIMIT / 256) + 1) // 熔断有界
+    const incremental = [...state.field(mathBlocksField)]
+    const full = [...EditorState.create({ doc: state.doc, extensions: [mathBlocksField] }).field(mathBlocksField)]
+    expect(incremental).toHaveLength(0) // 熔断后同样降级
+    expect(incremental).toEqual(full)
   })
 
   it('闭合在延伸上限内的长块照常配对：块中段击键经增量续扫重建（C3）', () => {

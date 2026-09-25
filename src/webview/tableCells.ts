@@ -284,20 +284,25 @@ export function needsPipeEscapeAt(lineText: string, pos: number): boolean {
 }
 
 /**
- * 写回内容转义：把文本中的裸 |（行内代码 span 外、未被 \ 转义）转义为 \|。
+ * 写回内容持久化形式（单一事实源，键入/粘贴/跨格替换共用）：换行写为
+ * `<br>`（一格一源行），文本中的裸 |（行内代码 span 外、未被 \ 转义）
+ * 转义为 \|——span 内与已转义的管道保持原样，与键入路径
+ * tablePipeKeyHandler 的逐位置判定同口径。
  * 单元格内容经此函数写回后，保存回读与再渲染保持单格语义。
  */
 export function escapeCellText(text: string): string {
-  if (!text.includes('|')) {
-    return text
+  const bridged = text.replace(/\r?\n/g, '<br>')
+  if (!bridged.includes('|')) {
+    return bridged
   }
-  const inSpan = scanCodeSpans(text)
+  const text$ = bridged
+  const inSpan = scanCodeSpans(text$)
   let out = ''
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === '|' && !inSpan[i] && !isEscapedAt(text, i)) {
+  for (let i = 0; i < text$.length; i++) {
+    if (text$[i] === '|' && !inSpan[i] && !isEscapedAt(text$, i)) {
       out += '\\|'
     } else {
-      out += text[i]
+      out += text$[i]
     }
   }
   return out

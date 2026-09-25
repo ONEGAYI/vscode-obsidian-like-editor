@@ -44,6 +44,10 @@ export const MATH_BLOCK_EXTEND_LIMIT = 4096
 /** 延伸批大小（行）：每批 concat 后增量续扫新行段 */
 const MATH_BLOCK_EXTEND_BATCH = 256
 
+/** 最近一次块表重建执行的延伸批次数（测试观测面：钉住熔断真实发生且
+ *  批次有界——块表空结果无法区分「熔断停止」与「从未延伸」） */
+export const mathBlockExtendStats = { batches: 0 }
+
 const mathSourceDeco = Decoration.mark({ class: MATH_CLASS_NAMES.mathSource })
 
 // ---- widget 与装饰实例缓存 ----
@@ -178,11 +182,13 @@ function rebuildBlocks(
   let openFrom = scanOpenIncrement(lines, 0, null)
   let scanned = lines.length
   let extended = 0
+  mathBlockExtendStats.batches = 0
   while (openFrom !== null && lastLine < doc.lines && extended < MATH_BLOCK_EXTEND_LIMIT) {
     const nextLast = Math.min(lastLine + MATH_BLOCK_EXTEND_BATCH, doc.lines)
     lines = lines.concat(collectLines(lastLine + 1, nextLast))
     lastLine = nextLast
     extended += MATH_BLOCK_EXTEND_BATCH
+    mathBlockExtendStats.batches += 1
     openFrom = scanOpenIncrement(lines, scanned, openFrom)
     scanned = lines.length
   }

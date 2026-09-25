@@ -955,6 +955,19 @@ describe('单元格编辑权威链路', () => {
     view.destroy()
   })
 
+  it('跨格选区粘贴含行内代码管道的文本：span 内不转义，与键入口径一致（评审 N-1 统一）', () => {
+    const doc = '| 左 | 右 |\n| --- | --- |\n| a | b |'
+    const from = doc.indexOf('a')
+    const to = doc.indexOf('b') + 1
+    const view = makeEditView(doc, from)
+    view.dispatch({ selection: EditorSelection.single(from, to), userEvent: 'select' })
+    view.dispatch({ changes: { from, to, insert: '`x|y`' }, userEvent: 'input.paste' })
+    // span 内管道保留（GFM 渲染为代码内容），列数与网格不变
+    expect(view.state.doc.line(3).text).toBe('| `x|y` |  |')
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
+    view.destroy()
+  })
+
   it('跨格选区粘贴多行文本：换行持久化为 <br>，表格源行不拆散（B-3 / A7 缺口）', () => {
     const doc = '前文\n\n| 左 | 右 |\n| --- | --- |\n| a | b |\n\n后文'
     const from = doc.indexOf('a')
