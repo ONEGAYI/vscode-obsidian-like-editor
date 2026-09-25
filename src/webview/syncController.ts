@@ -786,6 +786,14 @@ export class WebviewSyncController {
         }
         break
       }
+      case 'table.test.domType': {
+        if (this.view && this.viewMode === 'live') {
+          // 测试用浏览器内容可编辑输入路径；源码事务注入无法观测原生 DOM caret。
+          if (document.activeElement !== this.view.contentDOM) this.view.focus()
+          document.execCommand('insertText', false, message.text)
+        }
+        break
+      }
       case 'table.test.select': {
         const view = this.view
         if (view && this.viewMode === 'live') queueMicrotask(() => {
@@ -1066,6 +1074,7 @@ export class WebviewSyncController {
       viewMode: this.viewMode,
       selectionOffset: this.view?.state.selection.main.from ?? 0,
       selectionHead: this.view?.state.selection.main.head ?? 0,
+      selectionAssoc: this.view?.state.selection.main.assoc ?? 0,
       readingBlockCount: rStats?.mountedBlocks ?? 0,
       readingAnchorStart,
       // #7 按需挂载观测：块模型总量/挂载量/DOM 计数/解析次数/虚拟化状态
@@ -2430,11 +2439,22 @@ export class WebviewSyncController {
       // jsdom 无布局和 elementFromPoint；真宿主才能证明实际可见。
     }
     let caretGridColumn: number | null = null
+    let caretDomColumn: number | null = null
+    let caretNativeRectHeight: number | null = null
     try {
       const selection = window.getSelection()
       if (selection?.isCollapsed && selection.rangeCount > 0 &&
           selection.focusNode && view.contentDOM.contains(selection.focusNode)) {
         const rect = selection.getRangeAt(0).getBoundingClientRect()
+        caretNativeRectHeight = rect.height
+        const focusElement = selection.focusNode instanceof Element
+          ? selection.focusNode : selection.focusNode.parentElement
+        const domCell = focusElement?.closest<HTMLElement>(
+          '.vsidian-table-grid-row > .vsidian-table-grid-cell')
+        if (domCell?.parentElement) {
+          caretDomColumn = [...domCell.parentElement.querySelectorAll(
+            ':scope > .vsidian-table-grid-cell')].indexOf(domCell)
+        }
         // 零宽格的 DOM Selection 锚在 .cm-content 上，浏览器给出 0×0 Range；
         // CM6 仍能按光标关联侧返回实际排版坐标。
         const point = rect.height > 0 ? rect : view.coordsAtPos(
@@ -2498,6 +2518,8 @@ export class WebviewSyncController {
         caretGridColumn,
         delimiterDisplay: delimiterRow ? getComputedStyle(delimiterRow).display : null,
         headerCellBackgrounds,
+        caretDomColumn,
+        caretNativeRectHeight,
         gridDisplay: gridRow ? getComputedStyle(gridRow).display : null,
         cellBorderWidth: cellStyle?.borderLeftWidth ?? null,
         rowOutlineColor: rowStyle?.outlineColor ?? null,

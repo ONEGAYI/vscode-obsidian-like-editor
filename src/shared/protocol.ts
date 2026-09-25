@@ -103,6 +103,7 @@ export type HostToWebview =
   | { kind: 'table.test.cellClick'; rowIndex: number; columnIndex: number; point?: 'edge' | 'middle' | 'right-edge' }
   | { kind: 'table.test.crossSelect'; anchor: number; head: number }
   | { kind: 'table.test.type'; text: string }
+  | { kind: 'table.test.domType'; text: string }
   /** 测试钩子（#43）：点击真实行/列抓手，验证选中态实际绘制。 */
   | { kind: 'table.test.select'; axis: 'row' | 'column'; index: number }
   /** 测试钩子（#43）：真实 webview DOM 的点阵抓手拖动事件。 */
@@ -176,6 +177,7 @@ export type WebviewToHost =
       /** live 光标主位置（UTF-16 offset；#6 锚点恢复观测） */
       selectionOffset?: number
       selectionHead?: number
+      selectionAssoc?: number
       /** 阅读容器内块元素数（#6；#7 起为挂载块数，屏外块不创建） */
       readingBlockCount?: number
       /** 当前阅读锚点块的源 start（源码位置锚点，非滚动百分比） */
@@ -419,6 +421,8 @@ export interface PaintProbe {
     caretGridColumn?: number | null
     delimiterDisplay?: string | null
     headerCellBackgrounds?: string[]
+    caretDomColumn?: number | null
+    caretNativeRectHeight?: number | null
     gridDisplay: string | null
     cellBorderWidth: string | null
     rowOutlineColor: string | null
@@ -609,6 +613,8 @@ function isPaintProbe(v: unknown): v is PaintProbe {
       (v.table.delimiterDisplay === undefined || isNullOrString(v.table.delimiterDisplay)) &&
       (v.table.headerCellBackgrounds === undefined || (Array.isArray(v.table.headerCellBackgrounds) &&
         v.table.headerCellBackgrounds.every(isString))) &&
+      (v.table.caretDomColumn === undefined || v.table.caretDomColumn === null || isNonNegativeInt(v.table.caretDomColumn)) &&
+      (v.table.caretNativeRectHeight === undefined || v.table.caretNativeRectHeight === null || isNonNegativeNumber(v.table.caretNativeRectHeight)) &&
       isNullOrString(v.table.cellBorderWidth) &&
       isNullOrString(v.table.rowOutlineColor) &&
       isNullOrString(v.table.rowOutlineWidth) &&
@@ -843,6 +849,8 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.viewMode === undefined || v.viewMode === 'live' || v.viewMode === 'reading') &&
         (v.selectionOffset === undefined || isNonNegativeInt(v.selectionOffset)) &&
         (v.selectionHead === undefined || isNonNegativeInt(v.selectionHead)) &&
+        (v.selectionAssoc === undefined || (typeof v.selectionAssoc === 'number' &&
+          Number.isInteger(v.selectionAssoc) && v.selectionAssoc >= -1 && v.selectionAssoc <= 1)) &&
         (v.readingBlockCount === undefined || isNonNegativeInt(v.readingBlockCount)) &&
         (v.readingAnchorStart === undefined || isNonNegativeInt(v.readingAnchorStart)) &&
         (v.readingTotalBlocks === undefined || isNonNegativeInt(v.readingTotalBlocks)) &&
@@ -1030,6 +1038,7 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
     case 'table.test.crossSelect':
       return isNonNegativeInt(v.anchor) && isNonNegativeInt(v.head)
     case 'table.test.type':
+    case 'table.test.domType':
       return isString(v.text)
     case 'table.test.select':
       return (v.axis === 'row' || v.axis === 'column') && isNonNegativeInt(v.index)

@@ -17,7 +17,7 @@
 // - #43 悬停控件由 tableControls.ts 只按可见 DOM 行构建；拖排行的纯规划
 //   在 tableStructure.ts，松手时仍经本模块单笔 CM6 事务写回
 import { EditorSelection, EditorState, StateEffect, StateField, Transaction } from '@codemirror/state'
-import { EditorView, ViewPlugin, keymap } from '@codemirror/view'
+import { EditorView, ViewPlugin, keymap, type ViewUpdate } from '@codemirror/view'
 import type { Command } from '@codemirror/view'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import type { TableEditOp } from '../shared/protocol'
@@ -353,6 +353,73 @@ const protectGridCellContent = EditorState.transactionFilter.of((tr) => {
   }
 })
 
+/** 浏览器输入默认生成 assoc=0 的光标。格尾紧邻隐藏管道时，这会把原生
+ * caret 锚在网格行边界，视觉上落到下一列；向当前格关联以保持可继续退格。 */
+const keepGridInputCaretInsideCell = EditorState.transactionFilter.of((tr) => {
+  if (!tr.docChanged || !tr.isUserEvent('input') || tr.newSelection.ranges.length !== 1 ||
+      !tr.newSelection.main.empty) return tr
+  const cell = editableGridCellAt(tr.startState, tr.startState.selection.main.anchor)
+  if (!cell) return tr
+  const head = tr.newSelection.main.head
+  const line = tr.newDoc.lineAt(head)
+  if (line.number !== cell.line.number) return tr
+  const cells = tableRowCellsForColumns(line.text, line.from, cell.cells.length)
+  const column = cell.cells.findIndex((candidate) => candidate.from === cell.from)
+  const target = cells?.[column]
+  if (!target || head < target.from || head > target.to ||
+      tr.newSelection.main.assoc === -1) return tr
+  return [tr, {
+    selection: EditorSelection.create([EditorSelection.cursor(head, -1)]),
+    sequential: true,
+  }]
+})
+
+/** 原生 DOM 输入会在 CM6 事务后再次同步浏览器选区，并把格尾 assoc
+ * 复位为 0。待本轮 DOM 更新结束后重新关联当前格，避免原生 caret 跑到右列。 */
+const stabilizeGridCaretAfterInput = ViewPlugin.fromClass(class {
+  update(update: ViewUpdate): void {
+    if (!update.docChanged || update.view.compositionStarted) return
+    const view = update.view
+    queueMicrotask(() => {
+      if (view.compositionStarted) return
+      const selection = view.state.selection
+      if (selection.ranges.length !== 1 || !selection.main.empty) return
+      const head = selection.main.head
+      const cell = editableGridCellAt(view.state, head)
+      if (!cell || head !== cell.contentTo) return
+      if (selection.main.assoc !== -1) {
+        view.dispatch({ selection: EditorSelection.create([EditorSelection.cursor(head, -1)]) })
+      }
+      const column = cell.cells.findIndex((candidate) => candidate.from === cell.from)
+      const row = [...view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')]
+        .find((candidate) => view.posAtDOM(candidate, 0) === cell.line.from)
+      const target = row?.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')[column]
+      if (!target || document.activeElement !== view.contentDOM) return
+      const nativeSelection = window.getSelection()
+      const nativeNode = nativeSelection?.focusNode
+      const nativeRect = nativeSelection?.rangeCount
+        ? nativeSelection.getRangeAt(0).getBoundingClientRect() : null
+      if (nativeNode && target.contains(nativeNode) && (nativeRect?.height ?? 0) > 0) return
+      const mapped = view.domAtPos(head, -1)
+      let textNode = mapped.node.nodeType === Node.TEXT_NODE && target.contains(mapped.node)
+        ? mapped.node as globalThis.Text : null
+      let offset = mapped.offset
+      if (!textNode) {
+        const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT)
+        while (walker.nextNode()) {
+          const candidate = walker.currentNode as globalThis.Text
+          if (candidate.data.length > 0) textNode = candidate
+        }
+        offset = textNode?.data.length ?? 0
+      }
+      if (textNode) {
+        const at = Math.max(0, Math.min(offset, textNode.data.length))
+        nativeSelection?.setBaseAndExtent(textNode, at, textNode, at)
+      }
+    })
+  }
+})
+
 const selectGridCell: Command = (view) => {
   if (view.compositionStarted || view.state.selection.ranges.length !== 1) return false
   const cell = editableGridCellAt(view.state, view.state.selection.main.anchor)
@@ -548,6 +615,8 @@ export const tableEditing = [
   normalizeBlankRowInput,
   protectGridPointerSelection,
   protectGridCellContent,
+  keepGridInputCaretInsideCell,
+  stabilizeGridCaretAfterInput,
   keymap.of([{ key: 'Mod-a', run: selectGridCell }]),
   keymap.of([{ key: '|', run: tablePipeKeyHandler }]),
   keymap.of([{ key: 'Tab', run: tableTabForward, shift: tableTabBackward }]),

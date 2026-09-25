@@ -132,8 +132,10 @@ describe('live 表格装饰', () => {
     deleteCharBackward(view)
     expect(view.state.doc.line(1).text).toBe('| 带 || 送 |')
     const at = view.state.selection.main.head
-    view.dispatch({ changes: { from: at, insert: '是' }, userEvent: 'input.type' })
+    view.dispatch({ changes: { from: at, insert: '是' },
+      selection: { anchor: at + 1 }, userEvent: 'input.type' })
     expect(view.state.doc.line(1).text).toBe('| 带 |是| 送 |')
+    expect(view.state.selection.main.assoc).toBe(-1)
     const rendered = view.state.field(liveDecorationsField).decos
     const rebuilt = buildLivePreviewDecorations(view.state.doc, view.state.selection)
     expect(RangeSet.eq([rendered], [rebuilt])).toBe(true)
@@ -141,6 +143,18 @@ describe('live 表格装饰', () => {
       .querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')
     expect(cells).toHaveLength(3)
     expect(cells[1]!.textContent).toContain('是')
+    for (let i = 0; i < 8; i++) {
+      const at = view.state.selection.main.head
+      view.dispatch({ changes: { from: at, insert: 's' },
+        selection: { anchor: at + 1 }, userEvent: 'input.type' })
+      const current = view.state.doc.line(1)
+      const columns = splitTableRowCells(current.text, current.from)
+      expect(view.state.selection.main.head).toBeLessThanOrEqual(columns[1]!.contentTo)
+      expect(current.text.slice(columns[2]!.contentFrom - current.from,
+        columns[2]!.contentTo - current.from)).toBe('送')
+    }
+    expect(view.state.doc.line(1).text).toBe('| 带 |是ssssssss| 送 |')
+    expect(view.state.selection.main.assoc).toBe(-1)
     view.destroy()
   })
 
