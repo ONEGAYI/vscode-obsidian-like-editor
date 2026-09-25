@@ -4958,36 +4958,62 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await waitViewState('code-card.md', (v) =>
       v.paint?.code?.foldedCount === 0 && v.paint.code.cardLineCount === 15)
     assert(await readDisk('code-card.md') === diskBefore, '折叠交互不得改写源文')
-    // 设置总开关：关闭 → 卡片形态消失（#83 起高亮独立：code 节由 token 驱动
+
+    // ---- 设置开关段（#79–#83）。1.86.2 globalState 存在跨键迟到回翻
+    // （settingsService.apply 注释记载）：紧邻的多次写入可把先前键的 overlay
+    // 盖回旧值——每步写入后对**全量期望快照**做读回校验，不一致重写（≤3 次）
+    const desired: Record<string, boolean> = {
+      'codeblock.card': true,
+      'codeblock.lineNumbers': true,
+      'codeblock.copyButton': true,
+      'codeblock.highlight': true,
+    }
+    const setCardSettings = async (patch: Record<string, boolean>): Promise<void> => {
+      Object.assign(desired, patch)
+      for (let attempt = 0; ; attempt++) {
+        const applied = await vscode.commands.executeCommand(CMD.setSettings, patch) as { ok: boolean }
+        assert(applied.ok === true, `设置保存应成功：${JSON.stringify(patch)}`)
+        try {
+          await waitSettings(desired)
+          return
+        } catch (error) {
+          if (attempt >= 3) {
+            throw error
+          }
+          // 迟到回翻：全量读回不一致 → 重写补丁
+        }
+      }
+    }
+    // 总开关：关闭 → 卡片形态消失（#83 起高亮独立：code 节由 token 驱动
     // 仍存在，头部与行类为 0）；重开 → 恢复（Compartment 热重配）
-    await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.card': false })
+    await setCardSettings({ 'codeblock.card': false })
     await waitViewState('code-card.md', (v) =>
       v.paint?.code !== undefined && v.paint.code.headerCount === 0 && v.paint.code.cardLineCount === 0)
     assert(await readDisk('code-card.md') === diskBefore, '设置切换不得改写源文')
-    await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.card': true })
+    await setCardSettings({ 'codeblock.card': true })
     await waitViewState('code-card.md', (v) => v.paint?.code?.headerCount === 4)
     // #80 行号子开关：关闭 → 行号消失、卡片保留；重开恢复
-    await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.lineNumbers': false })
+    await setCardSettings({ 'codeblock.lineNumbers': false })
     await waitViewState('code-card.md', (v) =>
       v.paint?.code?.headerCount === 4 && (v.paint.code.lineNumberTexts?.length ?? 0) === 0)
-    await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.lineNumbers': true })
+    await setCardSettings({ 'codeblock.lineNumbers': true })
     await waitViewState('code-card.md', (v) =>
       v.paint?.code?.headerCount === 4 && (v.paint.code.lineNumberTexts?.length ?? 0) > 0)
     // #81 复制子开关：关闭 → 按钮消失、卡片保留；重开恢复
-    await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.copyButton': false })
+    await setCardSettings({ 'codeblock.copyButton': false })
     await waitViewState('code-card.md', (v) =>
       v.paint?.code?.headerCount === 4 && (v.paint.code.copyCount ?? 0) === 0)
-    await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.copyButton': true })
+    await setCardSettings({ 'codeblock.copyButton': true })
     await waitViewState('code-card.md', (v) =>
       v.paint?.code?.headerCount === 4 && (v.paint.code.copyCount ?? 0) === 4)
     // #83 高亮独立于卡片：关卡片仅高亮 → 无头部有 token；重开卡片关高亮 → 有头部无 token
-    await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.card': false })
+    await setCardSettings({ 'codeblock.card': false })
     await waitViewState('code-card.md', (v) =>
       v.paint?.code?.headerCount === 0 && (v.paint.code.tokenCount ?? 0) > 0)
-    await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.card': true, 'codeblock.highlight': false })
+    await setCardSettings({ 'codeblock.card': true, 'codeblock.highlight': false })
     await waitViewState('code-card.md', (v) =>
       v.paint?.code?.headerCount === 4 && (v.paint.code.tokenCount ?? 0) === 0)
-    await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.highlight': true })
+    await setCardSettings({ 'codeblock.highlight': true })
     await waitViewState('code-card.md', (v) =>
       v.paint?.code?.headerCount === 4 && (v.paint.code.tokenCount ?? 0) > 0)
   }],
