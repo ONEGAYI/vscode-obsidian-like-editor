@@ -39,6 +39,9 @@ vsidian/
 ├── .agents/          # agent 技能与本地配置
 │   └── skills/ # 已部署 agent 技能
 │       └── file-tree/ # file-tree 技能部署实例
+├── .github/          # GitHub 平台配置
+│   └── workflows/ # Actions 工作流目录
+│       └── ci.yml # GitHub CI 工作流
 ├── .gitignore        # Git 忽略规则
 ├── .scratch/         # MVP 开票草稿，临时目录
 ├── .vscode/          # VSCode 工作区配置

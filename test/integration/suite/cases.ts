@@ -764,17 +764,27 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const modeText = (await vscode.workspace.openTextDocument(wsUri('mode.md'))).getText()
 
     // 并存一个原生 .md 标签并使其活动（syntax 面板变非活动）：
-    // 非活动面板保留自身状态可查询
+    // 非活动面板保留自身状态可查询。retainContextWhenHidden 关闭，tab
+    // 不可见期间 webview 可能被卸载（view.state.request 无人应答），
+    // 故先在面板可见时让宿主模式缓存就位，变非活动后以宿主缓存为
+    // 观测面断言保留（CI 慢环境的 Linux 宿主曾因该竞速必超时）
+    await waitViewState('syntax.md', (v) => v.viewMode === 'live')
     const modeDoc = await vscode.workspace.openTextDocument(wsUri('mode.md'))
     await vscode.window.showTextDocument(modeDoc)
     await waitActiveTextEditor('mode.md')
-    const keptLive = await waitViewState('syntax.md', (v) => v.viewMode === 'live')
-    assert(keptLive.viewMode === 'live', '非活动的 syntax 面板应保留自身状态')
+    const keptLive = (await vscode.commands.executeCommand(
+      CMD.viewStateCache, syntaxUri,
+    )) as { found: boolean; viewMode?: string }
+    assert(keptLive.found && keptLive.viewMode === 'live', '非活动的 syntax 面板应保留自身状态')
 
     // 重显 syntax 面板使其活动（openWith 对已开面板是重显，不新建 tab），
-    // toReading 只作用于 syntax；原生 mode 标签不受影响
+    // toReading 只作用于 syntax；原生 mode 标签不受影响。不可见期间面板
+    // 可能经卸载重载：先以 0 轮探针（纯往返，不动文档）等待 webview 恢复
+    // 响应再下发模式命令，避免命令发给重载中的 webview 而丢失
     await vscode.commands.executeCommand('vscode.openWith', wsUri('syntax.md'), VIEW_TYPE)
     await waitActiveCustomTab('syntax.md')
+    await vscode.commands.executeCommand(
+      CMD.perfProbe, syntaxUri, { typingRounds: 0, scrollRounds: 0 })
     await vscode.commands.executeCommand('onegayi.vsidian.mode.toReading', wsUri('syntax.md'))
     await waitViewState('syntax.md', (v) => v.viewMode === 'reading')
     const backToMode = await vscode.window.showTextDocument(modeDoc)
@@ -2752,9 +2762,11 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(state.appliedEdits === 0, `歧义/缺失链路不得产生 applyEdit，实际 ${state.appliedEdits}`)
     assert(state.version === versionBefore, `版本不得变化（${versionBefore} → ${state.version}）`)
 
-    // 大小写语义随宿主平台：Windows 本地（NTFS 语义）大小写不敏感命中
-    //（面板此前未退场——以上拦截意图不打开编辑器）
-    await injectWikilink(uri, process.platform === 'win32' ? 'casenote' : 'CaseNote')
+    // 大小写语义随宿主平台：两平台注入同名小写 'casenote'——Windows 本地
+    //（NTFS 语义）不敏感命中 CaseNote.md；POSIX 宿主严格匹配为 not-found
+    //（注入端不得按平台翻转：精确名 'CaseNote' 在严格语义下必然命中打开，
+    // 与下方 not-found 断言矛盾，Linux 宿主上必超时）
+    await injectWikilink(uri, 'casenote')
     if (process.platform === 'win32') {
       await poll('大小写不敏感目标被打开', () =>
         vscode.window.activeTextEditor?.document.uri.toString() === wsUri('CaseNote.md').toString()

@@ -16,11 +16,16 @@ try {
   writeFixtures(wsDir, { generatePerfSample, generateReadingSample })
 
   console.log(`[runTest] fixture 工作区：${wsDir}`)
+  const launchArgs = [wsDir, '--disable-extensions']
+  // CI 的 xvfb 虚拟显示无 GPU，Electron GPU 进程反复崩溃会拖垮 webview 面板
+  if (process.env.CI) {
+    launchArgs.push('--disable-gpu')
+  }
   await runTests({
     version: '1.86.2',
     extensionDevelopmentPath: root,
     extensionTestsPath: path.join(root, 'out', 'test', 'integration', 'suite', 'index.js'),
-    launchArgs: [wsDir, '--disable-extensions'],
+    launchArgs,
     extensionTestsEnv: {
       WORKSPACE_DIR: wsDir,
       LARGE_DOC_LINES: String(LARGE_DOC_LINES),

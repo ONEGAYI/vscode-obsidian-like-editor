@@ -13,6 +13,15 @@ import { describe, it, expect } from 'vitest'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
 import type { WebviewToHost } from '../../src/shared/protocol'
 
+// jsdom 无布局：为 CM6 的视口测量（measureTextSize → Range.getClientRects）
+// 提供零值 polyfill，真宿主 Chromium 有真实实现
+if (typeof Range !== 'undefined' && Range.prototype.getClientRects === undefined) {
+  ;(Range.prototype as unknown as { getClientRects(): DOMRectList }).getClientRects =
+    () => [] as unknown as DOMRectList
+  ;(Range.prototype as unknown as { getBoundingClientRect(): DOMRect }).getBoundingClientRect =
+    () => new DOMRect(0, 0, 0, 0)
+}
+
 const DOC_URI = 'file:///d%3A/notes/c.md'
 
 function makeBridge() {
