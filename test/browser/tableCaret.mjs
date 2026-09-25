@@ -3,13 +3,27 @@
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { readFile } from 'node:fs/promises'
 import { build } from 'esbuild'
 import { chromium } from 'playwright'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const bundle = path.join(root, 'out/test/browser/tableCaret.js')
+// #59 公式依赖：katex.min.css 经 import 进入 bundle，需字体 loader（与
+// esbuild.mjs 的 webviewBase 同口径；裁剪插件去掉 woff/ttf 回退引用）
+const katexFontStrip = {
+  name: 'katex-font-fallback-strip',
+  setup(b) {
+    b.onLoad({ filter: /katex\.min\.css$/ }, async (args) => ({
+      contents: (await readFile(args.path, 'utf8')).replace(
+        /,\s*url\([^)]+\.(?:woff|ttf)\)\s*format\((["']?)(?:woff|truetype)\1\)/g, ''),
+      loader: 'css',
+    }))
+  },
+}
 await build({ entryPoints: [path.join(root, 'test/browser/tableCaretFixture.ts')],
-  bundle: true, outfile: bundle, format: 'iife' })
+  bundle: true, outfile: bundle, format: 'iife',
+  loader: { '.woff2': 'file' }, assetNames: 'assets/[name]', plugins: [katexFontStrip] })
 const browser = await chromium.launch({ headless: true,
   channel: process.env.VSIDIAN_TEST_BROWSER_CHANNEL || undefined })
 let passed = 0
@@ -267,6 +281,162 @@ try {
       console.error(`[原生输入][FAIL] ${scenario}: ${error.message}`)
     } finally { await page.close() }
   }
+  // ---- #59 公式输入回归：进入/编辑/离开、IME、粘贴、删除、块级与普通美元 ----
+  const mathFailures = []
+  for (const scenario of ['render-toggle', 'inline-edit', 'inline-ime', 'inline-paste',
+    'block-edit', 'dollar-plain', 'undo-redo-text', 'multi-math']) {
+    const page = await browser.newPage()
+    const errors = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    try {
+      await page.setContent('<div id="app"></div>')
+      await page.addStyleTag({ path: bundle.replace(/\.js$/, '.css') })
+      await page.addScriptTag({ path: bundle })
+      const source = '价格 $x^2$ 元\n\n$$\nE=mc^2\n$$\n\n花费 $5，合计 $10\n\n$a$ 与 $b$'
+      await page.evaluate((text) => window.initTable(text), source)
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+      const mathState = () => page.evaluate(() => ({
+        rendered: document.querySelectorAll('.cm-content .vsidian-math').length,
+        renderedKatex: document.querySelectorAll('.cm-content .vsidian-math .katex').length,
+        renderedBlock: document.querySelectorAll('.cm-content .vsidian-math-block').length,
+        error: document.querySelectorAll('.cm-content .vsidian-math-error').length,
+        source: document.querySelectorAll('.cm-content .vsidian-math-source').length,
+        text: window.readEditor().text,
+        head: window.readEditor().head,
+      }))
+      const locate = (offset) => page.evaluate(
+        o => window.controller.handleHostMessage({ kind: 'view.locate', offset: o }), offset)
+      // view.locate 只移动光标不给 contentDOM 焦点：键盘场景先点击行首聚焦
+      //（x=5 落在行首文字前，不会定位进公式区间）
+      const focusEditor = () => page.locator('.cm-line').first()
+        .click({ position: { x: 5, y: 8 } }).then(() => locate(0))
+      const inlineAt = source.indexOf('$x^2$')
+      const blockAt = source.indexOf('$$')
+      if (scenario === 'render-toggle') {
+        // 初始（光标在文档首，不触及公式）：渲染态存在且真实绘制（有面积）
+        const initial = await mathState()
+        assert(initial.rendered >= 3, `渲染态公式数: ${JSON.stringify(initial)}`)
+        assert(initial.renderedKatex === initial.rendered, '渲染态必须含 KaTeX 结构')
+        assert.equal(initial.renderedBlock, 1, '块级公式单独计数')
+        assert.equal(initial.error, 0, '合法公式无降级')
+        const painted = await page.evaluate(() => {
+          const el = document.querySelector('.cm-content .vsidian-math')
+          const rect = el?.getBoundingClientRect()
+          return rect ? rect.width > 0 && rect.height > 0 : false
+        })
+        assert(painted, '渲染态公式必须真实绘制（rect 有面积）')
+        // 光标进入行内公式 → 源码显形；离开 → 恢复渲染
+        await locate(inlineAt + 2)
+        const editing = await mathState()
+        assert(editing.source >= 1 && editing.rendered === editing.renderedKatex &&
+          editing.rendered + editing.source === initial.rendered, `进入后: ${JSON.stringify(editing)}`)
+        await locate(0)
+        const left = await mathState()
+        assert.equal(left.source, 0, '离开公式后不得残留源码态')
+        assert.equal(left.rendered, initial.rendered, '离开后渲染态恢复')
+        assert.equal(left.text, source, '切换显隐不得改写源文')
+      } else if (scenario === 'inline-edit') {
+        await focusEditor()
+        await locate(inlineAt + 4) // 光标在 x^2 的 2 后
+        await page.keyboard.type('+1')
+        const typed = await mathState()
+        assert.equal(typed.text, source.replace('$x^2$', '$x^2+1$'), '行内编辑写回源文')
+        await locate(0)
+        const restored = await mathState()
+        assert(restored.rendered >= 1 && restored.error === 0, '编辑后合法公式仍渲染')
+        // 删除恢复
+        await locate(inlineAt + 6)
+        await page.keyboard.press('Backspace')
+        await page.keyboard.press('Backspace')
+        assert.equal((await mathState()).text, source, '退格删除恢复原文')
+      } else if (scenario === 'inline-ime') {
+        await focusEditor()
+        await locate(inlineAt + 4)
+        const cdp = await page.context().newCDPSession(page)
+        for (const text of ['go', 'gong']) {
+          await cdp.send('Input.imeSetComposition', { text, selectionStart: text.length, selectionEnd: text.length })
+          const composing = await mathState()
+          assert(composing.text.includes(`$x^2${text}$`), `IME 候选 ${text} 写入公式: ${composing.text}`)
+          assert(composing.source >= 1, '组合期间保持源码态可编辑')
+        }
+        await cdp.send('Input.insertText', { text: '功' })
+        const committed = await mathState()
+        assert(committed.text.includes('$x^2功$'), 'IME 确认写入公式')
+        assert.equal(committed.text, source.replace('$x^2$', '$x^2功$'), '未触碰文本不被规范化')
+        await locate(0)
+        const after = await mathState()
+        assert(after.rendered >= 1 && after.error === 0, 'IME 提交后公式恢复渲染（中文在数学模式静默渲染）')
+        // 退格删除中文输入恢复
+        await locate(inlineAt + 5)
+        await page.keyboard.press('Backspace')
+        assert.equal((await mathState()).text, source, '删除 IME 输入恢复原文')
+      } else if (scenario === 'inline-paste') {
+        await focusEditor()
+        await locate(inlineAt + 4)
+        await page.keyboard.insertText('^2_3')
+        const pasted = await mathState()
+        assert(pasted.text.includes('$x^2^2_3$'), '粘贴文本进入公式')
+        await locate(0)
+        const r = await mathState()
+        assert(r.rendered >= 1, '粘贴后其他公式仍渲染')
+        // 粘贴造成非法公式（^ 重复）时该公式降级但不丢内容
+        assert.equal((await mathState()).text, source.replace('$x^2$', '$x^2^2_3$'))
+      } else if (scenario === 'block-edit') {
+        await focusEditor()
+        const eAt = blockAt + source.slice(blockAt).indexOf('E')
+        await locate(eAt + 1) // 光标在 E 后
+        const editing = await mathState()
+        assert(editing.source >= 1, '光标进入块级公式显源码')
+        await page.keyboard.type('2')
+        const typed = await mathState()
+        assert.equal(typed.text, source.replace('E=mc^2', 'E2=mc^2'), '块内输入精确写回')
+        await page.keyboard.press('Backspace')
+        await locate(0)
+        const restored = await mathState()
+        assert.equal(restored.text, source, '块内删除恢复原文')
+        assert.equal(restored.renderedBlock, 1, '块级公式恢复渲染')
+      } else if (scenario === 'dollar-plain') {
+        // 普通美元与代码区不渲染、不影响公式
+        const s = await mathState()
+        const plainStart = source.indexOf('花费')
+        for (const at of [plainStart + 3, plainStart + 10]) {
+          await locate(at)
+          const st = await mathState()
+          assert.equal(st.source, 0, '普通美元区间不得显公式源码态')
+        }
+        await locate(0)
+        assert((await mathState()).rendered >= 3, '公式渲染不受普通美元干扰')
+        void s
+      } else if (scenario === 'undo-redo-text') {
+        await focusEditor()
+        // 撤销/重做的权威栈在宿主（本装配无宿主）：此处钉「编辑序列后原文可
+        // 由等量退格复原」——等价校验输入事务的可逆性不依赖宿主历史
+        await locate(inlineAt + 4)
+        await page.keyboard.type('abc')
+        for (let i = 0; i < 3; i++) await page.keyboard.press('Backspace')
+        assert.equal((await mathState()).text, source, '逐字退格完全复原输入')
+        await locate(0)
+        assert((await mathState()).rendered >= 3, '复原后渲染态完整')
+      } else if (scenario === 'multi-math') {
+        // 相邻公式互不吞并：两个行内公式中间的文本可编辑
+        const between = source.indexOf(' 与 ') + 1 // '与' 字符位
+        await focusEditor()
+        await locate(between)
+        await page.keyboard.type('Z')
+        const typed = await mathState()
+        assert.equal(typed.text, source.replace(' 与 ', ' Z与 '), '相邻公式间输入只改目标位置')
+        await page.keyboard.press('Backspace')
+        assert.equal((await mathState()).text, source, '相邻公式间编辑可复原')
+      }
+      assert.deepEqual(errors, [])
+      passed++
+      console.log(`[原生输入][PASS] math/${scenario}`)
+    } catch (error) {
+      mathFailures.push(error)
+      console.error(`[原生输入][FAIL] math/${scenario}: ${error.message}`)
+    } finally { await page.close() }
+  }
+  if (mathFailures.length) throw new AggregateError(mathFailures, '公式输入回归失败')
   if (navigationFailures.length) throw new AggregateError(navigationFailures, '表格方向键导航回归失败')
   console.log(`[原生输入] ${passed} 项通过`)
 } finally { await browser.close() }

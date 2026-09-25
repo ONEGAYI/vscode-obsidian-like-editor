@@ -80,6 +80,7 @@ vsidian/
 │   │   └── obsidian-selector-map.md # Obsidian 选择器映射表
 │   ├── perf/     # 性能实测数据与测量工具说明
 │   │   ├── 2026-09-live-syntax-decorations.md   # 语法树装饰与大围栏细分实测（#8）
+│   │   ├── 2026-09-math-rendering.md            # 公式渲染性能实测（#59）
 │   │   ├── 2026-09-mvp-performance-summary.md   # MVP 性能档位汇总
 │   │   ├── 2026-09-reading-viewport-mount.md    # 阅读按需挂载实测数据
 │   │   ├── 2026-09-table-cell-editing.md        # 表格单元格编辑性能实测（#12）
@@ -119,6 +120,7 @@ vsidian/
 │   │   └── wikilinkTarget.ts     # 宿主侧双链目标解析纯逻辑（#11）
 │   ├── shared/      # 两端共享纯逻辑
 │   │   ├── changeMapping.ts # 变更重定位纯函数
+│   │   ├── math.ts          # 公式形态学纯函数（#59）
 │   │   ├── newline.ts       # CRLF/LF 换行协调器
 │   │   ├── protocol.ts      # 消息协议单一事实源
 │   │   ├── settings.ts      # 设置定义与读写纯逻辑
@@ -130,6 +132,7 @@ vsidian/
 │       ├── liveDecorations.ts    # 语法树驱动 Live 装饰（#8）
 │       ├── liveLineNumbers.ts    # 表格段首行号与绘制探针
 │       ├── liveLinks.ts          # live 链接装饰与跳转（#10）
+│       ├── liveMath.ts           # 行内与块级公式 live 装饰（#59）
 │       ├── main.css              # webview 全局布局样式
 │       ├── main.ts               # webview 启动入口
 │       ├── markdownDoc.ts        # Markdown 文档工具与树查询
@@ -189,13 +192,17 @@ vsidian/
 │       ├── linkInteraction.test.ts         # 链接交互契约测试（#10）
 │       ├── linkTarget.test.ts              # 链接目标分类契约测试
 │       ├── liveDecorations.test.ts         # Live 装饰契约测试
+│       ├── liveMath.test.ts                # live 公式装饰契约测试（#59）
 │       ├── liveTable.test.ts               # live 表格装饰测试（#12）
 │       ├── markdownDoc.test.ts             # 文档工具契约测试
+│       ├── mathPaintCssContract.test.ts    # 公式绘制样式契约测试（#59）
+│       ├── mathScan.test.ts                # 公式形态学契约测试（#59）
 │       ├── newline.test.ts                 # 换行协调契约
 │       ├── perfProbe.test.ts               # 性能探针契约测试
 │       ├── protocol.test.ts                # 消息协议校验契约
 │       ├── readingBlocks.test.ts           # 阅读块切分契约测试
 │       ├── readingMarkdown.test.ts         # 渲染层契约测试
+│       ├── readingMath.test.ts             # 阅读公式渲染契约测试（#59）
 │       ├── readingTable.test.ts            # 阅读表格契约测试（#12）
 │       ├── readingView.test.ts             # 阅读视图 DOM 契约测试
 │       ├── readingViewport.test.ts         # 视口窗口纯函数契约测试

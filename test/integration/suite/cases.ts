@@ -306,6 +306,9 @@ interface ViewState {
     readingTableDecorationColor: string | null
     liveWikilinkDecorationColor: string | null
     readingWikilinkDecorationColor: string | null
+    /** #59 公式字体观测：katex.min.css 生效时含 KaTeX 字体族 */
+    liveMathFontFamily?: string | null
+    readingMathFontFamily?: string | null
   }
   /** #8 双视图语法一致性观测 */
   liveSyntax?: {
@@ -351,6 +354,9 @@ interface ViewState {
   /** #11 双链观测（live：widget+mark；reading：a.vsidian-wikilink） */
   liveWikilinkCount?: number
   readingWikilinkCount?: number
+  /** #59 公式计数（live 视口渲染数 / 阅读挂载块内数） */
+  liveMathCount?: number
+  readingMathCount?: number
   imageStates?: { loading: number; loaded: number; error: number }
   /** #14 查找会话观测（首次打开后回报；匹配集来自文本模型全量计算） */
   find?: {
@@ -410,6 +416,12 @@ interface ViewState {
       columnTopBorderWidth: string | null
       columnBottomBorderWidth: string | null
       columnBackgroundColor: string | null
+    }
+    /** #59 公式绘制：当前激活视图内首个公式的实际可见性与计数 */
+    math?: {
+      visible: boolean
+      display: string | null
+      count: number
     }
   }
 }
@@ -4161,5 +4173,98 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // 还原默认开启，避免影响后续用例（与 #34 既有用例同款跨用例状态清理）
     await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
     await waitViewState('linenumbers.md', (v) => v.lineGutter?.on === true)
+  }],
+
+  // ---- 工单 #59：公式渲染（KaTeX）实时预览/阅读/一致性 ----
+
+  ['live 公式渲染与绘制层：渲染数、KaTeX 字体与真实可见（#59）', async () => {
+    await openWithEditor('math.md')
+    await waitSessionReady('math.md')
+    const state = await waitViewState('math.md', (v) => (v.liveMathCount ?? -1) === 7)
+    assert(state.liveMathCount === 7, `live 公式渲染数应为 7（6 合法 + 1 降级），实际 ${state.liveMathCount}`)
+    // 绘制层断言（AGENTS 视觉层断言约定）：公式真的画出来（rect 有面积 +
+    // elementFromPoint 命中），且 KaTeX 样式管线存活（字体族命中）
+    assert(state.paint?.math?.visible === true,
+      `公式应真实绘制（paint.math.visible=${String(state.paint?.math?.visible)}，` +
+        `display=${String(state.paint?.math?.display)}）`)
+    assert(state.paint?.math?.display !== 'none', '公式外层不得 display:none')
+    assert(state.paint?.math?.count === 7, `绘制计数应为 7，实际 ${state.paint?.math?.count}`)
+    assert((state.cssProbe?.liveMathFontFamily ?? '').includes('KaTeX'),
+      `KaTeX 字体应生效（实际 ${state.cssProbe?.liveMathFontFamily}；若为 body 字体说明 CSS/字体管线失效）`)
+    // 普通美元不被误判（$5 与 $10 不产生渲染态）
+    assert(state.text.includes('$5 与 $10'), '源文普通美元应原样保留')
+  }],
+
+  ['live 光标进入公式显源码、离开恢复渲染且零写回（#59）', async () => {
+    await openWithEditor('math.md')
+    await waitSessionReady('math.md')
+    const uri = wsUri('math.md').toString()
+    const diskBefore = await readDisk('math.md')
+    const before = await waitViewState('math.md', (v) => (v.liveMathCount ?? -1) === 7)
+    // 光标移入首个行内公式（$E=mc^2$ 的区间内）→ 该公式退出渲染态
+    const inlineAt = before.text.indexOf('$E=mc^2$')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: inlineAt + 3,
+    })
+    const editing = await waitViewState('math.md', (v) => (v.liveMathCount ?? -1) === 6)
+    const editOffset = editing.selectionOffset ?? -1
+    assert(editOffset >= inlineAt && editOffset <= inlineAt + 7,
+      `光标应落在公式区间（实际 ${editOffset}）`)
+    // 离开 → 恢复渲染
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: 0,
+    })
+    await waitViewState('math.md', (v) => (v.liveMathCount ?? -1) === 7)
+    // 纯视图交互零写回：磁盘不变（显隐切换不产生编辑事务）
+    assert(await readDisk('math.md') === diskBefore, '公式显隐交互不得改写源文')
+  }],
+
+  ['阅读模式公式渲染：块级独立成块、KaTeX 字体与绘制层（#59）', async () => {
+    await openWithEditor('math.md')
+    await waitSessionReady('math.md')
+    const uri = wsUri('math.md').toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const reading = await waitViewState('math.md', (v) =>
+      v.viewMode === 'reading' && (v.readingMathCount ?? -1) === 7)
+    assert(reading.readingMathCount === 7, `阅读公式数应为 7（6 KaTeX + 1 降级），实际 ${reading.readingMathCount}`)
+    assert((reading.cssProbe?.readingMathFontFamily ?? '').includes('KaTeX'),
+      `阅读 KaTeX 字体应生效（实际 ${reading.cssProbe?.readingMathFontFamily}）`)
+    assert(reading.paint?.math?.visible === true, '阅读公式应真实绘制（rect + elementFromPoint）')
+    assert((reading.readingTotalBlocks ?? 0) > 0, '阅读切块应正常')
+  }],
+
+  ['公式跨模式切换一致性：两模式计数对齐、文本不变、无写回（#59）', async () => {
+    await openWithEditor('math.md')
+    await waitSessionReady('math.md')
+    const uri = wsUri('math.md').toString()
+    const diskBefore = await readDisk('math.md')
+    const live = await waitViewState('math.md', (v) => (v.liveMathCount ?? -1) === 7)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const reading = await waitViewState('math.md', (v) =>
+      v.viewMode === 'reading' && (v.readingMathCount ?? -1) === 7)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'live' })
+    const back = await waitViewState('math.md', (v) =>
+      v.viewMode === 'live' && (v.liveMathCount ?? -1) === 7)
+    assert(back.text === live.text, '模式切换不得改写文本')
+    assert(back.docLength === live.docLength, '模式切换不得改变文档长度')
+    assert(reading.text === live.text, '阅读渲染不写回')
+    assert(await readDisk('math.md') === diskBefore, '模式切换不得触发磁盘写回')
+  }],
+
+  ['外部更新后公式与文本一致：新增公式进入渲染（#59）', async () => {
+    await openWithEditor('math.md')
+    await waitSessionReady('math.md')
+    const doc = await vscode.workspace.openTextDocument(wsUri('math.md'))
+    const extEdit = new vscode.WorkspaceEdit()
+    extEdit.replace(wsUri('math.md'), new vscode.Range(0, 0, 0, 0), '新增公式 $z^3$ 与块\n\n')
+    assert(await vscode.workspace.applyEdit(extEdit), '外部修改应成功')
+    await poll('外部修改生效', () => (doc.getText().startsWith('新增公式 $z^3$') ? true : undefined))
+    // 面板同步外部增量：渲染数 +1（新增行内公式），原公式不变
+    const after = await waitViewState('math.md', (v) => (v.liveMathCount ?? -1) === 8)
+    assert(after.text.startsWith('新增公式 $z^3$'), '面板文本应含外部新增公式')
+    // 切阅读模式：外部增量同样渲染
+    await vscode.commands.executeCommand(CMD.postToPanel, wsUri('math.md').toString(), {
+      kind: 'view.mode.set', mode: 'reading' })
+    await waitViewState('math.md', (v) => v.viewMode === 'reading' && (v.readingMathCount ?? -1) === 8)
   }],
 ]

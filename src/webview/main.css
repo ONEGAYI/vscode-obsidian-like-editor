@@ -797,3 +797,53 @@ body {
   background-color: var(--vsidian-find-hit-block-background, rgba(255, 141, 55, 0.08));
   border-radius: 2px;
 }
+
+/* ---- #59 公式渲染（KaTeX）样式 ----
+   KaTeX 基础样式与字体经 esbuild 从 katex.min.css 打入本产物（main.css），
+   字体文件（仅 woff2）产物化到 out/webview/assets/。此处只做主题适配、
+   布局与降级态；类名入口见 docs/design/obsidian-selector-map.md 数学节。 */
+
+/* live 渲染态 widget（行内公式）：内联排版，颜色继承正文 */
+#app .cm-editor .cm-content .vsidian-math {
+  color: var(--vscode-editor-foreground);
+}
+
+/* live 块级公式（$$…$$ 折叠为单视觉行）：独立块 + 居中 + 横向滚动 */
+#app .cm-editor .cm-content .vsidian-math-block {
+  display: block;
+  text-align: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+}
+
+/* KaTeX display 层不折行（KaTeX 官方建议：溢出走容器横向滚动） */
+#app .vsidian-math-block .katex-display,
+#app .vsidian-view-reading .katex-block .katex-display {
+  margin: 0;
+}
+
+#app .vsidian-view-reading .katex-block {
+  margin: 0.75em 0;
+  text-align: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* live 编辑态（光标进入公式范围）：源码显形，等宽着色区分正文 */
+#app .cm-editor .cm-content .vsidian-math-source {
+  color: var(--vscode-textPreformat-foreground, var(--vscode-editor-foreground));
+  background-color: var(--vsidian-math-source-background, rgba(120, 120, 120, 0.12));
+  border-radius: 2px;
+}
+
+/* 降级态（语法/渲染失败）：原文可读可编辑，浅红底标记异常，
+   错误不外溢到邻近内容（独立行内盒，颜色仅作用于自身） */
+#app .cm-editor .cm-content .vsidian-math-error,
+#app .vsidian-view-reading .vsidian-math-error {
+  font-family: var(--vscode-editor-font-family, monospace);
+  color: var(--vscode-editorError-foreground, #f14c4c);
+  background-color: var(--vsidian-math-error-background, rgba(241, 76, 76, 0.10));
+  border-radius: 2px;
+  padding: 0 2px;
+}

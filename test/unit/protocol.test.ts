@@ -262,6 +262,70 @@ describe('isWebviewToHost', () => {
     expect(isWebviewToHost({ ...base, paint: { ...paint, table: { ...table, columnRightBorderWidth: 2 } } })).toBe(false)
   })
 
+  it('公式观测与绘制样本校验（#59）：计数/字体/paint.math 类型必须可信', () => {
+    const base = { kind: 'view.state', text: '$x$', docLength: 3, lineCount: 1, renderedLines: 1 }
+    // 合法：计数非负整数、字体串或 null、paint.math 形态正确
+    expect(
+      isWebviewToHost({
+        ...base,
+        liveMathCount: 1,
+        readingMathCount: 0,
+        cssProbe: {
+          liveHeadingDecorationColor: null, readingHeadingDecorationColor: null, readingVarProbe: null,
+          liveStrongDecorationColor: null, liveInlineCodeDecorationColor: null,
+          liveCodeLineDecorationColor: null, readingStrongDecorationColor: null,
+          liveTaskCheckboxDecorationColor: null, readingTaskCheckboxDecorationColor: null,
+          liveLinkDecorationColor: null, readingLinkDecorationColor: null,
+          readingImageDecorationColor: null, liveTablePipeDecorationColor: null,
+          readingTableDecorationColor: null, liveWikilinkDecorationColor: null,
+          readingWikilinkDecorationColor: null,
+          liveMathFontFamily: 'KaTeX_Main, Times New Roman, serif',
+          readingMathFontFamily: null,
+        },
+        paint: {
+          textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none',
+          darkTheme: false, caretColor: null,
+          math: { visible: true, display: 'inline', count: 1 },
+        },
+      }),
+    ).toBe(true)
+    // 非法：计数负数 / 非整数、paint.math 字段类型错误
+    expect(isWebviewToHost({ ...base, liveMathCount: -1 })).toBe(false)
+    expect(isWebviewToHost({ ...base, readingMathCount: 1.5 })).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        paint: {
+          textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none',
+          darkTheme: false, caretColor: null,
+          math: { visible: 'true', display: 'inline', count: 1 },
+        },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        paint: {
+          textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none',
+          darkTheme: false, caretColor: null,
+          math: { visible: true, display: 3, count: 1 },
+        },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        paint: {
+          textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none',
+          darkTheme: false, caretColor: null,
+          math: { visible: true, display: 'inline', count: -2 },
+        },
+      }),
+    ).toBe(false)
+    // 缺省合法（旧 webview 无公式字段）
+    expect(isWebviewToHost(base)).toBe(true)
+  })
+
   it('拒绝 null、非对象与数组', () => {
     expect(isWebviewToHost(null)).toBe(false)
     expect(isWebviewToHost(undefined)).toBe(false)

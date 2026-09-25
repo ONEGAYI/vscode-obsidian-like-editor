@@ -6,6 +6,9 @@ import { keymap } from '@codemirror/view'
 import { defaultKeymap } from '@codemirror/commands'
 import { WebviewSyncController } from './syncController'
 import './main.css'
+// #59 KaTeX 基础样式：esbuild 合并进 main.css，字体（仅 woff2）经 CSS url()
+// 产物化到 out/webview/assets/（CSP font-src 已放行 cspSource 域）
+import 'katex/dist/katex.min.css'
 
 declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void
