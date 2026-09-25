@@ -19,7 +19,9 @@
 // 上，供渲染与搜索/无障碍口径复用；text 保留原文（重命名等编辑场景）。
 //
 // 本期（#66 起）：条目可点击跳转与常驻高亮（交互装配在 syncController，
-// 经面板容器的事件委托——条目 DOM 重建不丢监听）；折叠与搜索不在范围。
+// 经面板容器的事件委托——条目 DOM 重建不丢监听）；#67 起折叠滑块（六档
+// 圆点串珠）与手动折叠箭头在此装配 DOM，折叠状态机纯函数见
+// outlineCollapse.ts（搜索不在本期范围）。
 import type { Text } from '@codemirror/state'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import type { OutlineSpanInfo, OutlineSpanKind } from '../shared/protocol'
@@ -67,6 +69,20 @@ export const OUTLINE_CLASS_NAMES = {
   } as const,
   /** #66 当前控制域条目的常驻高亮类（半透明横条的唯一差异来源） */
   located: 'vsidian-outline-located',
+  /** #67 折叠滑块行（侧栏顶栏与条目面板之间；显隐跟随 outline-active 类） */
+  slider: 'vsidian-outline-slider',
+  /** 滑块圆点按钮（六档：No-Expand、H1–H5；结绳串珠意象） */
+  sliderDot: 'vsidian-outline-slider-dot',
+  /** 当前档圆点（实心高亮）：两态差异唯一来源的类切换 */
+  sliderActive: 'vsidian-outline-slider-active',
+  /** #67 折叠箭头按钮（有子项条目专属；点击折叠/展开，点文字跳转） */
+  chevron: 'vsidian-outline-chevron',
+  /** 无子项条目的箭头占位（与 chevron 同宽，文字左缘对齐） */
+  chevronSpacer: 'vsidian-outline-chevron-spacer',
+  /** #67 折叠遮蔽的条目（display:none；类切换是唯一显隐开关） */
+  hidden: 'vsidian-outline-hidden',
+  /** #67 折叠中的父节点条目（箭头旋转的差异来源） */
+  collapsed: 'vsidian-outline-collapsed',
 } as const
 
 /** 大纲面板可访问名称（按钮 aria-label 与面板 aria-label 共用文案） */
@@ -448,8 +464,15 @@ const OUTLINE_SPAN_ELEMENTS: Record<OutlineSpanKind, { tag: string; cls: string 
  * 与标题数线性且仅在序列变化时发生；正文编辑不触发）。无标题时渲染
  * 空态占位（保持面板有可读内容与高度语义）。#65 起条目内容按标记结构
  * 构建（语义元素 + 稳定类名；双链/链接为纯文本，无 a 元素不可点）。
+ * #67 起 hasChildren 标记父节点条目：前置折叠箭头按钮（点击目标与文字
+ * 区分：箭头折叠/展开、文字跳转）；无子项条目渲染同宽占位保持文字对齐。
+ * hidden/collapsed/located 等状态类不在此施加（控制器随折叠状态机维护）。
  */
-export function renderOutlineItems(panel: HTMLElement, items: readonly OutlineItem[]): void {
+export function renderOutlineItems(
+  panel: HTMLElement,
+  items: readonly OutlineItem[],
+  hasChildren?: readonly boolean[],
+): void {
   if (items.length === 0) {
     const empty = document.createElement('div')
     empty.className = OUTLINE_CLASS_NAMES.empty
@@ -458,10 +481,25 @@ export function renderOutlineItems(panel: HTMLElement, items: readonly OutlineIt
     return
   }
   const nodes: HTMLElement[] = []
-  for (const item of items) {
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]!
     const el = document.createElement('div')
     el.className = `${OUTLINE_CLASS_NAMES.item} ${OUTLINE_CLASS_NAMES.level(item.level)}`
     el.dataset['vsidianLevel'] = String(item.level)
+    if (hasChildren?.[i]) {
+      const chevron = document.createElement('button')
+      chevron.type = 'button'
+      chevron.className = OUTLINE_CLASS_NAMES.chevron
+      chevron.setAttribute('aria-label', '折叠或展开')
+      chevron.setAttribute('aria-expanded', 'true')
+      chevron.appendChild(createOutlineChevronIcon())
+      el.appendChild(chevron)
+    } else {
+      const spacer = document.createElement('span')
+      spacer.className = OUTLINE_CLASS_NAMES.chevronSpacer
+      spacer.setAttribute('aria-hidden', 'true')
+      el.appendChild(spacer)
+    }
     appendOutlineContent(el, item)
     nodes.push(el)
   }
@@ -544,6 +582,92 @@ export function buildOutlineDom(): { toggle: HTMLButtonElement; panel: HTMLEleme
 }
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
+
+/** #67 折叠箭头图标（chevron-down 意象，展开态朝下；折叠态由条目的
+ *  collapsed 类旋转 -90° 朝右——线宽不写在 SVG 属性上，样式失效时由
+ *  CSS 契约与集成绘制断言暴露，与侧栏图标同口径） */
+function createOutlineChevronIcon(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg')
+  svg.setAttribute('viewBox', '0 0 16 16')
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('stroke', 'currentColor')
+  svg.setAttribute('stroke-linecap', 'round')
+  svg.setAttribute('stroke-linejoin', 'round')
+  svg.setAttribute('aria-hidden', 'true')
+  const path = document.createElementNS(SVG_NS, 'path')
+  path.setAttribute('d', 'M4 6 L8 10 L12 6')
+  svg.appendChild(path)
+  return svg
+}
+
+/** 滑块行装配结果（dots 与档位一一对应：下标即档位 0–5） */
+export interface OutlineSliderDom {
+  row: HTMLElement
+  dots: HTMLButtonElement[]
+}
+
+/**
+ * #67 折叠滑块行（结绳记事：六个圆点 + 横线串联）。可访问口径采用
+ * role=group + 六按钮组（每个圆点是独立按钮，Tab 逐个可达、Enter/空格
+ * 原生激活；当前档以 aria-pressed + active 类双重表达——类是视觉差异
+ * 唯一来源，契约测试钉住）。点击选档由按钮 click 天然承载；拖拽由
+ * 调用方在 row 上挂 pointer 事件（outlineSliderLevelAt 换算最近档）。
+ */
+export function buildOutlineSlider(
+  level: number,
+  labelOf: (level: number) => string,
+): OutlineSliderDom {
+  const row = document.createElement('div')
+  row.className = OUTLINE_CLASS_NAMES.slider
+  row.setAttribute('role', 'group')
+  row.setAttribute('aria-label', '大纲展开层级')
+  const dots: HTMLButtonElement[] = []
+  for (let n = 0; n <= 5; n++) {
+    const dot = document.createElement('button')
+    dot.type = 'button'
+    dot.className = OUTLINE_CLASS_NAMES.sliderDot
+    dot.dataset['vsidianLevel'] = String(n)
+    const label = labelOf(n)
+    dot.setAttribute('aria-label', label)
+    dot.setAttribute('title', label)
+    dots.push(dot)
+    row.appendChild(dot)
+  }
+  applyOutlineSliderState({ row, dots }, level)
+  return { row, dots }
+}
+
+/** 滑块档位落 DOM：active 类与 aria-pressed 是两态差异唯一来源（幂等） */
+export function applyOutlineSliderState(slider: OutlineSliderDom, level: number): void {
+  slider.dots.forEach((dot, n) => {
+    const active = n === level
+    dot.classList.toggle(OUTLINE_CLASS_NAMES.sliderActive, active)
+    dot.setAttribute('aria-pressed', String(active))
+  })
+}
+
+/** 拖拽换算：指针 X 坐标 → 最近圆点的档位（拖拽经过任意位置可选档；
+ *  圆点未布局（jsdom）时回退当前档） */
+export function outlineSliderLevelAt(
+  slider: OutlineSliderDom,
+  clientX: number,
+  fallback: number,
+): number {
+  let best = fallback
+  let bestDist = Number.POSITIVE_INFINITY
+  slider.dots.forEach((dot, n) => {
+    const rect = dot.getBoundingClientRect()
+    if (rect.width === 0 && rect.height === 0) {
+      return // 无布局环境（jsdom）：跳过，保持 fallback
+    }
+    const dist = Math.abs(rect.left + rect.width / 2 - clientX)
+    if (dist < bestDist) {
+      bestDist = dist
+      best = n
+    }
+  })
+  return best
+}
 
 /** 大纲按钮图标（#54：Obsidian outline / lucide list 意象）：三条横线 +
  *  左端短点。线宽不写在 SVG 属性上（样式失效时由集成绘制断言暴露的口径

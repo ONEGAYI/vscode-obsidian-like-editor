@@ -119,6 +119,12 @@ export type HostToWebview =
   /** 测试钩子（#66）：点击第 index 个真实大纲条目，驱动与用户点击同一
    *  委托处理器（纯视图跳转：live 落光标居中 / reading 滚动到块，零写回） */
   | { kind: 'outline.test.itemClick'; index: number }
+  /** 测试钩子（#67）：点击第 level 档（0–5）的真实滑块圆点，驱动与用户
+   *  点击同一处理器（档位整体替换展开集，纯视图状态零写回） */
+  | { kind: 'outline.test.expandClick'; level: number }
+  /** 测试钩子（#67）：点击第 index 个真实条目的折叠箭头，驱动与用户点击
+   *  同一委托处理器（单条折叠/展开，不触发跳转） */
+  | { kind: 'outline.test.chevronClick'; index: number }
   /** 测试钩子（#21）：在真实 webview 的 CM6 中输入，验证暂停态即时留存。 */
   | { kind: 'sync.test.edit'; offset: number; text: string; closeAfter?: boolean }
   /** 测试钩子：组合候选写入首行 DOM，经过 CM6 MutationObserver 的真实输入链。 */
@@ -642,7 +648,9 @@ export interface OutlineProbe {
     headingColor: string | null
   }
   /** #66 当前控制域条目索引（items 下标；null = 无标题、首标题之前或
-   *  无布局环境）。以视口顶部行向上最近标题为准（locateOutlineIndex） */
+   *  无布局环境）。以视口顶部行向上最近标题为准（locateOutlineIndex）。
+   *  #67 起条目可能被折叠遮蔽：本字段仍回报真实控制域索引，高亮实际
+   *  施加在可见代表上（被遮蔽时为第一个可见祖先） */
   locatedItemIndex: number | null
   /** located 条目的文字（locatedItemIndex 的冗余可读形态；null 同上） */
   locatedText: string | null
@@ -650,6 +658,21 @@ export interface OutlineProbe {
    *  自身且 computed background-color 非全透明（半透明横条真实绘制；
    *  条目在面板可视区外或 jsdom 无布局时为 false） */
   locatedPainted: boolean
+  /** #67 展开档位实值（0=No-Expand、1–5=展开到 H1–H5；经 bridge state
+   *  全局记忆，跨文档共享） */
+  expandLevel: number
+  /** #67 当前可见条目索引序列（折叠遮蔽后的用户实际可见集；空文档为空
+   *  数组——折叠可见性断言的权威口径） */
+  visibleIndices: number[]
+  /** #67 滑块行绘制证据：elementFromPoint 命中滑块容器（侧栏展开 +
+   *  面板 active + 样式表显隐规则生效；jsdom 无布局恒 false） */
+  sliderPainted: boolean
+  /** #67 当前档圆点绘制证据：命中 active 圆点且 computed 背景非全透明
+   *  （实心珠真实绘制——串珠两态差异来源的绘制层验证） */
+  sliderActiveDotPainted: boolean
+  /** #67 折叠箭头绘制证据：首个箭头中心点命中自身（有子项条目的箭头
+   *  真实绘制；无标题/无子项文档或 jsdom 无布局时为 false） */
+  chevronPainted: boolean
 }
 
 /** 表格结构操作码校验（#13） */
@@ -765,10 +788,11 @@ function isOutlineItems(v: unknown): v is OutlineProbe['items'] {
   )
 }
 
-/** #54/#65/#66 大纲观测校验：active/命中布尔、图标尺寸与滚动几何（null 或
+/** #54/#65/#66/#67 大纲观测校验：active/命中布尔、图标尺寸与滚动几何（null 或
  *  非负数）、items 序列、名称字符串或 null、style 绘制证据（缺省或字段字符
  *  串或 null）、located 索引（null 或非负整数）/文字（字符串或 null）/绘制
- *  命中布尔 */
+ *  命中布尔、#67 档位（0–5 整数）/可见索引序列（非负整数数组）/滑块与箭头
+ *  绘制命中布尔 */
 function isOutlineProbe(v: unknown): v is OutlineProbe {
   return (
     isObject(v) &&
@@ -792,7 +816,13 @@ function isOutlineProbe(v: unknown): v is OutlineProbe {
     )) &&
     (v.locatedItemIndex === null || isNonNegativeInt(v.locatedItemIndex)) &&
     isNullOrString(v.locatedText) &&
-    typeof v.locatedPainted === 'boolean'
+    typeof v.locatedPainted === 'boolean' &&
+    typeof v.expandLevel === 'number' && Number.isInteger(v.expandLevel) &&
+    v.expandLevel >= 0 && v.expandLevel <= 5 &&
+    Array.isArray(v.visibleIndices) && v.visibleIndices.every(isNonNegativeInt) &&
+    typeof v.sliderPainted === 'boolean' &&
+    typeof v.sliderActiveDotPainted === 'boolean' &&
+    typeof v.chevronPainted === 'boolean'
   )
 }
 
@@ -1261,6 +1291,11 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
     case 'outline.test.click':
       return true
     case 'outline.test.itemClick':
+      return isNonNegativeInt(v.index)
+    case 'outline.test.expandClick':
+      return typeof v.level === 'number' && Number.isInteger(v.level) &&
+        v.level >= 0 && v.level <= 5
+    case 'outline.test.chevronClick':
       return isNonNegativeInt(v.index)
     case 'sync.test.edit':
       return isNonNegativeInt(v.offset) && isString(v.text) &&

@@ -463,6 +463,16 @@ interface ViewState {
     locatedText: string | null
     /** 高亮横条绘制证据（中心点命中 + computed 背景非全透明） */
     locatedPainted: boolean
+    /** #67 展开档位（0=全部折叠、1–5=展开到 Hn） */
+    expandLevel: number
+    /** #67 可见条目索引序列（折叠遮蔽后的用户实际可见集） */
+    visibleIndices: number[]
+    /** #67 滑块行绘制证据（elementFromPoint 命中滑块容器） */
+    sliderPainted: boolean
+    /** #67 当前档圆点绘制证据（命中 active 圆点 + computed 背景非全透明） */
+    sliderActiveDotPainted: boolean
+    /** #67 折叠箭头绘制证据（首个箭头中心点命中） */
+    chevronPainted: boolean
   }
 }
 
@@ -4705,6 +4715,135 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const backLive = await waitViewState('outline-long.md',
       (v) => v.viewMode === 'live' && v.outline !== undefined && v.outline.locatedItemIndex !== null)
     assert(backLive.outline!.locatedItemIndex! >= 0, '切回 live 后应即时重算 located')
+
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-long.md', (v) => v.sidebar?.open === false)
+  }],
+
+  // ---- #67 大纲折叠滑块与手动折叠 ----
+
+  ['大纲折叠滑块与手动折叠：档位语义、绘制层证据、滚动展开、编辑存活（#67）', async () => {
+    // 断言口径（视觉层断言必查）：
+    // - 档位语义：visibleIndices 状态对拍（档 1 = 展开 H1 父节点 → 51 条
+    //   可见；档 0 = 只露顶层）——「展开到 Hn = 展开 level≤n 父节点」而非
+    //   只显示 level≤n 标题
+    // - 绘制层证据：sliderPainted/sliderActiveDotPainted（active 圆点命中
+    //   + computed 实心）/chevronPainted（elementFromPoint 命中，样式注入
+    //   失败时必失败）与 locatedPainted（#67 落地后补全的口径：高亮行
+    //   滚进面板可视区后命中成立——跳转到面板滚动区深处的折叠条目）
+    // - 滚动动态展开：view.locate 落进折叠区 → only-expand 展开当前路径
+    //   （其余折叠区不动）、locatedPainted 成立
+    // - 编辑存活：宿主 WorkspaceEdit 重命名后折叠视图不扰动（迁移保键）
+    // - 零写回：滑块/箭头操作不推进版本、不产生写回
+    await openWithEditor('outline-long.md')
+    await waitSessionReady('outline-long.md')
+    const uri = wsUri('outline-long.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('outline-long.md'))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    // 条目序列（101 项）：0=主标题(H1)；第 i 章 H2=index 2i-1、H3=index 2i
+    const initial = await waitViewState('outline-long.md',
+      (v) => v.sidebar?.open === true && v.outline?.panelPainted === true && v.outline.items.length === 101)
+    assert(initial.outline!.expandLevel === 5, `默认档应为 5（实际 ${initial.outline!.expandLevel}）`)
+    assert(initial.outline!.visibleIndices.length === 101, `默认档全展开应 101 条可见（实际 ${initial.outline!.visibleIndices.length}）`)
+    assert(initial.outline!.sliderPainted === true,
+      `滑块行应真实绘制（命中失败：${JSON.stringify(initial.outline)}）`)
+    assert(initial.outline!.sliderActiveDotPainted === true,
+      `当前档圆点应实心绘制（命中 + computed 背景：${JSON.stringify(initial.outline)}）`)
+    assert(initial.outline!.chevronPainted === true,
+      `折叠箭头应真实绘制（命中失败：${JSON.stringify(initial.outline)}）`)
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+
+    // 档 1：展开 H1 父节点 → H2 直接子级全可见（51 条），H3 全折叠
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.expandClick', level: 1 })
+    const level1 = await waitViewState('outline-long.md', (v) => v.outline?.expandLevel === 1)
+    assert(level1.outline!.visibleIndices.length === 51,
+      `档 1 应 51 条可见（实际 ${level1.outline!.visibleIndices.length}）`)
+    assert(level1.outline!.visibleIndices[1] === 1 && level1.outline!.visibleIndices[2] === 3,
+      '档 1 可见序列应为 0,1,3,…（H2 可见、H3 折叠）')
+    assert(level1.outline!.sliderActiveDotPainted === true, '切档后当前档圆点应仍实心绘制')
+
+    // 手动箭头叠加在档位上（档 1 下 H2 本就折叠中——档位精确集只含
+    // level≤1 父节点）：点第 1 章箭头 = 展开（其 H3 可见），再点 = 折叠
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.chevronClick', index: 1 })
+    const expanded = await waitViewState('outline-long.md',
+      (v) => v.outline !== undefined && v.outline.visibleIndices.length === 52)
+    assert(expanded.outline!.visibleIndices.includes(2), '档 1 下手动展开第 1 章后其小节应可见')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.chevronClick', index: 1 })
+    const collapsed = await waitViewState('outline-long.md',
+      (v) => v.outline !== undefined && v.outline.visibleIndices.length === 51)
+    assert(!collapsed.outline!.visibleIndices.includes(2), '手动折叠第 1 章后其小节应不可见')
+    // 点折叠中的父条目文字跳转：条目自身可见（折叠遮子不遮己），不触发展开
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.itemClick', index: 1 })
+    const jumpParent = await waitViewState('outline-long.md', (v) => v.outline?.locatedItemIndex === 1)
+    assert(jumpParent.outline!.visibleIndices.length === 51,
+      '跳转到折叠中的父条目自身不得展开（自身可见，无祖先可展开）')
+    assert(jumpParent.outline!.locatedPainted === true, '父条目高亮横条应真实绘制（面板可视区内）')
+
+    // 跳转到被折叠遮蔽的深层条目（第 45 章 H3, index 90，面板滚动区深处）：
+    // only-expand 展开其祖先链（第 45 章 H2）+ 高亮行滚进面板可视区——
+    // #66 留下的「locatedPainted 暂不断言」口径在本票落地后的补全
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.itemClick', index: 90 })
+    const jumpDeep = await waitViewState('outline-long.md', (v) => v.outline?.locatedItemIndex === 90)
+    assert(jumpDeep.outline!.visibleIndices.length === 52,
+      `跳转深层折叠条目应展开其祖先链（实际 ${jumpDeep.outline!.visibleIndices.length}）`)
+    assert(jumpDeep.outline!.visibleIndices.includes(90), '展开后目标条目应可见')
+    assert(jumpDeep.outline!.locatedPainted === true,
+      `高亮行应滚进大纲面板可视区并真实绘制（${JSON.stringify(jumpDeep.outline)}）`)
+
+    // 滑块/箭头操作零写回（纯视图状态）
+    const afterCollapse = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterCollapse.version === before.version && afterCollapse.appliedEdits === before.appliedEdits,
+      `折叠操作不得推进版本或产生写回（${before.version}/${before.appliedEdits} → ` +
+        `${afterCollapse.version}/${afterCollapse.appliedEdits}）`)
+
+    // 档 0 + 宿主 view.locate 落进折叠区：only-expand 展开当前路径（目标
+    // 的祖先链 = 第 45 章 H2 + 主标题 H1——展开 H1 使全部 H2 作为直接子级
+    // 可见，这是「展开祖先链让目标可见」的语义代价），其余 H3 折叠不动
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.expandClick', level: 0 })
+    await waitViewState('outline-long.md', (v) => v.outline?.visibleIndices.length === 1)
+    const targetLine = jumpDeep.outline!.items[90]!.line
+    const targetOffset = doc.offsetAt(new vscode.Position(targetLine - 1, 0))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: targetOffset })
+    const located = await waitViewState('outline-long.md', (v) => v.outline?.locatedItemIndex === 90)
+    assert(located.outline!.visibleIndices.includes(90),
+      `定位到折叠区应 only-expand 使目标可见（实际 ${JSON.stringify(located.outline!.visibleIndices)}）`)
+    assert(!located.outline!.visibleIndices.includes(2) && !located.outline!.visibleIndices.includes(88),
+      `其余 H3 不得被展开（only-expand 只动当前路径）：${JSON.stringify(located.outline!.visibleIndices)}`)
+    assert(located.outline!.visibleIndices.length === 52,
+      `可见集应为 H1 + 50 个 H2 + 目标 H3（52 条，实际 ${located.outline!.visibleIndices.length}）`)
+    assert(located.outline!.locatedPainted === true, '定位后的高亮行应滚进可视区并真实绘制')
+
+    // 编辑存活：宿主 WorkspaceEdit 重命名第 45 章标题 → 折叠视图不扰动。
+    // 注意口径：doc 变化触发视口顶行重算 + only-expand（合法展开当前路径
+    // 的邻章），故不精确对拍数组——断言当前路径仍展开、远端章节仍折叠
+    const renameEdit = new vscode.WorkspaceEdit()
+    const headingLine = jumpDeep.outline!.items[89]!.line - 1
+    const lineText = doc.lineAt(headingLine)
+    renameEdit.replace(
+      wsUri('outline-long.md'),
+      lineText.range,
+      lineText.text.replace('第 45 章', '第 45 章改名'),
+    )
+    await vscode.workspace.applyEdit(renameEdit)
+    const renamed = await waitViewState('outline-long.md',
+      (v) => v.outline?.items[89] !== undefined && v.outline.items[89].text === '第 45 章改名')
+    assert(renamed.outline!.visibleIndices.includes(89) && renamed.outline!.visibleIndices.includes(90),
+      `重命名后当前展开路径应保持可见（实际 ${JSON.stringify(renamed.outline!.visibleIndices)}）`)
+    assert(!renamed.outline!.visibleIndices.includes(2) && !renamed.outline!.visibleIndices.includes(20),
+      `远端章节的 H3 不得因重命名被展开（实际 ${JSON.stringify(renamed.outline!.visibleIndices)}）`)
+
+    // 档位持久化：切档 1 后重载 webview（Developer: Reload Webviews——
+    // retainContextWhenHidden 关闭：销毁重建同一 panel，走 bridge state
+    // 恢复，#6 模式记忆的同款验证路径）→ 档位恢复为 1；重载同时恢复锚点
+    // （视口回到第 45 章区域），only-expand 会合法展开当前路径（至多
+    // +2 条 H3），可见数允许 51–53 而非精确 51
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.expandClick', level: 1 })
+    await waitViewState('outline-long.md', (v) => v.outline?.expandLevel === 1)
+    await vscode.commands.executeCommand('workbench.action.webview.reloadWebviewAction')
+    const reopened = await waitViewState('outline-long.md', (v) => v.outline?.expandLevel === 1)
+    assert(reopened.outline!.visibleIndices.length >= 51 && reopened.outline!.visibleIndices.length <= 53,
+      `重载后档 1 基础可见集应恢复（51–53 条，实际 ${reopened.outline!.visibleIndices.length}）`)
 
     // 收起侧栏收尾
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })

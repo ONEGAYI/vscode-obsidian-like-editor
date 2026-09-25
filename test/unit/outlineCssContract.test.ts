@@ -181,3 +181,72 @@ describe('常驻高亮横条（#66）', () => {
     expect(item).not.toMatch(/background/)
   })
 })
+
+// ---- #67 折叠滑块与手动折叠：滑块行、圆点串珠、箭头与折叠隐藏 ----
+
+describe('折叠滑块行（#67：结绳记事）', () => {
+  it('滑块行显隐唯一开关是侧栏容器的 outline-active 类（默认隐藏，与面板同模式）', () => {
+    const hidden = rule('#app .vsidian-sidebar .vsidian-outline-slider')
+    expect(hidden).toMatch(/display:\s*none/)
+    const shown = rule('#app .vsidian-sidebar.vsidian-outline-active .vsidian-outline-slider')
+    expect(shown).toMatch(/display:\s*flex/)
+  })
+
+  it('圆点按钮为正圆小点：border-radius 50% + 固定宽高 + 空心面（透明回退）', () => {
+    const dot = rule('.vsidian-sidebar .vsidian-outline-slider-dot')
+    expect(dot).toMatch(/border-radius:\s*50%/)
+    expect(dot).toMatch(/width:\s*8px/)
+    expect(dot).toMatch(/height:\s*8px/)
+    // 空闲珠空心（侧栏背景遮线、透明主题回退穿珠可见）——当前档与空闲档
+    // 的用户可见差异唯一来源是 active 类规则（实心填充 + 描边跟随）
+    expect(dot).toMatch(/background:\s*var\(--vscode-sideBar-background,\s*transparent\)/)
+    expect(dot).toMatch(/border:\s*1px solid/)
+  })
+
+  it('当前档圆点实心高亮：active 类规则是唯一差异来源（颜色跟随 VSCode 变量）', () => {
+    const active = rule(
+      '.vsidian-sidebar .vsidian-outline-slider-dot.vsidian-outline-slider-active',
+    )
+    expect(active).toMatch(/background:\s*var\(--vscode-button-background/)
+  })
+
+  it('横线串联（结绳意象）：滑块行 ::before 贯穿横线规则存在', () => {
+    expect(css, '滑块行应有 ::before 横线规则').toMatch(
+      /\.vsidian-sidebar \.vsidian-outline-slider::before/,
+    )
+  })
+})
+
+describe('折叠箭头与折叠隐藏（#67）', () => {
+  it('箭头为条目内图标按钮：inline-flex、透明底、无边框、指针形态', () => {
+    const chevron = rule('.vsidian-sidebar .vsidian-outline-item .vsidian-outline-chevron')
+    expect(chevron).toMatch(/display:\s*inline-flex/)
+    expect(chevron).toMatch(/background:\s*transparent/)
+    expect(chevron).toMatch(/border:\s*none/)
+    expect(chevron).toMatch(/cursor:\s*pointer/)
+  })
+
+  it('箭头 SVG 尺寸钉住（16px，与侧栏图标口径一致）', () => {
+    expect(rule('.vsidian-sidebar .vsidian-outline-item .vsidian-outline-chevron svg'))
+      .toMatch(/width:\s*16px/)
+  })
+
+  it('折叠态箭头旋转：collapsed 类规则是两态差异唯一来源', () => {
+    const rotated = rule(
+      '.vsidian-sidebar .vsidian-outline-item.vsidian-outline-collapsed .vsidian-outline-chevron',
+    )
+    expect(rotated).toMatch(/transform:\s*rotate\(/)
+  })
+
+  it('折叠隐藏：hidden 条目 display:none（类切换是唯一显隐开关）', () => {
+    const hidden = rule('.vsidian-sidebar .vsidian-outline-item.vsidian-outline-hidden')
+    expect(hidden).toMatch(/display:\s*none/)
+  })
+
+  it('占位与箭头同宽对齐（无子项条目文字与有子项条目文字左缘对齐）', () => {
+    const spacer = rule('.vsidian-sidebar .vsidian-outline-item .vsidian-outline-chevron-spacer')
+    expect(spacer).toMatch(/width:\s*18px/)
+    expect(rule('.vsidian-sidebar .vsidian-outline-item .vsidian-outline-chevron'))
+      .toMatch(/width:\s*18px/)
+  })
+})
