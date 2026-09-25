@@ -1,9 +1,13 @@
 # CI：push(main)、PR 与手动触发的持续集成。
 # unit 跑构建、类型检查与单元契约测试；integration 在 xvfb 虚拟显示下经
 # @vscode/test-electron 以真实 VSCode 1.86.2 宿主跑集成套件（与本地
-# npm run test:integration 同链路，测试钩子环境变量由 runTest.mjs 自带）。
+# npm run test:integration 同链路，测试钩子环境变量由 runTest.mjs 自带）；
+# browser 用 Playwright chromium 跑 test:browser 原生输入回归（#50）。
 # job 名 unit / integration 同时是 main 分支保护的必需状态检查，
 # 改名、增删 job 前需同步分支保护规则，否则保护会因找不到检查而挂起。
+# browser 暂未纳入必需检查（2026-09 核查保护规则仅含 unit / integration）：
+# 其失败不阻塞合并但会在 PR 状态区显示；是否升为必需由维护者视其稳定性决定，
+# 升级前无需改本文件，仅需在仓库设置中加入 browser 上下文。
 name: CI
 
 on:
@@ -54,3 +58,39 @@ jobs:
             libxkbcommon0 libgbm1 libasound2t64 libgtk-3-0t64 libsecret-1-0 libxkbfile1
       - name: 集成测试（真实 1.86.2 宿主）
         run: xvfb-run -a npm run test:integration
+
+  browser:
+    name: browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: 安装依赖
+        run: npm ci
+      # 浏览器二进制缓存：playwright 是直接 devDependency 且精确锁版本
+      # （package.json 无 ^），故以 lockfile 哈希作 key——lockfile 变更即
+      # 视为浏览器版本可能更新。其他依赖变更会偶发触发整缓存重下载
+      # （多一次 ~170 MB 下载），换来 key 无需手工维护版本号；不用
+      # restore-keys：恢复过期浏览器目录只会让 install 判定版本不符再
+      # 下载一遍，白花恢复时间。
+      - name: 缓存 Playwright 浏览器二进制
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ hashFiles('package-lock.json') }}
+      - name: 安装 Chromium
+        # --with-deps 无条件执行（不按 cache-hit 条件化拆分）：缓存只覆盖
+        # 浏览器二进制，系统库随 runner 镜像漂移；命中缓存时 playwright
+        # 检测到二进制已存在会跳过下载，apt 部分幂等（约 20s），保留它比
+        # 拆出 install-deps 分支更简单，也不损失系统库确定性。
+        run: npx playwright install --with-deps chromium
+      - name: 浏览器原生输入回归
+        # 与本地一致性：tableCaret.mjs 默认 Playwright chromium 通道，
+        # CI 与本机（npx playwright install chromium 后）跑同一套二进制；
+        # VSIDIAN_TEST_BROWSER_CHANNEL=msedge 仅供 Windows 本机借系统
+        # Edge 调试，不进 CI。
+        run: npm run test:browser
