@@ -277,6 +277,17 @@ const OUTLINE_LONG_DOC = (() => {
   return out.join('\n')
 })()
 
+// #65 大纲样式透传样例：白名单四标记（粗体/斜体/行内代码/删除线）、
+// 嵌套粗斜体、双链别名与链接文字的纯文本降级——plainText/spans 断言载体
+const OUTLINE_STYLE_DOC = [
+  '# **重点** 结论',
+  '## *斜体* 与 `代码`',
+  '### ~~删除线~~ 与 [[目标笔记|显示别名]]',
+  '#### [链接文字](https://example.com) 尾注',
+  '##### ***粗斜*** 与普通',
+  '',
+].join('\n')
+
 // #11 双链样例：合法四形态（按名/显式路径/别名/标题）+ 降级形态
 // （嵌入/块引用/残缺）+ 代码上下文（围栏与行内代码内不解析）
 const WIKILINKS_DOC = [
@@ -377,6 +388,7 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   writeFileSync(path.join(wsDir, 'linenumbers.md'), LINENUMBERS_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'outline.md'), OUTLINE_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'outline-long.md'), OUTLINE_LONG_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'outline-style.md'), OUTLINE_STYLE_DOC, 'utf8')
   writeFileSync(path.join(wsDir, '链接目标.md'), '# 链接目标\n中文目标文档内容。\n', 'utf8')
   writeFileSync(path.join(wsDir, '无扩展名目标.md'), '# 无扩展名目标\n省略扩展名解析目标。\n', 'utf8')
   mkdirSync(path.join(wsDir, '子 目录'), { recursive: true })

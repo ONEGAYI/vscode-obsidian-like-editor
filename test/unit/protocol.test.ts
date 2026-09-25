@@ -301,11 +301,12 @@ describe('isWebviewToHost', () => {
     expect(isHostToWebview({ kind: 'sidebar.test.clickx' })).toBe(false)
   })
 
-  it('view.state 的 outline 观测（#54）：合法样本接受、字段非法拒绝', () => {
+  it('view.state 的 outline 观测（#54/#65）：合法样本接受、字段非法拒绝', () => {
     const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
     // 合法：active 布尔；绘制命中布尔；图标尺寸与滚动几何 null 或非负数
     // （jsdom 无布局时 null）；items 每项 level 1-6 整数 + 字符串文字 +
-    // 非负行号；名称字符串或 null
+    // plainText（#65 剥标记可见文本）+ 白名单标记区间数组 + 非负行号；
+    // 名称字符串或 null；style（#65 绘制证据）缺省或字段全为字符串或 null
     expect(
       isWebviewToHost({
         ...base,
@@ -317,11 +318,20 @@ describe('isWebviewToHost', () => {
           panelScrollHeightPx: 1328,
           panelClientHeightPx: 570,
           items: [
-            { level: 1, text: '文档主标题', line: 1 },
-            { level: 2, text: '', line: 5 },
+            { level: 1, text: '**重点** 结论', plainText: '重点 结论', line: 1,
+              spans: [{ kind: 'strong', start: 0, end: 2 }] },
+            { level: 2, text: '', plainText: '', line: 5, spans: [] },
           ],
           toggleAriaLabel: '大纲',
           panelAriaLabel: '大纲',
+          style: {
+            itemFontWeight: '400',
+            strongFontWeight: '700',
+            codeFontFamily: 'monospace',
+            itemFontFamily: 'sans-serif',
+            itemColor: 'rgb(204, 204, 204)',
+            headingColor: 'rgb(204, 204, 204)',
+          },
         },
       }),
     ).toBe(true)
@@ -361,25 +371,66 @@ describe('isWebviewToHost', () => {
     expect(
       isWebviewToHost({
         ...base,
-        outline: { active: true, items: [{ level: 0, text: 'x', line: 1 }] },
+        outline: { active: true, items: [{ level: 0, text: 'x', plainText: 'x', spans: [], line: 1 }] },
       }),
     ).toBe(false)
     expect(
       isWebviewToHost({
         ...base,
-        outline: { active: true, items: [{ level: 7, text: 'x', line: 1 }] },
+        outline: { active: true, items: [{ level: 7, text: 'x', plainText: 'x', spans: [], line: 1 }] },
       }),
     ).toBe(false)
     expect(
       isWebviewToHost({
         ...base,
-        outline: { active: true, items: [{ level: 2, text: 3, line: 1 }] },
+        outline: { active: true, items: [{ level: 2, text: 3, plainText: 'x', spans: [], line: 1 }] },
       }),
     ).toBe(false)
     expect(
       isWebviewToHost({
         ...base,
-        outline: { active: true, items: [{ level: 2, text: 'x', line: -1 }] },
+        outline: { active: true, items: [{ level: 2, text: 'x', plainText: 'x', spans: [], line: -1 }] },
+      }),
+    ).toBe(false)
+    // 非法（#65）：缺 plainText / spans 非数组 / 白名单外 kind / 负偏移 /
+    // 区间倒置 / style 字段非字符串
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: { active: true, items: [{ level: 2, text: 'x', spans: [], line: 1 }] },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: { active: true, items: [{ level: 2, text: 'x', plainText: 'x', spans: 'strong', line: 1 }] },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: { active: true, items: [{ level: 2, text: 'x', plainText: 'x', line: 1,
+          spans: [{ kind: 'highlight', start: 0, end: 1 }] }] },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: { active: true, items: [{ level: 2, text: 'x', plainText: 'x', line: 1,
+          spans: [{ kind: 'strong', start: -1, end: 1 }] }] },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: { active: true, items: [{ level: 2, text: 'x', plainText: 'x', line: 1,
+          spans: [{ kind: 'strong', start: 2, end: 1 }] }] },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: { active: true, items: [], style: { itemFontWeight: 400 } },
       }),
     ).toBe(false)
     // 缺省合法（向后兼容：大纲观测未装配的旧 webview）

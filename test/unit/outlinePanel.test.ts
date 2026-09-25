@@ -444,3 +444,107 @@ describe('view.state 的 outline 观测（jsdom 无布局的容错口径）', ()
     expect(probe!.panelPainted).toBe(false)
   })
 })
+
+// ---- #65 行内样式透传：渲染与探针 ----
+
+/** #65 样式透传样例：白名单标记 + 双链/链接纯文本降级 */
+const STYLE_DOC = [
+  '# **重点** 结论',
+  '## *斜体* 与 `代码`',
+  '### ~~删除线~~ 与 [[目标|别名]]',
+  '#### [链接文字](https://example.com) 尾注',
+  '##### ***粗斜*** 混排',
+  '',
+].join('\n')
+
+describe('大纲条目行内样式渲染（#65）', () => {
+  it('标记按语义元素渲染：strong/em/code/del 各自带稳定类名', () => {
+    const h = makeBridge()
+    const { c, parent } = mountOutline(h, STYLE_DOC)
+    openSidebar(c)
+    const item0 = parent.querySelectorAll<HTMLElement>('.vsidian-outline-item')[0]!
+    const strong = item0.querySelector('strong.vsidian-outline-strong')
+    expect(strong, '粗体应为 strong.vsidian-outline-strong').toBeTruthy()
+    expect(strong!.textContent).toBe('重点')
+    const item1 = parent.querySelectorAll<HTMLElement>('.vsidian-outline-item')[1]!
+    expect(item1.querySelector('em.vsidian-outline-emphasis')?.textContent).toBe('斜体')
+    expect(item1.querySelector('code.vsidian-outline-code')?.textContent).toBe('代码')
+    const item2 = parent.querySelectorAll<HTMLElement>('.vsidian-outline-item')[2]!
+    expect(item2.querySelector('del.vsidian-outline-strike')?.textContent).toBe('删除线')
+  })
+
+  it('条目可见文本 = plainText（标记字符不透出）', () => {
+    const h = makeBridge()
+    const { c, parent } = mountOutline(h, STYLE_DOC)
+    openSidebar(c)
+    const d = outlineDom(parent)
+    expect(d.itemTexts()).toEqual([
+      '重点 结论',
+      '斜体 与 代码',
+      '删除线 与 别名',
+      '链接文字 尾注',
+      '粗斜 混排',
+    ])
+  })
+
+  it('wikilink/链接为纯文本：面板内无 a 元素（不可点、不触发跳转）', () => {
+    const h = makeBridge()
+    const { c, parent } = mountOutline(h, STYLE_DOC)
+    openSidebar(c)
+    expect(parent.querySelectorAll('.vsidian-outline-item a')).toHaveLength(0)
+    const item3 = parent.querySelectorAll<HTMLElement>('.vsidian-outline-item')[3]!
+    expect(item3.textContent).toBe('链接文字 尾注')
+    expect(item3.querySelector('.vsidian-link, .vsidian-wikilink')).toBeNull()
+  })
+
+  it('嵌套标记渲染为嵌套语义元素（***粗斜*** → em > strong）', () => {
+    const h = makeBridge()
+    const { c, parent } = mountOutline(h, STYLE_DOC)
+    openSidebar(c)
+    const item4 = parent.querySelectorAll<HTMLElement>('.vsidian-outline-item')[4]!
+    const em = item4.querySelector('em.vsidian-outline-emphasis')
+    expect(em?.querySelector('strong.vsidian-outline-strong')?.textContent).toBe('粗斜')
+  })
+
+  it('标记结构变化触发条目 DOM 重建（编辑加标记后语义元素出现）', () => {
+    const h = makeBridge()
+    const { c, parent } = mountOutline(h, '# 甲\n\n## 乙\n')
+    openSidebar(c)
+    const d = outlineDom(parent)
+    expect(d.itemTexts()).toEqual(['甲', '乙'])
+    const doc = c.getView()!.state.doc
+    c.getView()!.dispatch({ changes: { from: doc.line(1).from + 2, to: doc.line(1).to, insert: '*甲*' } })
+    const state = viewState(c, h) // 触发即时校准与渲染
+    expect(state.outline?.items[0]!.plainText).toBe('甲')
+    const item0 = parent.querySelectorAll<HTMLElement>('.vsidian-outline-item')[0]!
+    expect(item0.querySelector('em.vsidian-outline-emphasis')?.textContent).toBe('甲')
+  })
+
+  it('view.state 的 outline.items 携带 plainText 与 spans（透传信息）', () => {
+    const h = makeBridge()
+    const { c } = mountOutline(h, STYLE_DOC)
+    openSidebar(c)
+    const state = viewState(c, h)
+    expect(state.outline?.items[0]).toMatchObject({
+      level: 1,
+      text: '**重点** 结论',
+      plainText: '重点 结论',
+    })
+    expect(state.outline?.items[0]!.spans).toEqual([{ kind: 'strong', start: 0, end: 2 }])
+    expect(state.outline?.items[3]!.plainText).toBe('链接文字 尾注')
+    expect(state.outline?.items[3]!.spans).toEqual([])
+  })
+
+  it('outline.style 绘制证据字段随 view.state 回报（jsdom 无 CSS 引错为 null）', () => {
+    const h = makeBridge()
+    const { c } = mountOutline(h, STYLE_DOC)
+    openSidebar(c)
+    const state = viewState(c, h)
+    const style = state.outline?.style
+    expect(style, 'style 观测应随 outline 回报').toBeDefined()
+    // jsdom 无 CSS 引擎：字符串容错（真宿主的字重/颜色断言见集成用例）
+    for (const key of ['itemFontWeight', 'strongFontWeight', 'codeFontFamily', 'itemFontFamily', 'itemColor', 'headingColor'] as const) {
+      expect(style![key] === null || typeof style![key] === 'string', `${key} 应为字符串或 null`).toBe(true)
+    }
+  })
+})
