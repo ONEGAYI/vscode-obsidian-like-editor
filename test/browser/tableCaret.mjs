@@ -77,6 +77,10 @@ try {
             assert.equal(refocused.caretX, empty.caretX, '重新聚焦空格后光标不得越过填充空格')
           }
         }
+        for (let i = 0; i < 3; i++) {
+          await page.keyboard.press('ArrowLeft')
+          if (deletion !== 'empty-source') await check('', '清空后按左方向键')
+        }
         if (mode === 'english') {
           for (let i = 1; i <= 8; i++) {
             await page.keyboard.type('s')

@@ -446,6 +446,12 @@ const selectGridCell: Command = (view) => {
 }
 
 /** 透明填充不应成为额外的方向键停靠点，也不能让一次退格只删到填充。 */
+const stopAtGridCellStart: Command = (view) => {
+  if (view.compositionStarted || view.state.selection.ranges.length !== 1 || !view.state.selection.main.empty) return false
+  const head = view.state.selection.main.head
+  const cell = editableGridCellAt(view.state, head)
+  return !!cell && head === cell.from
+}
 const stopAtGridCellEnd: Command = (view) => {
   if (view.compositionStarted || view.state.selection.ranges.length !== 1 || !view.state.selection.main.empty) return false
   const head = view.state.selection.main.head
@@ -666,7 +672,11 @@ export const tableEditing = [
   protectGridCellContent,
   keepGridInputCaretInsideCell,
   stabilizeGridCaretAfterInput,
-  keymap.of([{ key: 'ArrowRight', run: stopAtGridCellEnd }, { key: 'Backspace', run: deleteBeforeGridPadding }]),
+  keymap.of([
+    { key: 'ArrowLeft', run: stopAtGridCellStart },
+    { key: 'ArrowRight', run: stopAtGridCellEnd },
+    { key: 'Backspace', run: deleteBeforeGridPadding },
+  ]),
   keymap.of([{ key: 'Mod-a', run: selectGridCell }]),
   keymap.of([{ key: '|', run: tablePipeKeyHandler }]),
   keymap.of([{ key: 'Tab', run: tableTabForward, shift: tableTabBackward }]),
