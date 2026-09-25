@@ -27,6 +27,7 @@
 import { Annotation, ChangeSet, Compartment, EditorSelection, EditorState, Prec, type Extension, type Text } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { liveLineNumbers, paintedLineNumbers } from './liveLineNumbers'
+import { CODE_CARD_CLASS_NAMES, codeCardConfigFacet, liveCodeCard, type CodeCardConfig } from './liveCodeCard'
 import {
   isHostToWebview,
   type CssProbeReport,
@@ -44,6 +45,8 @@ import {
   type WebviewToHost,
 } from '../shared/protocol'
 import {
+  CODEBLOCK_CARD_DEFAULT,
+  CODEBLOCK_CARD_KEY,
   SHOW_LINE_NUMBERS_DEFAULT,
   SHOW_LINE_NUMBERS_KEY,
   type SettingsPayload,
@@ -393,6 +396,19 @@ export class WebviewSyncController {
   /** 行号扩展的运行时开关通道（extensions 装配点） */
   private readonly lineNumbersCompartment = new Compartment()
 
+  // ---- 代码块卡片状态（#79）----
+  /** 卡片配置生效态（card/lineNumbers/copyButton/highlight；lineNumbers
+   *  与 copyButton 子项 #80/#81 接线，highlight #83——未接线键暂按默认开）；
+   *  设置快照/变更到达后经 Compartment 热重配 facet，不重建 EditorView */
+  private codeCardConfig: CodeCardConfig = {
+    card: CODEBLOCK_CARD_DEFAULT,
+    lineNumbers: true,
+    copyButton: true,
+    highlight: true,
+  }
+  /** 卡片扩展的运行时配置通道（extensions 装配点） */
+  private readonly codeCardCompartment = new Compartment()
+
   // ---- 宿主主题明暗自适应（不硬编码 dark，也不硬编码颜色）----
   /** CM6 明暗声明通道：跟随 webview body 的主题 class（vscode-dark 等），
    *  激活 baseTheme 内建变体（light: caret black / dark: caret white 等），
@@ -695,6 +711,7 @@ export class WebviewSyncController {
         // 热重配，缺键回默认、非法形态忽略）
         this.settings = message.values
         this.applyLineNumbersSetting()
+        this.applyCodeCardSetting()
         break
       case 'edit.ack': {
         if (this.suspended) {
@@ -2642,6 +2659,29 @@ export class WebviewSyncController {
     })
   }
 
+  /**
+   * 应用代码块卡片设置（#79；settings.snapshot / settings.changed 到达时）：
+   * card 总开关读 codeblock.card（缺键回定义默认、非布尔忽略——与行号同
+   * 口径）；子项键由后续工单接入，暂保持默认开。经 Compartment.reconfigure
+   * 热重配 codeCardConfigFacet（卡片装饰 StateField 检测到 facet 变化时对
+   * 围栏表全量重建），EditorView 不重建
+   */
+  private applyCodeCardSetting(): void {
+    const raw = this.settings?.[CODEBLOCK_CARD_KEY]
+    const card = typeof raw === 'boolean' ? raw : CODEBLOCK_CARD_DEFAULT
+    const next: CodeCardConfig = { ...this.codeCardConfig, card }
+    if (next.card === this.codeCardConfig.card) {
+      return
+    }
+    this.codeCardConfig = next
+    this.view?.dispatch({
+      effects: this.codeCardCompartment.reconfigure([
+        codeCardConfigFacet.of(next),
+        liveCodeCard,
+      ]),
+    })
+  }
+
   /** 行号栏观测（#34 view.state 扩展字段）。过滤 CM6 的隐藏测量探针
    *  单元格（visibility:hidden、用于测量 gutter 文本宽度的 dummy——真实
    *  宿主与 jsdom 均存在，不是行号） */
@@ -2932,6 +2972,42 @@ export class WebviewSyncController {
     const mermaid = mermaidEl
       ? { visible: mermaidVisible, display: mermaidDisplay, ...mermaidCounts }
       : undefined
+    // #79 代码块卡片绘制探针：当前激活视图取头部横带（可见性 = rect 有
+    // 面积 + elementFromPoint 命中）；label 取首个头部语言标签文本
+    const codeScope = this.viewMode === 'reading' ? this.readingContainer : view.contentDOM
+    const cardHeader = codeScope?.querySelector<HTMLElement>(
+      `.${CODE_CARD_CLASS_NAMES.header}`,
+    ) ?? null
+    let codeCardVisible = false
+    let codeCardDisplay: string | null = null
+    if (cardHeader) {
+      codeCardDisplay = getComputedStyle(cardHeader).display
+      try {
+        const rect = cardHeader.getBoundingClientRect()
+        if (rect.width > 0 && rect.height > 0) {
+          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+          if (hit && cardHeader.contains(hit)) {
+            codeCardVisible = true
+          }
+        }
+      } catch {
+        // jsdom 无布局与 elementFromPoint；真宿主才能证明实际可见。
+      }
+    }
+    const code = cardHeader
+      ? {
+        visible: codeCardVisible,
+        display: codeCardDisplay,
+        label:
+          cardHeader.querySelector(`.${CODE_CARD_CLASS_NAMES.headerLabel}`)?.textContent ?? null,
+        headerCount: codeScope
+          ? codeScope.querySelectorAll(`.${CODE_CARD_CLASS_NAMES.header}`).length
+          : 0,
+        cardLineCount: codeScope
+          ? codeScope.querySelectorAll(`.${CODE_CARD_CLASS_NAMES.line}`).length
+          : 0,
+      }
+      : undefined
     return {
       textVisible,
       scrollerDisplay: view.scrollDOM ? getComputedStyle(view.scrollDOM).display : null,
@@ -2966,6 +3042,7 @@ export class WebviewSyncController {
       },
       math,
       mermaid,
+      code,
       heading: headingPaint,
     }
   }
@@ -3178,6 +3255,9 @@ export class WebviewSyncController {
       // #60 Mermaid：围栏表 + 跨行块 replace 装饰（光标进入围栏显源码、
       // 离开恢复渲染图；渲染容器与阅读侧共用 mermaidRender 管线）
       liveMermaid,
+      // #79 代码块卡片：呈现态围栏收起 + 头部横带 + 卡片行类（配置经
+      // Compartment 热重配，围栏表复用上方 mermaidFencesField）
+      this.codeCardCompartment.of([codeCardConfigFacet.of(this.codeCardConfig), liveCodeCard]),
       // 表格单元格输入钩子（#12）：表格行内键入 | 转义写回 \|；
       // 编辑面即 CM6 源文本行，同步链路复用本控制器的标准出站路径
       tableEditing,

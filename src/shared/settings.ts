@@ -42,8 +42,18 @@ export const SHOW_LINE_NUMBERS_KEY = 'editor.lineNumbers'
 export const SHOW_LINE_NUMBERS_DEFAULT = true
 
 /**
+ * #79「代码块卡片」总开关：围栏代码块呈现态收起为卡片（隐藏围栏标记、
+ * 头部横带 + 语言标签；行号/复制按钮子开关见 #80/#81 的
+ * codeblock.lineNumbers / codeblock.copyButton，语法高亮见 #83 的
+ * codeblock.highlight）。关闭后回到朴素源码围栏外观。键与消费方
+ * （syncController 的 codeCardCompartment）成对导出。
+ */
+export const CODEBLOCK_CARD_KEY = 'codeblock.card'
+export const CODEBLOCK_CARD_DEFAULT = true
+
+/**
  * 生产设置定义注册表：#33 交付空状态页面与完整数据链路，#34 加入首个
- * 实际设置项「显示行号」（设置页自此渲染真实开关）。
+ * 实际设置项「显示行号」（设置页自此渲染真实开关），#79 加入「代码块卡片」。
  */
 export const PRODUCTION_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
   {
@@ -52,6 +62,13 @@ export const PRODUCTION_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     default: SHOW_LINE_NUMBERS_DEFAULT,
     title: '显示行号',
     description: '在实时预览左侧留白带内显示源文件行号（阅读模式不显示）。',
+  },
+  {
+    key: CODEBLOCK_CARD_KEY,
+    type: 'boolean',
+    default: CODEBLOCK_CARD_DEFAULT,
+    title: '代码块卡片',
+    description: '围栏代码块在光标离开时收起为卡片：隐藏围栏标记，显示语言头部横带。关闭后回到朴素源码围栏外观。',
   },
 ]
 

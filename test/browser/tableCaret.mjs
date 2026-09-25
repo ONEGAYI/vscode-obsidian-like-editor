@@ -952,3 +952,103 @@ try {
 }
 if (mermaidFailures.length) throw new AggregateError(mermaidFailures, 'Mermaid 渲染回归失败')
 console.log(`[原生输入] mermaid ${mermaidPassed} 项通过`)
+
+// ---- #79 代码块卡片：光标进出围栏的原生点击与键盘路径（独立浏览器实例） ----
+{
+  const cardBrowser = await chromium.launch({ headless: true,
+    channel: process.env.VSIDIAN_TEST_BROWSER_CHANNEL || undefined })
+  const cardFailures = []
+  let cardPassed = 0
+  try {
+    const page = await cardBrowser.newPage()
+    const errors = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    try {
+      await page.setContent('<div id="app"></div>')
+      await page.addStyleTag({ path: bundle.replace(/\.js$/, '.css') })
+      await page.addScriptTag({ path: bundle })
+      const CODE_DOC = ['前文', '', '```js', 'const a = 1;', '```', '', '后文', ''].join('\n')
+      await page.evaluate((text) => window.initTable(text), CODE_DOC)
+      const states = () => page.evaluate(() => ({
+        text: window.readEditor().text,
+        headers: [...document.querySelectorAll('.vsidian-code-card-header')].map((h) => h.textContent),
+        fenceVisible: [...document.querySelectorAll('.cm-content .cm-line')]
+          .some((l) => l.textContent.includes('```')),
+        cardLines: document.querySelectorAll('.cm-line.vsidian-code-card-line').length,
+      }))
+
+      // 1) 呈现态（光标在围栏外）：头部横带 + 围栏文本从行内容清空、行槽保留
+      await page.waitForFunction(() => document.querySelectorAll('.vsidian-code-card-header').length === 1)
+      let s = await states()
+      assert.equal(s.headers.length, 1, `应恰有一张卡片: ${JSON.stringify(s.headers)}`)
+      assert(s.headers[0].includes('JavaScript'), `标签应为 JavaScript: ${s.headers[0]}`)
+      assert(!s.fenceVisible, `呈现态围栏文本必须清空（DOM 行内不残留）: ${s.text}`)
+      assert.equal(s.cardLines, 3, `卡片行类应覆盖开围栏/代码/闭围栏 3 行，实际 ${s.cardLines}`)
+
+      // 2) 原生点击代码行 → 编辑态：围栏显形、头部保留
+      await page.locator('.cm-line.vsidian-code-card-line').nth(1).click()
+      await page.waitForFunction(() =>
+        [...document.querySelectorAll('.cm-content .cm-line')].some((l) => l.textContent.includes('```')))
+      s = await states()
+      assert.equal(s.headers.length, 1, '编辑态头部横带保留')
+
+      // 3) 原生键盘：行尾键入 → 精确写回代码体
+      await page.keyboard.press('End')
+      await page.keyboard.type('x')
+      s = await states()
+      assert(s.text.includes('const a = 1;x'), `围栏内输入应精确写回: ${s.text}`)
+
+      // 4) 点击开围栏行（呈现态被清空的行槽）→ 光标进入，围栏显形可编辑 info
+      await page.locator('.cm-line.vsidian-code-card-line').nth(0).click()
+      await page.waitForFunction(() =>
+        [...document.querySelectorAll('.cm-content .cm-line')].some((l) => l.textContent.includes('```')))
+      await page.keyboard.press('End')
+      await page.keyboard.type('s')
+      s = await states()
+      assert(s.text.includes('```jss'), `围栏 info 应可编辑: ${s.text}`)
+      await page.waitForFunction(() => {
+        const h = document.querySelector('.vsidian-code-card-header')
+        return h && h.textContent.includes('jss')
+      }, null, { timeout: 5000 })
+      await page.keyboard.press('Backspace')
+
+      // 5) 鼠标离开（点击后文行）→ 恢复呈现态
+      await page.locator('.cm-content .cm-line', { hasText: '后文' }).first().click()
+      await page.waitForFunction(() =>
+        ![...document.querySelectorAll('.cm-content .cm-line')].some((l) => l.textContent.includes('```')))
+      s = await states()
+      assert.equal(s.headers.length, 1, '离开围栏后头部保留')
+      assert.equal(s.cardLines, 3, '离开围栏后卡片行类保留')
+
+      // 5b) 键盘离开：重新进入代码行，ArrowDown 逐行穿出围栏（代码行→空行→
+      //     闭围栏行→后文）——穿越期间保持编辑态，越界后恢复呈现
+      await page.locator('.cm-line.vsidian-code-card-line').nth(1).click()
+      await page.waitForFunction(() =>
+        [...document.querySelectorAll('.cm-content .cm-line')].some((l) => l.textContent.includes('```')))
+      for (let i = 0; i < 4; i++) {
+        await page.keyboard.press('ArrowDown')
+        await page.waitForTimeout(60)
+      }
+      await page.waitForFunction(() =>
+        ![...document.querySelectorAll('.cm-content .cm-line')].some((l) => l.textContent.includes('```')))
+      s = await states()
+      assert.equal(s.headers.length, 1, '键盘离开围栏后头部保留')
+
+      // 6) 最终文本与手工构造逐字节一致；无页面异常
+      const expected = ['前文', '', '```js', 'const a = 1;x', '```', '', '后文', ''].join('\n')
+      assert.equal((await states()).text, expected, '全部交互后文本必须逐字节一致')
+      assert.deepEqual(errors, [], `页面异常: ${JSON.stringify(errors)}`)
+      cardPassed++
+      console.log('[原生输入][PASS] code-card/caret-in-out')
+    } finally {
+      await page.close()
+    }
+  } catch (error) {
+    cardFailures.push(error)
+    console.error(`[原生输入][FAIL] code-card/caret-in-out: ${error.message}`)
+  } finally {
+    await cardBrowser.close()
+  }
+  if (cardFailures.length) throw new AggregateError(cardFailures, '代码块卡片回归失败')
+  console.log(`[原生输入] code-card ${cardPassed} 项通过`)
+}

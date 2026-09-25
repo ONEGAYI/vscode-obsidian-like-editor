@@ -38,9 +38,9 @@ function makeStorage(writes: Array<{ key: string; value: unknown }> = []): Setti
 }
 
 describe('快照读取', () => {
-  it('生产注册表（#34 起）：快照为定义默认值（editor.lineNumbers: true）', () => {
+  it('生产注册表（#34 起）：快照为定义默认值（editor.lineNumbers / codeblock.card 均开）', () => {
     const svc = new SettingsService(makeStorage(), PRODUCTION_SETTING_DEFINITIONS)
-    expect(svc.getSnapshot()).toEqual({ 'editor.lineNumbers': true })
+    expect(svc.getSnapshot()).toEqual({ 'editor.lineNumbers': true, 'codeblock.card': true })
   })
 
   it('fixture 定义下按默认值产出快照', () => {

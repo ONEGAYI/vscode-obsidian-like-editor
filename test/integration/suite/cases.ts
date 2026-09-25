@@ -438,6 +438,14 @@ interface ViewState {
       error: number
       count: number
     }
+    /** #79 代码块卡片绘制：当前激活视图内卡片头部的实际可见性与计数 */
+    code?: {
+      visible: boolean
+      display: string | null
+      label: string | null
+      headerCount: number
+      cardLineCount: number
+    }
     /** #55：标题行左缘绘制观测（distinct computed 值；无挂载标题行为 null） */
     heading?: {
       inviewCount: number
@@ -4862,5 +4870,40 @@ export const cases: Array<[string, () => Promise<void>]> = [
       kind: 'view.mode.set', mode: 'reading' })
     await waitViewState('mermaid.md', (v) =>
       v.viewMode === 'reading' && (v.readingMermaidCount ?? -1) === 6)
+  }],
+
+  ['live 代码块卡片：呈现态头部绘制、编辑态保留、零写回与设置开关（#79）', async () => {
+    await openWithEditor('code-card.md')
+    await waitSessionReady('code-card.md')
+    const uri = wsUri('code-card.md').toString()
+    const diskBefore = await readDisk('code-card.md')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: diskBefore.indexOf('结尾段落'),
+    })
+    // 呈现态：4 张卡片（js/text/裸围栏/未知语言）头部绘制，mermaid 走图表管线
+    const present = await waitViewState('code-card.md', (v) => v.paint?.code?.headerCount === 4)
+    assert(present.paint?.code?.visible === true, '卡片头部应真实绘制（rect + elementFromPoint）')
+    assert(present.paint?.code?.label === 'JavaScript', `首块标签应为 JavaScript，实际 ${String(present.paint?.code?.label)}`)
+    assert((present.liveMermaidCount ?? -1) === 1, `mermaid 围栏不套卡片且仍渲染图表，实际 ${present.liveMermaidCount}`)
+    // 编辑态：光标进入首块代码体 → 头部与卡片行保留（外壳不撤）
+    const body = present.text.indexOf('const a = 1')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: body + 2,
+    })
+    const editing = await waitViewState('code-card.md', (v) =>
+      (v.selectionOffset ?? -1) >= body && (v.selectionOffset ?? -1) <= body + 6)
+    assert(editing.paint?.code?.headerCount === 4, `编辑态卡片头部应保留，实际 ${editing.paint?.code?.headerCount}`)
+    // 离开恢复呈现态；纯视图交互零写回
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: 0,
+    })
+    await waitViewState('code-card.md', (v) => (v.selectionOffset ?? 0) === 0 && v.paint?.code?.headerCount === 4)
+    assert(await readDisk('code-card.md') === diskBefore, '卡片显隐交互不得改写源文')
+    // 设置总开关：关闭 → 卡片消失；重开 → 恢复（Compartment 热重配）
+    await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.card': false })
+    await waitViewState('code-card.md', (v) => v.paint?.code === undefined)
+    assert(await readDisk('code-card.md') === diskBefore, '设置切换不得改写源文')
+    await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.card': true })
+    await waitViewState('code-card.md', (v) => v.paint?.code?.headerCount === 4)
   }],
 ]

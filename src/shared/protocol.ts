@@ -492,6 +492,22 @@ export interface PaintProbe {
     /** 当前激活视图内 .vsidian-mermaid 容器总数 */
     count: number
   }
+  /** #79 代码块卡片绘制：当前激活视图内卡片头部横带的实际可见性与计数。
+   *  jsdom 无布局（rect 恒 0），visible 恒 false，只作真宿主集成断言依据；
+   *  live 态探 live 侧头部 widget，reading 态探阅读容器（#84 起同源类名）。
+   *  无卡片（设置关闭/无围栏）时整个字段缺省。 */
+  code?: {
+    /** 首个头部横带的 rect 有面积且 elementFromPoint 命中 */
+    visible: boolean
+    /** 首个头部横带 computed display（'none' = 未绘制） */
+    display: string | null
+    /** 首个头部语言标签文本（如 'JavaScript'；无头部时 null） */
+    label: string | null
+    /** 当前激活视图内 .vsidian-code-card-header 头部数 */
+    headerCount: number
+    /** 当前激活视图内 .vsidian-code-card-line 行数（含被清空的围栏行） */
+    cardLineCount: number
+  }
   /** #55 标题行绘制观测：视口内已挂载的 .vsidian-heading-inview 行的
    *  distinct 计算值（box-shadow 应为 'none'、border-left-width 应为
    *  '0px'——标题行不得绘制左缘竖线）；无挂载标题行为 null。
@@ -821,6 +837,14 @@ function isPaintProbe(v: unknown): v is PaintProbe {
       isNonNegativeInt(v.mermaid.rendered) &&
       isNonNegativeInt(v.mermaid.error) &&
       isNonNegativeInt(v.mermaid.count)
+    )) &&
+    (v.code === undefined || (
+      isObject(v.code) &&
+      typeof v.code.visible === 'boolean' &&
+      isNullOrString(v.code.display) &&
+      (v.code.label === undefined || v.code.label === null || isString(v.code.label)) &&
+      isNonNegativeInt(v.code.headerCount) &&
+      isNonNegativeInt(v.code.cardLineCount)
     )) &&
     (v.heading === undefined || v.heading === null || (
       isObject(v.heading) &&

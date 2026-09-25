@@ -54,6 +54,8 @@ export interface FenceSpan {
   run: number
   /** info string 是否标记 mermaid */
   mermaid: boolean
+  /** 开围栏 info string 原文（#79 代码块卡片消费：语言路由与标签） */
+  info: string
   /** 围栏内容（内容行以 \n 拼接，不含围栏标记行） */
   code: string
 }
@@ -65,6 +67,8 @@ export interface OpenFence {
   char: '`' | '~'
   run: number
   mermaid: boolean
+  /** 开围栏 info string 原文（闭合时随 FenceSpan 产出） */
+  info: string
   /** 已累积的内容行（\n 拼接） */
   code: string
 }
@@ -130,13 +134,14 @@ export function scanFencesDetailed(
   initialOpen: OpenFence | null = null,
 ): FenceScanResult {
   const spans: FenceSpan[] = []
-  let open: { from: number; char: '`' | '~'; run: number; mermaid: boolean; code: string[] } | null =
+  let open: { from: number; char: '`' | '~'; run: number; mermaid: boolean; info: string; code: string[] } | null =
     initialOpen
       ? {
           from: initialOpen.from,
           char: initialOpen.char,
           run: initialOpen.run,
           mermaid: initialOpen.mermaid,
+          info: initialOpen.info,
           code: initialOpen.code === '' ? [] : initialOpen.code.split('\n'),
         }
       : null
@@ -153,6 +158,7 @@ export function scanFencesDetailed(
             char: open.char,
             run: open.run,
             mermaid: open.mermaid,
+            info: open.info,
             code: open.code.join('\n'),
           })
           open = null
@@ -167,13 +173,13 @@ export function scanFencesDetailed(
     if (cols <= 3) {
       const hit = matchFenceOpen(line.slice(restStart))
       if (hit && !(hit.char === '`' && hit.info.includes('`'))) {
-        open = { from: lineStart, char: hit.char, run: hit.run, mermaid: isMermaidInfo(hit.info), code: [] }
+        open = { from: lineStart, char: hit.char, run: hit.run, mermaid: isMermaidInfo(hit.info), info: hit.info, code: [] }
       }
     }
     lineStart += line.length + 1
   }
   return {
     spans,
-    open: open ? { from: open.from, char: open.char, run: open.run, mermaid: open.mermaid, code: open.code.join('\n') } : null,
+    open: open ? { from: open.from, char: open.char, run: open.run, mermaid: open.mermaid, info: open.info, code: open.code.join('\n') } : null,
   }
 }

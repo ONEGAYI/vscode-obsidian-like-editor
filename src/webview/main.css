@@ -35,6 +35,9 @@ body {
   --vsidian-content-padding-inline: 24px;
   /* 行号列与正文的固定间距：响应 VSCode UI 字号（界面元素大小） */
   --vsidian-ln-gap: calc(var(--vscode-font-size, 13px) * 2);
+  /* 代码块卡片底色（#79 起公开变量，选择器映射表登记；头部与代码区共用，
+     阅读卡片同源） */
+  --vsidian-code-card-background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.12));
 }
 
 #app .cm-editor {
@@ -426,6 +429,49 @@ body {
 #app .cm-editor .cm-scroller .vsidian-frontmatter-line {
   font-family: var(--vscode-editor-font-family, monospace);
   opacity: 0.75;
+}
+
+/* ---- 代码块卡片（#79–#84，规格 docs/specs/code-block-card.md）----
+   呈现态围栏行内容被清空（replace 装饰零宽）但行槽保留；卡片 = 块首行
+   上方的头部横带（block widget）+ 连续块行底色 + 尾行底边圆角（顶边
+   圆角由头部承担）。行级类只做背景/圆角着色，不改变行高（#8 约束沿用）。 */
+#app .cm-editor .cm-scroller .cm-line.vsidian-code-card-line {
+  background-color: var(--vsidian-code-card-background, rgba(128, 128, 128, 0.12));
+}
+
+#app .cm-editor .cm-scroller .cm-line.vsidian-code-card-line.vsidian-code-card-edge-top {
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+}
+
+#app .cm-editor .cm-scroller .cm-line.vsidian-code-card-line.vsidian-code-card-edge-bottom {
+  border-bottom-left-radius: 6px;
+  border-bottom-right-radius: 6px;
+}
+
+#app .cm-editor .cm-scroller .vsidian-code-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  margin: 4px 0 0;
+  padding: 5px 12px 4px;
+  background-color: var(--vsidian-code-card-background, rgba(128, 128, 128, 0.12));
+  border-radius: 6px 6px 0 0;
+  border-bottom: 1px solid var(--vscode-editorGroup-border, rgba(128, 128, 128, 0.35));
+  color: var(--vscode-descriptionForeground, rgba(128, 128, 128, 0.9));
+  user-select: none;
+}
+
+#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-header-label {
+  font-weight: 600;
+  font-size: var(--vscode-font-size, 13px);
+}
+
+#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* 行内格式 span（mark 按各自范围显形；类名为稳定样式入口，Obsidian 对应

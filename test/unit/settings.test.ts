@@ -4,6 +4,8 @@
 // 「显示行号」；其余读写语义仍以 fixture 定义覆盖。
 import { describe, it, expect } from 'vitest'
 import {
+  CODEBLOCK_CARD_DEFAULT,
+  CODEBLOCK_CARD_KEY,
   PRODUCTION_SETTING_DEFINITIONS,
   SHOW_LINE_NUMBERS_DEFAULT,
   SHOW_LINE_NUMBERS_KEY,
@@ -23,7 +25,6 @@ const FIXTURE_DEFS: readonly SettingDefinition[] = [
 describe('生产注册表（#34 起含实际设置项）', () => {
   it('注册「显示行号」：键 editor.lineNumbers、boolean、默认开启', () => {
     // #34：首个实际设置项接入，设置页不再是空状态（#33 设计的预期演进）
-    expect(PRODUCTION_SETTING_DEFINITIONS).toHaveLength(1)
     const def = PRODUCTION_SETTING_DEFINITIONS[0]
     expect(def.key).toBe('editor.lineNumbers')
     expect(def.type).toBe('boolean')
@@ -32,9 +33,23 @@ describe('生产注册表（#34 起含实际设置项）', () => {
     expect(isSettingDefinition(def)).toBe(true)
   })
 
+  it('注册「代码块卡片」：键 codeblock.card、boolean、默认开启（#79）', () => {
+    const def = PRODUCTION_SETTING_DEFINITIONS[1]
+    expect(def.key).toBe('codeblock.card')
+    expect(def.type).toBe('boolean')
+    expect(def.default).toBe(true)
+    expect(def.title).toBe('代码块卡片')
+    expect(isSettingDefinition(def)).toBe(true)
+  })
+
   it('键与消费方常量一致：webview/宿主经 SHOW_LINE_NUMBERS_KEY 读同一键', () => {
     expect(SHOW_LINE_NUMBERS_KEY).toBe('editor.lineNumbers')
     expect(SHOW_LINE_NUMBERS_DEFAULT).toBe(true)
+  })
+
+  it('键与消费方常量一致：卡片总开关经 CODEBLOCK_CARD_KEY 读同一键（#79）', () => {
+    expect(CODEBLOCK_CARD_KEY).toBe('codeblock.card')
+    expect(CODEBLOCK_CARD_DEFAULT).toBe(true)
   })
 })
 

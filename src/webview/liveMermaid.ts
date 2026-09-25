@@ -227,6 +227,7 @@ function rebuildFences(prev: MermaidFenceTable, tr: Transaction): MermaidFenceTa
         char: m.span.char,
         run: m.span.run,
         mermaid: m.span.mermaid,
+        info: m.span.info,
         code: m.span.code,
       })
     }

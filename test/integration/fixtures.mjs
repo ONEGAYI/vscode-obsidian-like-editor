@@ -134,6 +134,40 @@ const FENCE_CHUNK_DOC = (() => {
   out.push('```', '', '结尾段。', '')
   return out.join('\n')
 })()
+// #79 代码块卡片样例：js/text/裸围栏/未知语言各一块 + mermaid（排除）+
+// 缩进代码（不套卡片）——卡片头部计数 4 的断言载体
+const CODE_CARD_DOC = [
+  '# 代码块卡片样例',
+  '',
+  '```js',
+  'const a = 1;',
+  'function hi() {',
+  '  return a + 1;',
+  '}',
+  '```',
+  '',
+  '```text',
+  'hello',
+  '```',
+  '',
+  '```',
+  '裸围栏内容',
+  '```',
+  '',
+  '```zzz',
+  '未知语言内容',
+  '```',
+  '',
+  '```mermaid',
+  'graph TD',
+  'A-->B',
+  '```',
+  '',
+  '    缩进代码一行',
+  '',
+  '结尾段落。',
+  '',
+].join('\n')
 // #9 任务勾选样例：含重复任务行（定位安全验证）与已勾选项
 const TASK_DOC = [
   '# 任务清单标题',
@@ -444,6 +478,7 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   // 边界样例（普通围栏与伪围栏不误渲染）
   writeFileSync(path.join(wsDir, 'mermaid.md'), MERMAID_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'mermaid-edge.md'), MERMAID_EDGE_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'code-card.md'), CODE_CARD_DOC, 'utf8')
   // #60 图表密集性能样例（generateMermaidDenseSample 可选注入；缺省跳过）
   if (generateMermaidDenseSample) {
     writeFileSync(path.join(wsDir, 'perf-mermaid.md'), generateMermaidDenseSample(), 'utf8')
