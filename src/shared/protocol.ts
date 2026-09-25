@@ -116,6 +116,9 @@ export type HostToWebview =
   /** 测试钩子（#54）：点击侧栏顶栏的大纲按钮，驱动与用户点击同一处理器
    *  （纯视图状态翻转，零写回）。与 sidebar.test.click 同通道形态 */
   | { kind: 'outline.test.click' }
+  /** 测试钩子（#66）：点击第 index 个真实大纲条目，驱动与用户点击同一
+   *  委托处理器（纯视图跳转：live 落光标居中 / reading 滚动到块，零写回） */
+  | { kind: 'outline.test.itemClick'; index: number }
   /** 测试钩子（#21）：在真实 webview 的 CM6 中输入，验证暂停态即时留存。 */
   | { kind: 'sync.test.edit'; offset: number; text: string; closeAfter?: boolean }
   /** 测试钩子：组合候选写入首行 DOM，经过 CM6 MutationObserver 的真实输入链。 */
@@ -608,6 +611,15 @@ export interface OutlineProbe {
   toggleAriaLabel: string | null
   /** 大纲面板可访问名称（role=region + aria-label） */
   panelAriaLabel: string | null
+  /** #66 当前控制域条目索引（items 下标；null = 无标题、首标题之前或
+   *  无布局环境）。以视口顶部行向上最近标题为准（locateOutlineIndex） */
+  locatedItemIndex: number | null
+  /** located 条目的文字（locatedItemIndex 的冗余可读形态；null 同上） */
+  locatedText: string | null
+  /** 高亮横条绘制证据（#66）：located 条目中心点 elementFromPoint 命中
+   *  自身且 computed background-color 非全透明（半透明横条真实绘制；
+   *  条目在面板可视区外或 jsdom 无布局时为 false） */
+  locatedPainted: boolean
 }
 
 /** 表格结构操作码校验（#13） */
@@ -710,7 +722,8 @@ function isOutlineItems(v: unknown): v is OutlineProbe['items'] {
 }
 
 /** #54 大纲观测校验：active/命中布尔、图标尺寸与滚动几何（null 或非负数）、
- *  items 序列、名称字符串或 null */
+ *  items 序列、名称字符串或 null；#66 located 索引（null 或非负整数）、
+ *  文字（字符串或 null）、绘制命中布尔 */
 function isOutlineProbe(v: unknown): v is OutlineProbe {
   return (
     isObject(v) &&
@@ -722,7 +735,10 @@ function isOutlineProbe(v: unknown): v is OutlineProbe {
     (v.panelClientHeightPx === null || isNonNegativeNumber(v.panelClientHeightPx)) &&
     isOutlineItems(v.items) &&
     isNullOrString(v.toggleAriaLabel) &&
-    isNullOrString(v.panelAriaLabel)
+    isNullOrString(v.panelAriaLabel) &&
+    (v.locatedItemIndex === null || isNonNegativeInt(v.locatedItemIndex)) &&
+    isNullOrString(v.locatedText) &&
+    typeof v.locatedPainted === 'boolean'
   )
 }
 
@@ -1190,6 +1206,8 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return true
     case 'outline.test.click':
       return true
+    case 'outline.test.itemClick':
+      return isNonNegativeInt(v.index)
     case 'sync.test.edit':
       return isNonNegativeInt(v.offset) && isString(v.text) &&
         (v.closeAfter === undefined || typeof v.closeAfter === 'boolean')
