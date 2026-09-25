@@ -17,11 +17,14 @@ import { EditorSelection, EditorState, RangeSet } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import type { DecorationSet } from '@codemirror/view'
 import { buildLivePreviewDecorations, liveDecorationsField, LIVE_CLASS_NAMES } from '../../src/webview/liveDecorations'
+import { createTableControls } from '../../src/webview/tableControls'
 import {
   tableEditing,
   tableTabForward,
   tableTabBackward,
   runTableEdit,
+  runTableRowMove,
+  tableRowsAt,
 } from '../../src/webview/tableEditing'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
 import { DocumentSession, type HostDocumentPort } from '../../src/host/documentSession'
@@ -118,6 +121,22 @@ describe('表格 Tab/Shift+Tab 导航', () => {
     const view = makeEditView(TABLE_DOC, TABLE_DOC.indexOf('4') + 1)
     tabKeydown(view, true)
     expect(view.state.selection.main.from).toBe(TABLE_DOC.indexOf('`x|y`') + 5)
+    expect(view.state.doc.toString()).toBe(TABLE_DOC)
+    view.destroy()
+  })
+
+  it('表头末格 Tab：跳过隐藏分隔行直达首个数据行首格（网格导航不显形分隔行）', () => {
+    const view = makeEditView(TABLE_DOC, TABLE_DOC.indexOf('数量') + 2)
+    expect(tableTabForward(view)).toBe(true)
+    expect(view.state.selection.main.from).toBe(TABLE_DOC.indexOf('| 苹果 |') + 2)
+    expect(view.state.doc.toString()).toBe(TABLE_DOC)
+    view.destroy()
+  })
+
+  it('首个数据行首格 Shift+Tab：跳过隐藏分隔行回表头末格内容尾', () => {
+    const view = makeEditView(TABLE_DOC, TABLE_DOC.indexOf('苹果') + 1)
+    expect(tableTabBackward(view)).toBe(true)
+    expect(view.state.selection.main.from).toBe(TABLE_DOC.indexOf('数量') + 2)
     expect(view.state.doc.toString()).toBe(TABLE_DOC)
     view.destroy()
   })
@@ -305,7 +324,201 @@ const settle = async (): Promise<void> => {
   }
 }
 
+describe('表格点阵与悬停控件', () => {
+  it('只给安全网格的可见内容行提供抓手、选列与新增入口；状态反馈零写回', async () => {
+    const view = makeEditView(TABLE_DOC, 0)
+    await Promise.resolve()
+    const grips = view.dom.querySelectorAll<HTMLButtonElement>('.vsidian-table-row-handle')
+    const columns = view.dom.querySelectorAll<HTMLButtonElement>('.vsidian-table-column-handle')
+    expect(grips).toHaveLength(3)
+    expect(columns).toHaveLength(2)
+    expect(view.dom.querySelectorAll('.vsidian-table-insert-row')).toHaveLength(1)
+    expect(view.dom.querySelectorAll('.vsidian-table-insert-column')).toHaveLength(1)
+    const hovered = view.contentDOM.querySelector<HTMLElement>('.vsidian-table-grid-row')!
+    hovered.dispatchEvent(new MouseEvent('pointermove', { bubbles: true }))
+    expect(grips[0]!.classList.contains('vsidian-table-control-hover')).toBe(true)
+    expect(view.dom.querySelector('.vsidian-table-insert-column')?.classList.contains('vsidian-table-control-hover')).toBe(true)
+    grips[1]!.click()
+    expect(view.dom.querySelectorAll('.vsidian-table-row-selected')).toHaveLength(1)
+    columns[0]!.click()
+    expect(view.dom.querySelectorAll('.vsidian-table-column-selected')).toHaveLength(3)
+    expect(view.state.doc.toString()).toBe(TABLE_DOC)
+    view.dispatch({ selection: EditorSelection.single(TABLE_DOC.indexOf('苹果') + 1) })
+    await Promise.resolve()
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(3)
+    expect(view.dom.querySelectorAll('.vsidian-table-row-handle')).toHaveLength(3)
+    view.destroy()
+
+    const unsafe = '| a | b |\n| --- | --- |\n| one |\n'
+    const fallback = makeEditView(unsafe, unsafe.length)
+    await Promise.resolve()
+    expect(fallback.dom.querySelectorAll('.vsidian-table-row-handle')).toHaveLength(0)
+    fallback.destroy()
+  })
+
+  it('长表滚动复用行结构，控件不按可见行数重复扫描整表', async () => {
+    const doc = ['| a | b |', '| --- | --- |', ...Array.from({ length: 1000 }, (_, i) => `| ${i} | x |`), ''].join('\n')
+    let scans = 0
+    let rowIndexReads = 0
+    const controls = createTableControls({
+      tableRowsAt: (state, pos, tree) => {
+        scans++
+        const rows = tableRowsAt(state, pos, tree)
+        return rows && new Proxy(rows, {
+          get(target, key, receiver) {
+            if (typeof key === 'string' && /^\d+$/.test(key)) rowIndexReads++
+            return Reflect.get(target, key, receiver)
+          },
+        })
+      },
+      runTableEditAt: () => false,
+      runTableRowMove: () => false,
+    })
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc, extensions: [liveDecorationsField, controls], selection: EditorSelection.single(doc.length) }),
+    })
+    await Promise.resolve()
+    expect(scans).toBe(1)
+    const first = scans
+    const firstReads = rowIndexReads
+    // 红态每个可见行 slice 千行表，首轮实测 36073 次索引读取；二分定位
+    // 后只随可见行数与 log(总行数) 增长。
+    expect(firstReads).toBeLessThan(500)
+    for (let i = 0; i < 4; i++) {
+      view.scrollDOM.dispatchEvent(new Event('scroll'))
+      await Promise.resolve()
+    }
+    expect(scans - first).toBe(0)
+    expect(rowIndexReads - firstReads).toBeLessThan(2000)
+    view.destroy()
+  })
+
+  it('底部与右侧入口复用结构命令并经宿主权威文档落盘', async () => {
+    const linked = await setupLinked(TABLE_DOC)
+    const view = linked.controller.getView()!
+    const oldAddRow = view.dom.querySelector<HTMLButtonElement>('.vsidian-table-insert-row')!
+    oldAddRow.click()
+    await settle()
+    expect(linked.doc.getText()).toContain('| `x|y` | 4 |\n| | |')
+    expect(linked.doc.applyCalls).toHaveLength(1)
+    oldAddRow.click() // 视口/文档更新后旧 DOM 控件已回收，不能再次写回
+    await settle()
+    expect(linked.doc.applyCalls).toHaveLength(1)
+    view.dom.querySelector<HTMLButtonElement>('.vsidian-table-insert-column')!.click()
+    await settle()
+    expect(linked.doc.getText()).toContain('| 名字 | 数量 | |')
+    expect(linked.doc.getText()).toContain('| --- | :---: | --- |')
+    expect(linked.doc.applyCalls).toHaveLength(2)
+  })
+
+  it('拖末行至表头只发一次文本事务，可一次撤销；IME 中拒绝拖动', async () => {
+    const linked = await setupLinked(TABLE_DOC)
+    const view = linked.controller.getView()!
+    expect(runTableRowMove(view, TABLE_DOC.indexOf('`x|y`'), 0)).toBe(true)
+    await settle()
+    expect(linked.doc.getText()).toContain('| `x|y` | 4 |\n| --- | :---: |\n| 名字 | 数量 |')
+    expect(linked.doc.applyCalls).toHaveLength(1)
+    await linked.doc.undo()
+    await settle()
+    expect(linked.doc.getText()).toBe(TABLE_DOC)
+
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    expect(runTableRowMove(view, TABLE_DOC.indexOf('`x|y`'), 0)).toBe(false)
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+  })
+
+  it('点阵按住拖至表头上方显示落点，松开只写回一笔；仅点击抓手不写回', async () => {
+    const linked = await setupLinked(TABLE_DOC)
+    const view = linked.controller.getView()!
+    document.body.appendChild(view.dom.parentElement!)
+    const grips = [...view.dom.querySelectorAll<HTMLButtonElement>('.vsidian-table-row-handle')]
+    grips[2]!.click()
+    expect(linked.doc.applyCalls).toHaveLength(0)
+    const header = view.contentDOM.querySelector<HTMLElement>('.vsidian-table-grid-row')!
+    header.getBoundingClientRect = () => new DOMRect(0, 0, 400, 20)
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    grips[2]!.dispatchEvent(new MouseEvent('pointerdown', {
+      bubbles: true, cancelable: true, clientX: 0, clientY: 100,
+    }))
+    header.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 0, clientY: 1 }))
+    document.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 0, clientY: 1 }))
+    expect(linked.doc.applyCalls).toHaveLength(0)
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+    grips[2]!.dispatchEvent(new MouseEvent('pointerdown', {
+      bubbles: true, cancelable: true, clientX: 0, clientY: 100,
+    }))
+    header.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 0, clientY: 1 }))
+    expect(header.classList.contains('vsidian-table-drop-before')).toBe(true)
+    document.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 0, clientY: 1 }))
+    await settle()
+    expect(linked.doc.getText()).toContain('| `x|y` | 4 |\n| --- | :---: |\n| 名字 | 数量 |')
+    expect(linked.doc.applyCalls).toHaveLength(1)
+  })
+
+  it('千行表仅为视口中已挂载的网格行建立抓手，滚动回收时同步更新', async () => {
+    const doc = ['| a | b |', '| --- | --- |', ...Array.from({ length: 1000 }, (_, i) => `| ${i} | x |`), ''].join('\n')
+    const view = makeEditView(doc, 0)
+    await Promise.resolve()
+    const count = view.dom.querySelectorAll('.vsidian-table-row-handle').length
+    expect(count).toBeGreaterThan(0)
+    expect(count).toBeLessThan(100)
+    view.destroy()
+  })
+
+  it('仅有表头和分隔行的最小表格仍提供底部新增行及完整的单列选中边界', async () => {
+    const view = makeEditView('| a |\n| --- |\n', '| a |\n| --- |\n'.length)
+    await Promise.resolve()
+    expect(view.dom.querySelectorAll('.vsidian-table-row-handle')).toHaveLength(1)
+    expect(view.dom.querySelectorAll('.vsidian-table-insert-row')).toHaveLength(1)
+    view.dom.querySelector<HTMLButtonElement>('.vsidian-table-column-handle')!.click()
+    const selected = view.dom.querySelector<HTMLElement>('.vsidian-table-column-selected')!
+    expect(selected.classList.contains('vsidian-table-column-first')).toBe(true)
+    expect(selected.classList.contains('vsidian-table-column-last')).toBe(true)
+    view.destroy()
+  })
+
+  it('表头滚出视口后右侧新增列与列选择仍锚定首个可见数据行', async () => {
+    const view = makeEditView(TABLE_DOC, 0)
+    await Promise.resolve()
+    const querySelectorAll = view.contentDOM.querySelectorAll.bind(view.contentDOM)
+    view.contentDOM.querySelectorAll = ((selector: string) => selector === '.vsidian-table-grid-row'
+      ? [...querySelectorAll(selector)].slice(1) as unknown as NodeListOf<Element>
+      : querySelectorAll(selector)) as typeof view.contentDOM.querySelectorAll
+    view.scrollDOM.dispatchEvent(new Event('scroll'))
+    await Promise.resolve()
+    expect(view.dom.querySelectorAll('.vsidian-table-column-handle')).toHaveLength(2)
+    const add = view.dom.querySelector<HTMLButtonElement>('.vsidian-table-insert-column')
+    expect(add).not.toBeNull()
+    view.dom.querySelector<HTMLButtonElement>('.vsidian-table-column-handle')!.click()
+    expect(view.dom.querySelectorAll('.vsidian-table-column-selected')).toHaveLength(2)
+    add!.click()
+    expect(view.state.doc.toString()).toContain('| 名字 | 数量 | |')
+    expect(view.state.doc.toString()).toContain('| --- | :---: | --- |')
+    view.destroy()
+  })
+})
+
 describe('表格增删行列权威链路', () => {
+  it('创建表格命令：行中文字拆开隔行，单笔写回且一次撤销', async () => {
+    const original = '左文右文\n尾段'
+    const linked = await setupLinked(original)
+    const view = linked.controller.getView()!
+    view.dispatch({ selection: EditorSelection.single(2) })
+    linked.controller.handleHostMessage({ kind: 'table.create' })
+    await settle()
+    const expected = '左文\n\n|  |  |\n| --- | --- |\n|  |  |\n\n右文\n尾段'
+    expect(linked.doc.getText()).toBe(expected)
+    expect(linked.doc.applyCalls).toHaveLength(1)
+    expect(view.state.selection.main.from).toBe(expected.indexOf('|  |') + 2)
+    await linked.session.handleWebviewMessage(
+      { kind: 'history.request', op: 'undo' },
+      linked.sessionId,
+    )
+    await settle()
+    expect(linked.doc.getText()).toBe(original)
+  })
+
   it('插入行（命令路径）：一笔 edit.request，权威文档与保存回读一致，焦点落新行首格', async () => {
     const linked = await setupLinked(TABLE_DOC)
     const view = linked.controller.getView()!

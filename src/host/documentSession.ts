@@ -15,6 +15,7 @@
 //   版本重定位，消除并发窗口
 // - 面板关闭/断连（onDidDispose → detachPanel）时存在未确认输入必须通知，
 //   不得静默丢弃（SSH 断开不得误报已保存）
+import { Text } from '@codemirror/state'
 import {
   isWebviewToHost,
   type HostToWebview,
@@ -94,6 +95,8 @@ interface PanelEntry {
   port: PanelPort
   ready: boolean
   pending: PendingEdit[]
+  /** 已收但仍在全局 queue 中等待执行的请求；关闭检查须同步看见。 */
+  queued: Map<number, SerChange[]>
   /** seq → 已发送的 ack（幂等去重：重复消息重发同一 ack） */
   ackCache: Map<number, HostToWebview>
   lastViewState?: Extract<WebviewToHost, { kind: 'view.state' }>
@@ -106,6 +109,10 @@ interface PanelEntry {
   /** webview 冲突上报的本地全文快照（conflict.report） */
   conflictWebviewText?: string
   conflictWebviewVersion?: number
+  /** 特殊空白格 IME 在写回前的候选快照；普通冲突快照不参与此判定。 */
+  compositionPending?: boolean
+  /** 候选快照用 CM6 Text 增量维护；全文只在关闭/复制时生成。 */
+  compositionSnapshot?: Text
   /** 单调快照序号：迟到的旧报告不得覆盖更新的全文。 */
   lastConflictRevision: number
   /** 最近一次性能探针回报（#5：测试钩子 perfProbe 轮询读取） */
@@ -178,10 +185,12 @@ export class DocumentSession {
       port,
       ready: false,
       pending: [],
+      queued: new Map(),
       ackCache: new Map(),
       suspended: false,
       suspendedReason: 'conflict',
       conflictFragments: [],
+      compositionPending: false,
       lastConflictRevision: 0,
       conflictNotified: false,
       reloaded: false,
@@ -197,12 +206,22 @@ export class DocumentSession {
     const panel = this.panels.get(sessionId)
     if (panel) {
       const fragments = [...panel.conflictFragments]
+      let queuedChanges = false
+      for (const changes of panel.queued.values()) {
+        queuedChanges ||= changes.length > 0
+        for (const change of changes) {
+          if (change.text) fragments.push(change.text) // 入队请求本身已是 LF 坐标与文本
+        }
+      }
       for (const p of panel.pending) {
         if (!p.confirmed) {
           this.collectFragments(fragments, p.changes)
         }
       }
-      if (panel.suspended || fragments.length > 0) {
+      const snapshotText = panel.compositionSnapshot?.toString() ?? panel.conflictWebviewText
+      const pendingComposition = panel.compositionPending && snapshotText !== undefined &&
+        snapshotText !== this.newline.toLfText(this.doc.getText())
+      if (panel.suspended || fragments.length > 0 || queuedChanges || pendingComposition) {
         this.notify({
           type: 'panel-closed-with-input',
           sessionId,
@@ -210,7 +229,7 @@ export class DocumentSession {
           fragments,
           // 快照随通知带走（面板即将注销，事后无从查询）；暂停后新输入
           // 与暂缓集内容只在快照里（R-1）
-          webviewText: panel.conflictWebviewText,
+          webviewText: snapshotText,
         })
       }
     }
@@ -278,7 +297,20 @@ export class DocumentSession {
         if (!panel.ready || message.docUri !== this.docUri) {
           return Promise.resolve()
         }
-        const task = this.queue.then(() => this.processEditRequest(panel, message))
+        // 已确认 seq 的重传直接回复原 ack；其他面板可能占住全局队列，
+        // 若先登记 queued，关闭本面板时会把已经保存的输入误报为未确认。
+        const cached = panel.ackCache.get(message.seq)
+        if (cached) {
+          panel.port.send(cached)
+          return Promise.resolve()
+        }
+        if (!panel.queued.has(message.seq)) panel.queued.set(message.seq, message.changes)
+        const task = this.queue.then(() => {
+          // 同一个微任务中从 queued 移入 processEditRequest 的 pending；
+          // 关闭面板不会观察到两者都为空的中间窗口。
+          panel.queued.delete(message.seq)
+          return this.processEditRequest(panel, message)
+        })
         this.queue = task.catch(() => undefined)
         return task
       }
@@ -292,7 +324,30 @@ export class DocumentSession {
           panel.lastConflictRevision = message.revision
           panel.conflictWebviewText = message.text
           panel.conflictWebviewVersion = message.version
+          if (message.compositionPending !== undefined) {
+            panel.compositionPending = message.compositionPending
+            panel.compositionSnapshot = message.compositionPending
+              ? Text.of(message.text.split('\n'))
+              : undefined
+          }
         }
+        return Promise.resolve()
+      }
+      case 'composition.changed': {
+        if (message.docUri !== this.docUri || !panel.compositionPending ||
+            !panel.compositionSnapshot || message.revision <= panel.lastConflictRevision) {
+          return Promise.resolve()
+        }
+        let snapshot = panel.compositionSnapshot
+        let nextStart = snapshot.length
+        for (const change of [...message.changes].sort((a, b) => b.offset - a.offset)) {
+          if (change.offset + change.length > nextStart) return Promise.resolve()
+          snapshot = snapshot.replace(change.offset, change.offset + change.length,
+            Text.of(change.text.split('\n')))
+          nextStart = change.offset
+        }
+        panel.compositionSnapshot = snapshot
+        panel.lastConflictRevision = message.revision
         return Promise.resolve()
       }
       case 'conflict.action': {
@@ -384,7 +439,10 @@ export class DocumentSession {
    * 自家 applyEdit 的回流在此被识别为确认并发 ack；其余视为外部变更广播。
    */
   handleDocChanged(changes: SerChange[], version: number): void {
-    if (this.disposed) {
+    // VSCode 的 dirty 状态变化也触发 onDidChangeTextDocument：没有内容变更，
+    // 版本不推进。它不属于文本同步，不能进入版本日志或广播为外部修改；
+    // 否则 IME 会缓冲这个空事件，确认时把待发候选误判为外部冲突。
+    if (this.disposed || changes.length === 0) {
       return
     }
     // 一切 LF 转换都基于变更前的行尾位置表（changes/pending 坐标均指变更前
@@ -663,6 +721,8 @@ export class DocumentSession {
     panel.conflictFragments = []
     panel.conflictWebviewText = undefined
     panel.conflictWebviewVersion = undefined
+    panel.compositionPending = false
+    panel.compositionSnapshot = undefined
     panel.conflictNotified = false
     panel.reloaded = false
     panel.pending.length = 0
@@ -695,7 +755,7 @@ export class DocumentSession {
     return {
       suspended: panel.suspended,
       fragments: [...panel.conflictFragments],
-      webviewText: panel.conflictWebviewText,
+      webviewText: panel.compositionSnapshot?.toString() ?? panel.conflictWebviewText,
       webviewVersion: panel.conflictWebviewVersion,
       reloaded: panel.reloaded,
     }

@@ -1062,7 +1062,8 @@ export function createTextEditorProvider(
   // ---- 表格结构命令（#13）：活动 tab 为本扩展 custom editor 时向其面板发送
   // table.command（webview 在光标处执行，走标准出站链路）。与模式切换/查找
   // 不同，这是写操作：只发活动面板（表格上下文在各面板光标处独立） ----
-  const TABLE_COMMANDS: Array<[string, TableEditOp]> = [
+  const TABLE_COMMANDS: Array<[string, TableEditOp | 'create']> = [
+    ['onegayi.vsidian.table.create', 'create'],
     ['onegayi.vsidian.table.insertRowAbove', 'insertRowAbove'],
     ['onegayi.vsidian.table.insertRowBelow', 'insertRowBelow'],
     ['onegayi.vsidian.table.deleteRow', 'deleteRow'],
@@ -1088,13 +1089,17 @@ export function createTextEditorProvider(
                 )
                 return true
               }
-              entry.session.postToPanel(sessionId, { kind: 'table.command', op })
+              entry.session.postToPanel(sessionId, op === 'create'
+                ? { kind: 'table.create' }
+                : { kind: 'table.command', op })
               return true
             }
           }
         }
         await vscode.window.showWarningMessage(
-          '请先聚焦一个 Vsidian 编辑器面板（光标置于表格内），再执行表格操作',
+          op === 'create'
+            ? '请先聚焦一个 Vsidian 编辑器面板，再创建表格'
+            : '请先聚焦一个 Vsidian 编辑器面板（光标置于表格内），再执行表格操作',
         )
         return false
       }),

@@ -19,7 +19,10 @@
 // - frontmatter：与阅读视图共用 markdownDoc.frontmatterRange（有界扫描），
 //   头块内不产生 Markdown 装饰（伪标题/伪列表按源码呈现）
 // - 未支持语法（脚注、定义列表等）：无装饰即局部源码降级，不整篇改写
+// - #42 表格：安全表格始终以原文区间 mark + CSS grid 呈现，活动单元格
+//   继续在 CM6 源区间输入。没有独立单元格输入模型，DOM 由视口回收
 import {
+  Annotation,
   EditorSelection,
   RangeSet,
   StateField,
@@ -49,8 +52,11 @@ import {
 import { resolveTaskToggleAtMarker } from './taskToggle'
 import {
   barePipeAt,
+  escapedPipeBackslashes,
   parseTableDelimiter,
   splitTableRowCells,
+  tableRowCellsForColumns,
+  tableCellBreaks,
   type TableAlign,
 } from './tableCells'
 
@@ -92,7 +98,7 @@ export const LIVE_CLASS_NAMES = {
   hrLine: 'vsidian-hr-line',
   /** frontmatter 行（`.cm-hmd-frontmatter` 方向） */
   frontmatterLine: 'vsidian-frontmatter-line',
-  /** ---- 表格（#12）：编辑面即源文本行，装饰只做样式标记（不隐藏源文）---- */
+  /** ---- 表格：源文本为唯一编辑面，安全表格保持可编辑网格（#42）---- */
   /** 表格行（表头/分隔/数据行通用；Obsidian 对应 .cm-table 方向） */
   tableLine: 'vsidian-table-line',
   /** 表头行修饰 */
@@ -105,6 +111,11 @@ export const LIVE_CLASS_NAMES = {
   tableCellHeader: 'vsidian-table-cell-header',
   /** 管道符 span（含首尾边界管道） */
   tablePipe: 'vsidian-table-pipe',
+  /** 安全表格的网格行和单元格；行身份另见 data-vsidian-table-row */
+  tableGridRow: 'vsidian-table-grid-row',
+  tableGridCell: 'vsidian-table-grid-cell',
+  tableGridDelimiter: 'vsidian-table-grid-delimiter',
+  tableEscapedPipe: 'vsidian-table-escaped-pipe',
   /** 列对齐修饰（分隔行声明的对齐落到各单元格） */
   tableAlign: (a: TableAlign) => `vsidian-table-align-${a}`,
 } as const
@@ -196,6 +207,135 @@ const taskCheckboxDecos = [
 // （lezer 的 TableCell 节点不识别 \| 与行内代码内管道，不作定位依据）
 
 const tablePipeDeco = Decoration.mark({ class: LIVE_CLASS_NAMES.tablePipe })
+const tableEscapedPipeDeco = Decoration.mark({ class: LIVE_CLASS_NAMES.tableEscapedPipe })
+// 行尾一个 Markdown 填充空格保留文字节点供原生输入/IME 使用，但不参与
+// 可见排版。不要替换成零宽 widget：删空格再输入曾使光标显示在后一列。
+const tableGridPaddingDeco = Decoration.mark({ class: 'vsidian-table-grid-padding' })
+class TableCellBreakWidget extends WidgetType {
+  eq(): boolean { return true }
+  // 文档仍只有一个源行，CM6 必须得知 widget 在视觉上增加一行，
+  // 否则格内上下方向键与光标测量会停留在原行。
+  get lineBreaks(): number { return 1 }
+  toDOM(): HTMLElement {
+    const br = document.createElement('br')
+    br.className = 'vsidian-table-cell-break'
+    return br
+  }
+}
+const tableCellBreakDeco = Decoration.replace({ widget: new TableCellBreakWidget(), tableCellBreak: true })
+/** 仅无边界空白格的 IME 候选事务：源文暂变但沿用原网格装饰。 */
+export const tableCompositionPreview = Annotation.define<boolean>()
+export const tableCompositionSettled = Annotation.define<boolean>()
+const tableGridCellDecos = new Map<string, ReturnType<typeof Decoration.mark>>()
+function tableGridCellDeco(align: TableAlign | null): ReturnType<typeof Decoration.mark> {
+  const cls = align
+    ? `${LIVE_CLASS_NAMES.tableGridCell} vsidian-table-grid-align-${align}`
+    : LIVE_CLASS_NAMES.tableGridCell
+  let deco = tableGridCellDecos.get(cls)
+  if (!deco) {
+    // 内容恰好填满单元格区间时，网格 span 仍须包在内容 span 外层；
+    // 双端 inclusive 给 CM6 稳定的外层优先级，也让边界输入留在当前格。
+    deco = Decoration.mark({ class: cls, inclusiveStart: true, inclusiveEnd: true })
+    tableGridCellDecos.set(cls, deco)
+  }
+  return deco
+}
+
+/** 零宽空格仍须占一列；widget 仅在该行进入 CM6 视口时生成 DOM。 */
+class EmptyTableCellWidget extends WidgetType {
+  constructor(private readonly active = false) { super() }
+  toDOM(): HTMLElement {
+    const span = document.createElement('span')
+    span.className = this.active
+      ? `${LIVE_CLASS_NAMES.tableGridCell} vsidian-table-grid-empty-active`
+      : LIVE_CLASS_NAMES.tableGridCell
+    span.setAttribute('aria-label', '空单元格')
+    span.addEventListener('mousedown', (event) => {
+      const view = EditorView.findFromDOM(span)
+      if (!view) return
+      const pos = view.posAtDOM(span)
+      view.dispatch({ selection: EditorSelection.create([EditorSelection.cursor(pos, -1)]), scrollIntoView: true })
+      view.focus()
+      event.preventDefault()
+    })
+    return span
+  }
+  ignoreEvent(): boolean {
+    return false
+  }
+}
+const emptyTableCellDeco = Decoration.widget({ widget: new EmptyTableCellWidget() })
+const activeEmptyTableCellDeco = Decoration.widget({ widget: new EmptyTableCellWidget(true) })
+
+type GridRowKind = 'header' | 'row'
+interface TableGridPlan {
+  columns: number
+  rows: Map<number, GridRowKind>
+  delimiterLine: number
+}
+
+const tableGridStats = { planCalls: 0, rowsScanned: 0 }
+export function getTableGridStats(): Readonly<typeof tableGridStats> {
+  return { ...tableGridStats }
+}
+
+/**
+ * 仅对源区间与显示格一一对应的表格启用网格。缺列/多列以及无法解析的
+ * 分隔行保持源码形态，避免视觉点击落到错误列。
+ */
+function tableGridPlan(doc: Text, table: SyntaxNode): TableGridPlan | null {
+  tableGridStats.planCalls += 1
+  const rows = new Map<number, GridRowKind>()
+  let delimiterLine = 0
+  let columns = 0
+  let headers = 0
+  for (let c = table.firstChild; c; c = c.nextSibling) {
+    tableGridStats.rowsScanned += 1
+    if (c.name !== 'TableHeader' && c.name !== 'TableDelimiter' && c.name !== 'TableRow') {
+      return null
+    }
+    const line = doc.lineAt(c.from)
+    if (c.name === 'TableDelimiter') {
+      const aligns = parseTableDelimiter(line.text)
+      if (!aligns || delimiterLine !== 0) {
+        return null
+      }
+      delimiterLine = line.number
+      columns = aligns.length
+    } else {
+      const kind: GridRowKind = c.name === 'TableHeader' ? 'header' : 'row'
+      if (kind === 'header') headers += 1
+      rows.set(line.number, kind)
+    }
+  }
+  if (headers !== 1 || delimiterLine === 0 || columns === 0 || rows.size === 0) {
+    return null
+  }
+  for (const lineNo of rows.keys()) {
+    tableGridStats.rowsScanned += 1
+    if (!tableRowCellsForColumns(doc.line(lineNo).text, 0, columns)) {
+      return null
+    }
+  }
+  return { columns, rows, delimiterLine }
+}
+
+const gridLineDecos = new Map<string, ReturnType<typeof Decoration.line>>()
+function tableGridLineDeco(cls: string, kind: GridRowKind, plan: TableGridPlan): ReturnType<typeof Decoration.line> {
+  const key = `${cls}\u0000${kind}\u0000${plan.columns}`
+  let deco = gridLineDecos.get(key)
+  if (!deco) {
+    deco = Decoration.line({
+      class: cls,
+      attributes: {
+        'data-vsidian-table-row': kind,
+        style: `--vsidian-table-columns: ${plan.columns}`,
+      },
+    })
+    gridLineDecos.set(key, deco)
+  }
+  return deco
+}
 
 /** 单元格 mark 实例缓存：header × 对齐的有限组合，增量与全量产出相同实例 */
 const tableCellDecos = new Map<string, ReturnType<typeof Decoration.mark>>()
@@ -263,16 +403,39 @@ function emitTableRowMarks(
   doc: Text,
   node: SyntaxNode,
   path: SyntaxNode[],
+  selection: EditorSelection,
+  grid: boolean,
+  columns?: number,
 ): void {
   const line = doc.lineAt(node.from)
   const header = node.name === 'TableHeader'
   const aligns = tableAlignsOf(doc, tableAncestor(path))
-  const cells = splitTableRowCells(line.text, line.from)
+  const cells = grid && columns
+    ? tableRowCellsForColumns(line.text, line.from, columns) ?? []
+    : splitTableRowCells(line.text, line.from)
   for (let col = 0; col < cells.length; col++) {
     const cell = cells[col]!
+    if (grid) {
+      out.push(cell.to > cell.from
+        ? tableGridCellDeco(aligns?.[col] ?? null).range(cell.from, cell.to)
+        : (selection.ranges.some((range) => range.empty && range.head === cell.from)
+          ? activeEmptyTableCellDeco : emptyTableCellDeco).range(cell.from))
+      if (cell.to > cell.from && doc.sliceString(cell.to - 1, cell.to) === ' ') {
+        out.push(tableGridPaddingDeco.range(cell.to - 1, cell.to))
+      }
+      // 只替换裸 br；代码片段或转义后的 br 要保持可见字面文本。
+      for (const lineBreak of tableCellBreaks(doc.sliceString(cell.from, cell.to))) {
+        out.push(tableCellBreakDeco.range(cell.from + lineBreak.from, cell.from + lineBreak.to))
+      }
+    }
     if (cell.contentTo > cell.contentFrom) {
       const deco = tableCellDeco(header, aligns && col < aligns.length ? aligns[col]! : null)
       out.push(deco.range(cell.contentFrom, cell.contentTo))
+    }
+  }
+  if (grid) {
+    for (const pos of escapedPipeBackslashes(line.text)) {
+      out.push(tableEscapedPipeDeco.range(line.from + pos, line.from + pos + 1))
     }
   }
   emitTablePipeMarks(out, doc, line.from)
@@ -361,9 +524,11 @@ function emitForRange(
   fm: SourceRange | null,
   fromLine: number,
   toLine: number,
+  gridPlans: Map<number, TableGridPlan | null> = new Map(),
 ): Array<Range<Decoration>> {
   const out: Array<Range<Decoration>> = []
   const lineCls: Array<Set<string> | undefined> = new Array(toLine - fromLine + 1).fill(undefined)
+  const gridLines = new Map<number, { kind: GridRowKind; plan: TableGridPlan }>()
   const addLineCls = (lineNo: number, cls: string): void => {
     const idx = lineNo - fromLine
     let set = lineCls[idx]
@@ -430,22 +595,48 @@ function emitForRange(
       case 'HorizontalRule':
         eachNodeLine(doc, node, fromLine, toLine, (n) => addLineCls(n, LIVE_CLASS_NAMES.hrLine))
         return
-      // ---- 表格（#12）：行级类 + GFM 语义单元格 mark；管道符保持可见 ----
-      case 'Table':
+      // 安全表格在光标进入单元格后仍保留网格；原文编辑由 CM6 承担。
+      case 'Table': {
         eachNodeLine(doc, node, fromLine, toLine, (n) => addLineCls(n, LIVE_CLASS_NAMES.tableLine))
+        let plan = gridPlans.get(node.from)
+        if (plan === undefined && !gridPlans.has(node.from)) {
+          plan = tableGridPlan(doc, node)
+          gridPlans.set(node.from, plan)
+        }
+        if (plan) {
+          const first = Math.max(fromLine, doc.lineAt(node.from).number)
+          const last = Math.min(toLine, doc.lineAt(Math.min(node.to, doc.length)).number)
+          for (let lineNo = first; lineNo <= last; lineNo++) {
+            const kind = plan.rows.get(lineNo)
+            if (!kind) continue
+            addLineCls(lineNo, LIVE_CLASS_NAMES.tableGridRow)
+            gridLines.set(lineNo, { kind, plan })
+          }
+          // 只有光标直接停在分隔行才显露可编辑源码。跨行选区即使覆盖该行，
+          // 也继续隐藏结构标记，避免把 `| --- |` 当可选正文显示。
+          const editingDelimiter = selection.ranges.some((range) => range.empty &&
+            doc.lineAt(range.head).number === plan.delimiterLine)
+          if (plan.delimiterLine >= fromLine && plan.delimiterLine <= toLine &&
+              !editingDelimiter) {
+            addLineCls(plan.delimiterLine, LIVE_CLASS_NAMES.tableGridDelimiter)
+          }
+        }
         return
+      }
       case 'TableHeader': {
         const lineNo = doc.lineAt(node.from).number
         if (lineNo >= fromLine && lineNo <= toLine) {
           addLineCls(lineNo, LIVE_CLASS_NAMES.tableHeaderLine)
-          emitTableRowMarks(out, doc, node, path)
+          const grid = gridPlans.get(tableAncestor(path)?.from ?? -1)
+          emitTableRowMarks(out, doc, node, path, selection, Boolean(grid && gridLines.has(lineNo)), grid?.columns)
         }
         return
       }
       case 'TableRow': {
         const lineNo = doc.lineAt(node.from).number
         if (lineNo >= fromLine && lineNo <= toLine) {
-          emitTableRowMarks(out, doc, node, path)
+          const grid = gridPlans.get(tableAncestor(path)?.from ?? -1)
+          emitTableRowMarks(out, doc, node, path, selection, Boolean(grid && gridLines.has(lineNo)), grid?.columns)
         }
         return
       }
@@ -551,7 +742,9 @@ function emitForRange(
     const set = lineCls[i]
     if (set && set.size > 0) {
       const line = doc.line(fromLine + i)
-      out.push(lineDeco([...set].sort().join(' ')).range(line.from))
+      const cls = [...set].sort().join(' ')
+      const grid = gridLines.get(line.number)
+      out.push((grid ? tableGridLineDeco(cls, grid.kind, grid.plan) : lineDeco(cls)).range(line.from))
     }
   }
   return out
@@ -606,6 +799,8 @@ interface LiveDecoState {
   tree: Tree
   fragments: readonly TreeFragment[]
   fm: SourceRange | null
+  gridPlans: Map<number, TableGridPlan | null>
+  compositionPreview: boolean
 }
 
 function parseTree(doc: Text, fragments?: readonly TreeFragment[]): Tree {
@@ -854,11 +1049,14 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
     const tree = parseTree(state.doc)
     const fm = frontmatterOf(state.doc)
     stats.fullBuildLines = state.doc.lines
+    const gridPlans = new Map<number, TableGridPlan | null>()
     return {
-      decos: RangeSet.of(emitForRange(tree, state.doc, state.selection, fm, 1, state.doc.lines), true),
+      decos: RangeSet.of(emitForRange(tree, state.doc, state.selection, fm, 1, state.doc.lines, gridPlans), true),
       tree,
       fragments: TreeFragment.addTree(tree),
       fm,
+      gridPlans,
+      compositionPreview: false,
     }
   },
   update(value, tr) {
@@ -866,6 +1064,49 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
       return value
     }
     if (!tr.docChanged) {
+      if (tr.annotation(tableCompositionSettled)) {
+        const doc = tr.state.doc
+        const lineNo = doc.lineAt(tr.state.selection.main.head).number
+        let oldKey: number | undefined
+        let oldPlan: TableGridPlan | null | undefined
+        for (const [key, plan] of value.gridPlans) {
+          if (plan?.rows.has(lineNo)) { oldKey = key; oldPlan = plan; break }
+        }
+        if (oldPlan && oldKey !== undefined) {
+          const currentLine = doc.line(lineNo)
+          const pipe = currentLine.text.indexOf('|')
+          const stillRow = pipe >= 0 &&
+            chainAt(value.tree, currentLine.from + pipe + 1).some((node) => node.name === 'TableRow')
+          if (stillRow && tableRowCellsForColumns(currentLine.text, currentLine.from, oldPlan.columns)) {
+            // 取消等仍符合列数的净结果，只需恢复当前行的普通装饰。
+            const decos = value.decos.update({
+              filterFrom: currentLine.from,
+              filterTo: currentLine.to,
+              filter: () => false,
+              add: emitForRange(value.tree, doc, tr.state.selection, value.fm, lineNo, lineNo, value.gridPlans),
+              sort: true,
+            })
+            return { ...value, decos, compositionPreview: false }
+          }
+          let first = oldPlan.delimiterLine
+          let last = oldPlan.delimiterLine
+          for (const rowNo of oldPlan.rows.keys()) {
+            first = Math.min(first, rowNo)
+            last = Math.max(last, rowNo)
+          }
+          const gridPlans = new Map(value.gridPlans)
+          gridPlans.delete(oldKey)
+          const decos = value.decos.update({
+            filterFrom: doc.line(first).from,
+            filterTo: doc.line(last).to,
+            filter: () => false,
+            add: emitForRange(value.tree, doc, tr.state.selection, value.fm, first, last, gridPlans),
+            sort: true,
+          })
+          return { ...value, decos, gridPlans, compositionPreview: false }
+        }
+      }
+      if (value.compositionPreview && !tr.annotation(tableCompositionSettled)) return value
       // 纯选区移动：树不变，仅重建旧/新选区所在行的 mark 显形
       const doc = tr.state.doc
       let decos = value.decos
@@ -877,7 +1118,7 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
           filterFrom: from,
           filterTo: to,
           filter: () => false,
-          add: emitForRange(value.tree, doc, tr.state.selection, value.fm, span.fromLine, span.toLine),
+          add: emitForRange(value.tree, doc, tr.state.selection, value.fm, span.fromLine, span.toLine, value.gridPlans),
           sort: true,
         })
         scanned += span.toLine - span.fromLine + 1
@@ -885,7 +1126,7 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
       stats.totalUpdates += 1
       stats.lastUpdateScannedLines = scanned
       stats.totalScannedLines += scanned
-      return { ...value, decos }
+      return { ...value, decos, compositionPreview: false }
     }
 
     const doc = tr.state.doc
@@ -897,7 +1138,20 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
     const tree = parseTree(doc, fragments)
     const fmTouched = changed.some((c) => c.fromA < FM_SCAN_LIMIT || c.fromB < FM_SCAN_LIMIT)
     const fm = fmTouched ? frontmatterOf(doc) : value.fm
+    if (tr.annotation(tableCompositionPreview)) {
+      // 候选文字由 CM6 原生 DOM 管理；只平移网格装饰，避免解析暂态列数
+      // 导致整表闪退源码。结束后正常事务或 settled 选区事务重新计算。
+      return {
+        ...value,
+        decos: value.decos.map(tr.changes),
+        tree,
+        fragments: TreeFragment.addTree(tree),
+        fm,
+        compositionPreview: true,
+      }
+    }
     const spans = planRebuildSpans(tr, value.tree, tree, changed, value.fm, fm)
+    const gridPlans = new Map<number, TableGridPlan | null>()
     let decos = value.decos.map(tr.changes)
     let scanned = 0
     for (const span of spans) {
@@ -907,7 +1161,7 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
         filterFrom: from,
         filterTo: to,
         filter: () => false,
-        add: emitForRange(tree, doc, tr.state.selection, fm, span.fromLine, span.toLine),
+        add: emitForRange(tree, doc, tr.state.selection, fm, span.fromLine, span.toLine, gridPlans),
         sort: true,
       })
       scanned += span.toLine - span.fromLine + 1
@@ -918,9 +1172,22 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
     if (scanned >= doc.lines) {
       stats.fullBuildLines = doc.lines
     }
-    return { decos, tree, fragments: TreeFragment.addTree(tree), fm }
+    return { decos, tree, fragments: TreeFragment.addTree(tree), fm, gridPlans, compositionPreview: false }
   },
-  provide: (f) => EditorView.decorations.from(f, (s) => s.decos),
+  provide: (f) => [
+    EditorView.decorations.from(f, (s) => s.decos),
+    // `<br>` 的四个源字符是一个可见换行。将其设为原子范围，退格时
+    // 一次合行，方向键也不会钻进不可见的 <、b、r、> 中间。
+    EditorView.atomicRanges.of((view) => {
+      const breaks: Array<Range<Decoration>> = []
+      for (const visible of view.visibleRanges) {
+        view.state.field(f).decos.between(visible.from, visible.to, (from, to, deco) => {
+          if (deco.spec.tableCellBreak) breaks.push(deco.range(from, to))
+        })
+      }
+      return Decoration.set(breaks, true)
+    }),
+  ],
 })
 
 // ---- 间接装饰（视口内纯样式） ----
@@ -958,6 +1225,91 @@ const inviewActiveDeco = Decoration.line({
   class: `${HEADING_CLASS_NAMES.inview} ${HEADING_CLASS_NAMES.active}`,
 })
 
+/** CSS grid 的留白可能让 CM6 默认点击命中隐藏管道，甚至把中格点击映射
+ * 到右格；先按实际点击的格 DOM 约束源位置。mouseup 再核对一次，处理
+ * 浏览器默认选区定位晚于 mousedown 的情况，空格也必须可点可编辑。 */
+const gridPointerDown = new WeakMap<EditorView, { x: number; y: number }>()
+
+/** 鼠标拖选、双击和三击都只在起始格的内容区间内定位。 */
+const gridCellMouseSelection = EditorView.mouseSelectionStyle.of((view, event) => {
+  if (event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey) return null
+  const target = event.target instanceof Element ? event.target : null
+  const cell = target?.closest<HTMLElement>('.vsidian-table-grid-row > .vsidian-table-grid-cell')
+  const row = cell?.parentElement
+  if (!cell || !row) return null
+  const cells = [...row.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')]
+  const line = view.state.doc.lineAt(view.posAtDOM(row, 0))
+  const range = tableRowCellsForColumns(line.text, line.from, cells.length)?.[cells.indexOf(cell)]
+  if (!range) return null
+  // 空格子的源码填充不属于用户内容。再次点击时落在填充前，避免把
+  // 保留的输入节点变成下一次键入文字的前置空格。
+  const empty = range.contentFrom === range.contentTo && range.from < range.to
+  let from = empty ? range.from : range.contentFrom, to = empty ? range.from : range.contentTo
+  const clamp = (pos: number) => Math.max(from, Math.min(to, pos))
+  const hit = (e: MouseEvent) => clamp(view.posAtCoords({ x: e.clientX, y: e.clientY }) ?? from)
+  const start = hit(event)
+  let anchor = event.shiftKey ? clamp(view.state.selection.main.anchor) : start
+  const selection = (head: number) => anchor === head
+    ? EditorSelection.create([EditorSelection.cursor(head, empty ? 1 : head === to ? -1 : head === from ? 1 : 0)])
+    : EditorSelection.single(anchor, head)
+  const word = event.detail === 2 ? view.state.wordAt(start) : null
+  let startFrom = event.detail >= 3 ? from : word ? clamp(word.from) : start
+  let startTo = event.detail >= 3 ? to : word ? clamp(word.to) : start
+  gridPointerDown.set(view, { x: event.clientX, y: event.clientY })
+  return {
+    get(current, extend) {
+      const end = hit(current)
+      if (extend) return selection(end)
+      if (event.detail >= 3) return EditorSelection.single(from, to)
+      if (word) {
+        const currentWord = view.state.wordAt(end)
+        return end < startFrom
+          ? EditorSelection.single(startTo, clamp(currentWord?.from ?? end))
+          : EditorSelection.single(startFrom, clamp(currentWord?.to ?? end))
+      }
+      return selection(end)
+    },
+    update(update) {
+      if (!update.docChanged) return
+      from = update.changes.mapPos(from, -1)
+      to = update.changes.mapPos(to, 1)
+      anchor = update.changes.mapPos(anchor)
+      startFrom = update.changes.mapPos(startFrom)
+      startTo = update.changes.mapPos(startTo)
+    },
+  }
+})
+
+function clampGridCellPointer(event: MouseEvent, view: EditorView): boolean {
+  if (event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return false
+  const target = event.target instanceof Element ? event.target : null
+  const cell = target?.closest<HTMLElement>('.vsidian-table-grid-row > .vsidian-table-grid-cell')
+  if (!cell) return false
+  const down = gridPointerDown.get(view)
+  gridPointerDown.delete(view)
+  if (!down || event.detail > 1 ||
+      Math.hypot(event.clientX - down.x, event.clientY - down.y) > 5) return false
+  const row = cell.parentElement
+  if (!row) return false
+  const column = [...row.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')].indexOf(cell)
+  if (column < 0) return false
+  const line = view.state.doc.lineAt(view.posAtDOM(row, 0))
+  const range = tableRowCellsForColumns(line.text, line.from,
+    row.querySelectorAll(':scope > .vsidian-table-grid-cell').length)?.[column]
+  if (!range) return false
+  const empty = range.contentFrom === range.contentTo && range.from < range.to
+  const from = empty ? range.from : range.contentFrom
+  const to = empty ? range.from : range.contentTo
+  const hit = view.state.selection.main.head
+  if (hit >= from && hit < to) return false
+  const pos = hit < from ? from : to
+  const assoc = empty ? 1 : pos === to ? -1 : 1
+  if (hit === to && view.state.selection.main.assoc === assoc) return false
+  view.dispatch({ selection: EditorSelection.create([EditorSelection.cursor(pos, assoc)]) })
+  event.preventDefault()
+  return true
+}
+
 /** 间接装饰 ViewPlugin：仅按 visibleRanges 更新，update 内不触发 DOM 测量 */
 const viewportLivePlugin = ViewPlugin.fromClass(
   class {
@@ -981,8 +1333,15 @@ const viewportLivePlugin = ViewPlugin.fromClass(
       }
     }
   },
-  { decorations: (plugin) => plugin.decorations },
+  {
+    decorations: (plugin) => plugin.decorations,
+    eventHandlers: {
+      mouseup(event: MouseEvent, view: EditorView) {
+        return clampGridCellPointer(event, view)
+      },
+    },
+  },
 )
 
 /** Live Preview 装饰装配：直接（StateField）+ 间接（ViewPlugin） */
-export const livePreviewDecorations: Extension = [liveDecorationsField, viewportLivePlugin]
+export const livePreviewDecorations: Extension = [liveDecorationsField, gridCellMouseSelection, viewportLivePlugin]

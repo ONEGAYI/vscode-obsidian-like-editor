@@ -9,6 +9,14 @@ import {
 
 const validChange: SerChange = { offset: 3, length: 0, text: '中文' }
 
+it('DOM 组合测试钩子只接受明确阶段和字符串候选', () => {
+  for (const phase of ['start', 'update', 'end']) {
+    expect(isHostToWebview({ kind: 'sync.test.composition', phase, text: '中文' })).toBe(true)
+  }
+  expect(isHostToWebview({ kind: 'sync.test.composition', phase: 'unknown', text: '中文' })).toBe(false)
+  expect(isHostToWebview({ kind: 'sync.test.composition', phase: 'update', text: null })).toBe(false)
+})
+
 describe('isWebviewToHost', () => {
   it('接受合法 ready', () => {
     expect(isWebviewToHost({ kind: 'ready' })).toBe(true)
@@ -129,12 +137,23 @@ describe('isWebviewToHost', () => {
   it('接受合法 conflict.report，拒绝缺字段或类型错误', () => {
     const base = { kind: 'conflict.report', sessionId: 's1', docUri: 'file:///a.md', version: 3, revision: 1, text: '本地全文' }
     expect(isWebviewToHost(base)).toBe(true)
+    expect(isWebviewToHost({ ...base, compositionPending: true })).toBe(true)
+    expect(isWebviewToHost({ ...base, compositionPending: false })).toBe(true)
+    expect(isWebviewToHost({ ...base, compositionPending: 'yes' })).toBe(false)
     expect(isWebviewToHost({ ...base, sessionId: 1 })).toBe(false)
     expect(isWebviewToHost({ ...base, docUri: null })).toBe(false)
     expect(isWebviewToHost({ ...base, version: -1 })).toBe(false)
     expect(isWebviewToHost({ ...base, revision: 0 })).toBe(false)
     expect(isWebviewToHost({ ...base, text: 42 })).toBe(false)
     expect(isWebviewToHost({ kind: 'conflict.report', sessionId: 's1', docUri: 'u', version: 1 })).toBe(false)
+  })
+
+  it('组合候选增量须含合法序号和源坐标变更', () => {
+    const base = { kind: 'composition.changed', sessionId: 's1', docUri: 'file:///a.md',
+      revision: 2, changes: [{ offset: 3, length: 1, text: '你' }] }
+    expect(isWebviewToHost(base)).toBe(true)
+    expect(isWebviewToHost({ ...base, revision: 0 })).toBe(false)
+    expect(isWebviewToHost({ ...base, changes: [{ offset: -1, length: 0, text: '你' }] })).toBe(false)
   })
 
   it('接受合法 conflict.action，拒绝非法 action 或缺字段', () => {
@@ -224,6 +243,25 @@ describe('isWebviewToHost', () => {
     expect(isWebviewToHost(base)).toBe(true)
   })
 
+  it('表格绘制样本校验：可见性和边框计算值类型必须可信', () => {
+    const base = { kind: 'view.state', text: '| A |', docLength: 5, lineCount: 1, renderedLines: 1 }
+    const table = {
+      cellVisible: true, gridDisplay: 'grid', cellBorderWidth: '1px',
+      rowOutlineColor: null, rowOutlineWidth: null, rowBackgroundColor: null,
+      columnBorderColor: null, columnBorderWidth: null, columnRightBorderWidth: null,
+      columnTopBorderWidth: null, columnBottomBorderWidth: null, columnBackgroundColor: null,
+    }
+    const paint = {
+      textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none',
+      darkTheme: false, caretColor: 'rgb(0, 0, 0)', table,
+    }
+    expect(isWebviewToHost({ ...base, paint })).toBe(true)
+    expect(isWebviewToHost({ ...base, paint: { ...paint, table: { ...table, cellVisible: 'yes' } } })).toBe(false)
+    expect(isWebviewToHost({ ...base, paint: { ...paint, table: { ...table, rowOutlineWidth: 2 } } })).toBe(false)
+    expect(isWebviewToHost({ ...base, paint: { ...paint, table: { ...table, columnBorderColor: [] } } })).toBe(false)
+    expect(isWebviewToHost({ ...base, paint: { ...paint, table: { ...table, columnRightBorderWidth: 2 } } })).toBe(false)
+  })
+
   it('拒绝 null、非对象与数组', () => {
     expect(isWebviewToHost(null)).toBe(false)
     expect(isWebviewToHost(undefined)).toBe(false)
@@ -273,6 +311,13 @@ describe('isWebviewToHost', () => {
 })
 
 describe('isHostToWebview', () => {
+  it('表格选中测试钩子只接受行或列的非负索引', () => {
+    expect(isHostToWebview({ kind: 'table.test.select', axis: 'row', index: 1 })).toBe(true)
+    expect(isHostToWebview({ kind: 'table.test.select', axis: 'column', index: 0 })).toBe(true)
+    expect(isHostToWebview({ kind: 'table.test.select', axis: 'cell', index: 0 })).toBe(false)
+    expect(isHostToWebview({ kind: 'table.test.select', axis: 'row', index: -1 })).toBe(false)
+  })
+
   it('接受合法 init', () => {
     expect(
       isHostToWebview({ kind: 'init', sessionId: 's1', docUri: 'file:///a.md', version: 2, text: '# 中文' }),
@@ -350,11 +395,24 @@ describe('isHostToWebview', () => {
     expect(isHostToWebview({ kind: 'table.command', op: 1 })).toBe(false)
   })
 
+  it('创建空表格是宿主到 webview 的独立命令消息', () => {
+    expect(isHostToWebview({ kind: 'table.create' })).toBe(true)
+    expect(isWebviewToHost({ kind: 'table.create' })).toBe(false)
+  })
+
   it('接受合法 table.test.key，拒绝未知键名（#13 测试钩子）', () => {
     expect(isHostToWebview({ kind: 'table.test.key', key: 'tab' })).toBe(true)
     expect(isHostToWebview({ kind: 'table.test.key', key: 'shift-tab' })).toBe(true)
-    expect(isHostToWebview({ kind: 'table.test.key', key: 'enter' })).toBe(false)
+    expect(isHostToWebview({ kind: 'table.test.key', key: 'enter' })).toBe(true)
+    expect(isHostToWebview({ kind: 'table.test.key', key: 'unknown' })).toBe(false)
     expect(isHostToWebview({ kind: 'table.test.key' })).toBe(false)
+  })
+
+  it('table.test.drag 只接受非负整数行索引与有效目标槽位（#43）', () => {
+    expect(isHostToWebview({ kind: 'table.test.drag', sourceIndex: 2, targetSlot: 0 })).toBe(true)
+    expect(isHostToWebview({ kind: 'table.test.drag', sourceIndex: -1, targetSlot: 0 })).toBe(false)
+    expect(isHostToWebview({ kind: 'table.test.drag', sourceIndex: 2.5, targetSlot: 0 })).toBe(false)
+    expect(isHostToWebview({ kind: 'table.test.drag', sourceIndex: 2, targetSlot: -1 })).toBe(false)
   })
 })
 

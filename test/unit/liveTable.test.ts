@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-// 表格单元格编辑契约（工单 #12）：live 装饰 + 单元格编辑链路 + 权威回读。
+// 表格单元格编辑契约（工单 #12/#42）：live 网格装饰 + 编辑链路 + 权威回读。
 //
 // 核心断言（用户可观察行为，非实现复述）：
-// - 装饰：表格行/单元格/管道符/对齐的稳定类名；无 widget 交互控件
-//   （表格编辑面即 CM6 源文本行：编辑直接发生在权威文本上，无覆盖层状态机）
+// - 装饰：表格行/单元格/管道符/对齐的稳定类名；安全表格的活动格也保留网格，
+//   原文零长度格用定位 widget；编辑清空后保留填充空格承载原生输入
 // - 编辑链路：视图单元格输入（CM6 事务）→ edit.request → 宿主权威文档
 //   → 保存回读（getText）→ 以权威文本重建装饰与编辑后呈现一致
 // - 键入 | 自动转义 \|；代码 span 内不转义；\ 之后不重复转义
@@ -13,18 +13,24 @@
 // - 真冲突进入暂停并保留输入（conflict.report），不静默丢字
 // - 增量装饰与全量重建对拍一致（RangeSet.eq）
 // - 千行单表：装饰构建/单格编辑增量在宽松时限内完成且写回正确
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { EditorSelection, EditorState, RangeSet, Text } from '@codemirror/state'
-import { EditorView } from '@codemirror/view'
+import { EditorView, keymap } from '@codemirror/view'
+import { defaultKeymap, deleteCharBackward, deleteCharForward } from '@codemirror/commands'
 import type { DecorationSet } from '@codemirror/view'
 import {
   LIVE_CLASS_NAMES,
   buildLivePreviewDecorations,
+  getTableGridStats,
   liveDecorationsField,
+  livePreviewDecorations,
 } from '../../src/webview/liveDecorations'
-import { tableEditing, tablePipeKeyHandler } from '../../src/webview/tableEditing'
+import { blankRowInputPlan, tableEditing, tablePipeKeyHandler } from '../../src/webview/tableEditing'
+import { splitTableRowCells, tableRowCellsForColumns } from '../../src/webview/tableCells'
+import { splitReadingBlocks } from '../../src/webview/readingBlocks'
+import { createReadingBlockElement } from '../../src/webview/readingView'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
-import { DocumentSession, type HostDocumentPort } from '../../src/host/documentSession'
+import { DocumentSession, type HostDocumentPort, type SessionNotice } from '../../src/host/documentSession'
 import type { HostToWebview, SerChange, WebviewToHost } from '../../src/shared/protocol'
 
 if (typeof Range !== 'undefined' && Range.prototype.getClientRects === undefined) {
@@ -84,6 +90,74 @@ function build(doc: string, selection = { anchor: 0 }): DecorationSet {
 // ---- 装饰契约 ----
 
 describe('live 表格装饰', () => {
+  it('跨过安全表格的非空选区不露出分隔行源码标记', () => {
+    const doc = '前文\n\n| A | B | C |\n| --- | --- | --- |\n| 带 | s是 | 送 |\n\n后文'
+    const selection = EditorSelection.single(1, doc.indexOf('后文') + 1)
+    const set = buildLivePreviewDecorations(Text.of(doc.split('\n')), selection)
+    expect(textsFor(set, LIVE_CLASS_NAMES.tableGridRow, doc)).toHaveLength(2)
+    const delimiterAt = doc.indexOf('| --- | --- | --- |')
+    expect(collect(set).some((item) => item.from === delimiterAt &&
+      item.cls?.split(' ').includes(LIVE_CLASS_NAMES.tableGridDelimiter))).toBe(true)
+  })
+
+  it('鼠标从段落跨行拖选到表格后方时停在表格边界，不把结构标记纳入选区', () => {
+    const doc = '前文\n\n| A | B | C |\n| --- | --- | --- |\n| 带 | s是 | 送 |\n\n后文'
+    const view = makeEditView(doc, 1)
+    view.dispatch({ selection: EditorSelection.single(1, doc.indexOf('后文') + 1),
+      userEvent: 'select.pointer' })
+    expect(view.state.selection.main.anchor).toBe(1)
+    expect(view.state.selection.main.head).toBe(doc.indexOf('| A | B | C |'))
+    expect(view.state.doc.toString()).toBe(doc)
+    const after = doc.indexOf('后文') + 1
+    view.dispatch({ selection: EditorSelection.single(after, 0), userEvent: 'select.pointer' })
+    expect(view.state.selection.main.head).toBe(doc.indexOf('| 带 | s是 | 送 |') + '| 带 | s是 | 送 |'.length)
+    view.destroy()
+  })
+
+  it('键盘跨过安全表格的非空选区删除不破坏隐藏结构', () => {
+    const doc = '前文\n\n| A | B | C |\n| --- | --- | --- |\n| 带 | s是 | 送 |\n\n后文'
+    const view = makeEditView(doc, 1)
+    view.dispatch({ selection: EditorSelection.single(1, doc.indexOf('后文') + 1), userEvent: 'select' })
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe(doc)
+    view.destroy()
+  })
+
+  it('中间空格连续退格后再输入仍包在中列网格标记中', () => {
+    const doc = '| 带 |  | 送 |\n| --- | --- | --- |\n| 左 | 右 | 末 |'
+    const line = doc.split('\n')[0]!
+    const middle = splitTableRowCells(line, 0)[1]!
+    const view = makeEditView(doc, middle.contentFrom)
+    deleteCharBackward(view)
+    deleteCharBackward(view)
+    expect(view.state.doc.line(1).text).toBe('| 带 | | 送 |')
+    const at = view.state.selection.main.head
+    view.dispatch({ changes: { from: at, insert: '是' },
+      selection: { anchor: at + 1 }, userEvent: 'input.type' })
+    expect(view.state.doc.line(1).text).toBe('| 带 |是 | 送 |')
+    expect(view.state.selection.main.assoc).toBe(-1)
+    const rendered = view.state.field(liveDecorationsField).decos
+    const rebuilt = buildLivePreviewDecorations(view.state.doc, view.state.selection)
+    expect(RangeSet.eq([rendered], [rebuilt])).toBe(true)
+    const cells = view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')[0]!
+      .querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')
+    expect(cells).toHaveLength(3)
+    expect(cells[1]!.textContent).toContain('是')
+    for (let i = 0; i < 8; i++) {
+      const at = view.state.selection.main.head
+      view.dispatch({ changes: { from: at, insert: 's' },
+        selection: { anchor: at + 1 }, userEvent: 'input.type' })
+      const current = view.state.doc.line(1)
+      const columns = splitTableRowCells(current.text, current.from)
+      expect(view.state.selection.main.head).toBeLessThanOrEqual(columns[1]!.contentTo)
+      expect(current.text.slice(columns[2]!.contentFrom - current.from,
+        columns[2]!.contentTo - current.from)).toBe('送')
+    }
+    expect(view.state.doc.line(1).text).toBe('| 带 |是ssssssss | 送 |')
+    expect(view.state.selection.main.assoc).toBe(-1)
+    view.destroy()
+  })
+
   it('表格各行带稳定行级类：表头/分隔/数据行区分', () => {
     const set = build(TABLE_DOC)
     // 4 行表格（header、delimiter、2 数据行）；行级装饰零宽 → @行首
@@ -138,7 +212,7 @@ describe('live 表格装饰', () => {
     expect(pipes.map((p) => TABLE_DOC[p.from])).toEqual(['|', '|', '|'])
   })
 
-  it('表格装饰不含任何 widget 或隐藏区间（编辑面即源文本，无交互控件实例）', () => {
+  it('非空表格行没有独立输入 widget 或源区间替换', () => {
     const set = build(TABLE_DOC)
     expect(collect(set).some((i) => i.cls === '__widget__' || i.cls === undefined)).toBe(false)
   })
@@ -153,6 +227,119 @@ describe('live 表格装饰', () => {
     const doc = '---\n| a | b |\n| --- | --- |\n---\n\n正文\n'
     const set = build(doc)
     expect(textsFor(set, LIVE_CLASS_NAMES.tableLine, doc)).toHaveLength(0)
+  })
+
+  it('活动单元格仍留在完整网格内，原文编辑和选区切换不改其他格', () => {
+    const at = TABLE_DOC.indexOf('苹果')
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc: TABLE_DOC, extensions: [livePreviewDecorations] }),
+    })
+    const rows = [...view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')]
+    expect(rows).toHaveLength(3)
+    expect(rows[0]?.dataset['vsidianTableRow']).toBe('header')
+    expect(rows[1]?.dataset['vsidianTableRow']).toBe('row')
+    expect(rows[0]?.style.getPropertyValue('--vsidian-table-columns')).toBe('2')
+    expect(rows[0]?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(2)
+    expect(rows[2]?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(2)
+    expect(rows[1]?.querySelector('.vsidian-table-grid-align-center')).not.toBeNull()
+    expect(view.contentDOM.querySelector('.vsidian-table-grid-delimiter')).not.toBeNull()
+    expect(view.state.doc.toString()).toBe(TABLE_DOC)
+
+    view.dispatch({ selection: EditorSelection.single(at) })
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(3)
+    const activeRow = view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')[1]!
+    expect(activeRow.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(2)
+    expect(view.state.doc.toString()).toBe(TABLE_DOC)
+    view.dispatch({ changes: { from: at, to: at + 2, insert: '香蕉' } })
+    expect(view.state.doc.toString()).toContain('| 香蕉 | 3 |')
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(3)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]
+      ?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(2)
+    view.destroy()
+  })
+
+  it('空格、转义管道与代码管道保留单格；不安全的列数不一致表格退回源码', () => {
+    const safe = '| A | B |\n| --- | :---: |\n| | x\\|y |\n| `a|b` | z |\n'
+    const safeSet = build(safe, { anchor: safe.length })
+    expect(textsFor(safeSet, LIVE_CLASS_NAMES.tableGridRow, safe)).toHaveLength(3)
+    expect(textsFor(safeSet, LIVE_CLASS_NAMES.tableGridCell, safe)).toHaveLength(6)
+    expect(textsFor(safeSet, LIVE_CLASS_NAMES.tableEscapedPipe, safe)).toEqual(['\\'])
+    const safeView = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc: safe, extensions: [livePreviewDecorations], selection: EditorSelection.single(safe.length) }),
+    })
+    expect(safeView.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(2)
+    expect(safeView.contentDOM.querySelectorAll('.vsidian-table-grid-row')[2]?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(2)
+    safeView.destroy()
+    const empty = '| A | B |\n| --- | --- |\n|| x |\n'
+    const emptySet = build(empty, { anchor: empty.length })
+    expect(textsFor(emptySet, LIVE_CLASS_NAMES.tableGridRow, empty)).toHaveLength(2)
+    expect(collect(emptySet).some((item) => item.cls === '__widget__')).toBe(true)
+    const emptyView = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc: empty, extensions: [livePreviewDecorations], selection: EditorSelection.single(empty.length) }),
+    })
+    const slot = emptyView.contentDOM.querySelector<HTMLElement>('[aria-label="空单元格"]')
+    expect(slot).not.toBeNull()
+    expect(slot!.parentElement?.classList.contains(LIVE_CLASS_NAMES.tableGridRow)).toBe(true)
+    expect(slot!.parentElement?.querySelectorAll(':scope > .cm-widgetBuffer')).toHaveLength(1)
+    slot!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    expect(emptyView.state.selection.main.from).toBe(empty.indexOf('|| x |') + 1)
+    expect(emptyView.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
+    emptyView.destroy()
+    const unsafe = '| A | B |\n| --- | --- |\n| only one |\n'
+    const unsafeSet = build(unsafe)
+    expect(textsFor(unsafeSet, LIVE_CLASS_NAMES.tableGridRow, unsafe)).toHaveLength(0)
+    expect(textsFor(unsafeSet, LIVE_CLASS_NAMES.tableLine, unsafe)).toHaveLength(3)
+    const trailing = '| A | B |\n| --- | --- |\n| c | d |  \n'
+    expect(textsFor(build(trailing, { anchor: trailing.length }), LIVE_CLASS_NAMES.tableGridRow, trailing))
+      .toHaveLength(2)
+  })
+
+  it.each([
+    ['a|b', '---|---', ' | ', 2],
+    ['a|b|c', '---|---|---', ' | | ', 3],
+    ['a|b|c|d', '---|---|---|---', ' | | | ', 4],
+    ['| a | b | c |', '| --- | --- | --- |', '| | | |', 3],
+  ])('合法表格 %s / %s / %s 保持 %i 格网格', (header, delimiter, row, count) => {
+    const doc = `${header}\n${delimiter}\n${row}\n`
+    const set = build(doc, { anchor: doc.length })
+    expect(textsFor(set, LIVE_CLASS_NAMES.tableGridRow, doc)).toHaveLength(2)
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc, extensions: [livePreviewDecorations], selection: EditorSelection.single(doc.length) }),
+    })
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]
+      ?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(count)
+    view.destroy()
+  })
+
+  it.each([2, 3])('同一无边界空白行在 %i 列表格按列数绘制，点击不写回且首次输入维持网格', (columns) => {
+    const header = Array.from({ length: columns }, (_, i) => String.fromCharCode(97 + i)).join('|')
+    const delimiter = Array(columns).fill('---').join('|')
+    const doc = `${header}\n${delimiter}\n | | \n`
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc, extensions: [livePreviewDecorations, tableEditing] }),
+    })
+    const table = splitReadingBlocks(doc).find((block) => block.kind === 'table')!
+    expect(createReadingBlockElement(table, doc).querySelectorAll('tbody td')).toHaveLength(columns)
+    for (let col = 0; col < columns; col++) {
+      const cells = view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')[1]
+        ?.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')
+      expect(cells).toHaveLength(columns)
+      cells![col]!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }))
+      expect(view.state.doc.toString()).toBe(doc)
+      const pos = splitTableRowCells(' | | ', doc.indexOf(' | | '))[col]!.contentFrom
+      view.dispatch({ selection: EditorSelection.single(pos) })
+      view.dispatch({ changes: { from: pos, insert: 'X' }, userEvent: 'input.type' })
+      expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]
+        ?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(columns)
+      expect(view.state.doc.line(3).text).toContain('X')
+      view.dispatch({ changes: { from: view.state.doc.line(3).from, to: view.state.doc.line(3).to, insert: ' | | ' } })
+    }
+    view.destroy()
   })
 
   it('增量维护：单元格编辑后装饰与全量重建对拍一致', () => {
@@ -208,6 +395,19 @@ function makeEditView(doc: string, anchor: number): EditorView {
 }
 
 describe('表格单元格 | 键转义钩子', () => {
+  it('省略边界的纯空白行首次键入管道：一笔规范化并转义，网格仍在', () => {
+    const doc = 'a|b|c\n---|---|---\n | | '
+    const pos = doc.length
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc, extensions: [livePreviewDecorations, tableEditing], selection: EditorSelection.single(pos) }),
+    })
+    expect(tablePipeKeyHandler(view)).toBe(true)
+    expect(view.state.doc.line(3).text).toBe('| | | \\||')
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]
+      ?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(3)
+    view.destroy()
+  })
   it('单元格内容中键入 | 写为 \\|（一次 CM6 事务）', () => {
     const view = makeEditView(TABLE_DOC, TABLE_DOC.indexOf('果') + 1)
     expect(tablePipeKeyHandler(view)).toBe(true)
@@ -328,11 +528,13 @@ interface LinkedPanel {
   doc: FakeDoc
   hostSent: WebviewToHost[]
   sessionId: string
+  notices: SessionNotice[]
 }
 
 async function setupLinked(text: string): Promise<LinkedPanel> {
   const doc = new FakeDoc(text)
-  const session = new DocumentSession(doc, { docUri: DOC_URI })
+  const notices: SessionNotice[] = []
+  const session = new DocumentSession(doc, { docUri: DOC_URI, onNotice: (notice) => notices.push(notice) })
   doc.onDocChanged((changes, version) => session.handleDocChanged(changes, version))
   const hostSent: WebviewToHost[] = []
   let sessionId = ''
@@ -352,9 +554,9 @@ async function setupLinked(text: string): Promise<LinkedPanel> {
   sessionId = session.attachPanel({
     send: (m: HostToWebview) => controller.handleHostMessage(m),
   })
-  controller.mount(document.createElement('div'))
+  controller.mount(document.createElement('div'), [keymap.of(defaultKeymap)])
   await settle()
-  return { controller, session, doc, hostSent, sessionId }
+  return { controller, session, doc, hostSent, sessionId, notices }
 }
 
 /** 宿主请求队列串行化后排空（applyChanges async 链） */
@@ -365,6 +567,426 @@ const settle = async (): Promise<void> => {
 }
 
 describe('单元格编辑权威链路', () => {
+  it('格内全选再删除只清空当前格，保留管道、分隔行和其他格', async () => {
+    const linked = await setupLinked(TABLE_DOC)
+    const view = linked.controller.getView()!
+    view.dispatch({ selection: EditorSelection.single(TABLE_DOC.indexOf('苹果') + 1) })
+    view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'a', ctrlKey: true, bubbles: true, cancelable: true,
+    }))
+    expect(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to)).toBe('苹果')
+    deleteCharBackward(view)
+    await settle()
+    expect(linked.doc.getText()).toBe(TABLE_DOC.replace('苹果', ''))
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(3)
+    for (let i = 0; i < 3; i++) deleteCharForward(view)
+    await settle()
+    expect(linked.doc.getText()).toBe(TABLE_DOC.replace('| 苹果 |', '| |'))
+    linked.controller.dispose()
+  })
+
+  it('从第二格扩选到前格后键入管道只替换第二格内容', () => {
+    const at = TABLE_DOC.indexOf('| 3 |') + 2
+    const view = makeEditView(TABLE_DOC, at + 1)
+    view.dispatch({ selection: EditorSelection.single(at + 1, TABLE_DOC.indexOf('苹果') + 2) })
+    expect(tablePipeKeyHandler(view)).toBe(true)
+    expect(view.state.doc.toString()).toBe(TABLE_DOC.replace('| 3 |', '| \\| |'))
+    view.destroy()
+  })
+
+  it.each(['text', 'empty', 'zero'] as const)('三列表格点击中间 %s 格后输入保持在第二列', (kind) => {
+    const row = kind === 'text' ? '| 带 | sss | 右 |'
+      : kind === 'empty' ? '| 带 |  | 右 |' : '| 带 || 右 |'
+    const doc = '| A | B | C |\n| --- | --- | --- |\n' + row + '\n'
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc, extensions: [livePreviewDecorations, tableEditing] }),
+    })
+    const cells = view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')[1]!
+      .querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')
+    expect(cells).toHaveLength(3)
+    const middle = cells[1]!
+    const ranges = splitTableRowCells(row, doc.indexOf(row))
+    const right = ranges[2]!.contentFrom
+    const hit = vi.spyOn(view, 'posAtCoords').mockReturnValue(right)
+    middle.dispatchEvent(new MouseEvent('mousedown', {
+      bubbles: true, cancelable: true, button: 0, buttons: 1, clientX: 440, clientY: 50,
+    }))
+    middle.dispatchEvent(new MouseEvent('mouseup', {
+      bubbles: true, cancelable: true, button: 0, clientX: 440, clientY: 50,
+    }))
+    const cursor = view.state.selection.main.head
+    expect(cursor).toBeGreaterThanOrEqual(kind === 'empty' ? ranges[1]!.from : ranges[1]!.contentFrom)
+    expect(cursor).toBeLessThanOrEqual(ranges[1]!.contentTo)
+    expect(view.state.selection.main.assoc).toBe(kind === 'empty' ? 1 : -1)
+    if (kind === 'zero') {
+      expect(view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')[1]!
+        .querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')[1]!
+        .classList.contains('vsidian-table-grid-empty-active')).toBe(true)
+    }
+    view.dispatch({ changes: { from: cursor, insert: '中' }, userEvent: 'input.type' })
+    const editedLine = view.state.doc.line(3)
+    const editedCells = splitTableRowCells(editedLine.text, editedLine.from)
+    expect(editedLine.text.slice(editedCells[1]!.contentFrom - editedLine.from,
+      editedCells[1]!.contentTo - editedLine.from)).toContain('中')
+    expect(editedLine.text.slice(editedCells[2]!.contentFrom - editedLine.from,
+      editedCells[2]!.contentTo - editedLine.from)).toBe('右')
+    hit.mockRestore()
+    view.destroy()
+  })
+
+  it.each(['backward', 'forward'] as const)('单元格边界 %s 删除不会删掉隐藏的表格标记', (direction) => {
+    const from = TABLE_DOC.indexOf('苹果')
+    const view = makeEditView(TABLE_DOC, direction === 'backward' ? from : from + 2)
+    for (let i = 0; i < 5; i++) {
+      (direction === 'backward' ? deleteCharBackward : deleteCharForward)(view)
+    }
+    expect(view.state.doc.toString()).toBe(TABLE_DOC.replace('| 苹果 |',
+      direction === 'backward' ? '|苹果 |' : '| 苹果|'))
+    view.destroy()
+  })
+
+  it('格内新输入的空格仍可退格删除', () => {
+    const text = TABLE_DOC.replace('苹果', '苹果 ')
+    const view = makeEditView(text, text.indexOf('苹果') + 3)
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe(TABLE_DOC)
+    view.destroy()
+  })
+
+  it('空单元格新输入的空格也可退格删除，不能把可编辑空白当作结构标记', () => {
+    const text = TABLE_DOC.replace('苹果', '')
+    const view = makeEditView(text, text.indexOf('|  |') + 2)
+    const at = view.state.selection.main.head
+    view.dispatch({ changes: { from: at, insert: ' ' }, selection: { anchor: at + 1 }, userEvent: 'input.type' })
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe(text)
+    view.destroy()
+  })
+
+  it.each(['backward', 'forward', 'selection', 'native'] as const)('中格以 %s 删光后保留原生输入所需的空文本承载', (method) => {
+    const text = '| 左 |middle| 右 |\n| --- | --- | --- |\n| a | b | c |'
+    const from = text.indexOf('middle')
+    const view = makeEditView(text, method === 'backward' ? from + 6 : from)
+    if (method === 'native') {
+      view.dispatch({ changes: { from, to: from + 6 }, selection: { anchor: from }, userEvent: 'input.type' })
+    } else if (method === 'selection') {
+      view.dispatch({ selection: EditorSelection.single(from, from + 6) })
+      deleteCharBackward(view)
+    } else {
+      for (let i = 0; i < 10; i++) (method === 'backward' ? deleteCharBackward : deleteCharForward)(view)
+    }
+    expect(view.state.doc.line(1).text).toBe('| 左 | | 右 |')
+    const middle = view.contentDOM.querySelector('.vsidian-table-grid-row')!
+      .querySelectorAll('.vsidian-table-grid-cell')[1]!
+    expect(middle.getAttribute('contenteditable')).not.toBe('false')
+    expect(middle.textContent).toBe(' ')
+    const at = view.state.selection.main.head
+    view.dispatch({ changes: { from: at, insert: 'abc' }, selection: { anchor: at + 3 }, userEvent: 'input.type' })
+    deleteCharBackward(view)
+    expect(view.state.doc.line(1).text).toBe('| 左 |ab | 右 |')
+    view.destroy()
+  })
+
+  it.each([0, 1])('省略边界管道的表头清空第 %i 格后仍保持两列', (column) => {
+    const text = 'a|b\n---|---\nc|d'
+    const at = column * 2
+    const view = makeEditView(text, at)
+    view.dispatch({ selection: EditorSelection.single(at, at + 1) })
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe((column === 0 ? '| |b|' : '|a| |') + '\n---|---\nc|d')
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
+    view.destroy()
+  })
+
+  it('删除隐藏转义符会暴露额外列时保留原文，不破坏安全表格', () => {
+    const text = '| a\\|b | c |\n| --- | --- |\n| d | e |'
+    const at = text.indexOf('\\')
+    const view = makeEditView(text, at + 1)
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe(text)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
+    view.destroy()
+  })
+
+  it('Home 落到表格源行首后退格不能吞掉前一行分隔声明', () => {
+    const view = makeEditView(TABLE_DOC, TABLE_DOC.indexOf('| 苹果 |'))
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe(TABLE_DOC)
+    view.destroy()
+  })
+
+  it('从格内拖到隐藏管道外时，鼠标选区仍限定在原格内容中', () => {
+    const at = TABLE_DOC.indexOf('苹果')
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc: TABLE_DOC,
+        extensions: [livePreviewDecorations, tableEditing, keymap.of(defaultKeymap)] }),
+    })
+    const cell = view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]!
+      .querySelector<HTMLElement>('.vsidian-table-grid-cell')!
+    const hit = vi.spyOn(view, 'posAtCoords').mockReturnValue(at + 2)
+    cell.dispatchEvent(new MouseEvent('mousedown', {
+      bubbles: true, cancelable: true, button: 0, buttons: 1, clientX: 80, clientY: 20,
+    }))
+    hit.mockReturnValue(at - 2)
+    document.dispatchEvent(new MouseEvent('mousemove', {
+      bubbles: true, cancelable: true, button: 0, buttons: 1, clientX: 0, clientY: 20,
+    }))
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }))
+    expect(view.state.selection.main.from).toBe(at)
+    expect(view.state.selection.main.to).toBe(at + 2)
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe(TABLE_DOC.replace('苹果', ''))
+    hit.mockRestore()
+    view.destroy()
+  })
+
+  it.each([2, 3])('格内连续点击 %i 次后删除不包含源码标记', (detail) => {
+    const at = TABLE_DOC.indexOf('苹果')
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc: TABLE_DOC,
+        extensions: [livePreviewDecorations, tableEditing, keymap.of(defaultKeymap)] }),
+    })
+    const cell = view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]!
+      .querySelector<HTMLElement>('.vsidian-table-grid-cell')!
+    const hit = vi.spyOn(view, 'posAtCoords').mockReturnValue(at + 1)
+    cell.dispatchEvent(new MouseEvent('mousedown', {
+      bubbles: true, cancelable: true, button: 0, buttons: 1, detail,
+    }))
+    cell.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, detail }))
+    expect(view.state.selection.main.from).toBe(at)
+    expect(view.state.selection.main.to).toBe(at + 2)
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe(TABLE_DOC.replace('苹果', ''))
+    hit.mockRestore()
+    view.destroy()
+  })
+
+  it('格内反向键盘扩选越过隐藏管道后删除仍保留结构，格外选中整表可以删除', () => {
+    const at = TABLE_DOC.indexOf('苹果')
+    const view = makeEditView(TABLE_DOC, at + 2)
+    view.dispatch({ selection: EditorSelection.single(at + 2, at - 2), userEvent: 'select' })
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe(TABLE_DOC.replace('苹果', ''))
+    view.dispatch({ selection: EditorSelection.single(0, view.state.doc.length), userEvent: 'select' })
+    deleteCharBackward(view)
+    expect(view.state.doc.toString()).toBe('')
+    view.destroy()
+  })
+
+  it('特殊空白格组合提交遇全文重同步时保留本地净输入并暂停，不能静默覆盖', async () => {
+    const source = 'a|b|c\n---|---|---\n | | \n'
+    const linked = await setupLinked(source)
+    const view = linked.controller.getView()!
+    const pos = source.indexOf(' | | ') + 5
+    view.dispatch({ selection: EditorSelection.single(pos) })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.dispatch({ changes: { from: pos, insert: '你' }, userEvent: 'input.type.compose' })
+    linked.controller.handleHostMessage({ kind: 'doc.resync', version: 2, text: '远端全文\n' })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    expect(view.state.doc.toString()).toContain('| | | 你|')
+    expect(view.state.doc.toString()).not.toBe('远端全文\n')
+    expect(linked.hostSent.some((msg) => msg.kind === 'conflict.report')).toBe(true)
+    expect((view.dom.parentElement?.parentElement?.querySelector('.vsidian-suspend-banner') as HTMLElement)?.style.display)
+      .toBe('flex')
+    expect(linked.session.getConflictState(linked.sessionId)?.webviewText).toBe(view.state.doc.toString())
+    linked.session.detachPanel(linked.sessionId)
+    expect(linked.notices).toMatchObject([{ type: 'panel-closed-with-input', webviewText: view.state.doc.toString() }])
+  })
+
+  it('特殊空白格组合净结果替换了原空白时重建装饰，不保留预编辑旧格位', async () => {
+    const source = 'a|b|c\n---|---|---\n | | \n'
+    const linked = await setupLinked(source)
+    const view = linked.controller.getView()!
+    const pos = source.indexOf(' | | ') + 5
+    view.dispatch({ selection: EditorSelection.single(pos) })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.dispatch({ changes: { from: pos - 1, to: pos, insert: '你' }, userEvent: 'input.type.compose' })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    const actual = view.state.field(liveDecorationsField).decos
+    const rebuilt = buildLivePreviewDecorations(view.state.doc, view.state.selection)
+    expect(collect(actual)).toEqual(collect(rebuilt))
+    expect(RangeSet.eq([actual], [rebuilt])).toBe(true)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(0)
+    expect(linked.doc.getText()).toBe(view.state.doc.toString())
+  })
+
+  it('千行安全表格的组合取消仅重建当前行，不再全表扫描', async () => {
+    const source = 'a|b|c\n---|---|---\n' +
+      Array.from({ length: 1000 }, (_, i) => `a${i}|b${i}|c${i}\n`).join('') + ' | | \n'
+    const linked = await setupLinked(source)
+    const view = linked.controller.getView()!
+    const pos = source.lastIndexOf(' | | ') + 5
+    view.dispatch({ selection: EditorSelection.single(pos) })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.dispatch({ changes: { from: pos, insert: 'n' }, userEvent: 'input.type.compose' })
+    view.dispatch({ changes: { from: pos, to: pos + 1, insert: '' }, userEvent: 'input.type.compose' })
+    const before = getTableGridStats().rowsScanned
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    expect(getTableGridStats().rowsScanned - before).toBeLessThan(20)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row').length).toBeGreaterThan(0)
+  })
+
+  it('长文档连续候选只发一次全文基线，后续候选桥消息随编辑量增长', async () => {
+    const prefix = '```\n' + ('x'.repeat(1000) + '\n').repeat(1000) + '```\n\n'
+    const source = prefix + 'a|b|c\n---|---|---\n | | \n'
+    const linked = await setupLinked(source)
+    const view = linked.controller.getView()!
+    const pos = source.indexOf(' | | ') + 5
+    view.dispatch({ selection: EditorSelection.single(pos) })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    let length = 0
+    for (let i = 1; i <= 12; i++) {
+      view.dispatch({ changes: { from: pos, to: pos + length, insert: 'n'.repeat(i) }, userEvent: 'input.type.compose' })
+      length = i
+    }
+    const full = linked.hostSent.filter((msg) => msg.kind === 'conflict.report' && msg.compositionPending)
+    const patches = linked.hostSent.filter((msg) => msg.kind === 'composition.changed')
+    expect(full).toHaveLength(1)
+    expect(patches).toHaveLength(12)
+    expect(JSON.stringify(patches).length).toBeLessThan(12000)
+    expect(linked.hostSent.filter((msg) => msg.kind === 'edit.request')).toHaveLength(0)
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    expect(linked.doc.getText()).toBe(view.state.doc.toString())
+  })
+  it('纯空白格 IME 组合预编辑与取消不规范化源行，也不向宿主写回', async () => {
+    const source = 'a|b|c\n---|---|---\n | | \n'
+    const linked = await setupLinked(source)
+    const view = linked.controller.getView()!
+    const pos = source.indexOf(' | | ') + 5
+    view.dispatch({ selection: EditorSelection.single(pos) })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionupdate'))
+    view.dispatch({ changes: { from: pos, insert: 'n' }, userEvent: 'input.type.compose' })
+    expect(view.state.doc.line(3).text).toBe(' | | n')
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]
+      ?.querySelectorAll(':scope > .vsidian-table-grid-cell')[2]?.textContent).toContain('n')
+    expect(linked.hostSent.filter((msg) => msg.kind === 'edit.request')).toHaveLength(0)
+    view.dispatch({ changes: { from: pos, to: pos + 1, insert: '' }, userEvent: 'input.type.compose' })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    expect(view.state.doc.toString()).toBe(source)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
+    expect(linked.doc.getText()).toBe(source)
+    expect(linked.hostSent.filter((msg) => msg.kind === 'edit.request')).toHaveLength(0)
+    linked.session.detachPanel(linked.sessionId)
+    expect(linked.notices.filter((notice) => notice.type === 'panel-closed-with-input')).toHaveLength(0)
+  })
+
+  it('纯空白格 IME 组合提交后补边界，只向宿主写一笔并维持目标列', async () => {
+    const source = 'a|b|c\n---|---|---\n | | \n'
+    const linked = await setupLinked(source)
+    const view = linked.controller.getView()!
+    const pos = source.indexOf(' | | ') + 5
+    view.dispatch({ selection: EditorSelection.single(pos) })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionupdate'))
+    view.dispatch({ changes: { from: pos, insert: 'ni' }, userEvent: 'input.type.compose' })
+    expect(linked.hostSent.filter((msg) => msg.kind === 'edit.request')).toHaveLength(0)
+    view.dispatch({ changes: { from: pos, to: pos + 2, insert: '你' }, userEvent: 'input.type.compose' })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    expect(linked.hostSent.filter((msg) => msg.kind === 'edit.request')).toHaveLength(1)
+    expect(linked.doc.getText()).toBe(view.state.doc.toString())
+    expect(view.state.doc.line(3).text).toBe('| | | 你|')
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]
+      ?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(3)
+    const table = splitReadingBlocks(linked.doc.getText()).find((block) => block.kind === 'table')!
+    expect(Array.from(createReadingBlockElement(table, linked.doc.getText()).querySelectorAll('tbody td'),
+      (cell) => cell.textContent)).toEqual(['', '', '你'])
+  })
+
+  it('纯空白格组合中面板关闭：未写回的候选文本通过宿主快照可取回', async () => {
+    const source = 'a|b|c\n---|---|---\n | | \n'
+    const linked = await setupLinked(source)
+    const view = linked.controller.getView()!
+    const pos = source.indexOf(' | | ') + 5
+    view.dispatch({ selection: EditorSelection.single(pos) })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.dispatch({ changes: { from: pos, insert: 'ni' }, userEvent: 'input.type.compose' })
+    await settle()
+    expect(linked.hostSent.filter((msg) => msg.kind === 'edit.request')).toHaveLength(0)
+    linked.session.detachPanel(linked.sessionId)
+    expect(linked.notices).toMatchObject([{ type: 'panel-closed-with-input', webviewText: view.state.doc.toString() }])
+  })
+
+  it('另一面板占住宿主队列时，空白格组合提交后立即关闭仍取回完整候选', async () => {
+    const source = 'a|b|c\n---|---|---\n | | \n'
+    const linked = await setupLinked(source)
+    const blocker = linked.session.attachPanel({ send: () => undefined })
+    await linked.session.handleWebviewMessage({ kind: 'ready' }, blocker)
+    linked.doc.holdApply = true
+    void linked.session.handleWebviewMessage({ kind: 'edit.request', sessionId: blocker, docUri: DOC_URI,
+      seq: 1, baseVersion: 1, changes: [{ offset: 0, length: 0, text: 'X' }] }, blocker)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const view = linked.controller.getView()!
+    const pos = source.indexOf(' | | ') + 5
+    view.dispatch({ selection: EditorSelection.single(pos) })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.dispatch({ changes: { from: pos, insert: '你' }, userEvent: 'input.type.compose' })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    expect(linked.hostSent.filter((msg) => msg.kind === 'edit.request')).toHaveLength(1)
+    expect(linked.hostSent.some((msg) => msg.kind === 'conflict.report' && msg.compositionPending === false)).toBe(true)
+    linked.session.detachPanel(linked.sessionId)
+    expect(linked.notices).toMatchObject([{ type: 'panel-closed-with-input', webviewText: view.state.doc.toString() }])
+    expect(view.state.doc.line(3).text).toBe('| | | 你|')
+  })
+
+  it.each([false, true])('纯空白格组合提交时外部%s增量按原有规则重定位或暂停', async (overlap) => {
+    const source = 'a|b|c\n---|---|---\n | | \n'
+    const linked = await setupLinked(source)
+    const view = linked.controller.getView()!
+    const pos = source.indexOf(' | | ') + 5
+    view.dispatch({ selection: EditorSelection.single(pos) })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.dispatch({ changes: { from: pos, insert: 'ni' }, userEvent: 'input.type.compose' })
+    const offset = overlap ? pos - 1 : 0
+    linked.doc.content = source.slice(0, offset) + 'X' + source.slice(offset + 1)
+    linked.doc.ver++
+    linked.session.handleDocChanged([{ offset, length: 1, text: 'X' }], linked.doc.ver)
+    view.dispatch({ changes: { from: pos, to: pos + 2, insert: '你' }, userEvent: 'input.type.compose' })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    if (overlap) {
+      expect(view.state.doc.toString()).toContain('你')
+      expect(linked.hostSent.some((msg) => msg.kind === 'conflict.report')).toBe(true)
+      expect(linked.notices.some((notice) => notice.type === 'conflict')).toBe(true)
+    } else {
+      expect(view.state.doc.toString()).toBe(linked.doc.getText())
+      expect(linked.doc.getText()).toContain('X|b|c')
+      expect(linked.doc.getText()).toContain('| | | 你|')
+    }
+  })
+  it.each([
+    [2, 'input.paste'],
+    [3, 'input.type.compose'],
+  ])('%i 列纯空白行末格首次 %s 输入：单笔权威写回并在阅读视图保持目标列', async (columns, userEvent) => {
+    const header = Array.from({ length: columns }, (_, i) => String.fromCharCode(97 + i)).join('|')
+    const delimiter = Array(columns).fill('---').join('|')
+    const source = `${header}\n${delimiter}\n | | \n`
+    const linked = await setupLinked(source)
+    const view = linked.controller.getView()!
+    const pos = tableRowCellsForColumns(' | | ', source.indexOf(' | | '), columns)![columns - 1]!.contentFrom
+    view.dispatch({ selection: EditorSelection.single(pos) })
+    view.dispatch({ changes: { from: pos, insert: 'X' }, userEvent })
+    await settle()
+    expect(linked.doc.getText()).toBe(view.state.doc.toString())
+    expect(linked.hostSent.filter((msg) => msg.kind === 'edit.request')).toHaveLength(1)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]
+      ?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(columns)
+    const table = splitReadingBlocks(linked.doc.getText()).find((block) => block.kind === 'table')!
+    const reading = createReadingBlockElement(table, linked.doc.getText())
+    expect(Array.from(reading.querySelectorAll('tbody td'), (cell) => cell.textContent))
+      .toEqual(Array.from({ length: columns }, (_, i) => i === columns - 1 ? 'X' : ''))
+  })
   it('视图单元格替换 → 权威文档更新 → 保存回读一致 → 再渲染一致', async () => {
     const linked = await setupLinked(TABLE_DOC)
     const view = linked.controller.getView()!
@@ -386,6 +1008,32 @@ describe('单元格编辑权威链路', () => {
     expect(tablePipeKeyHandler(view)).toBe(true)
     await settle()
     expect(linked.doc.getText()).toBe(TABLE_DOC.replace('| 苹果 | 3 |', '| 苹果\\| | 3 |'))
+  })
+
+  it.each([
+    ['替换选区', true],
+    ['纯插入', false],
+  ])('格内粘贴多行文本（%s）：换行持久化为格内换行标记，表格源行不拆散', async (_name, asReplace) => {
+    const linked = await setupLinked(TABLE_DOC)
+    const view = linked.controller.getView()!
+    const at = TABLE_DOC.indexOf('苹果')
+    view.dispatch({ selection: EditorSelection.single(asReplace ? at : at) })
+    view.dispatch({
+      changes: asReplace ? { from: at, to: at + 2, insert: 'a\r\nb\nc' } : { from: at, insert: 'x\ny' },
+      userEvent: 'input.paste',
+    })
+    await settle()
+    const pasted = asReplace ? 'a<br>b<br>c' : 'x<br>y苹果'
+    const expected = TABLE_DOC.replace('| 苹果 | 3 |', `| ${pasted} | 3 |`)
+    expect(linked.doc.getText()).toBe(expected)
+    // live 网格保持完整：表格四行未被拆散降级为源码
+    expect(textsFor(buildLivePreviewDecorations(view.state.doc, view.state.selection),
+      LIVE_CLASS_NAMES.tableLine, view.state.doc.toString())).toHaveLength(4)
+    // 阅读视图仍是表格块，粘贴的换行渲染为 <br>
+    const table = splitReadingBlocks(linked.doc.getText()).find((block) => block.kind === 'table')!
+    const reading = createReadingBlockElement(table, linked.doc.getText())
+    const firstBodyCell = reading.querySelectorAll('tbody td')[0]!
+    expect(firstBodyCell.querySelectorAll('br')).toHaveLength(asReplace ? 2 : 1)
   })
 
   it('撤销一次 = 撤销一次单元格提交（宿主权威栈回流）', async () => {
@@ -442,6 +1090,43 @@ describe('单元格编辑权威链路', () => {
     expect(view.state.doc.toString()).toContain('| 40 |')
     expect(linked.doc.getText()).toContain('苹果汁')
     expect(linked.doc.getText()).toContain('| 40 |')
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(3)
+  })
+
+  it('网格边框附近点击被约束在被点击的单元格源区间，不落到隐藏管道符', () => {
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc: TABLE_DOC, extensions: [livePreviewDecorations] }),
+    })
+    const first = view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')[1]!
+      .querySelector<HTMLElement>('.vsidian-table-grid-cell')!
+    const pipe = TABLE_DOC.indexOf('| 苹果 |')
+    const hit = vi.spyOn(view, 'posAtCoords').mockReturnValue(pipe)
+    const originalPosAtDOM = view.posAtDOM.bind(view)
+    const domMap = vi.spyOn(view, 'posAtDOM').mockImplementation((node, offset) =>
+      node === first ? pipe : originalPosAtDOM(node, offset))
+    first.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }))
+    expect(view.state.selection.main.from).toBe(pipe + 2)
+    view.dispatch({ selection: EditorSelection.single(pipe) }) // 浏览器默认定位若晚于装饰处理
+    first.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, button: 0 }))
+    expect(view.state.selection.main.from).toBe(pipe + 2)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(3)
+    hit.mockRestore()
+    domMap.mockRestore()
+    view.destroy()
+  })
+
+  it('活动格粘贴经同一 CM6 事务写回，网格和邻格不变', async () => {
+    const linked = await setupLinked(TABLE_DOC)
+    const view = linked.controller.getView()!
+    const at = TABLE_DOC.indexOf('苹果') + 2
+    view.dispatch({ selection: EditorSelection.single(at) })
+    view.dispatch({ changes: { from: at, insert: '汁' }, userEvent: 'input.paste' })
+    await settle()
+    expect(linked.doc.getText()).toBe(TABLE_DOC.replace('苹果', '苹果汁'))
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(3)
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')[1]
+      ?.querySelectorAll(':scope > .vsidian-table-grid-cell')).toHaveLength(2)
   })
 
   it('单元格在途编辑与外部变更真重叠：暂停并保留输入（不静默丢字）', async () => {
@@ -475,7 +1160,37 @@ function bigTableDoc(rows: number): string {
   return lines.join('\n')
 }
 
+it('千行表纯空白格首键资格判断只触及有界行数', () => {
+  const doc = 'a|b|c\n---|---|---\n' + Array.from({ length: 1000 }, (_, i) => `a${i}|b${i}|c${i}\n`).join('') + ' | | \n'
+  const state = EditorState.create({ doc, extensions: [livePreviewDecorations] })
+  const line = state.doc.line(state.doc.lines - 1)
+  const spy = vi.spyOn(state.doc, 'lineAt')
+  expect(blankRowInputPlan(state, line.from + 5, line.from + 5, 'X')).not.toBeNull()
+  expect(spy.mock.calls.length).toBeLessThan(16)
+  spy.mockRestore()
+})
+
 describe('千行单表性能边界', () => {
+  it('光标跨行仅重建局部装饰，不重复遍历整张表规划网格', () => {
+    const doc = bigTableDoc(1000)
+    const state0 = EditorState.create({ doc, extensions: [liveDecorationsField] })
+    const before = getTableGridStats()
+    const at = state0.doc.line(502).from + 3
+    const state1 = state0.update({ selection: EditorSelection.single(at) }).state
+    const after = getTableGridStats()
+    expect(state1.doc.toString()).toBe(doc)
+    expect(after.rowsScanned - before.rowsScanned).toBeLessThan(20)
+  })
+  it('网格 DOM 仍由 CM6 视口裁剪，千行表不常驻全部单元格节点', () => {
+    const doc = bigTableDoc(1000)
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc, extensions: [livePreviewDecorations] }),
+    })
+    expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-cell').length).toBeLessThan(150)
+    view.destroy()
+  })
+
   it('装饰全量构建在时限内完成且行数正确', () => {
     const doc = bigTableDoc(1000)
     const text = Text.of(doc.split('\n'))

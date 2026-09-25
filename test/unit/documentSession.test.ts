@@ -158,6 +158,23 @@ async function readyPanel(s: ReturnType<typeof setup>, sessionId: string): Promi
 }
 
 describe('ready 握手与 init', () => {
+  it('dirty 状态的空内容事件不广播，也不挤掉内容版本日志', async () => {
+    const s = setup('abc')
+    const id = s.attach()
+    await readyPanel(s, id)
+    await s.doc.applyChanges([{ offset: 0, length: 0, text: 'X' }])
+    await s.doc.applyChanges([{ offset: 0, length: 0, text: 'Y' }])
+    s.sent.get(id)!.length = 0
+    for (let i = 0; i < 300; i++) s.session.handleDocChanged([], s.doc.version)
+    expect(s.sent.get(id)).toEqual([])
+    await s.send(id, {
+      kind: 'edit.request', sessionId: id, docUri: DOC_URI,
+      seq: 1, baseVersion: 1, changes: [{ offset: 3, length: 0, text: '尾' }],
+    })
+    expect(s.doc.content).toBe('YXabc尾')
+    expect(s.sent.get(id)!.at(-1)).toMatchObject({ kind: 'edit.ack', ok: true })
+  })
+
   it('ready 后发送 init：sessionId、docUri、全文与版本', async () => {
     const s = setup('# 你好\n')
     const id = s.attach()
@@ -432,6 +449,137 @@ describe('外部变更广播与不写回保证', () => {
     const after = s.sent.get(id)!.length
     await s.send(id, { kind: 'ready' }).catch(() => undefined)
     expect(s.sent.get(id)!.length).toBe(after)
+  })
+
+  it('仅有未提交组合快照时关闭可取回；快照等于权威 LF 文本时正常关闭不误报', async () => {
+    const notices: SessionNotice[] = []
+    const s = setup('a\r\nb', { onNotice: (notice) => notices.push(notice) })
+    const first = s.attach()
+    await readyPanel(s, first)
+    await s.send(first, { kind: 'conflict.report', sessionId: first, docUri: DOC_URI,
+      version: 1, revision: 1, text: 'a\nb候选', compositionPending: true })
+    s.session.detachPanel(first)
+    expect(notices).toMatchObject([{ type: 'panel-closed-with-input', webviewText: 'a\nb候选' }])
+
+    const second = s.attach()
+    await readyPanel(s, second)
+    await s.send(second, { kind: 'conflict.report', sessionId: second, docUri: DOC_URI,
+      version: 1, revision: 1, text: 'a\nb候选', compositionPending: true })
+    await s.send(second, { kind: 'conflict.report', sessionId: second, docUri: DOC_URI,
+      version: 1, revision: 2, text: 'a\nb', compositionPending: false })
+    s.session.detachPanel(second)
+    expect(notices).toHaveLength(1)
+
+    const equalLf = s.attach()
+    await readyPanel(s, equalLf)
+    await s.send(equalLf, { kind: 'conflict.report', sessionId: equalLf, docUri: DOC_URI,
+      version: 1, revision: 1, text: 'a\nb', compositionPending: true })
+    s.session.detachPanel(equalLf)
+    expect(notices).toHaveLength(1)
+
+    const staleOrdinary = s.attach()
+    await readyPanel(s, staleOrdinary)
+    await s.send(staleOrdinary, { kind: 'conflict.report', sessionId: staleOrdinary, docUri: DOC_URI,
+      version: 1, revision: 1, text: '旧快照' })
+    s.session.detachPanel(staleOrdinary)
+    expect(notices).toHaveLength(1)
+  })
+
+  it('组合基线后的候选增量依次更新快照，关闭时取回最新文本', async () => {
+    const notices: SessionNotice[] = []
+    const s = setup('a\r\nb', { onNotice: (notice) => notices.push(notice) })
+    const id = s.attach()
+    await readyPanel(s, id)
+    await s.send(id, { kind: 'conflict.report', sessionId: id, docUri: DOC_URI,
+      version: 1, revision: 1, text: 'a\nb', compositionPending: true })
+    await s.send(id, { kind: 'composition.changed', sessionId: id, docUri: DOC_URI,
+      revision: 2, changes: [{ offset: 3, length: 0, text: 'n' }] })
+    await s.send(id, { kind: 'composition.changed', sessionId: id, docUri: DOC_URI,
+      revision: 3, changes: [{ offset: 3, length: 1, text: '你' }] })
+    s.session.detachPanel(id)
+    expect(notices).toMatchObject([{ type: 'panel-closed-with-input', webviewText: 'a\nb你' }])
+  })
+
+  it('另一面板阻塞请求队列时，组合提交后立即关闭仍可取回；确认后正常关闭不误报', async () => {
+    const source = 'a|b|c\n---|---|---\n | | \n'
+    const final = 'a|b|c\n---|---|---\n| | | 你|\n'
+    const rowFrom = source.indexOf(' | | ')
+    const notices: SessionNotice[] = []
+    const s = setup(source, { onNotice: (notice) => notices.push(notice) })
+    const blocker = s.attach()
+    const editing = s.attach()
+    await readyPanel(s, blocker)
+    await readyPanel(s, editing)
+    const gate = s.doc.holdNextApply()
+    void s.send(blocker, { kind: 'edit.request', sessionId: blocker, docUri: DOC_URI,
+      seq: 1, baseVersion: 1, changes: [{ offset: 0, length: 0, text: 'X' }] })
+    await new Promise((resolve) => setTimeout(resolve, 0)) // 第一面板占住 DocumentSession.queue
+    await s.send(editing, { kind: 'conflict.report', sessionId: editing, docUri: DOC_URI,
+      version: 1, revision: 1, text: final, compositionPending: true })
+    void s.send(editing, { kind: 'edit.request', sessionId: editing, docUri: DOC_URI,
+      seq: 1, baseVersion: 1, changes: [{ offset: rowFrom, length: 5, text: '| | | 你|' }] })
+    await s.send(editing, { kind: 'conflict.report', sessionId: editing, docUri: DOC_URI,
+      version: 1, revision: 2, text: final, compositionPending: false })
+    s.session.detachPanel(editing)
+    expect(notices).toMatchObject([{ type: 'panel-closed-with-input', webviewText: final }])
+    gate.release()
+
+    const confirmedNotices: SessionNotice[] = []
+    const confirmed = setup(source, { onNotice: (notice) => confirmedNotices.push(notice) })
+    const id = confirmed.attach()
+    await readyPanel(confirmed, id)
+    await confirmed.send(id, { kind: 'conflict.report', sessionId: id, docUri: DOC_URI,
+      version: 1, revision: 1, text: final, compositionPending: true })
+    await confirmed.send(id, { kind: 'edit.request', sessionId: id, docUri: DOC_URI,
+      seq: 1, baseVersion: 1, changes: [{ offset: rowFrom, length: 5, text: '| | | 你|' }] })
+    await confirmed.send(id, { kind: 'conflict.report', sessionId: id, docUri: DOC_URI,
+      version: 1, revision: 2, text: final, compositionPending: false })
+    confirmed.session.detachPanel(id)
+    expect(confirmed.doc.getText()).toBe(final)
+    expect(confirmedNotices).toHaveLength(0)
+  })
+
+  it('已确认 seq 在另一面板阻塞队列时重传，立即关闭不误报未确认输入', async () => {
+    const notices: SessionNotice[] = []
+    const s = setup('abc', { onNotice: (notice) => notices.push(notice) })
+    const editing = s.attach()
+    const blocker = s.attach()
+    await readyPanel(s, editing)
+    await readyPanel(s, blocker)
+    const savedRequest = { kind: 'edit.request' as const, sessionId: editing, docUri: DOC_URI,
+      seq: 1, baseVersion: 1, changes: [{ offset: 3, length: 0, text: '已保存' }] }
+    await s.send(editing, savedRequest)
+    expect(s.doc.getText()).toBe('abc已保存')
+    expect(s.sent.get(editing)?.at(-1)).toMatchObject({ kind: 'edit.ack', seq: 1, ok: true })
+
+    const gate = s.doc.holdNextApply()
+    void s.send(blocker, { kind: 'edit.request', sessionId: blocker, docUri: DOC_URI,
+      seq: 1, baseVersion: s.doc.ver, changes: [{ offset: 0, length: 0, text: 'X' }] })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    void s.send(editing, savedRequest) // 已保存请求重传，不应重新登记为未确认输入
+    s.session.detachPanel(editing)
+    expect(notices).toHaveLength(0)
+    gate.release()
+  })
+
+  it('未确认 seq 在另一面板阻塞队列时重复到达，关闭仍可取回输入', async () => {
+    const notices: SessionNotice[] = []
+    const s = setup('abc', { onNotice: (notice) => notices.push(notice) })
+    const blocker = s.attach()
+    const editing = s.attach()
+    await readyPanel(s, blocker)
+    await readyPanel(s, editing)
+    const gate = s.doc.holdNextApply()
+    void s.send(blocker, { kind: 'edit.request', sessionId: blocker, docUri: DOC_URI,
+      seq: 1, baseVersion: 1, changes: [{ offset: 0, length: 0, text: 'X' }] })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const unsavedRequest = { kind: 'edit.request' as const, sessionId: editing, docUri: DOC_URI,
+      seq: 1, baseVersion: 1, changes: [{ offset: 3, length: 0, text: '待取回' }] }
+    void s.send(editing, unsavedRequest)
+    void s.send(editing, unsavedRequest)
+    s.session.detachPanel(editing)
+    expect(notices).toMatchObject([{ type: 'panel-closed-with-input', fragments: ['待取回'] }])
+    gate.release()
   })
 })
 

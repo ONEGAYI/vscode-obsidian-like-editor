@@ -30,6 +30,16 @@ const TABLE_DOC = [
 ].join('\n')
 
 describe('阅读块模型：表格独立成块', () => {
+  it('格内换行显示为 br，行内代码和带属性的 HTML 保持字面文本', () => {
+    const text = '| 上<br>下 | `a<br>b` |\n| --- | --- |\n| 甲<br/>乙<br />丙 | <br onclick="x()"> |'
+    const table = splitReadingBlocks(text).find((b) => b.kind === 'table')!
+    const el = createReadingBlockElement(table, text)
+    expect(el.querySelectorAll('th')[0]!.querySelectorAll('br')).toHaveLength(1)
+    expect(el.querySelectorAll('th')[1]!.textContent).toBe('a<br>b')
+    expect(el.querySelectorAll('td')[0]!.querySelectorAll('br')).toHaveLength(2)
+    expect(el.querySelectorAll('td')[1]!.querySelector('br')).toBeNull()
+    expect(el.querySelectorAll('td')[1]!.textContent).toContain('<br onclick="x()">')
+  })
   it('表格切为 kind=table 的块，区间覆盖表头到末行，带源锚点', () => {
     const blocks = splitReadingBlocks(TABLE_DOC)
     const table = blocks.find((b) => b.kind === 'table')

@@ -94,12 +94,25 @@ export type HostToWebview =
    *  模式只读忽略）。变更经 webview 的 CM6 事务走标准出站链路
    *  （edit.request 一笔 = 宿主撤销一次） */
   | { kind: 'table.command'; op: TableEditOp }
+  /** 在当前光标/选区建立两列两内容行的空表格，仍走 CM6 文本事务。 */
+  | { kind: 'table.create' }
   /** 测试钩子（#13）：向真实编辑器派发 Tab/Shift+Tab keydown（与用户按键
    *  同一 keymap 链路；纯选区导航，零写回）。宿主测试无法向 webview 派发
    *  真实键盘事件，以此通道验证导航装配 */
-  | { kind: 'table.test.key'; key: 'tab' | 'shift-tab' }
+  | { kind: 'table.test.key'; key: 'tab' | 'shift-tab' | 'select-all' | 'backspace' | 'delete' | 'enter' }
+  /** 测试钩子（#42）：在真实 webview 网格单元格派发鼠标点击及当前位置输入。 */
+  | { kind: 'table.test.cellClick'; rowIndex: number; columnIndex: number; point?: 'edge' | 'middle' | 'right-edge' }
+  | { kind: 'table.test.crossSelect'; anchor: number; head: number }
+  | { kind: 'table.test.type'; text: string }
+  | { kind: 'table.test.domType'; text: string }
+  /** 测试钩子（#43）：点击真实行/列抓手，验证选中态实际绘制。 */
+  | { kind: 'table.test.select'; axis: 'row' | 'column'; index: number }
+  /** 测试钩子（#43）：真实 webview DOM 的点阵抓手拖动事件。 */
+  | { kind: 'table.test.drag'; sourceIndex: number; targetSlot: number }
   /** 测试钩子（#21）：在真实 webview 的 CM6 中输入，验证暂停态即时留存。 */
   | { kind: 'sync.test.edit'; offset: number; text: string; closeAfter?: boolean }
+  /** 测试钩子：组合候选写入首行 DOM，经过 CM6 MutationObserver 的真实输入链。 */
+  | { kind: 'sync.test.composition'; phase: 'start' | 'update' | 'end'; text: string }
   /** 测试钩子：真实 webview DOM 的渲染链接 mousedown。 */
   | { kind: 'link.test.mousedown'; target: 'wikilink' | 'link'; index: number; ctrlKey?: boolean }
   /** 设置快照（#33）：当前生效设置的全量键值对。两个消费方向——设置页
@@ -132,7 +145,11 @@ export type WebviewToHost =
   /** 请求宿主回发全文重同步（外部变更与本地状态无法安全对齐时） */
   | { kind: 'sync.request' }
   /** 冲突/暂停时的本地全文快照上报：宿主保存供用户取回未确认输入 */
-  | { kind: 'conflict.report'; sessionId: string; docUri: string; version: number; revision: number; text: string }
+  | { kind: 'conflict.report'; sessionId: string; docUri: string; version: number; revision: number; text: string;
+      /** 仅空白表格格 IME 暂缓：快照仍含未提交候选文本；结束时显式清除。 */
+      compositionPending?: boolean }
+  /** 空白格组合候选的 LF 增量：首笔 conflict.report 已提供全文基线。 */
+  | { kind: 'composition.changed'; sessionId: string; docUri: string; revision: number; changes: SerChange[] }
   /** 测试钩子（#21）：编辑事务结束后立即关闭面板，检验快照与关闭竞争。 */
   | { kind: 'sync.test.close'; sessionId: string; docUri: string }
   /** 暂停横幅按钮动作：copy = 请求宿主复制未确认输入；resume = 请求恢复（重新同步） */
@@ -160,6 +177,8 @@ export type WebviewToHost =
       viewMode?: 'live' | 'reading'
       /** live 光标主位置（UTF-16 offset；#6 锚点恢复观测） */
       selectionOffset?: number
+      selectionHead?: number
+      selectionAssoc?: number
       /** 阅读容器内块元素数（#6；#7 起为挂载块数，屏外块不创建） */
       readingBlockCount?: number
       /** 当前阅读锚点块的源 start（源码位置锚点，非滚动百分比） */
@@ -183,6 +202,8 @@ export type WebviewToHost =
       cssProbe?: CssProbeReport
       /** live 侧语法装饰统计（#8 双视图语义一致性观测；装饰集合级计数，非 DOM） */
       liveSyntax?: LiveSyntaxProbe
+      /** #42：网格 DOM 与活动格、#43 抓手的真实宿主观测 */
+      tableGrid?: { visibleRows: number; selectedRowIsGrid: boolean; selectedRowCells: string[]; rowHandles: number }
       /** reading 侧渲染语义统计（#8 双视图语义一致性观测；小文档全量挂载时有效） */
       readingSyntax?: ReadingSyntaxProbe
       /** live 视口内链接 span 数（#10；间接装饰渲染结果，限于视口） */
@@ -384,6 +405,8 @@ export interface PaintProbe {
   scrollerDisplay: string | null
   /** 行号栏 computed user-select（'none' = 禁选；栏未装配为 null） */
   gutterUserSelect: string | null
+  /** 真宿主中通过文字可见性、面积与命中检查的行号文本。 */
+  visibleLineNumbers?: string[]
   /** CM6 明暗声明当前激活态（EditorView.darkTheme facet 实值）。随宿主
    *  body 主题 class 动态跟随；激活后 baseTheme 内建变体接管 caret 等
    *  颜色——本扩展不硬编码光标色（深色主题黑底黑光标回归的观测位） */
@@ -392,6 +415,28 @@ export interface PaintProbe {
    *  drawSelection 时 CM6 光标即原生 caret，颜色由 baseTheme 明暗变体
    *  决定（light=black / dark=white）；jsdom 无 CSS 引擎为 null */
   caretColor: string | null
+  /** #42/#43 表格绘制：真宿主文本命中与计算样式；无表格/未选中为 null。 */
+  table?: {
+    cellVisible: boolean
+    /** 真宿主光标（零宽格使用格内绘制指示）的命中列；无可见光标时为 null。 */
+    caretGridColumn?: number | null
+    delimiterDisplay?: string | null
+    headerCellBackgrounds?: string[]
+    caretDomColumn?: number | null
+    caretNativeRectHeight?: number | null
+    cellBreakDisplay?: string | null
+    gridDisplay: string | null
+    cellBorderWidth: string | null
+    rowOutlineColor: string | null
+    rowOutlineWidth: string | null
+    rowBackgroundColor: string | null
+    columnBorderColor: string | null
+    columnBorderWidth: string | null
+    columnRightBorderWidth: string | null
+    columnTopBorderWidth: string | null
+    columnBottomBorderWidth: string | null
+    columnBackgroundColor: string | null
+  }
 }
 
 /** #32 排版一致性探针：正文基础排版四项样本（null = 元素缺失/不可读） */
@@ -508,6 +553,13 @@ function isFindSessionProbe(v: unknown): v is FindSessionProbe {
   )
 }
 
+function isTableGridProbe(v: unknown): boolean {
+  return isObject(v) && isNonNegativeInt(v.visibleRows) &&
+    typeof v.selectedRowIsGrid === 'boolean' &&
+    Array.isArray(v.selectedRowCells) && v.selectedRowCells.every(isString) &&
+    isNonNegativeInt(v.rowHandles)
+}
+
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
@@ -550,8 +602,33 @@ function isPaintProbe(v: unknown): v is PaintProbe {
     typeof v.textVisible === 'boolean' &&
     isNullOrString(v.scrollerDisplay) &&
     isNullOrString(v.gutterUserSelect) &&
+    (v.visibleLineNumbers === undefined || (Array.isArray(v.visibleLineNumbers) &&
+      v.visibleLineNumbers.every((number) => typeof number === 'string'))) &&
     typeof v.darkTheme === 'boolean' &&
-    isNullOrString(v.caretColor)
+    isNullOrString(v.caretColor) &&
+    (v.table === undefined || (
+      isObject(v.table) &&
+      typeof v.table.cellVisible === 'boolean' &&
+      (v.table.caretGridColumn === undefined || v.table.caretGridColumn === null ||
+        isNonNegativeInt(v.table.caretGridColumn)) &&
+      isNullOrString(v.table.gridDisplay) &&
+      (v.table.delimiterDisplay === undefined || isNullOrString(v.table.delimiterDisplay)) &&
+      (v.table.headerCellBackgrounds === undefined || (Array.isArray(v.table.headerCellBackgrounds) &&
+        v.table.headerCellBackgrounds.every(isString))) &&
+      (v.table.caretDomColumn === undefined || v.table.caretDomColumn === null || isNonNegativeInt(v.table.caretDomColumn)) &&
+      (v.table.caretNativeRectHeight === undefined || v.table.caretNativeRectHeight === null || isNonNegativeNumber(v.table.caretNativeRectHeight)) &&
+      (v.table.cellBreakDisplay === undefined || v.table.cellBreakDisplay === null || isString(v.table.cellBreakDisplay)) &&
+      isNullOrString(v.table.cellBorderWidth) &&
+      isNullOrString(v.table.rowOutlineColor) &&
+      isNullOrString(v.table.rowOutlineWidth) &&
+      isNullOrString(v.table.rowBackgroundColor) &&
+      isNullOrString(v.table.columnBorderColor) &&
+      isNullOrString(v.table.columnBorderWidth) &&
+      isNullOrString(v.table.columnRightBorderWidth) &&
+      isNullOrString(v.table.columnTopBorderWidth) &&
+      isNullOrString(v.table.columnBottomBorderWidth) &&
+      isNullOrString(v.table.columnBackgroundColor)
+    ))
   )
 }
 
@@ -740,8 +817,12 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         isString(v.docUri) &&
         isNonNegativeInt(v.version) &&
         isPositiveInt(v.revision) &&
-        isString(v.text)
+        isString(v.text) &&
+        (v.compositionPending === undefined || typeof v.compositionPending === 'boolean')
       )
+    case 'composition.changed':
+      return isString(v.sessionId) && isString(v.docUri) &&
+        isPositiveInt(v.revision) && isSerChangeArray(v.changes)
     case 'sync.test.close':
       return isString(v.sessionId) && isString(v.docUri)
     case 'settings.open':
@@ -770,6 +851,9 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.headingFontPx === undefined || isNonNegativeNumber(v.headingFontPx)) &&
         (v.viewMode === undefined || v.viewMode === 'live' || v.viewMode === 'reading') &&
         (v.selectionOffset === undefined || isNonNegativeInt(v.selectionOffset)) &&
+        (v.selectionHead === undefined || isNonNegativeInt(v.selectionHead)) &&
+        (v.selectionAssoc === undefined || (typeof v.selectionAssoc === 'number' &&
+          Number.isInteger(v.selectionAssoc) && v.selectionAssoc >= -1 && v.selectionAssoc <= 1)) &&
         (v.readingBlockCount === undefined || isNonNegativeInt(v.readingBlockCount)) &&
         (v.readingAnchorStart === undefined || isNonNegativeInt(v.readingAnchorStart)) &&
         (v.readingTotalBlocks === undefined || isNonNegativeInt(v.readingTotalBlocks)) &&
@@ -782,6 +866,7 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.readingScrollHeightPx === undefined || isNonNegativeNumber(v.readingScrollHeightPx)) &&
         (v.cssProbe === undefined || isCssProbeReport(v.cssProbe)) &&
         (v.liveSyntax === undefined || isLiveSyntaxProbe(v.liveSyntax)) &&
+        (v.tableGrid === undefined || isTableGridProbe(v.tableGrid)) &&
         (v.readingSyntax === undefined || isReadingSyntaxProbe(v.readingSyntax)) &&
         (v.liveLinkCount === undefined || isNonNegativeInt(v.liveLinkCount)) &&
         (v.liveImageCount === undefined || isNonNegativeInt(v.liveImageCount)) &&
@@ -945,11 +1030,28 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return v.direction === 'next' || v.direction === 'prev'
     case 'table.command':
       return isTableEditOp(v.op)
+    case 'table.create':
+      return true
     case 'table.test.key':
-      return v.key === 'tab' || v.key === 'shift-tab'
+      return v.key === 'tab' || v.key === 'shift-tab' || v.key === 'select-all' || v.key === 'enter' ||
+        v.key === 'backspace' || v.key === 'delete'
+    case 'table.test.cellClick':
+      return isNonNegativeInt(v.rowIndex) && isNonNegativeInt(v.columnIndex) &&
+        (v.point === undefined || v.point === 'edge' || v.point === 'middle' || v.point === 'right-edge')
+    case 'table.test.crossSelect':
+      return isNonNegativeInt(v.anchor) && isNonNegativeInt(v.head)
+    case 'table.test.type':
+    case 'table.test.domType':
+      return isString(v.text)
+    case 'table.test.select':
+      return (v.axis === 'row' || v.axis === 'column') && isNonNegativeInt(v.index)
+    case 'table.test.drag':
+      return isNonNegativeInt(v.sourceIndex) && isNonNegativeInt(v.targetSlot)
     case 'sync.test.edit':
       return isNonNegativeInt(v.offset) && isString(v.text) &&
         (v.closeAfter === undefined || typeof v.closeAfter === 'boolean')
+    case 'sync.test.composition':
+      return (v.phase === 'start' || v.phase === 'update' || v.phase === 'end') && isString(v.text)
     case 'link.test.mousedown':
       return (v.target === 'wikilink' || v.target === 'link') && isNonNegativeInt(v.index) &&
         (v.ctrlKey === undefined || typeof v.ctrlKey === 'boolean')

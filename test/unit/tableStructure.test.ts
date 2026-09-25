@@ -20,6 +20,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   planTableEdit,
+  planTableRowMove,
   tableCellNavTarget,
   type TableRowInfo,
 } from '../../src/webview/tableStructure'
@@ -74,6 +75,13 @@ const at = (needle: string, from = 0): number => DOC.indexOf(needle, from)
 // ---- Tab / Shift+Tab 导航目标 ----
 
 describe('tableCellNavTarget：单元格导航目标', () => {
+  it('两列空白行的 Tab 只遍历网格实际两格，不进入被截断的尾部空白', () => {
+    const doc = 'a|b\n---|---\n | | '
+    const rows = rowsOf(doc, [0, 1, 2], ['header', 'delimiter', 'row'])
+    const start = doc.lastIndexOf(' | | ')
+    expect(tableCellNavTarget(doc, rows, start + 1, true)).toBe(start + 3)
+    expect(tableCellNavTarget(doc, rows, start + 3, true)).toBeNull()
+  })
   it('Tab：单元格内光标 → 下一单元格内容首', () => {
     // '| 苹果 | 3 | 甲 |' 中「苹果」首字符后
     const p = at('苹果') + 1
@@ -128,6 +136,60 @@ describe('tableCellNavTarget：单元格导航目标', () => {
   it('光标不在任何表格行上 → null', () => {
     expect(tableCellNavTarget(DOC, ROWS, at('前导段落'), true)).toBeNull()
     expect(tableCellNavTarget(DOC, ROWS, at('结尾段落'), false)).toBeNull()
+  })
+})
+
+describe('planTableRowMove：点阵拖排行', () => {
+  it('表头拖到末尾：首个数据行升为表头，分隔行与对齐声明原位不动', () => {
+    const plan = planTableRowMove(DOC, ROWS, 0, 3)!
+    expect(apply(DOC, plan.changes)).toBe([
+      '前导段落。', '',
+      '| 苹果 | 3 | 甲 |',
+      '| --- | :---: | ---: |',
+      '| `x|y` | 4 | 乙\\|丙 |',
+      '| 名字 | 数量 | 备注 |',
+      '', '结尾段落。',
+    ].join('\n'))
+    expect(plan.changes.every((c) => DOC.slice(c.from, c.to).indexOf('\n') < 0)).toBe(true)
+  })
+
+  it('末数据行拖到表头：空格、转义与代码内管道符逐字保留', () => {
+    const plan = planTableRowMove(DOC, ROWS, 2, 0)!
+    const after = apply(DOC, plan.changes)
+    expect(after).toContain('| `x|y` | 4 | 乙\\|丙 |\n| --- | :---: | ---: |\n| 名字 | 数量 | 备注 |')
+    expect(after.startsWith('前导段落。\n\n')).toBe(true)
+    expect(after.endsWith('\n\n结尾段落。')).toBe(true)
+  })
+
+  it('首末边界与原位置落点：相邻不动，末数据行可移到第一数据行', () => {
+    expect(planTableRowMove(DOC, ROWS, 0, 0)).toBeNull()
+    expect(planTableRowMove(DOC, ROWS, 0, 1)).toBeNull()
+    expect(planTableRowMove(DOC, ROWS, 2, 3)).toBeNull()
+    expect(planTableRowMove(DOC, ROWS, 3, 0)).toBeNull()
+    const plan = planTableRowMove(DOC, ROWS, 2, 1)!
+    expect(apply(DOC, plan.changes)).toContain(
+      '| 名字 | 数量 | 备注 |\n| --- | :---: | ---: |\n| `x|y` | 4 | 乙\\|丙 |\n| 苹果 | 3 | 甲 |',
+    )
+  })
+
+  it('只替换行内容，CRLF 和结尾换行字节保持原状', () => {
+    const doc = '前\r\n| a | b |\r\n| :--- | ---: |\r\n| 1 | |\r\n| 2 | x |\r\n尾\r\n'
+    const lines = doc.split('\r\n')
+    let offset = 0
+    const rows: TableRowInfo[] = []
+    for (let i = 0; i < lines.length; i++) {
+      if (i >= 1 && i <= 4) {
+        rows.push({
+          kind: i === 1 ? 'header' : i === 2 ? 'delimiter' : 'row',
+          lineFrom: offset,
+          lineTo: offset + lines[i]!.length,
+        })
+      }
+      offset += lines[i]!.length + 2
+    }
+    const plan = planTableRowMove(doc, rows, 2, 0)!
+    expect(apply(doc, plan.changes)).toBe('前\r\n| 2 | x |\r\n| :--- | ---: |\r\n| a | b |\r\n| 1 | |\r\n尾\r\n')
+    expect(plan.changes.every((c) => !/[\r\n]/.test(doc.slice(c.from, c.to)))).toBe(true)
   })
 })
 

@@ -17,12 +17,15 @@
 
 - **打开文档**：`.md` 文件默认由本扩展打开（#38 起注册为默认编辑器）；想改回原生，用右键「打开方式…」选文本编辑器，或「Reopen With… → Configure default editor for '*.md'…」修改关联设置。
 - **三态视图切换**：编辑器标题栏按钮在实时预览 → 阅读模式 → 源码编辑器之间循环（按钮只显示下一步的目标与图标，源码编辑器态显示铅笔按钮一键切回）；命令面板也有「切换到下一视图模式」及三个显式目标命令。最近一次停留的模式跨窗口全局记住；源码位置锚点保持（不按滚动百分比跳变）。
-- **实时预览**（live）：CodeMirror 6 全文承载，视口外不创建 DOM；左侧行号与源文件行一一对应（可在设置页开关，见下）；标题符号在光标进入该标题时显形，列表与引用的行首符号仅在标记附近显形；链接、图片和双链仅在光标进入各自范围时显示源码。
+- **实时预览**（live）：CodeMirror 6 全文承载，视口外不创建 DOM；左侧显示源文件行号，安全网格表格只显示段首行号（可在设置页开关，见下）；标题符号在光标进入该标题时显形，列表与引用的行首符号仅在标记附近显形；链接、图片和双链仅在光标进入各自范围时显示源码。
 - **阅读模式**（reading）：markdown-it 渲染的分块按需挂载，10 万块级文档挂载量与体量无关。
 - **任务勾选**：两种视图点击 checkbox 写回源文本，支持撤销。
 - **链接与图片**：live 视图已渲染的普通链接和双链单击跳转，源码显形后普通单击编辑，Ctrl/Cmd + 单击仍可跳转（reading 直接单击）；本地图片经宿主通道装载，缺失图呈现可重试错误态；`file://`、`javascript:` 等危险 scheme 被拦截。注：CSP 以 `img-src https:` 放行任意 https 图源（远程图床支持的设计代价——任意 https 图片可达，理论上可被用作跟踪像素）。
 - **双链**：`[[笔记名]]`、`[[路径/笔记|别名]]`、`[[笔记#标题]]` 四形态；重名弹出候选选择，缺失目标提示且不自动建文件。
-- **表格**：live 视图内 Tab/Shift+Tab 单元格导航、行末 Tab 移到下一表格行首格（末行末格 Tab 交默认缩进）；命令面板六个「表格：…」命令增删行列；单元格内键入 `|` 自动转义。
+- **表格**：live 视图的安全普通表格以网格显示，点击单元格后可直接在格内编辑且网格保持；可从悬停入口增添行列、用点阵抓手拖排行，行列选中有边框反馈；Tab/Shift+Tab 单元格导航，行末 Tab 移到下一表格行首格（末行末格 Tab 交默认缩进）；命令面板六个「表格：…」命令增删行列；单元格内键入 `|` 自动转义。列数不一致的表格显示可编辑源码。
+- **创建表格**：命令面板执行「Vsidian: Create a Table」或中文界面的「Vsidian: 创建表格」，在光标处建立两列、空表头加一行空数据的表格。光标在行内文字之间时，左右文字分到表格上下，并各隔一空行；一次撤销可恢复原文。
+- **单元格选择与删除**：格内拖选、双击、三击及 Ctrl/Cmd+A 限定在当前格内容；删除保留源管道和对齐声明，格内空白仍可编辑。省略首尾管道的行在清空边缘格产生列数歧义时自动补齐边界；会暴露额外列的删除被阻止。
+- **中列点击定位**：三列表格点击中间文字格或空格时，光标和输入保持在中列；完全零宽的空格在编辑器聚焦时显示格内光标提示。
 - **查找**：编辑器内 Ctrl+F（限本编辑器激活时）。
 - **设置**：命令面板 →「Vsidian: 打开设置」，或编辑器工具栏「设置」按钮——Vsidian 的插件设置在独立设置页管理（不进入 VSCode 统一设置中心）；设置按用户级保存，重开页面与重启后保持，变更即时同步到已打开的 Vsidian 编辑器。当前提供「显示行号」开关（默认开启，实时预览左侧行号栏；阅读模式始终无行号）。
 - **外部修改安全同步**：检测到无法安全同步的外部修改时顶部出现冲突横幅——本地输入已保留，可「复制未确认输入」或「放弃本地修改并重新同步」。
@@ -33,12 +36,32 @@
 npm install                     # 安装锁定依赖（版本全部精确锁定）
 npm run compile                 # esbuild 双产物 + tsc 类型检查
 npm run watch                   # esbuild watch
-npm run test:unit               # vitest 单元/契约测试（无宿主依赖）
-npm run test:integration        # @vscode/test-electron 1.86.2 真宿主集成测试（87 例）
+npm run test:unit               # vitest 与启动器契约测试（无 VSCode 宿主依赖）
+npm run test:browser            # Playwright 原生键盘/IME 表格光标回归（headless Chromium，首次需 npx playwright install chromium）
+npm run test:integration        # 1.86.2 真宿主集成测试（Windows 默认独立桌面，不抢前台）
 node test/integration/runInstalled.mjs  # VSIX 安装态回归（先 package 出 VSIX）
 node test/perf/runPerf.mjs      # 性能档位测量（报告写 docs/perf/data/）
 npx @vscode/vsce package --no-dependencies  # 打包 VSIX（bundle 自包含，不带 node_modules）
 ```
+
+Windows 上两条集成测试路径默认将真实 VSCode 宿主启动在同一交互会话的独立桌面。测试窗口在该桌面创建，不遮挡当前桌面；日志继续输出到终端，宿主非零退出会使启动器失败。启动器会记录宿主 PID、独立桌面的可见窗口数，并在测试期间每半秒采样前台 PID，便于复查焦点行为。独立桌面创建失败时测试直接失败，不会悄悄改为当前桌面启动。
+
+Windows 启动器将本次宿主及其子进程放入单独的 Job Object（进程组），宿主退出、启动器失败或中断时关闭该组，避免残留独立桌面进程；不会按进程名结束其他 VSCode。测试宿主默认限时 15 分钟，超时以非零退出，fixture 工作区仍由启动器清理。手动终止最外层 Node 启动器时，PowerShell 会检测父进程退出并关闭该进程组。正常取消可用 Ctrl+C。
+
+在不支持交互式桌面的环境（例如无人登录的 CI 服务）中，可使用独立的 Windows 用户会话或虚拟机运行，并在该会话内显式选择前台模式：
+
+```powershell
+$env:VSIDIAN_TEST_HOST_MODE = 'foreground'
+npm run test:integration
+node test/integration/runInstalled.mjs
+Remove-Item Env:VSIDIAN_TEST_HOST_MODE
+```
+
+前台模式会显示测试窗口，应在专用会话中使用。单测和类型检查不启动 VSCode；`test:unit` 内的启动器契约测试含独立桌面探针（仅创建进程与桌面，不启动 VSCode），在上述同一前台模式下会自动跳过这些探针，SSH / 服务会话等无交互桌面的 Windows 环境可照常跑完其余用例。
+
+测试钩子：`VSIDIAN_TEST_HOOKS=1` 由各集成启动器注入，注册 `onegayi.vsidian._test.*` 观测命令（生产不注册）；`VSIDIAN_TEST_HOST_FAULT_MARKER` 仅供启动器契约测试受控注入 PowerShell 启动期故障（验证进程树清理），日常使用不应设置。
+
+若缓存里的 `.vscode-test/vscode-win32-x64-archive-1.86.2/data` 由人工便携版运行留下，VSCode 会优先使用其中的便携 profile；此时可能撞上正在运行的便携版实例。可在新的 worktree 执行 `npm ci` 和 `npm run test:integration`，让测试工具自动下载不含 `data` 的独立宿主，再打包 VSIX 运行安装态回归。不要把正在使用的便携版目录当作测试宿主缓存。
 
 调试：VSCode 以**文件夹工作区**打开本仓库根目录，按 F5 运行「Vsidian: 启动扩展开发宿主」。启动前会执行 `npm run compile`，开发宿主加载当前工作树的 `out/extension.js`。调试端口固定为 46186；端口被占用时修改 `.vscode/launch.json` 中的 `port`。开发宿主打开 `.md` 文件默认进入 Vsidian；若被弹回原生编辑器，说明全局记忆停留在源码态，点标题栏铅笔按钮即可切回。
 
@@ -51,7 +74,7 @@ npx @vscode/vsce package --no-dependencies  # 打包 VSIX（bundle 自包含，�
 
 ## 验证与性能
 
-- 当前开发工作树回归：803 单元测试 + 87 集成用例（真实 1.86.2 宿主）通过；安装态与人工验收另见[验证清单](docs/specs/manual-verification.md)。
+- 本联合分支自动化套件包含 897 项 Vitest 单测、11 项启动器契约测试、31 项原生浏览器输入回归，以及开发态与 VSIX 安装态共用的 88 项真实 VSCode 1.86.2 宿主集成用例（另有空窗口激活实测路径）。覆盖单元格删除边界、跨行拖选时表格标记保护、中格空白退格后再输入的网格绘制、Tab 可见行导航、格内粘贴换行、多表编辑后的行号绘制、真实 DOM 中文候选经 WorkspaceEdit 保存回读，以及关闭队列和确认重传；执行结果与人工复验见[验证清单](docs/specs/manual-verification.md)。
 - 性能实测与功能验证矩阵：[docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md)。
 - 人工验证项（IME/鼠标手感/远程环境）：[docs/specs/manual-verification.md](docs/specs/manual-verification.md)。
 

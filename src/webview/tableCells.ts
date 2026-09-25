@@ -28,6 +28,28 @@ export interface TableCellRange {
   contentTo: number
 }
 
+/** 表格格内换行的持久化形式，仅允许无属性的 br。
+ * 宽松接受大小写、空格和自闭合写法，以便重新打开已有 Markdown 时同样换行；
+ * 带属性标签不在此白名单内，也不应因此打开通用 HTML 渲染。 */
+export function tableCellBreakLength(text: string, at: number): number {
+  return /^<br[\t ]*\/?>/i.exec(text.slice(at))?.[0].length ?? 0
+}
+
+/** 行内代码与转义文本中的 br 仍为字面内容。 */
+export function tableCellBreaks(text: string): Array<{ from: number; to: number }> {
+  const code = scanCodeSpans(text)
+  const breaks: Array<{ from: number; to: number }> = []
+  for (let at = 0; at < text.length; at++) {
+    if (text[at] !== '<' || code[at] || isEscapedAt(text, at)) continue
+    const length = tableCellBreakLength(text, at)
+    if (length) {
+      breaks.push({ from: at, to: at + length })
+      at += length - 1
+    }
+  }
+  return breaks
+}
+
 /** 列对齐语义（GFM 分隔行声明） */
 export type TableAlign = 'left' | 'center' | 'right'
 
@@ -113,6 +135,20 @@ export function barePipeAt(lineText: string, i: number): boolean {
   return !scanCodeSpans(lineText)[i]
 }
 
+/** 非代码 span 中被反斜杠转义的管道符，其紧邻的反斜杠位置。网格显示
+ * 隐藏这一枚转义标记，源文本及编辑行为保持不变。 */
+export function escapedPipeBackslashes(lineText: string): number[] {
+  if (!lineText.includes('\\|')) return []
+  const inSpan = scanCodeSpans(lineText)
+  const out: number[] = []
+  for (let i = 1; i < lineText.length; i++) {
+    if (lineText[i] === '|' && !inSpan[i] && isEscapedAt(lineText, i)) {
+      out.push(i - 1)
+    }
+  }
+  return out
+}
+
 /**
  * GFM 语义切分一行表格行为单元格。
  * 调用方负责判定该行确为表格行（表头/数据行）；非表格行（无裸管道）返回 []。
@@ -132,11 +168,19 @@ export function splitTableRowCells(lineText: string, lineStart: number): TableCe
     }
   }
   segs.push({ from: segStart, to: lineText.length })
-  if (segs.length > 0 && segs[0]!.from === segs[0]!.to) {
-    segs.shift()
-  }
-  if (segs.length > 0 && segs[segs.length - 1]!.from === segs[segs.length - 1]!.to) {
-    segs.pop()
+  // 纯空白行且首尾没有实际边界管道时，每段空白都是一个单元格：
+  // ` | ` 为两格，` | | ` 为三格。若行首/行尾有管道，或行内有内容，
+  // 则首尾空白段是边界外的缩进/尾随空白，不计入单元格。
+  const hasContent = segs.some((seg) => lineText.slice(seg.from, seg.to).trim() !== '')
+  const hasEdgePipe = segs[0]!.from === segs[0]!.to ||
+    segs[segs.length - 1]!.from === segs[segs.length - 1]!.to
+  if (hasContent || hasEdgePipe) {
+    if (segs.length > 0 && lineText.slice(segs[0]!.from, segs[0]!.to).trim() === '') {
+      segs.shift()
+    }
+    if (segs.length > 0 && lineText.slice(segs[segs.length - 1]!.from, segs[segs.length - 1]!.to).trim() === '') {
+      segs.pop()
+    }
   }
   return segs.map((seg) => {
     const raw = lineText.slice(seg.from, seg.to)
@@ -151,6 +195,51 @@ export function splitTableRowCells(lineText: string, lineStart: number): TableCe
       contentTo,
     }
   })
+}
+
+/**
+ * 表格网格需要每个显示格有独立源区间。仅在纯空白且省略边界管道的行上，
+ * 允许按表头列数舍弃多余的尾部空白段；含内容的多列行仍拒绝映射。
+ */
+export function tableRowCellsForColumns(
+  lineText: string,
+  lineStart: number,
+  columns: number,
+): TableCellRange[] | null {
+  const cells = splitTableRowCells(lineText, lineStart)
+  if (cells.length === columns) return cells
+  if (columns > 0 && cells.length === columns + 1 && /^[\s|]+$/.test(lineText) &&
+      lineText[0] !== '|' && lineText[lineText.length - 1] !== '|') {
+    return cells.slice(0, columns)
+  }
+  return null
+}
+
+/** 首次写入无边界纯空白行时，在同一事务中规范化为显式边界并填目标格。 */
+export function planBlankRowCellInput(
+  lineText: string,
+  lineStart: number,
+  columns: number,
+  from: number,
+  to: number,
+  insert: string,
+): { from: number; to: number; insert: string; selection: number } | null {
+  if (from !== to || !insert || insert.includes('\n') || !/^[\s|]+$/.test(lineText) ||
+      lineText[0] === '|' || lineText[lineText.length - 1] === '|') return null
+  const cells = tableRowCellsForColumns(lineText, lineStart, columns)
+  if (!cells) return null
+  const column = cells.findIndex((cell) => cell.contentFrom === from)
+  if (column < 0) return null
+  const canonical = '|' + ' |'.repeat(columns)
+  const target = splitTableRowCells(canonical, lineStart)[column]!.contentFrom
+  const relative = target - lineStart
+  const escaped = escapeCellText(insert)
+  return {
+    from: lineStart,
+    to: lineStart + lineText.length,
+    insert: canonical.slice(0, relative) + escaped + canonical.slice(relative),
+    selection: target + escaped.length,
+  }
 }
 
 /**

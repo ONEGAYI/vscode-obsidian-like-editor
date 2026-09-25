@@ -59,6 +59,11 @@
         "category": "Vsidian"
       },
       {
+        "command": "onegayi.vsidian.table.create",
+        "title": "%command.table.create.title%",
+        "category": "Vsidian"
+      },
+      {
         "command": "onegayi.vsidian.table.insertRowAbove",
         "title": "表格：上方插入行",
         "category": "Vsidian"
@@ -126,8 +131,9 @@
     "compile": "node esbuild.mjs && tsc --noEmit",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
-    "test:unit": "vitest run",
+    "test:unit": "vitest run && node --test test/integration/testHost.test.mjs",
     "test:integration": "node esbuild.mjs && node ./test/integration/runTest.mjs",
+    "test:browser": "node test/browser/tableCaret.mjs",
     "vscode:prepublish": "node esbuild.mjs --production"
   },
   "repository": {
@@ -151,6 +157,7 @@
     "@vscode/test-electron": "3.1.0",
     "esbuild": "0.28.2",
     "jsdom": "30.1.1",
+    "playwright": "1.62.1",
     "typescript": "6.0.3",
     "vitest": "5.0.1"
   }

@@ -24,8 +24,9 @@
 //   （不再发送 edit.request、忽略 doc.changed）；doc.resync 兼作恢复信号
 // - seq 持久化：经 bridge.setState 保存，webview 重载（retainContextWhenHidden
 //   关闭导致的状态重建）后继续编号，宿主按 seq 幂等去重
-import { Annotation, ChangeSet, Compartment, EditorState, type Extension, type Text } from '@codemirror/state'
-import { EditorView, keymap, lineNumbers } from '@codemirror/view'
+import { Annotation, ChangeSet, Compartment, EditorSelection, EditorState, type Extension, type Text } from '@codemirror/state'
+import { EditorView, keymap } from '@codemirror/view'
+import { liveLineNumbers, paintedLineNumbers } from './liveLineNumbers'
 import {
   isHostToWebview,
   type CssProbeReport,
@@ -53,7 +54,7 @@ import {
   setFindMatches,
   type FindMatch,
 } from './findSession'
-import { liveDecorationsField, livePreviewDecorations, LIVE_CLASS_NAMES } from './liveDecorations'
+import { liveDecorationsField, livePreviewDecorations, LIVE_CLASS_NAMES, tableCompositionSettled } from './liveDecorations'
 import { createLinkInteractions, WIKILINK_CLASS_NAMES } from './liveLinks'
 import { ImageResourceManager } from './imageResource'
 import { runPerfProbe } from './perfProbe'
@@ -62,7 +63,7 @@ import { createReadingContainer, prepareReadingImages } from './readingView'
 import { READING_MARKDOWN_CLASS_NAMES } from './readingMarkdown'
 import { resolveStaleTaskToggle } from './taskToggle'
 import { VirtualReadingView } from './readingVirtualView'
-import { runTableEdit, tableEditing } from './tableEditing'
+import { blankRowInputPlan, runCreateTable, runTableEdit, tableEditing } from './tableEditing'
 
 /** rAF 不可用环境（旧 jsdom）退化为短超时（与 readingVirtualView 同款） */
 function scheduleFrame(fn: () => void): void {
@@ -134,8 +135,10 @@ function localPosToBase(p: number, sections: readonly ChainSection[]): number {
   return p - delta
 }
 
-/** 插入点落在未确认内容的闭区间，或替换/删除范围与内容真正相交。 */
-function touchesUnconfirmedInsertion(
+/** 新编辑触及未确认变更的插入内容或纯删除塌缩点时，无法安全逆投影。
+ *  纯删除虽无插入内容，紧接着在原位置补字（IME 替换选区的常见顺序）
+ *  仍依赖前笔删除；若立即发旧基线坐标，宿主会与自己的删除判为冲突。 */
+function touchesUnconfirmedChange(
   changes: readonly SerChange[],
   sections: readonly ChainSection[],
 ): boolean {
@@ -143,11 +146,16 @@ function touchesUnconfirmedInsertion(
   for (const s of sections) {
     const afterStart = s.fromA + delta
     const afterEnd = afterStart + s.insLen
-    if (s.insLen > 0 && changes.some((c) => (
-      c.length === 0
-        ? c.offset >= afterStart && c.offset <= afterEnd
-        : c.offset < afterEnd && c.offset + c.length > afterStart
-    ))) {
+    if (changes.some((c) => {
+      if (s.insLen > 0) {
+        return c.length === 0
+          ? c.offset >= afterStart && c.offset <= afterEnd
+          : c.offset < afterEnd && c.offset + c.length > afterStart
+      }
+      return s.fromA < s.toA && (c.length === 0
+        ? c.offset === afterStart
+        : c.offset <= afterStart && c.offset + c.length > afterStart)
+    })) {
       return true
     }
     delta += s.insLen - (s.toA - s.fromA)
@@ -368,6 +376,8 @@ export class WebviewSyncController {
   // ---- IME 组合缓冲状态 ----
   /** 组合进行中（DOM compositionstart..compositionend） */
   private composing = false
+  /** 仅空白网格格子的组合暂缓：CM6 可更新候选，宿主只接收结束后的净变更。 */
+  private blankComposition: { startState: EditorState; changes: ChangeSet | null } | null = null
   /** 组合期间到达、待 flush 的外部增量（按到达序） */
   private pendingExternal: BufferedIncremental[] = []
   /** 组合期间到达、待 flush 的全文消息（覆盖增量形态）。source 记录来源
@@ -646,18 +656,24 @@ export class WebviewSyncController {
           // 直接丢弃——版本与变更一一对应，重复应用会静默错位
           break
         }
+        if (message.changes.length === 0) {
+          // 无内容变更（#44：宿主侧已过滤空 dirty 事件，此处为第二道防线）。
+          // 直接丢弃且不占用版本号：若空事件与真实增量同版本，后者仍须应用；
+          // 也不得让暂缓态把它当成外部修改而升级为暂停。
+          break
+        }
         this.lastDocChangedVersion = message.version
         if (this.suspended) {
           // 暂停：外部增量不应用（保留本地输入，恢复时以全文对齐）
           break
         }
-        if (this.deferredLocal && !this.composing && !this.hasBufferedSync()) {
+        if (this.deferredLocal && !this.composing && !this.blankComposition && !this.hasBufferedSync()) {
           // 待发集定义域未随外部增量重定位；保守暂停并保留本地全文，
           // 避免确认后用旧坐标覆盖权威文本。
           this.enterSuspended()
           break
         }
-        if (this.composing || this.hasBufferedSync()) {
+        if (this.composing || this.blankComposition || this.hasBufferedSync()) {
           // 组合中不打断输入；缓冲挂起期间到达的增量一并对齐到 flush。
           // 入队即逆穿到 base 系（参考系一致性见 BufferedIncremental 注释）
           this.pendingExternal.push({
@@ -712,19 +728,115 @@ export class WebviewSyncController {
         }
         break
       }
+      case 'table.create': {
+        if (this.view && this.viewMode === 'live') {
+          runCreateTable(this.view)
+        }
+        break
+      }
       case 'table.test.key': {
-        // 测试钩子（#13）：向真实编辑器派发 Tab keydown（与用户按键同一
-        // keymap 链路；纯选区导航零写回）
+        // 测试钩子：向真实编辑器派发 keydown，走用户按键的同一 keymap 链路。
         if (this.view) {
           this.view.contentDOM.dispatchEvent(
             new KeyboardEvent('keydown', {
-              key: 'Tab',
+              key: message.key === 'select-all' ? 'a' : message.key === 'backspace' ? 'Backspace'
+                : message.key === 'delete' ? 'Delete' : message.key === 'enter' ? 'Enter' : 'Tab',
+              ctrlKey: message.key === 'select-all',
               shiftKey: message.key === 'shift-tab',
               bubbles: true,
               cancelable: true,
             }),
           )
         }
+        break
+      }
+      case 'table.test.cellClick': {
+        if (this.view && this.viewMode === 'live') {
+          const row = this.view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')[message.rowIndex]
+          const cell = row?.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')[message.columnIndex]
+          if (cell) {
+            const rect = cell.getBoundingClientRect()
+            const x = rect.left + Math.min(message.point === 'right-edge' ? rect.width - 2
+              : message.point === 'middle' ? 35 : 15,
+              Math.max(1, rect.width - 1))
+            const y = rect.top + rect.height / 2
+            cell.dispatchEvent(new MouseEvent('mousedown', {
+              bubbles: true, cancelable: true, button: 0, buttons: 1, clientX: x, clientY: y,
+            }))
+            const settledRow = this.view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')[message.rowIndex]
+            const settledCell = settledRow?.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')[message.columnIndex]
+            settledCell?.dispatchEvent(new MouseEvent('mouseup', {
+              bubbles: true, cancelable: true, button: 0, clientX: x, clientY: y,
+            }))
+          }
+        }
+        break
+      }
+      case 'table.test.crossSelect': {
+        if (this.view && message.anchor <= this.view.state.doc.length &&
+            message.head <= this.view.state.doc.length) {
+          this.view.dispatch({
+            selection: EditorSelection.single(message.anchor, message.head),
+            userEvent: 'select.pointer',
+          })
+        }
+        break
+      }
+      case 'table.test.type': {
+        if (this.view && this.viewMode === 'live') {
+          const range = this.view.state.selection.main
+          this.view.dispatch({
+            changes: { from: range.from, to: range.to, insert: message.text },
+            userEvent: 'input.type',
+          })
+        }
+        break
+      }
+      case 'table.test.domType': {
+        if (this.view && this.viewMode === 'live') {
+          // 测试用浏览器内容可编辑输入路径；源码事务注入无法观测原生 DOM caret。
+          if (document.activeElement !== this.view.contentDOM) this.view.focus()
+          document.execCommand('insertText', false, message.text)
+        }
+        break
+      }
+      case 'table.test.select': {
+        const view = this.view
+        if (view && this.viewMode === 'live') queueMicrotask(() => {
+          if (this.view !== view) return
+          const selector = message.axis === 'row'
+            ? '.vsidian-table-row-handle' : '.vsidian-table-column-handle'
+          view.dom.querySelectorAll<HTMLButtonElement>(selector)[message.index]?.click()
+        })
+        break
+      }
+      case 'table.test.drag': {
+        // 测试钩子（#43）：在真实宿主 webview 中向点阵抓手派发鼠标指针序列。
+        // 仍经控件的 pointerdown/move/up 与 CM6 标准写回链路。
+        const view = this.view
+        if (view && this.viewMode === 'live') queueMicrotask(() => {
+          if (this.view !== view) return
+          const grips = [...view.dom.querySelectorAll<HTMLElement>('.vsidian-table-row-handle')]
+          const rows = [...view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')]
+          const source = grips[message.sourceIndex]
+          const target = rows[Math.min(message.targetSlot, rows.length - 1)]
+          if (!source || !target || message.targetSlot > rows.length) return
+          const sourceRect = source.getBoundingClientRect()
+          const targetRect = target.getBoundingClientRect()
+          const x = targetRect.left + Math.max(1, targetRect.width / 2)
+          const startY = sourceRect.top + sourceRect.height / 2
+          const endY = message.targetSlot === rows.length
+            ? targetRect.bottom - 2 : targetRect.top + 2
+          source.dispatchEvent(new PointerEvent('pointerdown', {
+            bubbles: true, cancelable: true, clientX: x, clientY: startY,
+          }))
+          target.dispatchEvent(new PointerEvent('pointermove', {
+            bubbles: true, clientX: x, clientY: endY,
+          }))
+          document.dispatchEvent(new PointerEvent('pointerup', {
+            bubbles: true, clientX: x, clientY: endY,
+          }))
+        })
         break
       }
       case 'sync.test.edit': {
@@ -734,6 +846,25 @@ export class WebviewSyncController {
           if (message.closeAfter && this.sessionId) {
             this.bridge.postMessage({ kind: 'sync.test.close', sessionId: this.sessionId, docUri: this.docUri })
           }
+        }
+        break
+      }
+      case 'sync.test.composition': {
+        const view = this.view
+        if (!view || this.viewMode !== 'live') break
+        if (message.phase === 'start') {
+          view.focus()
+          view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+        } else if (message.phase === 'update') {
+          const line = view.contentDOM.querySelector('.cm-line')
+          if (line) {
+            line.replaceChildren(document.createTextNode(message.text))
+            const node = line.firstChild!
+            document.getSelection()?.setBaseAndExtent(node, message.text.length, node, message.text.length)
+            view.contentDOM.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertCompositionText', data: message.text, isComposing: true }))
+          }
+        } else {
+          view.contentDOM.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: message.text }))
         }
         break
       }
@@ -871,6 +1002,24 @@ export class WebviewSyncController {
   private reportViewState(): void {
     const doc = this.view?.state.doc
     const content = this.view?.dom.querySelector('.cm-content')
+    let selectedGridRow: HTMLElement | null = null
+    if (this.view && this.viewMode === 'live') {
+      try {
+        const node = this.view.domAtPos(this.view.state.selection.main.from).node
+        selectedGridRow = (node instanceof Element ? node : node.parentElement)?.closest<HTMLElement>('.cm-line') ?? null
+      } catch {
+        // 屏外选区没有 DOM；表格探针仅报告当前已挂载节点。
+      }
+    }
+    const tableGrid = {
+      visibleRows: content?.querySelectorAll('.vsidian-table-grid-row').length ?? 0,
+      selectedRowIsGrid: selectedGridRow?.classList.contains('vsidian-table-grid-row') ?? false,
+      selectedRowCells: selectedGridRow
+        ? [...selectedGridRow.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')]
+          .map((cell) => cell.textContent ?? '')
+        : [],
+      rowHandles: this.view?.dom.querySelectorAll('.vsidian-table-row-handle').length ?? 0,
+    }
     // 标题装饰的可观测 DOM 文本：活动（源码态）与非活动（隐藏标记）
     // 各取第一个样本，供集成测试断言 Live Preview 语义
     let headingActiveText: string | undefined
@@ -930,6 +1079,8 @@ export class WebviewSyncController {
       headingFontPx,
       viewMode: this.viewMode,
       selectionOffset: this.view?.state.selection.main.from ?? 0,
+      selectionHead: this.view?.state.selection.main.head ?? 0,
+      selectionAssoc: this.view?.state.selection.main.assoc ?? 0,
       readingBlockCount: rStats?.mountedBlocks ?? 0,
       readingAnchorStart,
       // #7 按需挂载观测：块模型总量/挂载量/DOM 计数/解析次数/虚拟化状态
@@ -943,6 +1094,7 @@ export class WebviewSyncController {
       readingScrollHeightPx: rScroll?.scrollHeight,
       cssProbe: this.collectCssProbe(),
       liveSyntax: this.collectLiveSyntax(),
+      tableGrid,
       readingSyntax: this.viewMode === 'reading' ? this.collectReadingSyntax() : undefined,
       // #10 链接/图片观测（DOM 级：live 限视口，reading 限挂载块）
       liveLinkCount: content ? content.querySelectorAll('.vsidian-link').length : 0,
@@ -1036,7 +1188,7 @@ export class WebviewSyncController {
       this.enterSuspended()
       return
     }
-    if (this.composing || this.hasBufferedSync()) {
+    if (this.composing || this.blankComposition || this.hasBufferedSync()) {
       if (!this.pendingFull || version >= this.pendingFull.version) {
         this.pendingFull = { version, text, source: opts.source ?? 'init' }
       }
@@ -1837,10 +1989,66 @@ export class WebviewSyncController {
       : cs
   }
 
+  /** 普通事务与空白格组合净变更共用同一出站/未确认坐标链。 */
+  private recordLocalChangeSet(changeSet: ChangeSet, changes: SerChange[]): void {
+    if (changes.length === 0 || !this.sessionId) {
+      this.unconfirmed = this.unconfirmed ? this.unconfirmed.compose(changeSet) : changeSet
+      return
+    }
+    if (this.deferredLocal || (
+      this.unconfirmed && touchesUnconfirmedChange(changes, chainSections(this.unconfirmed))
+    )) {
+      this.deferredLocal = this.deferredLocal
+        ? this.deferredLocal.compose(changeSet)
+        : changeSet
+      this.unconfirmed = this.unconfirmed ? this.unconfirmed.compose(changeSet) : changeSet
+      this.reportConflictSnapshot()
+      return
+    }
+    const baseChanges = this.toBaseChanges(changes)
+    this.unconfirmed = this.unconfirmed ? this.unconfirmed.compose(changeSet) : changeSet
+    this.seq += 1
+    this.persistState()
+    this.inFlight.add(this.seq)
+    this.sentTxns.push({ seq: this.seq, changes: baseChanges })
+    this.bridge.postMessage({
+      kind: 'edit.request', sessionId: this.sessionId, docUri: this.docUri,
+      seq: this.seq, baseVersion: this.baseVersion, changes: baseChanges,
+    })
+  }
+
+  private reportBlankCompositionSnapshot(pending: boolean): void {
+    if (!this.sessionId) return
+    this.conflictRevision += 1
+    this.persistState()
+    this.bridge.postMessage({
+      kind: 'conflict.report', sessionId: this.sessionId, docUri: this.docUri,
+      version: this.baseVersion, revision: this.conflictRevision,
+      text: this.view?.state.doc.toString() ?? '', compositionPending: pending,
+    })
+  }
+
+  /** 候选期间只跨桥传变更片段；宿主以组合开始时的全文快照为基线增量应用。 */
+  private reportBlankCompositionChanges(changeSet: ChangeSet): void {
+    if (!this.sessionId) return
+    const changes: SerChange[] = []
+    changeSet.iterChanges((from, to, _fromB, _toB, inserted) => {
+      changes.push({ offset: from, length: to - from, text: inserted.sliceString(0, inserted.length) })
+    })
+    if (changes.length === 0) return
+    this.conflictRevision += 1
+    this.persistState()
+    this.bridge.postMessage({
+      kind: 'composition.changed', sessionId: this.sessionId, docUri: this.docUri,
+      revision: this.conflictRevision, changes,
+    })
+  }
+
   /** 已发请求全部确认后，以确认后的权威版本发送待发本地净变更。 */
   private sendDeferredLocal(): void {
     const deferred = this.deferredLocal
-    if (!deferred || this.suspended || this.inFlight.size > 0 || this.hasBufferedSync()) {
+    if (!deferred || this.suspended || this.blankComposition ||
+        this.inFlight.size > 0 || this.hasBufferedSync()) {
       return
     }
     this.deferredLocal = null
@@ -1892,16 +2100,93 @@ export class WebviewSyncController {
     })
   }
 
+  private beginBlankComposition(): void {
+    if (this.blankComposition || this.viewMode !== 'live' || !this.view) return
+    const state = this.view.state
+    const selection = state.selection.main
+    if (!selection.empty || !blankRowInputPlan(state, selection.from, selection.to, 'x')) return
+    this.blankComposition = { startState: state, changes: null }
+    this.reportBlankCompositionSnapshot(true)
+  }
+
+  /** 仅空白网格组合：结束后取净输入，一笔规范化并沿既有出站链提交。 */
+  private finishBlankComposition(): boolean {
+    const pending = this.blankComposition
+    const view = this.view
+    if (!pending || !view) return false
+    let net = pending.changes
+    if (!net) {
+      this.blankComposition = null
+      view.dispatch({ selection: view.state.selection, annotations: tableCompositionSettled.of(true) })
+      this.reportBlankCompositionSnapshot(false)
+      return false
+    }
+    const initial: SerChange[] = []
+    net.iterChanges((from, to, _fromB, _toB, inserted) => {
+      initial.push({ offset: from, length: to - from, text: inserted.sliceString(0, inserted.length) })
+    })
+    let normalized = false
+    if (initial.length === 1 && initial[0]!.length === 0 && initial[0]!.text) {
+      const edit = initial[0]!
+      const plan = blankRowInputPlan(pending.startState, edit.offset, edit.offset, edit.text)
+      if (plan) {
+        const line = view.state.doc.lineAt(plan.from)
+        view.dispatch({
+          changes: { from: line.from, to: line.to, insert: plan.insert },
+          selection: { anchor: plan.selection },
+        })
+        net = pending.changes
+        normalized = true
+      }
+    }
+    this.blankComposition = null
+    const changes: SerChange[] = []
+    net!.iterChanges((from, to, _fromB, _toB, inserted) => {
+      changes.push({ offset: from, length: to - from, text: inserted.sliceString(0, inserted.length) })
+    })
+    // 组合取消可能先插后删；ChangeSet 仍可包含文本相同的替换。
+    const effective = changes.some((change) =>
+      pending.startState.doc.sliceString(change.offset, change.offset + change.length) !== change.text)
+    if (!effective) {
+      view.dispatch({ selection: view.state.selection, annotations: tableCompositionSettled.of(true) })
+      this.reportBlankCompositionSnapshot(false)
+      return false
+    }
+    if (!normalized) {
+      view.dispatch({ selection: view.state.selection, annotations: tableCompositionSettled.of(true) })
+    }
+    // 并发全文没有可证明的局部重定位，留给暂停态取回，不能覆盖候选。
+    if (this.pendingFull) {
+      this.reportBlankCompositionSnapshot(true)
+      return true
+    }
+    if (this.suspended) {
+      this.reportConflictSnapshot()
+      this.reportBlankCompositionSnapshot(true)
+      return true
+    }
+    this.recordLocalChangeSet(net!, changes)
+    this.reportBlankCompositionSnapshot(false)
+    return true
+  }
+
   /**
-   * 应用缓冲的外部同步。调用时机：compositionend 后的宏任务（setTimeout 0），
-   * 晚于 CM6 在 microtask 中生成的组合上屏事务（@codemirror/view 6.43 的
-   * observers.compositionend 用 Promise.resolve().then(flush)），因此
-   * unconfirmed 此时已含组合编辑、组合文本的 edit.request 也已发出。
+   * 应用缓冲的外部同步。compositionend 后宏任务晚于 CM6 最终上屏微任务；
+   * 空白网格组合先提交净本地变更，再将外部变更穿过它做重定位。
    */
   private flushBufferedExternal(): void {
     this.flushTimer = undefined
     if (this.composing || !this.view) {
       // 新一轮组合进行中：缓冲保持，待下一轮 compositionend 重新调度
+      return
+    }
+    const blankInput = this.finishBlankComposition()
+    if (blankInput && this.pendingFull) {
+      this.pendingFull = undefined
+      this.pendingExternal = []
+      this.pendingVersionAck = undefined
+      this.enterSuspended()
+      this.reportConflictSnapshot()
       return
     }
     if (this.suspended) {
@@ -1979,7 +2264,7 @@ export class WebviewSyncController {
   }
 
   private scheduleFlush(): void {
-    if (this.flushTimer === undefined && this.hasBufferedSync()) {
+    if (this.flushTimer === undefined && (this.hasBufferedSync() || this.blankComposition)) {
       this.flushTimer = setTimeout(() => this.flushBufferedExternal(), 0)
     }
   }
@@ -2024,7 +2309,7 @@ export class WebviewSyncController {
     }
     this.lineNumbersOn = on
     this.view?.dispatch({
-      effects: this.lineNumbersCompartment.reconfigure(on ? lineNumbers() : []),
+      effects: this.lineNumbersCompartment.reconfigure(on ? liveLineNumbers() : []),
     })
   }
 
@@ -2099,6 +2384,115 @@ export class WebviewSyncController {
       textVisible = false
     }
     const guttersEl = view.dom.querySelector<HTMLElement>('.cm-gutters')
+    const gridRow = view.contentDOM.querySelector<HTMLElement>('.vsidian-table-grid-row')
+    const delimiterRow = view.contentDOM.querySelector<HTMLElement>('.vsidian-table-grid-delimiter')
+    const headerRow = view.contentDOM.querySelector<HTMLElement>(
+      '.vsidian-table-grid-row.vsidian-table-header-line')
+    const headerCellBackgrounds = headerRow
+      ? [...headerRow.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')]
+        .map((cell) => getComputedStyle(cell).backgroundColor)
+      : []
+    const firstCell = gridRow?.querySelector<HTMLElement>(':scope > .vsidian-table-grid-cell') ?? null
+    const selectedRow = view.contentDOM.querySelector<HTMLElement>(
+      '.vsidian-table-grid-row.vsidian-table-row-selected',
+    )
+    const selectedRowCell = selectedRow?.querySelector<HTMLElement>(':scope > .vsidian-table-grid-cell') ?? null
+    const selectedColumnCell = view.contentDOM.querySelector<HTMLElement>(
+      '.vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-selected',
+    )
+    const columnFirst = view.contentDOM.querySelector<HTMLElement>(
+      '.vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-first',
+    )
+    const columnLast = view.contentDOM.querySelector<HTMLElement>(
+      '.vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-last',
+    )
+    let cellVisible = false
+    try {
+      const cells = view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-cell')
+      // 只取少量已挂载格做绘制命中；长表格的 view.state 不逐格测量。
+      for (let index = 0; index < Math.min(cells.length, 12); index++) {
+        const cell = cells[index]!
+        const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT)
+        let node: Node | null
+        while ((node = walker.nextNode())) {
+          const text = node.nodeValue ?? ''
+          const at = text.search(/\S/)
+          if (at < 0) continue
+          const range = document.createRange()
+          range.setStart(node, at)
+          range.setEnd(node, at + 1)
+          const rect = range.getBoundingClientRect()
+          if (rect.width <= 0 || rect.height <= 0) continue
+          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+          if (hit && cell.contains(hit)) {
+            cellVisible = true
+            break
+          }
+        }
+        if (cellVisible) break
+      }
+    } catch {
+      // jsdom 无布局和 elementFromPoint；真宿主才能证明实际可见。
+    }
+    let caretGridColumn: number | null = null
+    let caretDomColumn: number | null = null
+    let caretNativeRectHeight: number | null = null
+    try {
+      const selection = window.getSelection()
+      if (selection?.isCollapsed && selection.rangeCount > 0 &&
+          selection.focusNode && view.contentDOM.contains(selection.focusNode)) {
+        const rect = selection.getRangeAt(0).getBoundingClientRect()
+        caretNativeRectHeight = rect.height
+        const focusElement = selection.focusNode instanceof Element
+          ? selection.focusNode : selection.focusNode.parentElement
+        const domCell = focusElement?.closest<HTMLElement>(
+          '.vsidian-table-grid-row > .vsidian-table-grid-cell')
+        if (domCell?.parentElement) {
+          caretDomColumn = [...domCell.parentElement.querySelectorAll(
+            ':scope > .vsidian-table-grid-cell')].indexOf(domCell)
+        }
+        // 零宽格的 DOM Selection 锚在 .cm-content 上，浏览器给出 0×0 Range；
+        // CM6 仍能按光标关联侧返回实际排版坐标。
+        const point = rect.height > 0 ? rect : view.coordsAtPos(
+          view.state.selection.main.head, view.state.selection.main.assoc || -1)
+        if (point) {
+          const hit = document.elementFromPoint(point.left + 1,
+            (point.top + point.bottom) / 2)
+          const cell = hit?.closest<HTMLElement>('.vsidian-table-grid-row > .vsidian-table-grid-cell')
+          const row = cell?.parentElement
+          if (cell && row) {
+            caretGridColumn = [...row.querySelectorAll(':scope > .vsidian-table-grid-cell')].indexOf(cell)
+          }
+        }
+      }
+    } catch {
+      // jsdom 无绘制位置；只有真实宿主可断言光标所在格。
+    }
+    const activeEmpty = view.contentDOM.querySelector<HTMLElement>('.vsidian-table-grid-empty-active')
+    if (activeEmpty) {
+      try {
+        const rect = activeEmpty.getBoundingClientRect()
+        const caretStyle = getComputedStyle(activeEmpty, '::after')
+        const nativeCaret = getComputedStyle(contentEl).caretColor
+        const hit = document.elementFromPoint(rect.left + 11, rect.top + 14)
+        if (rect.width > 0 && rect.height > 0 &&
+            Number.parseFloat(caretStyle.borderLeftWidth) > 0 &&
+            (nativeCaret === 'transparent' || nativeCaret === 'rgba(0, 0, 0, 0)') &&
+            hit && activeEmpty.contains(hit)) {
+          const row = activeEmpty.parentElement
+          if (row) caretGridColumn = [...row.querySelectorAll(':scope > .vsidian-table-grid-cell')]
+            .indexOf(activeEmpty)
+        }
+      } catch {
+        // 绘制探针不干预编辑状态。
+      }
+    }
+    const cellStyle = firstCell ? getComputedStyle(firstCell) : null
+    const rowStyle = selectedRow ? getComputedStyle(selectedRow) : null
+    const rowCellStyle = selectedRowCell ? getComputedStyle(selectedRowCell) : null
+    const columnStyle = selectedColumnCell ? getComputedStyle(selectedColumnCell) : null
+    const columnFirstStyle = columnFirst ? getComputedStyle(columnFirst) : null
+    const columnLastStyle = columnLast ? getComputedStyle(columnLast) : null
     // 光标取证：本扩展未启用 drawSelection，CM6 光标即原生 caret，颜色
     // 由 baseTheme 明暗变体决定（light=black / dark=white）。darkTheme 取
     // facet 实值（jsdom 可读），caretColor 取计算值（jsdom 无 CSS 引擎为 null）
@@ -2112,8 +2506,30 @@ export class WebviewSyncController {
       textVisible,
       scrollerDisplay: view.scrollDOM ? getComputedStyle(view.scrollDOM).display : null,
       gutterUserSelect: guttersEl ? getComputedStyle(guttersEl).userSelect : null,
+      visibleLineNumbers: paintedLineNumbers(view),
       darkTheme: view.state.facet(EditorView.darkTheme),
       caretColor,
+      table: {
+        cellVisible,
+        caretGridColumn,
+        delimiterDisplay: delimiterRow ? getComputedStyle(delimiterRow).display : null,
+        headerCellBackgrounds,
+        caretDomColumn,
+        caretNativeRectHeight,
+        cellBreakDisplay: view.contentDOM.querySelector('.vsidian-table-cell-break')
+          ? getComputedStyle(view.contentDOM.querySelector('.vsidian-table-cell-break')!).display : null,
+        gridDisplay: gridRow ? getComputedStyle(gridRow).display : null,
+        cellBorderWidth: cellStyle?.borderLeftWidth ?? null,
+        rowOutlineColor: rowStyle?.outlineColor ?? null,
+        rowOutlineWidth: rowStyle?.outlineWidth ?? null,
+        rowBackgroundColor: rowCellStyle?.backgroundColor ?? null,
+        columnBorderColor: columnStyle?.borderLeftColor ?? null,
+        columnBorderWidth: columnStyle?.borderLeftWidth ?? null,
+        columnRightBorderWidth: columnStyle?.borderRightWidth ?? null,
+        columnTopBorderWidth: columnFirstStyle?.borderTopWidth ?? null,
+        columnBottomBorderWidth: columnLastStyle?.borderBottomWidth ?? null,
+        columnBackgroundColor: columnStyle?.backgroundColor ?? null,
+      },
     }
   }
 
@@ -2178,7 +2594,7 @@ export class WebviewSyncController {
       // 行号栏（#34）：源文件行号经 Compartment 装配（设置开关热重配，
       // mount 时按定义默认开）；列在流内、与正文以固定间距相隔的布局
       // 见 main.css 的 #34 段（行号列宽随位数自适应，无降级机制）
-      this.lineNumbersCompartment.of(this.lineNumbersOn ? lineNumbers() : []),
+      this.lineNumbersCompartment.of(this.lineNumbersOn ? liveLineNumbers() : []),
       // 标题实时预览装饰（#5 切片）：直接装饰（StateField）+ 间接装饰
       // （ViewPlugin 按 visibleRanges），见 liveDecorations.ts 头注释
       livePreviewDecorations,
@@ -2235,6 +2651,12 @@ export class WebviewSyncController {
           if (!tr.docChanged || tr.annotation(externalSync)) {
             continue
           }
+          if (this.blankComposition) {
+            const buffered = this.blankComposition
+            buffered.changes = buffered.changes ? buffered.changes.compose(tr.changes) : tr.changes
+            this.reportBlankCompositionChanges(tr.changes)
+            continue
+          }
           if (this.suspended) {
             // 暂停写回：本地文本继续保留累积，但不回传、不追踪同步状态；
             // 立即刷新宿主全文快照，快速关闭时也能取回这笔输入。
@@ -2249,40 +2671,7 @@ export class WebviewSyncController {
               text: inserted.sliceString(0, inserted.length),
             })
           })
-          if (changes.length === 0 || !this.sessionId) {
-            // 无文本变更的事务不进入写回，但仍是本地状态的一部分
-            this.unconfirmed = this.unconfirmed ? this.unconfirmed.compose(tr.changes) : tr.changes
-            continue
-          }
-          if (this.deferredLocal || (
-            this.unconfirmed && touchesUnconfirmedInsertion(changes, chainSections(this.unconfirmed))
-          )) {
-            // 继续乐观回显；待已有请求全部确认后一次性发送净变更。
-            this.deferredLocal = this.deferredLocal
-              ? this.deferredLocal.compose(tr.changes)
-              : tr.changes
-            this.unconfirmed = this.unconfirmed ? this.unconfirmed.compose(tr.changes) : tr.changes
-            // 暂缓集内容不在宿主 pending 里：立即上报全文快照，面板
-            // 关闭/断连后取回不缺这部分输入
-            this.reportConflictSnapshot()
-            continue
-          }
-          // 出站坐标先逆穿本事务前的未确认集，回到 baseVersion 参考系（C-2）
-          const baseChanges = this.toBaseChanges(changes)
-          // 未确认变更集累积：外部增量到达时须平移穿过（防静默错位）
-          this.unconfirmed = this.unconfirmed ? this.unconfirmed.compose(tr.changes) : tr.changes
-          this.seq += 1
-          this.persistState() // 合并写入：保留 viewMode/anchor（#6）
-          this.inFlight.add(this.seq)
-          this.sentTxns.push({ seq: this.seq, changes: baseChanges })
-          this.bridge.postMessage({
-            kind: 'edit.request',
-            sessionId: this.sessionId,
-            docUri: this.docUri,
-            seq: this.seq,
-            baseVersion: this.baseVersion,
-            changes: baseChanges,
-          })
+          this.recordLocalChangeSet(tr.changes, changes)
         }
       }),
       // 撤销/重做转发 keymap：置于数组末尾（CM6 扩展数组靠后者优先级高），
@@ -2297,9 +2686,11 @@ export class WebviewSyncController {
       EditorView.domEventHandlers({
         compositionstart: () => {
           this.composing = true
+          this.beginBlankComposition()
         },
         compositionupdate: () => {
           this.composing = true
+          this.beginBlankComposition()
         },
         compositionend: () => {
           this.composing = false

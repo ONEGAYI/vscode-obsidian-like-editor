@@ -276,6 +276,8 @@ interface ViewState {
   /** #6 模式切换观测 */
   viewMode?: 'live' | 'reading'
   selectionOffset?: number
+  selectionHead?: number
+  selectionAssoc?: number
   readingBlockCount?: number
   readingAnchorStart?: number
   /** #7 按需挂载观测 */
@@ -321,6 +323,12 @@ interface ViewState {
     taskChecked: number
     tableLines?: number
     tableCells?: number
+  }
+  tableGrid?: {
+    visibleRows: number
+    selectedRowIsGrid: boolean
+    selectedRowCells: string[]
+    rowHandles: number
   }
   readingSyntax?: {
     headings: number
@@ -380,8 +388,29 @@ interface ViewState {
     textVisible: boolean
     scrollerDisplay: string | null
     gutterUserSelect: string | null
+    visibleLineNumbers?: string[]
     darkTheme: boolean
     caretColor: string | null
+    table?: {
+      cellVisible: boolean
+      caretGridColumn?: number | null
+      delimiterDisplay?: string | null
+      headerCellBackgrounds?: string[]
+      caretDomColumn?: number | null
+      caretNativeRectHeight?: number | null
+      cellBreakDisplay?: string | null
+      gridDisplay: string | null
+      cellBorderWidth: string | null
+      rowOutlineColor: string | null
+      rowOutlineWidth: string | null
+      rowBackgroundColor: string | null
+      columnBorderColor: string | null
+      columnBorderWidth: string | null
+      columnRightBorderWidth: string | null
+      columnTopBorderWidth: string | null
+      columnBottomBorderWidth: string | null
+      columnBackgroundColor: string | null
+    }
   }
 }
 
@@ -1306,6 +1335,49 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await poll('恢复后写回生效', () => (doc.getText() === `恢复后输入${afterExternal}` ? true : undefined))
     const conflictAfter = (await vscode.commands.executeCommand(CMD.conflictState, uri)) as ConflictState
     assert(conflictAfter.suspended === false, '恢复后不应处于暂停')
+  }],
+
+  ['真实 DOM 中文候选连续替换确认后正常写回并保存', async () => {
+    const filename = 'ime-dom-commit.md'
+    await vscode.workspace.fs.writeFile(wsUri(filename), Buffer.from('A文B\n'))
+    await openWithEditor(filename)
+    await waitSessionReady(filename)
+    const uri = wsUri(filename).toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri(filename))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sync.test.composition', phase: 'start', text: '' })
+    for (const candidate of ['n', 'ni', 'nih', 'nihao', '你好']) {
+      await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sync.test.composition', phase: 'update', text: 'A' + candidate + 'B' })
+      await waitViewState(filename, (v) => v.text === 'A' + candidate + 'B\n')
+    }
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sync.test.composition', phase: 'end', text: '你好' })
+    await poll('中文候选确认后权威文档一致', () => doc.getText() === 'A你好B\n' ? true : undefined)
+    const state = await waitViewState(filename, (v) => v.text === 'A你好B\n')
+    assert(state.suspended !== true, '真实 DOM 中文候选确认不得暂停写回')
+    assert(await doc.save(), '中文文本应正常落盘')
+    const bytes = await vscode.workspace.fs.readFile(wsUri(filename))
+    assert(Buffer.from(bytes).toString('utf8') === 'A你好B\n', '保存后回读中文一致')
+  }],
+
+  ['外部替换与过期本地删除同区间：真实 1.86 宿主保留外部文本并暂停（#44）', async () => {
+    await openWithEditor('ime-escape.md')
+    const initial = await waitSessionReady('ime-escape.md')
+    const uri = wsUri('ime-escape.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('ime-escape.md'))
+    const external = new vscode.WorkspaceEdit()
+    external.replace(wsUri('ime-escape.md'), new vscode.Range(0, 1, 0, 2), '外')
+    assert(await vscode.workspace.applyEdit(external), '外部替换应成功')
+    const authoritative = 'A外B\n'
+    await poll('外部替换进入宿主文档', () => (doc.getText() === authoritative ? true : undefined))
+
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, {
+      kind: 'edit.request', sessionId: '', docUri: uri, seq: 1,
+      baseVersion: initial.version,
+      changes: [{ offset: 1, length: 1, text: '' }],
+    })
+    assert(doc.getText() === authoritative, '过期的同区间删除不得覆盖外部修改')
+    const conflict = (await vscode.commands.executeCommand(CMD.conflictState, uri)) as ConflictState
+    assert(conflict.found && conflict.suspended === true, `同区间真实重叠应暂停：${JSON.stringify(conflict)}`)
+    await waitViewState('ime-escape.md', (v) => v.suspended === true && v.text === authoritative)
   }],
 
   ['冲突后输入立即留存：关闭面板通知含最后一笔（#21）', async () => {
@@ -2364,6 +2436,325 @@ export const cases: Array<[string, () => Promise<void>]> = [
     )
   }],
 
+  ['网格单元格全选删除与边界删除保留表格源码结构（P0）', async () => {
+    const name = 'table-cell-delete.md'
+    await openWithEditor(name)
+    await waitSessionReady(name)
+    const uri = wsUri(name).toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri(name))
+    const before = doc.getText()
+    const at = before.indexOf('苹果')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.cellClick', rowIndex: 1, columnIndex: 0 })
+    await waitViewState(name, (v) => v.tableGrid?.selectedRowIsGrid === true)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: at })
+    await waitViewState(name, (v) => v.selectionOffset === at)
+    for (let i = 0; i < 3; i++) {
+      await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'backspace' })
+    }
+    const paddingTrimmed = before.replace('| 苹果 |', '|苹果 |')
+    const boundary = await waitViewState(name, (v) => v.text === paddingTrimmed)
+    assert(boundary.tableGrid?.visibleRows === 3, '格首退格只能删格内空白，不能越过源管道')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'select-all' })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'backspace' })
+    const cleared = before.replace('| 苹果 |', '| |')
+    await poll('仅清空当前格写回', () => doc.getText() === cleared ? true : undefined)
+    for (let i = 0; i < 3; i++) {
+      await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'delete' })
+    }
+    const afterPaddingDelete = before.replace('| 苹果 |', '| |')
+    const rendered = await waitViewState(name, (v) => v.text === afterPaddingDelete)
+    assert(rendered.tableGrid?.visibleRows === 3, '删除内容后仍须保留完整网格')
+    assert(rendered.paint?.table?.cellVisible === true && rendered.paint.table.gridDisplay === 'grid',
+      '删除后剩余文字须在网格绘制层可见')
+    assert(await doc.save(), '清空单元格保存失败')
+    assert(await readDisk(name) === afterPaddingDelete, '落盘内容只能清空当前格，表格标记必须完整')
+  }],
+
+  ['安全表格仅绘制段首行号，格内光标与设置切换不恢复重叠编号', async () => {
+    await openWithEditor('table42.md')
+    await waitSessionReady('table42.md')
+    const uri = wsUri('table42.md').toString()
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
+    const expected = ['1', '2', '3', '7', '8', '9']
+    const before = await waitViewState('table42.md', (v) => (v.paint?.visibleLineNumbers?.length ?? 0) > 0)
+    assert(JSON.stringify(before.paint?.visibleLineNumbers) === JSON.stringify(expected),
+      `表格只绘制段首 3，隐藏 4/5/6：${JSON.stringify(before.paint?.visibleLineNumbers)}`)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.cellClick', rowIndex: 1, columnIndex: 0 })
+    const clicked = await waitViewState('table42.md', (v) => v.tableGrid?.selectedRowIsGrid === true)
+    assert(JSON.stringify(clicked.paint?.visibleLineNumbers) === JSON.stringify(expected),
+      `单元格激活后仍只绘制表格段首行号：${JSON.stringify(clicked.paint?.visibleLineNumbers)}`)
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': false })
+    await waitViewState('table42.md', (v) => v.lineGutter?.on === false)
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
+    const restored = await waitViewState('table42.md', (v) => v.lineGutter?.on === true)
+    assert(JSON.stringify(restored.paint?.visibleLineNumbers) === JSON.stringify(expected),
+      '重新开启行号应保留表格段首策略')
+  }],
+
+  ['多表局部编辑并滚动返回后，安全表格内部行号保持隐藏', async () => {
+    const name = 'table-gutter-edit.md'
+    const source = '开头\n\n普通段落\n\n| A | B |\n| --- | --- |\n| 甲 | 乙 |\n\n' +
+      Array.from({ length: 160 }, (_, i) => `中段${i}\n`).join('') +
+      '\n| C | D |\n| --- | --- |\n| 丙 | 丁 |\n'
+    await vscode.workspace.fs.writeFile(wsUri(name), Buffer.from(source))
+    await openWithEditor(name)
+    await waitSessionReady(name)
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
+    await waitViewState(name, (v) => v.lineGutter?.on === true)
+    const uri = wsUri(name).toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri(name))
+    const assertFirstTableNumbers = async () => {
+      const state = await waitViewState(name, (v) => v.paint?.visibleLineNumbers?.includes('5') === true)
+      assert(!state.paint!.visibleLineNumbers!.includes('6') && !state.paint!.visibleLineNumbers!.includes('7'),
+        `第一张表只应绘制段首5：${JSON.stringify(state.paint!.visibleLineNumbers)}`)
+    }
+    await assertFirstTableNumbers()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'sync.test.edit', offset: 1, text: '新' })
+    await poll('表外输入落到权威文本', () => doc.getText().startsWith('开新头') ? true : undefined)
+    await assertFirstTableNumbers()
+    const secondCell = doc.getText().indexOf('丙')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: secondCell })
+    await waitViewState(name, (v) => v.selectionOffset === secondCell)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'sync.test.edit', offset: secondCell, text: '新' })
+    await poll('第二张表输入落到权威文本', () => doc.getText().includes('新丙') ? true : undefined)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: 0 })
+    await waitViewState(name, (v) => v.selectionOffset === 0)
+    await assertFirstTableNumbers()
+  }],
+
+  ['实时预览活动格保留网格与抓手，格内输入经 CM6 写回（#42）', async () => {
+    await openWithEditor('table42.md')
+    const beforeSession = await waitSessionReady('table42.md')
+    const uri = wsUri('table42.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('table42.md'))
+    const before = doc.getText()
+    assert(before === TABLE_DOC_TEXT, '独立表格 fixture 初始文本不符')
+    const at = before.indexOf('苹果') + 2
+
+    // 在真实 1.86.2 webview 内派发鼠标事件，点击第一数据行首格。
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.cellClick', rowIndex: 1, columnIndex: 0 })
+    const appleCellStart = before.indexOf('| 苹果 |') + 1
+    const clicked = await waitViewState('table42.md', (v) =>
+      v.selectionOffset !== undefined && v.selectionOffset >= appleCellStart &&
+      v.selectionOffset <= appleCellStart + ' 苹果 '.length)
+    assert(clicked.tableGrid?.selectedRowIsGrid === true, '鼠标进入单元格后整行必须仍是网格')
+    assert(clicked.tableGrid?.visibleRows === 3, '活动格不得撤掉表格网格行')
+    assert(clicked.tableGrid?.rowHandles === 3, '活动格仍须保留 #43 点阵抓手')
+    assert(clicked.tableGrid?.selectedRowCells[0]?.includes('苹果') === true, '点击应命中苹果单元格')
+    assert(clicked.paint?.table?.cellVisible === true,
+      '表格单元格文字须在绘制层命中，不能仅有 DOM 文本')
+    assert(clicked.paint?.table?.gridDisplay === 'grid',
+      `表格行须实际按网格绘制：${clicked.paint?.table?.gridDisplay}`)
+    assert(Number.parseFloat(clicked.paint?.table?.cellBorderWidth ?? '') > 0,
+      `表格单元格须实际绘出边框：${clicked.paint?.table?.cellBorderWidth}`)
+
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.cellClick', rowIndex: 1, columnIndex: 0, point: 'middle' })
+    const middle = await waitViewState('table42.md', (v) =>
+      v.selectionOffset !== undefined && v.selectionOffset > before.indexOf('苹果') &&
+      v.selectionOffset <= before.indexOf('苹果') + 2)
+    assert(middle.tableGrid?.selectedRowIsGrid === true, '格内中部点击仍须保留网格')
+
+    // 精确定位到内容末端后模拟格内输入；定位只改变选区，不触发 edit.request。
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: at })
+    const located = await waitViewState('table42.md', (v) => v.selectionOffset === at)
+    assert(located.text === before && doc.getText() === before, '进入单元格不得改写 Markdown')
+    const afterLocate = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterLocate.appliedEdits === beforeSession.appliedEdits, '网格进入源码不得产生宿主编辑')
+
+    // 真实 webview 内 CM6 事务写回，与网格显示不建立第二份输入状态。
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.type', text: '汁' })
+    const edited = before.replace('苹果', '苹果汁')
+    await poll('网格单元格编辑写回', () => (doc.getText() === edited ? true : undefined))
+    const afterTyping = await waitViewState('table42.md', (v) => v.text === edited)
+    assert(afterTyping.tableGrid?.selectedRowIsGrid === true, '键入后活动格仍须保持网格')
+    assert(afterTyping.tableGrid?.selectedRowCells[0]?.includes('苹果汁') === true,
+      '键入应只更新目标单元格的可见内容')
+    assert(afterTyping.tableGrid?.selectedRowCells[1]?.includes('3') === true, '邻格内容不得改变')
+    assert(afterTyping.tableGrid?.rowHandles === 3, '键入后点阵抓手仍须可用')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const reading = await waitViewState('table42.md', (v) => v.viewMode === 'reading')
+    assert(reading.text === edited,
+      `阅读模式应读取单元格最新文本：${JSON.stringify({ before, edited, actual: reading.text, host: doc.getText() })}`)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'live' })
+    const live = await waitViewState('table42.md', (v) => v.viewMode === 'live')
+    assert(live.text === edited, `切回实时预览后文本不一致：${JSON.stringify(live.text)}`)
+    assert(await doc.save(), '网格单元格编辑保存失败')
+    assert(await readDisk('table42.md') === edited, '网格单元格编辑的磁盘回读不一致')
+  }],
+
+  ['实时预览空单元格点击与输入仍在目标网格格内（#42）', async () => {
+    await openWithEditor('table42-empty.md')
+    const initial = await waitSessionReady('table42-empty.md')
+    const uri = wsUri('table42-empty.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('table42-empty.md'))
+    const before = '| A | B |\n| --- | --- |\n| | 空 |\n'
+    assert(doc.getText() === before, '空格 fixture 初始内容不符')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.cellClick', rowIndex: 1, columnIndex: 0 })
+    const emptyAt = before.indexOf('| | 空 |') + 1
+    const clicked = await waitViewState('table42-empty.md', (v) => v.selectionOffset === emptyAt)
+    assert(clicked.tableGrid?.selectedRowIsGrid === true, '空单元格点击后不得撤网格')
+    assert(clicked.tableGrid?.selectedRowCells.length === 2, '空单元格所在行应保留两列')
+    const afterClick = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterClick.appliedEdits === initial.appliedEdits, '空单元格点击不应写回')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.type', text: '新' })
+    const edited = before.replace('| | 空 |', '|新 | 空 |')
+    await poll('空单元格输入写回', () => doc.getText() === edited ? true : undefined)
+    const live = await waitViewState('table42-empty.md', (v) => v.text === edited)
+    assert(live.tableGrid?.selectedRowIsGrid === true, '空单元格输入后仍须保持网格')
+    assert(live.tableGrid?.selectedRowCells[0]?.includes('新') === true, '空格输入应留在目标格')
+  }],
+
+  ['三列表格中格点击与空格输入：可见光标绘在目标列', async () => {
+    const name = 'table-middle-click.md'
+    const before = '| 左 | sss | 右 |\n| --- | --- | --- |\n| 带 |  | 末 |\n| 带 || 末 |\n'
+    await vscode.workspace.fs.writeFile(wsUri(name), Buffer.from(before))
+    await openWithEditor(name)
+    await waitSessionReady(name)
+    const uri = wsUri(name).toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri(name))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.cellClick', rowIndex: 0, columnIndex: 1, point: 'right-edge' })
+    const header = await waitViewState(name, (v) => v.tableGrid?.selectedRowIsGrid === true)
+    assert(header.paint?.table?.caretGridColumn === 1,
+      `点击表头中格后光标须在中列绘出：${JSON.stringify(header.paint?.table)}`)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.domType', text: '中' })
+    await poll('表头中格写回', () => doc.getText().includes('sss中') ? true : undefined)
+    for (let i = 0; i < 8; i++) {
+      await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.domType', text: 's' })
+      const count = i + 1
+      await poll(`表头中格第 ${count} 次输入写回`, () =>
+        (doc.getText().split('\n')[0]?.match(/s/g)?.length ?? 0) === 3 + count ? true : undefined)
+      const actual = doc.getText()
+      const typed = await waitViewState(name, (v) => v.text === actual)
+      assert(typed.paint?.table?.caretDomColumn === 1 &&
+        (typed.paint?.table?.caretNativeRectHeight ?? 0) > 0 &&
+        typed.paint?.table?.caretGridColumn === 1,
+        `表头中格连续输入后光标须保持在中列（第 ${i + 1} 次）：${JSON.stringify(typed.paint?.table)}`)
+    }
+    assert(/^\| 左 \| [^|]*中[^|]* \| 右 \|/.test(doc.getText()),
+      `表头中格连续输入须写回原格：${JSON.stringify(doc.getText().split('\n')[0])}`)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.cellClick', rowIndex: 1, columnIndex: 1, point: 'right-edge' })
+    const empty = await waitViewState(name, (v) => v.tableGrid?.selectedRowIsGrid === true &&
+      v.selectionOffset !== header.selectionOffset)
+    assert(empty.paint?.table?.caretGridColumn === 1,
+      `点击数据行空中格后光标须在中列绘出：${JSON.stringify(empty.paint?.table)}`)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.type', text: '空' })
+    await poll('空中格写回', () => doc.getText().includes('| 带 |空  | 末 |') ? true : undefined)
+    const latest = await waitViewState(name, (v) => v.tableGrid?.selectedRowCells[1]?.includes('空') === true)
+    assert(latest.tableGrid?.selectedRowCells[2]?.includes('末') === true, '右格不得接收中格输入')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.cellClick', rowIndex: 2, columnIndex: 1, point: 'right-edge' })
+    const zero = await waitViewState(name, (v) => v.tableGrid?.selectedRowCells[1] === '')
+    assert(zero.paint?.table?.caretGridColumn === 1,
+      `点击零宽空中格后光标须在中列绘出：${JSON.stringify(zero.paint?.table)}`)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.type', text: '零' })
+    await poll('零宽空中格写回', () => doc.getText().includes('| 带 |零| 末 |') ? true : undefined)
+    assert(await doc.save(), '三列表格保存失败')
+    assert((await readDisk(name)) === doc.getText(), '三列点击写回与磁盘回读须一致')
+  }],
+
+  ['跨行选区不显露或选中安全表格分隔标记', async () => {
+    const name = 'table-cross-selection.md'
+    const source = '前文\n\n| 带 | s是 | 送 |\n| --- | --- | --- |\n| 甲 | 乙 | 丙 |\n\n后文'
+    await vscode.workspace.fs.writeFile(wsUri(name), Buffer.from(source))
+    await openWithEditor(name)
+    const initial = await waitSessionReady(name)
+    const uri = wsUri(name).toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'table.test.crossSelect', anchor: 1, head: source.indexOf('后文') + 1,
+    })
+    const state = await waitViewState(name, (v) => v.selectionHead === source.indexOf('| 带 | s是 | 送 |'))
+    assert(state.paint?.table?.delimiterDisplay === 'none',
+      `跨行选择后分隔行仍须隐藏：${JSON.stringify(state.paint?.table)}`)
+    assert(state.paint?.table?.gridDisplay === 'grid', '跨行选择后表格仍须绘制为网格')
+    const after = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(after.appliedEdits === initial.appliedEdits, '跨行选区不能改写源文')
+  }],
+
+  ['表格回车在格内换行，退格合行、保存回读与撤销保持完整表格', async () => {
+    const name = 'table-cell-enter.md'
+    const source = '| 左 | 中 | 右 |\n| --- | --- | --- |\n| 甲 | 乙 | 丙 |\n'
+    await vscode.workspace.fs.writeFile(wsUri(name), Buffer.from(source))
+    await openWithEditor(name)
+    await waitSessionReady(name)
+    const uri = wsUri(name).toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri(name))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.cellClick', rowIndex: 0, columnIndex: 1, point: 'right-edge' })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'enter' })
+    const withBreak = source.replace('中', '中<br>')
+    await poll('格内换行写回', () => doc.getText() === withBreak ? true : undefined)
+    const state = await waitViewState(name, (v) => v.text === withBreak && v.paint?.table?.cellBreakDisplay === 'inline')
+    assert(state.paint?.table?.cellVisible === true && state.paint.table.gridDisplay === 'grid', '换行后表格文字与网格须实际可见')
+    assert(state.tableGrid?.visibleRows === 2, '回车不能增加或拆散表格行')
+    assert(await doc.save(), '格内换行保存失败')
+    assert(await readDisk(name) === withBreak, '格内换行磁盘回读须保真')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'backspace' })
+    await poll('退格合行写回', () => doc.getText() === source ? true : undefined)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'enter' })
+    await poll('再次格内换行', () => doc.getText() === withBreak ? true : undefined)
+    await vscode.commands.executeCommand('undo')
+    await poll('一次撤销格内换行', () => doc.getText() === source ? true : undefined)
+    assert(await doc.save(), '恢复原表格保存失败')
+    assert(await readDisk(name) === source, '合回原行后保存不得残留换行标记')
+  }],
+
+  ['中格空白连续删除后再输入仍保持表头网格样式', async () => {
+    const name = 'table-middle-delete.md'
+    const source = '| 带 |  | 送 |\n| --- | --- | --- |\n| 左 | 右 | 末 |\n'
+    await vscode.workspace.fs.writeFile(wsUri(name), Buffer.from(source))
+    await openWithEditor(name)
+    await waitSessionReady(name)
+    const uri = wsUri(name).toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri(name))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.cellClick', rowIndex: 0, columnIndex: 1, point: 'right-edge' })
+    for (let i = 0; i < 2; i++) {
+      await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'delete' })
+    }
+    await poll('中格空白退格后源文', () => doc.getText().startsWith('| 带 | | 送 |') ? true : undefined)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.domType', text: '是' })
+    await poll('中格再次输入写回', () => doc.getText().startsWith('| 带 |是 | 送 |') ? true : undefined)
+    const state = await waitViewState(name, (v) => v.tableGrid?.selectedRowCells[1]?.includes('是') === true)
+    const backgrounds = state.paint?.table?.headerCellBackgrounds ?? []
+    assert(backgrounds.length === 3 && backgrounds.every((color) => color === backgrounds[0]),
+      `表头中格须与两侧同样绘制底色：${JSON.stringify(backgrounds)}`)
+    assert(state.paint?.table?.gridDisplay === 'grid', '退格再输入后表头仍须是网格')
+    for (let i = 0; i < 8; i++) {
+      await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.domType', text: 's' })
+      const count = i + 1
+      await poll(`中格删空后第 ${count} 次输入写回`, () =>
+        (doc.getText().split('\n')[0]?.match(/s/g)?.length ?? 0) === count ? true : undefined)
+      const actual = doc.getText()
+      const typed = await waitViewState(name, (v) => v.text === actual)
+      assert(typed.selectionAssoc === -1,
+        `中格末端输入后光标须向中格关联（第 ${count} 次）：${typed.selectionAssoc}`)
+      assert(typed.paint?.table?.caretDomColumn === 1 &&
+        (typed.paint?.table?.caretNativeRectHeight ?? 0) > 0,
+      `浏览器原生光标须实际落在中格文字节点（第 ${count} 次）：${JSON.stringify(typed.paint?.table)}`)
+      assert(typed.paint?.table?.caretGridColumn === 1,
+        `中格删空后连续输入光标须留中列（第 ${count} 次）：${JSON.stringify(typed.paint?.table)}`)
+    }
+    assert(doc.getText().startsWith('| 带 |是ssssssss | 送 |'),
+      `中格删空后文字须继续落入中列：${JSON.stringify(doc.getText().split('\n')[0])}`)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'backspace' })
+    await poll('中格连续输入后可退格', () =>
+      doc.getText().startsWith('| 带 |是sssssss | 送 |') ? true : undefined)
+    const afterBackspace = await waitViewState(name, (v) => v.text === doc.getText())
+    assert(afterBackspace.paint?.table?.caretDomColumn === 1,
+      '连续输入后退格仍须把原生光标留在中格')
+    assert(await doc.save(), '中格再次输入保存失败')
+    assert((await readDisk(name)) === doc.getText(), '中格退格再输入的磁盘回读须一致')
+  }],
+
   ['阅读视图表格：真实 table 只读呈现与样式入口（#12）', async () => {
     await openWithEditor('table.md')
     await waitSessionReady('table.md')
@@ -2778,6 +3169,89 @@ export const cases: Array<[string, () => Promise<void>]> = [
     }
 
     assert(await readDisk('wikilinks.md') === diskBefore, '歧义/缺失链路不得改写源文档')
+  }],
+
+  ['表格行列选中在绘制层显示完整轮廓与高亮（#43）', async () => {
+    await openWithEditor('table43-crlf.md')
+    await waitSessionReady('table43-crlf.md')
+    const uri = wsUri('table43-crlf.md').toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.select', axis: 'row', index: 1 })
+    const row = await waitViewState('table43-crlf.md', (v) => v.paint?.table?.rowOutlineWidth != null)
+    const rowPaint = row.paint!.table!
+    assert(rowPaint.cellVisible === true && rowPaint.gridDisplay === 'grid',
+      '选中行的表格文字仍须真实可见且保持网格布局')
+    assert(rowPaint.rowOutlineColor !== null && rowPaint.rowOutlineColor !== 'rgba(0, 0, 0, 0)',
+      `选中行轮廓须有实色：${rowPaint.rowOutlineColor}`)
+    const baseBorderWidth = Number.parseFloat(rowPaint.cellBorderWidth ?? '')
+    assert(baseBorderWidth > 0 && Number.parseFloat(rowPaint.rowOutlineWidth ?? '') > baseBorderWidth,
+      `选中行轮廓须比普通格线更醒目：格线=${rowPaint.cellBorderWidth}，轮廓=${rowPaint.rowOutlineWidth}`)
+    assert(rowPaint.rowBackgroundColor !== null && rowPaint.rowBackgroundColor !== 'rgba(0, 0, 0, 0)',
+      `选中行单元格须实际着色：${rowPaint.rowBackgroundColor}`)
+
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.select', axis: 'column', index: 0 })
+    const column = await waitViewState('table43-crlf.md', (v) => v.paint?.table?.columnBorderWidth != null)
+    const colPaint = column.paint!.table!
+    assert(colPaint.cellVisible === true && colPaint.gridDisplay === 'grid',
+      '选中列的表格文字仍须真实可见且保持网格布局')
+    assert(colPaint.columnBorderColor === rowPaint.rowOutlineColor,
+      `行列轮廓须使用同一主题强调色：行=${rowPaint.rowOutlineColor}，列=${colPaint.columnBorderColor}`)
+    assert(Number.parseFloat(colPaint.columnBorderWidth ?? '') > baseBorderWidth,
+      `选中列两侧轮廓须比普通格线更醒目：格线=${colPaint.cellBorderWidth}，轮廓=${colPaint.columnBorderWidth}`)
+    assert(Number.parseFloat(colPaint.columnRightBorderWidth ?? '') > baseBorderWidth,
+      `选中列右侧轮廓须闭合：${colPaint.columnRightBorderWidth}`)
+    assert(Number.parseFloat(colPaint.columnTopBorderWidth ?? '') > baseBorderWidth &&
+      Number.parseFloat(colPaint.columnBottomBorderWidth ?? '') > baseBorderWidth,
+      `选中列顶边和底边须闭合：${colPaint.columnTopBorderWidth}/${colPaint.columnBottomBorderWidth}`)
+    assert(colPaint.columnBackgroundColor !== null && colPaint.columnBackgroundColor !== 'rgba(0, 0, 0, 0)',
+      `选中列单元格须实际着色：${colPaint.columnBackgroundColor}`)
+  }],
+
+  ['点阵拖排行经真实 webview 鼠标处理器写回 CRLF，一次撤销（#43）', async () => {
+    await openWithEditor('table43-crlf.md')
+    await waitSessionReady('table43-crlf.md')
+    const uri = wsUri('table43-crlf.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('table43-crlf.md'))
+    const original = TABLE13_DOC_TEXT.replace(/\n/g, '\r\n')
+    const movedLf = TABLE13_DOC_TEXT.replace(
+      '| 名字 | 数量 |\n| --- | :---: |\n| 苹果 | 3 |\n| `x|y` | 4 |',
+      '| `x|y` | 4 |\n| --- | :---: |\n| 名字 | 数量 |\n| 苹果 | 3 |',
+    )
+    const moved = movedLf.replace(/\n/g, '\r\n')
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'table.test.drag', sourceIndex: 2, targetSlot: 0,
+    })
+    await poll('拖动写回权威 CRLF 文本', () => doc.getText() === moved ? true : undefined)
+    const after = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(after.appliedEdits === before.appliedEdits + 1, '一次拖动必须只产生一笔 applyEdit')
+    assert(await doc.save(), '拖排行保存失败')
+    assert(await readDisk('table43-crlf.md') === moved, '拖排行保存回读丢失 CRLF 或顺序')
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('一次撤销恢复原行序', () => doc.getText() === original ? true : undefined)
+    await doc.save()
+  }],
+
+  ['创建空表格命令：行内拆分、上下空行、CRLF 回读与单次撤销', async () => {
+    await openWithEditor('table-create-crlf.md')
+    await waitSessionReady('table-create-crlf.md')
+    const uri = wsUri('table-create-crlf.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('table-create-crlf.md'))
+    const original = '左文右文\r\n尾段\r\n'
+    const expected = '左文\r\n\r\n|  |  |\r\n| --- | --- |\r\n|  |  |\r\n\r\n右文\r\n尾段\r\n'
+    assert(doc.getText() === original, '创建表格夹具原文不符')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: 2 })
+    const invoked = await vscode.commands.executeCommand('onegayi.vsidian.table.create')
+    assert(invoked === true, '创建表格命令应在活动 Vsidian 编辑器中可用')
+    await poll('创建表格写回 CRLF 文档', () => doc.getText() === expected ? true : undefined)
+    const state = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(state.appliedEdits === 1, '创建表格应只产生一笔宿主编辑')
+    assert(await doc.save(), '创建表格保存失败')
+    assert(await readDisk('table-create-crlf.md') === expected, '创建表格保存回读未保留 CRLF 或上下文')
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('创建表格一次撤销恢复原文', () => doc.getText() === original ? true : undefined)
+    await doc.save()
   }],
 
   // ---- 工单 #13：表格键盘导航与增删行列 ----

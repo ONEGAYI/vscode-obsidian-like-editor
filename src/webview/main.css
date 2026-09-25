@@ -307,9 +307,8 @@ body {
   opacity: 0.9;
 }
 
-/* 表格（#12）：编辑面即源文本行——管道符保持可见（点击定位与光标编辑
-   直接落在源区间），装饰只做表格样式标记；类名为稳定样式入口，
-   Obsidian 对应 .HyperMD-table-line 方向（见选择器映射表） */
+/* 表格（#42）：源文本仍在 CM6；安全行始终以同列数 CSS grid 呈现。
+   活动格留在网格中直接编辑，IME、Tab 与宿主写回链路继续工作。 */
 #app .cm-editor .cm-scroller .vsidian-table-line {
   font-family: var(--vscode-editor-font-family, monospace);
   background-color: var(--vsidian-table-background, rgba(128, 128, 128, 0.05));
@@ -321,7 +320,7 @@ body {
   box-shadow: inset 0 -1px 0 var(--vscode-panel-border, rgba(128, 128, 128, 0.45));
 }
 
-/* 分隔行弱化（保留可见：编辑/结构判定都以源文为准） */
+/* 源码降级或光标进入分隔行时仍可编辑 */
 #app .cm-editor .cm-scroller .vsidian-table-delimiter-line {
   opacity: 0.55;
 }
@@ -332,10 +331,184 @@ body {
   font-weight: 400;
 }
 
-/* 单元格内容对齐类（vsidian-table-align-left/center/right，GFM 分隔行声明）：
-   稳定样式入口。首版 live 是源码形态（管道与内容保持源文一维布局，
-   列对齐由源文排版决定），不施加 inline-block/width 等破坏行内映射的
-   布局——阅读视图（markdown-it 真实 table）呈现 GFM 对齐语义 */
+/* 每个单元格 span 对应原始文档区间；点击后光标留在该格，网格不撤下。
+   列数在行装饰的 CSS 变量中。 */
+#app .cm-editor .cm-scroller .vsidian-table-grid-row {
+  display: grid;
+  grid-template-columns: repeat(var(--vsidian-table-columns), minmax(0, 1fr));
+  width: min(100%, 880px);
+  padding: 0;
+  box-shadow: none;
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell,
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .cm-widgetBuffer + .vsidian-table-grid-cell {
+  min-width: 0;
+  padding: 4px 10px;
+  box-sizing: border-box;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.45));
+  border-top: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 填充仍是可编辑文字节点，保留原生 caret/IME 的高度；仅将空格字宽归零。
+   固定此空格为等宽字体，使 1ch 精确等于空格宽度，不影响正文的字体设置。 */
+#app .cm-editor .vsidian-table-grid-padding {
+  font-family: monospace;
+  word-spacing: -1ch;
+}
+
+/* 零宽格没有可挂载原生 caret 的文字节点：仅在该格活动时将原生 caret
+   隐去，并在目标格内绘制同色光标。输入仍由 CM6 源文本管线处理。 */
+#app .cm-editor .cm-content:has(.vsidian-table-grid-empty-active) {
+  caret-color: transparent;
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-empty-active {
+  position: relative;
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-empty-active::after {
+  content: '';
+  display: none;
+  position: absolute;
+  left: 10px;
+  top: 4px;
+  height: 1.5em;
+  border-left: 1px solid currentColor;
+  pointer-events: none;
+  animation: vsidian-empty-caret-blink 1.2s steps(1, end) infinite;
+}
+
+#app .cm-editor.cm-focused .cm-scroller .vsidian-table-grid-empty-active::after {
+  display: block;
+}
+
+@keyframes vsidian-empty-caret-blink {
+  50% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #app .cm-editor .cm-scroller .vsidian-table-grid-empty-active::after {
+    animation: none;
+  }
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row.vsidian-table-header-line > .vsidian-table-grid-cell {
+  border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.45));
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row.vsidian-table-header-line > .vsidian-table-grid-cell {
+  font-weight: 600;
+  background: var(--vsidian-table-background, rgba(128, 128, 128, 0.1));
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-align-left { text-align: left; }
+#app .cm-editor .cm-scroller .vsidian-table-grid-align-center { text-align: center; }
+#app .cm-editor .cm-scroller .vsidian-table-grid-align-right { text-align: right; }
+
+/* 这些 mark 仅在绘制层隐藏，仍存在于 CM6 源文档。光标和删除边界必须
+   同时由 tableEditing.ts 保护，单靠 display:none 无法阻止跨格误删。 */
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-pipe,
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .cm-widgetBuffer,
+#app .cm-editor .cm-scroller .vsidian-table-grid-delimiter {
+  display: none;
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row .vsidian-table-escaped-pipe {
+  display: none;
+}
+
+/* #43 悬停控件位于 CM6 文本层之上，只为视口内网格行建立 DOM。 */
+#app .cm-editor .vsidian-table-controls {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+}
+
+#app .cm-editor .vsidian-table-controls button {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  transform: translate(-50%, -50%);
+  border: 0;
+  border-radius: 4px;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editor-foreground);
+  cursor: pointer;
+  pointer-events: auto;
+  opacity: 0;
+}
+
+#app .cm-editor .vsidian-table-controls button:hover,
+#app .cm-editor .vsidian-table-controls button:focus-visible,
+#app .cm-editor .vsidian-table-controls button.vsidian-table-control-hover {
+  opacity: 1;
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
+}
+
+#app .cm-editor .vsidian-table-controls .vsidian-table-row-handle {
+  cursor: grab;
+  font-size: 16px;
+  line-height: 20px;
+}
+
+#app .cm-editor .vsidian-table-controls .vsidian-table-row-handle:active {
+  cursor: grabbing;
+}
+
+#app .cm-editor .vsidian-table-controls .vsidian-table-insert-row,
+#app .cm-editor .vsidian-table-controls .vsidian-table-insert-column {
+  color: var(--vscode-textLink-foreground, #8abce2);
+  font-size: 18px;
+  line-height: 20px;
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row.vsidian-table-row-selected {
+  border-radius: 6px;
+  outline: 2px solid var(--vscode-focusBorder, #7ab0d0);
+  outline-offset: -1px;
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row.vsidian-table-row-selected > .vsidian-table-grid-cell,
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-selected {
+  background: color-mix(in srgb, var(--vscode-focusBorder, #7ab0d0) 12%, transparent);
+}
+
+/* 整列只有外轮廓强调，内部横线保持表格原有分隔，与参考图一致。 */
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-selected {
+  border-left: 2px solid var(--vscode-focusBorder, #7ab0d0);
+  border-right: 2px solid var(--vscode-focusBorder, #7ab0d0);
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-first {
+  border-top: 2px solid var(--vscode-focusBorder, #7ab0d0);
+  border-radius: 6px 6px 0 0;
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-last {
+  border-bottom: 2px solid var(--vscode-focusBorder, #7ab0d0);
+  border-radius: 0 0 6px 6px;
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-first.vsidian-table-column-last {
+  border-radius: 6px;
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row.vsidian-table-dragging {
+  opacity: 0.55;
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row.vsidian-table-drop-before {
+  box-shadow: inset 0 3px 0 var(--vscode-focusBorder, #7ab0d0);
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-row.vsidian-table-drop-after {
+  box-shadow: inset 0 -3px 0 var(--vscode-focusBorder, #7ab0d0);
+}
 
 /* 表头单元格内容强调 */
 #app .cm-editor .cm-scroller .vsidian-table-cell-header {

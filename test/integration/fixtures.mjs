@@ -12,6 +12,7 @@ const UNDO2_DOC = '全局命令撤销甲行\n全局命令撤销乙行\n'
 const UNDO3_DOC = '撤销守卫甲行\n撤销守卫乙行\n'
 const ACKORDER_DOC = '顺序观测起始行\n顺序观测第二行\n'
 const RESYNC_DOC = '重同步起始内容\n重同步第二段\n'
+const IME_ESC_DOC = 'A文B\n'
 const CONFLICT_DOC = '第一段原文甲\n第二段原文乙\n'
 const SPLIT_CONFLICT_DOC = '分裂测试行一\n分裂测试行二\n'
 const HEADING_DOC = '# 顶部一级标题\n普通段落第一行内容\n普通段落第二行内容\n## 中部二级标题\n另一段普通内容结尾\n'
@@ -108,6 +109,7 @@ const TABLE_DOC = [
   '结尾段落。',
   '',
 ].join('\n')
+const TABLE42_EMPTY_DOC = '| A | B |\n| --- | --- |\n| | 空 |\n'
 // #13 表格导航/结构操作样例：表格前后有段落（区域不变断言），含对齐、
 // 行内代码管道与转义管道
 const TABLE13_DOC = [
@@ -121,6 +123,8 @@ const TABLE13_DOC = [
   '结尾段落乙。',
   '',
 ].join('\n')
+const TABLE43_CRLF_DOC = TABLE13_DOC.replace(/\n/g, '\r\n')
+const TABLE_CREATE_CRLF_DOC = '左文右文\r\n尾段\r\n'
 // #8 大围栏细分样例：120 行围栏（超过 FENCE_CHUNK_LINES=60，切为 3 片）
 const FENCE_CHUNK_DOC = (() => {
   const out = ['# 大围栏样例', '', '```text']
@@ -281,6 +285,7 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   writeFileSync(path.join(wsDir, 'undo3.md'), UNDO3_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'ackorder.md'), ACKORDER_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'resync.md'), RESYNC_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'ime-escape.md'), IME_ESC_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'conflict.md'), CONFLICT_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'splitconflict.md'), SPLIT_CONFLICT_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'heading.md'), HEADING_DOC, 'utf8')
@@ -291,7 +296,12 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   writeFileSync(path.join(wsDir, 'fence-chunk.md'), FENCE_CHUNK_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'task.md'), TASK_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'table.md'), TABLE_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'table42.md'), TABLE_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'table-cell-delete.md'), TABLE_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'table42-empty.md'), TABLE42_EMPTY_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'table13.md'), TABLE13_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'table43-crlf.md'), TABLE43_CRLF_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'table-create-crlf.md'), TABLE_CREATE_CRLF_DOC, 'utf8')
   const largeLines = Array.from({ length: LARGE_DOC_LINES }, (_, i) => `第 ${i + 1} 行 ——固定宽度填充文本，用于长文档视口渲染验证——`)
   writeFileSync(path.join(wsDir, 'large.md'), largeLines.join('\n') + '\n', 'utf8')
   // 性能体量对比样例（#5）：同构普通段落 + 每 50 行一个二级标题

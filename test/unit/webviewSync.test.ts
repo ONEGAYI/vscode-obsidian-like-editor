@@ -12,6 +12,11 @@ import type { HostToWebview, SerChange, WebviewToHost } from '../../src/shared/p
 
 const DOC_URI = 'file:///d%3A/notes/a.md'
 
+// DOM 输入用例会经过 CM6 的异步测量；jsdom 没有布局，提供空测量结果。
+if (Range.prototype.getClientRects === undefined) {
+  Range.prototype.getClientRects = () => [] as unknown as DOMRectList
+}
+
 function makeBridge() {
   const sent: WebviewToHost[] = []
   let state: Record<string, unknown> | undefined
@@ -162,7 +167,12 @@ describe('外部变更与重同步', () => {
     const { bridge, sent } = makeBridge()
     const c = mount(bridge)
     init(c, 'abc', 1)
-    c.handleHostMessage({ kind: 'doc.changed', version: 5, origin: 'external', changes: [] })
+    c.handleHostMessage({
+      kind: 'doc.changed',
+      version: 5,
+      origin: 'external',
+      changes: [{ offset: 3, length: 0, text: 'd' }],
+    })
     c.getView()!.dispatch({ changes: { from: 0, insert: 'x' } })
     const req = sent.at(-1) as Extract<WebviewToHost, { kind: 'edit.request' }>
     expect(req.baseVersion).toBe(5)
@@ -383,7 +393,7 @@ class InlineDoc implements HostDocumentPort {
   content: string
   ver = 1
   private listener: ((changes: SerChange[], version: number) => void) | undefined
-  constructor(text: string) {
+  constructor(text: string, private readonly dirtyStateEvent = false) {
     this.content = text
   }
   onDocChanged(cb: (changes: SerChange[], version: number) => void): void {
@@ -405,6 +415,8 @@ class InlineDoc implements HostDocumentPort {
     this.content = out
     this.ver++
     this.listener?.(changes, this.ver)
+    // VSCode 首次变脏会在内容事件后再发 contentChanges=[]、同版本的状态事件。
+    if (this.dirtyStateEvent && this.ver === 2) this.listener?.([], this.ver)
     return true
   }
   async undo(): Promise<boolean> {
@@ -416,8 +428,8 @@ class InlineDoc implements HostDocumentPort {
 }
 
 /** Controller ↔ DocumentSession 配对（C-2 与文档边角用例共用的端到端基建） */
-function setupPair(text: string) {
-  const doc = new InlineDoc(text)
+function setupPair(text: string, dirtyStateEvent = false) {
+  const doc = new InlineDoc(text, dirtyStateEvent)
   const toWebview: HostToWebview[] = []
   const session = new DocumentSession(doc, { docUri: DOC_URI })
   doc.onDocChanged((changes, version) => session.handleDocChanged(changes, version))
@@ -443,10 +455,126 @@ function setupPair(text: string) {
       idle = messages.length === 0 ? idle + 1 : 0
     }
   }
-  return { doc, controller, settle }
+  return { doc, controller, session, sessionId, settle }
 }
 
 describe('C-2 端到端：未确认期间连续输入经宿主重定位后与本地一致', () => {
+  it('空白表头 DOM 候选确认后保存中文', async () => {
+    const { doc, controller, session, sessionId, settle } = setupPair('|  |  |\n| --- | --- |\n|  |  |', true)
+    const view = controller.getView()!
+    view.dispatch({ selection: { anchor: 2 } })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    for (const candidate of ['n', 'ni', 'nih', 'nihao', '你好']) {
+      const node = view.contentDOM.querySelector('.vsidian-table-grid-cell')!
+      node.textContent = ' ' + candidate + ' '
+      view.contentDOM.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertCompositionText', data: candidate, isComposing: true }))
+      await settle()
+    }
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '你好' }))
+    await settle()
+    expect(view.state.doc.toString()).toBe('| 你好 |  |\n| --- | --- |\n|  |  |')
+    expect(doc.content).toBe(view.state.doc.toString())
+    expect(session.getConflictState(sessionId)?.suspended).toBe(false)
+    controller.dispose()
+  })
+  it.each([true, false])('真实 DOM 候选连续替换并确认中文后可以继续写回（逐候选 ack=%s）', async (ackEachCandidate) => {
+    const { doc, controller, session, sessionId, settle } = setupPair('正文', true)
+    const view = controller.getView()!
+    view.dispatch({ selection: { anchor: 2 } })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    for (const candidate of ['n', 'ni', 'nih', 'nihao', '你好']) {
+      const node = view.contentDOM.querySelector('.cm-line')!.firstChild!
+      node.textContent = '正文' + candidate
+      view.contentDOM.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertCompositionText', data: candidate, isComposing: true }))
+      if (ackEachCandidate) await settle()
+      else await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '你好' }))
+    await settle()
+    expect(view.state.doc.toString()).toBe('正文你好')
+    expect(doc.content).toBe('正文你好')
+    expect(session.getConflictState(sessionId)?.suspended).toBe(false)
+    view.dispatch({ changes: { from: 4, insert: '！' } })
+    await settle()
+    expect(doc.content).toBe('正文你好！')
+    controller.dispose()
+  })
+  it('IME Esc 留下拼音：多轮组合和确认回流交错后继续写回', async () => {
+    const { doc, controller, settle } = setupPair('正文')
+    const view = controller.getView()!
+    const content = view.contentDOM
+    content.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.dispatch({ changes: { from: 2, insert: 'n' }, userEvent: 'input.type.compose' })
+    view.dispatch({ changes: { from: 2, to: 3, insert: 'ni' }, userEvent: 'input.type.compose' })
+    content.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    content.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    expect(view.state.doc.toString()).toBe('正文ni')
+    expect(doc.content).toBe('正文ni')
+
+    content.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.dispatch({ changes: { from: 4, insert: 'h' }, userEvent: 'input.type.compose' })
+    view.dispatch({ changes: { from: 4, to: 5, insert: 'hao' }, userEvent: 'input.type.compose' })
+    content.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    expect(view.state.doc.toString()).toBe('正文nihao')
+    expect(doc.content).toBe('正文nihao')
+    view.dispatch({ changes: { from: 7, insert: '!' } })
+    await settle()
+    expect(doc.content).toBe('正文nihao!')
+  })
+
+  it('IME 拼音多次替换且 ack 可在任一轮返回：本地与宿主一致', async () => {
+    const { doc, controller, settle } = setupPair('正文')
+    const view = controller.getView()!
+    let previous = ''
+    for (let round = 0; round < 20; round++) {
+      view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+      for (const candidate of ['n', 'ni', 'nih', 'niha', 'nihao']) {
+        view.dispatch({
+          changes: { from: 2, to: 2 + previous.length, insert: candidate },
+          userEvent: 'input.type.compose',
+        })
+        previous = candidate
+        if ((round + candidate.length) % 3 === 0) await settle()
+      }
+      view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+      await settle()
+    }
+    expect(view.state.doc.toString()).toBe('正文nihao')
+    expect(doc.content).toBe('正文nihao')
+  })
+
+  it('IME 先删除选中文本再留下拼音：不得把自己的删除判为冲突', async () => {
+    const { doc, controller, session, sessionId, settle } = setupPair('A文B')
+    const view = controller.getView()!
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.dispatch({ changes: { from: 1, to: 2, insert: '' }, userEvent: 'input.type.compose' })
+    view.dispatch({ changes: { from: 1, insert: 'ni' }, userEvent: 'input.type.compose' })
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    expect(view.state.doc.toString()).toBe('AniB')
+    expect(doc.content).toBe('AniB')
+    expect(session.getConflictState(sessionId)?.suspended).toBe(false)
+    view.dispatch({ changes: { from: 4, insert: '!' } })
+    await settle()
+    expect(doc.content).toBe('AniB!')
+  })
+
+  it('IME 删除选区与真实外部编辑重叠：保留拼音并暂停', async () => {
+    const { doc, controller, session, sessionId, settle } = setupPair('A文B')
+    const view = controller.getView()!
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart'))
+    view.dispatch({ changes: { from: 1, to: 2, insert: '' }, userEvent: 'input.type.compose' })
+    view.dispatch({ changes: { from: 1, insert: 'ni' }, userEvent: 'input.type.compose' })
+    // 另一编辑器在首笔本地请求确认前改同一范围。
+    await doc.applyChanges([{ offset: 1, length: 1, text: '外' }])
+    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend'))
+    await settle()
+    expect(view.state.doc.toString()).toBe('AniB')
+    expect(doc.content).toBe('A外B')
+    expect(session.getConflictState(sessionId)?.suspended).toBe(true)
+  })
   it('两笔不等 ack 的连续输入：宿主权威文本与本地视图最终一致', async () => {
     const { doc, controller } = setupPair('abcdef')
     const view = controller.getView()!
@@ -529,6 +657,50 @@ describe('待发编辑与冲突恢复', () => {
 })
 
 describe('doc.changed 版本单调防线（C-4）', () => {
+  it('空 changes 的 doc.changed 被丢弃且不占用版本号（#44 webview 侧第二道防线）', () => {
+    const { bridge, sent } = makeBridge()
+    const c = mount(bridge)
+    init(c, 'abcdef', 1)
+    // 宿主侧已过滤空 dirty 事件；若未知路径仍发出无内容变更广播，webview
+    // 直接丢弃：不应用、不占用版本号
+    c.handleHostMessage({ kind: 'doc.changed', version: 2, origin: 'external', changes: [] })
+    expect(c.getView()!.state.doc.toString()).toBe('abcdef')
+    expect(sent.filter((m) => m.kind === 'conflict.report')).toHaveLength(0)
+    // 同版本的真实增量仍应正常应用（空事件不得让版本防线误吞它）
+    c.handleHostMessage({
+      kind: 'doc.changed',
+      version: 2,
+      origin: 'external',
+      changes: [{ offset: 6, length: 0, text: '!' }],
+    })
+    expect(c.getView()!.state.doc.toString()).toBe('abcdef!')
+  })
+
+  it('暂缓态收到空 changes 的 doc.changed 不得升级为暂停（#44 误暂停路径）', () => {
+    const { bridge, sent } = makeBridge()
+    const c = mount(bridge)
+    init(c, 'abcdef', 1)
+    const view = c.getView()!
+    // 第三笔与前两笔未确认区间重叠 → 进入暂缓（deferredLocal 非空），
+    // 但未暂停（无 ack fail、无真冲突）
+    view.dispatch({ changes: { from: 0, insert: 'ZZ' } })
+    view.dispatch({ changes: { from: 5, insert: 'Q' } })
+    view.dispatch({ changes: { from: 2, insert: 'X' } })
+    const reportsBefore = sent.filter((m) => m.kind === 'conflict.report').length
+    expect(reportsBefore).toBeGreaterThan(0)
+    c.handleHostMessage({ kind: 'doc.changed', version: 3, origin: 'external', changes: [] })
+    expect(sent.filter((m) => m.kind === 'conflict.report').length).toBe(reportsBefore)
+    expect(view.state.doc.toString()).toBe('ZZXabcQdef')
+    // 未暂停：同版本的真实外部增量才按既定保守语义触发暂停（快照再 +1）
+    c.handleHostMessage({
+      kind: 'doc.changed',
+      version: 3,
+      origin: 'external',
+      changes: [{ offset: 6, length: 0, text: '!' }],
+    })
+    expect(sent.filter((m) => m.kind === 'conflict.report').length).toBe(reportsBefore + 1)
+  })
+
   it('同版本重复到达的增量被丢弃：仅应用一次', () => {
     const { bridge } = makeBridge()
     const c = mount(bridge)
