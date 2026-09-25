@@ -127,6 +127,8 @@
 | `.vsidian-outline-chevron` / `.vsidian-outline-chevron-spacer` | #67 折叠箭头按钮（有子项条目）/ 无子项条目的同宽占位（文字左缘对齐） | 无 | 本项目自有；线宽不写在 SVG 属性上（与侧栏图标同口径）；点箭头折叠/展开、点文字仍跳转 |
 | `.vsidian-outline-collapsed` | 折叠中的父节点条目（箭头旋转 -90° 朝右是两态差异唯一来源） | 无 | 本项目自有 |
 | `.vsidian-outline-hidden` | 折叠遮蔽的条目（`display:none`，类切换是唯一显隐开关；DOM 保留维持索引序） | 无 | 本项目自有 |
+| `.vsidian-outline-menu`（+ `-item` / `-host` / `-submenu` / `-danger` / `-cue`） | #69 右键菜单浮层（挂侧栏内 absolute；菜单项为 button 键盘可达；子菜单显隐唯一开关是父项宿主的 `:hover`/`:focus-within`；danger 红字标删除） | 无（VSCode 原生上下文菜单为宿主级） | 本项目自有；颜色跟随 `--vscode-menu-*` 变量族 |
+| `.vsidian-outline-rename-input` | #69 重命名行内编辑态输入框（条目内容区被 input 替换，编辑原文含行内标记） | 无 | 本项目自有；VSCode 输入框三变量（前景/背景/边框） |
 
 行为边界（非样式映射，随 #65 记录）：
 

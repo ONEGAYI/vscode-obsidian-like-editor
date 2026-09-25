@@ -287,6 +287,39 @@ const OUTLINE_STYLE_DOC = [
   '##### ***粗斜*** 与普通',
   '',
 ].join('\n')
+// #69 右键菜单样例：多级嵌套 + 跨级（H4 挂 H2 下）+ 行内标记标题（重命名
+// 的资产保留断言）+ Setext（调级/重命名规范化 ATX 的载体）+ 文末段。
+// 条目序列：0 主(H1) 1 加粗 Alpha(H2) 2 Alpha 子(H3) 3 Beta(H2) 4 Beta 深(H4)
+//           5 Setext 标题(H1) 6 第二顶(H1)
+const OUTLINE_MENU_DOC = [
+  '# 主标题',
+  '',
+  '## **加粗** Alpha',
+  '',
+  'Alpha 内容。',
+  '',
+  '### Alpha 子',
+  '',
+  '子内容。',
+  '',
+  '## Beta',
+  '',
+  'Beta 内容。',
+  '',
+  '#### Beta 深',
+  '',
+  '深内容。',
+  '',
+  'Setext 标题',
+  '============',
+  '',
+  'Setext 内容。',
+  '',
+  '# 第二顶',
+  '',
+  '内容。',
+  '',
+].join('\n')
 
 // #11 双链样例：合法四形态（按名/显式路径/别名/标题）+ 降级形态
 // （嵌入/块引用/残缺）+ 代码上下文（围栏与行内代码内不解析）
@@ -389,6 +422,7 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   writeFileSync(path.join(wsDir, 'outline.md'), OUTLINE_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'outline-long.md'), OUTLINE_LONG_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'outline-style.md'), OUTLINE_STYLE_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'outline-menu.md'), OUTLINE_MENU_DOC, 'utf8')
   writeFileSync(path.join(wsDir, '链接目标.md'), '# 链接目标\n中文目标文档内容。\n', 'utf8')
   writeFileSync(path.join(wsDir, '无扩展名目标.md'), '# 无扩展名目标\n省略扩展名解析目标。\n', 'utf8')
   mkdirSync(path.join(wsDir, '子 目录'), { recursive: true })
