@@ -375,3 +375,26 @@ describe('右键菜单浮层（#69）', () => {
     expect(input).toMatch(/color:\s*var\(--vscode-input-foreground/)
   })
 })
+
+// ---- #70 拖拽排序：源条目提示与三态落点指示 ----
+
+describe('拖拽视觉反馈（#70：类切换是唯一差异来源）', () => {
+  it('拖动中源条目弱化（opacity 提示"这段正在被搬走"，不改变布局）', () => {
+    expect(rule('.vsidian-sidebar .vsidian-outline-item.vsidian-outline-dragging'))
+      .toMatch(/opacity:\s*0\.45/)
+  })
+
+  it('before/after 落点 = 目标上/下缘插入线（inset box-shadow，焦点变量配色）', () => {
+    const before = rule('.vsidian-sidebar .vsidian-outline-item.vsidian-outline-drop-before')
+    expect(before).toMatch(/box-shadow:\s*inset 0 2px 0 0 var\(--vscode-focusBorder/)
+    const after = rule('.vsidian-sidebar .vsidian-outline-item.vsidian-outline-drop-after')
+    expect(after).toMatch(/box-shadow:\s*inset 0 -2px 0 0 var\(--vscode-focusBorder/)
+  })
+
+  it('inside 落点 = 目标包裹高亮（outline 内缩 + 半透明背景，与 located 同变量族）', () => {
+    const inside = rule('.vsidian-sidebar .vsidian-outline-item.vsidian-outline-drop-inside')
+    expect(inside).toMatch(/outline:\s*1px solid var\(--vscode-focusBorder/)
+    expect(inside).toMatch(/background:\s*var\(--vscode-list-hoverBackground,\s*rgba\(/)
+    expect(inside).toMatch(/border-radius:\s*4px/)
+  })
+})

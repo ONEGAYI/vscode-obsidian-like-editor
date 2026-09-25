@@ -96,6 +96,14 @@ export const OUTLINE_CLASS_NAMES = {
   searchHit: 'vsidian-outline-search-hit',
   /** #68 无匹配占位（有词条但零命中） */
   nomatch: 'vsidian-outline-nomatch',
+  /** #70 拖拽中的源条目（源位置提示：拖动后原条目弱化） */
+  dragging: 'vsidian-outline-dragging',
+  /** #70 落点指示三态：目标上缘插入线（before 落点） */
+  dropBefore: 'vsidian-outline-drop-before',
+  /** #70 落点指示三态：目标下缘插入线（after 落点） */
+  dropAfter: 'vsidian-outline-drop-after',
+  /** #70 落点指示三态：目标包裹高亮（inside 落点 = 成为子标题） */
+  dropInside: 'vsidian-outline-drop-inside',
 } as const
 
 /** 大纲面板可访问名称（按钮 aria-label 与面板 aria-label 共用文案） */
