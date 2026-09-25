@@ -239,6 +239,7 @@ class EmptyTableCellWidget extends WidgetType {
       if (!view) return
       const pos = view.posAtDOM(span)
       view.dispatch({ selection: EditorSelection.create([EditorSelection.cursor(pos, -1)]), scrollIntoView: true })
+      view.focus()
       event.preventDefault()
     })
     return span

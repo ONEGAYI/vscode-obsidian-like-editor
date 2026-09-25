@@ -3,7 +3,7 @@
 //
 // 核心断言（用户可观察行为，非实现复述）：
 // - 装饰：表格行/单元格/管道符/对齐的稳定类名；安全表格的活动格也保留网格，
-//   空单元格仅有零宽定位 widget（编辑仍在 CM6 原文，无覆盖层状态机）
+//   原文零长度格用定位 widget；编辑清空后保留填充空格承载原生输入
 // - 编辑链路：视图单元格输入（CM6 事务）→ edit.request → 宿主权威文档
 //   → 保存回读（getText）→ 以权威文本重建装饰与编辑后呈现一致
 // - 键入 | 自动转义 \|；代码 span 内不转义；\ 之后不重复转义
@@ -130,11 +130,11 @@ describe('live 表格装饰', () => {
     const view = makeEditView(doc, middle.contentFrom)
     deleteCharBackward(view)
     deleteCharBackward(view)
-    expect(view.state.doc.line(1).text).toBe('| 带 || 送 |')
+    expect(view.state.doc.line(1).text).toBe('| 带 | | 送 |')
     const at = view.state.selection.main.head
     view.dispatch({ changes: { from: at, insert: '是' },
       selection: { anchor: at + 1 }, userEvent: 'input.type' })
-    expect(view.state.doc.line(1).text).toBe('| 带 |是| 送 |')
+    expect(view.state.doc.line(1).text).toBe('| 带 |是 | 送 |')
     expect(view.state.selection.main.assoc).toBe(-1)
     const rendered = view.state.field(liveDecorationsField).decos
     const rebuilt = buildLivePreviewDecorations(view.state.doc, view.state.selection)
@@ -153,7 +153,7 @@ describe('live 表格装饰', () => {
       expect(current.text.slice(columns[2]!.contentFrom - current.from,
         columns[2]!.contentTo - current.from)).toBe('送')
     }
-    expect(view.state.doc.line(1).text).toBe('| 带 |是ssssssss| 送 |')
+    expect(view.state.doc.line(1).text).toBe('| 带 |是ssssssss | 送 |')
     expect(view.state.selection.main.assoc).toBe(-1)
     view.destroy()
   })
@@ -664,13 +664,37 @@ describe('单元格编辑权威链路', () => {
     view.destroy()
   })
 
+  it.each(['backward', 'forward', 'selection', 'native'] as const)('中格以 %s 删光后保留原生输入所需的空文本承载', (method) => {
+    const text = '| 左 |middle| 右 |\n| --- | --- | --- |\n| a | b | c |'
+    const from = text.indexOf('middle')
+    const view = makeEditView(text, method === 'backward' ? from + 6 : from)
+    if (method === 'native') {
+      view.dispatch({ changes: { from, to: from + 6 }, selection: { anchor: from }, userEvent: 'input.type' })
+    } else if (method === 'selection') {
+      view.dispatch({ selection: EditorSelection.single(from, from + 6) })
+      deleteCharBackward(view)
+    } else {
+      for (let i = 0; i < 10; i++) (method === 'backward' ? deleteCharBackward : deleteCharForward)(view)
+    }
+    expect(view.state.doc.line(1).text).toBe('| 左 | | 右 |')
+    const middle = view.contentDOM.querySelector('.vsidian-table-grid-row')!
+      .querySelectorAll('.vsidian-table-grid-cell')[1]!
+    expect(middle.getAttribute('contenteditable')).not.toBe('false')
+    expect(middle.textContent).toBe(' ')
+    const at = view.state.selection.main.head
+    view.dispatch({ changes: { from: at, insert: 'abc' }, selection: { anchor: at + 3 }, userEvent: 'input.type' })
+    deleteCharBackward(view)
+    expect(view.state.doc.line(1).text).toBe('| 左 |ab | 右 |')
+    view.destroy()
+  })
+
   it.each([0, 1])('省略边界管道的表头清空第 %i 格后仍保持两列', (column) => {
     const text = 'a|b\n---|---\nc|d'
     const at = column * 2
     const view = makeEditView(text, at)
     view.dispatch({ selection: EditorSelection.single(at, at + 1) })
     deleteCharBackward(view)
-    expect(view.state.doc.toString()).toBe((column === 0 ? '||b|' : '|a||') + '\n---|---\nc|d')
+    expect(view.state.doc.toString()).toBe((column === 0 ? '| |b|' : '|a| |') + '\n---|---\nc|d')
     expect(view.contentDOM.querySelectorAll('.vsidian-table-grid-row')).toHaveLength(2)
     view.destroy()
   })

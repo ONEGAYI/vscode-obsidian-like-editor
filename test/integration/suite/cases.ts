@@ -1906,7 +1906,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     for (let i = 0; i < 3; i++) {
       await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'delete' })
     }
-    const afterPaddingDelete = before.replace('| 苹果 |', '||')
+    const afterPaddingDelete = before.replace('| 苹果 |', '| |')
     const rendered = await waitViewState(name, (v) => v.text === afterPaddingDelete)
     assert(rendered.tableGrid?.visibleRows === 3, '删除内容后仍须保留完整网格')
     assert(rendered.paint?.table?.cellVisible === true && rendered.paint.table.gridDisplay === 'grid',
@@ -2136,9 +2136,9 @@ export const cases: Array<[string, () => Promise<void>]> = [
     for (let i = 0; i < 2; i++) {
       await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'backspace' })
     }
-    await poll('中格空白退格后源文', () => doc.getText().startsWith('| 带 || 送 |') ? true : undefined)
+    await poll('中格空白退格后源文', () => doc.getText().startsWith('| 带 | | 送 |') ? true : undefined)
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.domType', text: '是' })
-    await poll('中格再次输入写回', () => doc.getText().startsWith('| 带 |是| 送 |') ? true : undefined)
+    await poll('中格再次输入写回', () => doc.getText().startsWith('| 带 |是 | 送 |') ? true : undefined)
     const state = await waitViewState(name, (v) => v.tableGrid?.selectedRowCells[1]?.includes('是') === true)
     const backgrounds = state.paint?.table?.headerCellBackgrounds ?? []
     assert(backgrounds.length === 3 && backgrounds.every((color) => color === backgrounds[0]),
@@ -2159,11 +2159,11 @@ export const cases: Array<[string, () => Promise<void>]> = [
       assert(typed.paint?.table?.caretGridColumn === 1,
         `中格删空后连续输入光标须留中列（第 ${count} 次）：${JSON.stringify(typed.paint?.table)}`)
     }
-    assert(doc.getText().startsWith('| 带 |是ssssssss| 送 |'),
+    assert(doc.getText().startsWith('| 带 |是ssssssss | 送 |'),
       `中格删空后文字须继续落入中列：${JSON.stringify(doc.getText().split('\n')[0])}`)
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.key', key: 'backspace' })
     await poll('中格连续输入后可退格', () =>
-      doc.getText().startsWith('| 带 |是sssssss| 送 |') ? true : undefined)
+      doc.getText().startsWith('| 带 |是sssssss | 送 |') ? true : undefined)
     const afterBackspace = await waitViewState(name, (v) => v.text === doc.getText())
     assert(afterBackspace.paint?.table?.caretDomColumn === 1,
       '连续输入后退格仍须把原生光标留在中格')

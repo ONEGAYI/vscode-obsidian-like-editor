@@ -130,6 +130,9 @@ vsidian/
 │       ├── tableStructure.ts     # 表格导航与增删行列纯函数（#13）
 │       └── taskToggle.ts         # 任务勾选解析纯函数（#9）
 ├── test/                  # 测试根
+│   ├── browser/     # 浏览器原生输入回归
+│   │   ├── tableCaret.mjs       # 表格原生键盘与IME回归
+│   │   └── tableCaretFixture.ts # 原生输入测试生产控制器装配
 │   ├── integration/ # 真宿主集成测试
 │   │   ├── fixtures.mjs              # 集成测试 fixture 单一事实源
 │   │   ├── hiddenDesktop.ps1         # Windows 独立桌面启动器

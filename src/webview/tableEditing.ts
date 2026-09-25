@@ -293,8 +293,8 @@ const protectGridCellContent = EditorState.transactionFilter.of((tr) => {
     }
     return tr
   }
-  // 格内空白也是可编辑内容（包括刚键入的空格及 IME 预编辑替换）；
-  // 边界取管道内侧，不用 trim 后的内容范围推断空白是否可删除。
+  // 边界取管道内侧；普通空白可删除，但删到零长度时保留一个 Markdown
+  // 填充空格作为原生输入节点，避免 CM6 将当前格换成不可编辑的 widget。
   const lower = cell.from
   const upper = cell.to
   const changes: Array<{ from: number; to: number; insert: string }> = []
@@ -314,9 +314,23 @@ const protectGridCellContent = EditorState.transactionFilter.of((tr) => {
       changes.push({ from: start, to: end, insert: insert.toString() })
     }
   })
+  let clearedCell = false
+  // Chromium 原生 Backspace 经 DOM observer 回来时标为 input.type，
+  // 不能仅按 delete 事件判断；组合中间态不改写，避免打断候选区间。
+  if (!tr.isUserEvent('input.type.compose') && changes.length) {
+    let remaining = tr.startState.sliceDoc(lower, upper)
+    for (const change of [...changes].reverse()) {
+      remaining = remaining.slice(0, change.from - lower) + change.insert +
+        remaining.slice(change.to - lower)
+    }
+    if (remaining.length === 0) {
+      changes.splice(0, changes.length, { from: lower, to: upper, insert: ' ' })
+      clipped = clearedCell = true
+    }
+  }
   // 省略首尾管道的行在边缘格清空后可能丢列（a|b → |b）。只有此时
   // 才补显式边界，在同一笔事务中保留原列数及其余格内容。
-  if (tr.isUserEvent('delete') && changes.length) {
+  if ((clearedCell || tr.isUserEvent('delete')) && changes.length) {
     let editedLine = cell.line.text
     for (const change of [...changes].reverse()) {
       editedLine = editedLine.slice(0, change.from - cell.line.from) + change.insert +
@@ -333,7 +347,8 @@ const protectGridCellContent = EditorState.transactionFilter.of((tr) => {
       // 删除转义符或代码定界符可能暴露格内管道。补边界仍不能保持列数时
       // 拒绝这笔删除，避免把当前格拆成额外列。
       if (!tableRowCellsForColumns(canonical, cell.line.from, cell.cells.length)) return []
-      const caret = Math.min(parts[column]!.length, changes[0]!.from - cell.from + changes[0]!.insert.length)
+      const caret = clearedCell ? 0
+        : Math.min(parts[column]!.length, changes[0]!.from - cell.from + changes[0]!.insert.length)
       return {
         changes: { from: cell.line.from, to: cell.line.to, insert: canonical },
         selection: { anchor: cell.line.from + 1 + parts.slice(0, column).reduce((n, part) => n + part.length + 1, 0) + caret },
@@ -347,7 +362,7 @@ const protectGridCellContent = EditorState.transactionFilter.of((tr) => {
   const event = tr.annotation(Transaction.userEvent)
   return {
     changes,
-    selection: { anchor: changes[0]!.from + changes[0]!.insert.length },
+    selection: { anchor: changes[0]!.from + (clearedCell ? 0 : changes[0]!.insert.length) },
     annotations: event ? Transaction.userEvent.of(event) : undefined,
     scrollIntoView: tr.scrollIntoView,
   }
@@ -586,6 +601,14 @@ export const tableEditing = [
   tableCompositionCleanup,
   EditorView.domEventHandlers({
     compositionstart: (_event, view) => {
+      // 既有文件可能含 || 零宽格。候选开始前提供文字节点，避免浏览器
+      // 把组合区间附着在不可编辑 widget 外；普通点击仍不修改源文。
+      const caret = view.state.selection.main
+      const empty = caret.empty ? editableGridCellAt(view.state, caret.head) : null
+      if (empty && empty.from === empty.to) {
+        view.dispatch({ changes: { from: empty.from, insert: ' ' },
+          selection: EditorSelection.create([EditorSelection.cursor(empty.from, 1)]) })
+      }
       const timer = tableCompositionTimers.get(view)
       if (timer !== undefined) clearTimeout(timer)
       tableCompositionTimers.delete(view)
