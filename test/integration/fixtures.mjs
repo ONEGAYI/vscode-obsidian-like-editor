@@ -269,6 +269,30 @@ const WIKILINK_CRLF_TARGET_DOC = (() => {
   out.push('## CRLF 深处小节', '', '小节内容。', '')
   return out.join('\r\n')
 })()
+// #59 公式样例：混排段落、相邻行内公式、段内 $$、跨行块、普通美元、
+// 行内代码/围栏排除、非法公式降级
+const MATH_DOC = [
+  '# 公式样例',
+  '',
+  '质量能量关系 $E=mc^2$ 出现在行内，段内块 $$a^2+b^2=c^2$$ 紧随其后。',
+  '',
+  '相邻公式 $x_1$ 与 $x_2$ 互不影响，普通价格 $5 与 $10 不是公式。',
+  '',
+  '$$',
+  '\\int_0^1 x^2 \\, dx = \\frac{1}{3}',
+  '$$',
+  '',
+  '非法公式 $\\notdefined{x}$ 显示原文降级。',
+  '',
+  '`行内代码 $不渲染$` 与正文公式 $y=kx+b$。',
+  '',
+  '```text',
+  '围栏内 $不渲染$',
+  '```',
+  '',
+  '结尾段落。',
+  '',
+].join('\n')
 
 /**
  * 向目录写入全部集成测试 fixture（字节由脚本直接生成，不经 git 检出，
@@ -302,6 +326,7 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   writeFileSync(path.join(wsDir, 'table13.md'), TABLE13_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'table43-crlf.md'), TABLE43_CRLF_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'table-create-crlf.md'), TABLE_CREATE_CRLF_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'math.md'), MATH_DOC, 'utf8')
   const largeLines = Array.from({ length: LARGE_DOC_LINES }, (_, i) => `第 ${i + 1} 行 ——固定宽度填充文本，用于长文档视口渲染验证——`)
   writeFileSync(path.join(wsDir, 'large.md'), largeLines.join('\n') + '\n', 'utf8')
   // 性能体量对比样例（#5）：同构普通段落 + 每 50 行一个二级标题

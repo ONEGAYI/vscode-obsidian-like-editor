@@ -16,6 +16,7 @@ import {
   generateSampleNearBytes,
   generateLongLineSample,
   generateImageDenseSample,
+  generateMathDenseSample,
 } from './gen-sample.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -45,6 +46,8 @@ try {
   writeFileSync(path.join(wsDir, 'reading-giant.md'), generateGiantBlockSample(20_000), 'utf8')
   writeFileSync(path.join(wsDir, 'perf-longline.md'), generateLongLineSample(), 'utf8')
   writeFileSync(path.join(wsDir, 'perf-images.md'), generateImageDenseSample(), 'utf8')
+  // #59 公式密集档：行内/块级/段内公式交替（渲染缓存与装饰增量的载体）
+  writeFileSync(path.join(wsDir, 'perf-math.md'), generateMathDenseSample(), 'utf8')
   for (let i = 0; i < 24; i++) {
     const width = 320 + (i % 4) * 80
     const height = 180 + (i % 6) * 60
