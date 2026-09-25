@@ -2,11 +2,7 @@
 
 VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 
-> 当前状态：**MVP 主要功能已实施，整体验收未结**。双视图编辑器、增量写回、任务、链接与图片、双链、表格和查找已落地；#32 统一两模式基础排版基线，#33 独立设置页，#34 实时预览源文件行号（设置页可开关）；#38 落地标题栏三态切换（实时预览 → 阅读 → 源码编辑器循环）、`.md` 默认编辑器接管、全局模式记忆（globalState）与 diff 语境防御；#45 后台集成宿主、#44 IME 同步修复、#42/#43 表格网格与控件；#52–#55 联合分支落地兜底确认权威版本推导（旁观面板不再丢暂存增量）、顶栏齿轮入口与右侧栏布局、右侧栏大纲面板、标题左缘竖线移除。二期联合分支（#57/#59/#60/#72–#75）落地渲染与表格交互：#59 公式渲染（KaTeX 本地打包，live 双通道装饰 + 阅读渲染，LRU 缓存与可读降级），#60 Mermaid 围栏双模式渲染（独立产物按需懒加载、视口挂载/卸载、主题联动），#57 表格跨格选择经 #72–#75 按用户确认规格重做（见下段）；随附 5 轮审查修复循环与发布闸双向加固（out/ 白名单、woff/ttf 禁令）。#21–#25、#28、#30 跟进规格票验收缺口，#26–#27 等人工与跨环境事项仍按验证清单跟进。
->
-> 自动化套件为 1224 项 Vitest 单测、25 项 node --test 契约测试、62 项原生浏览器输入回归（表格拖选/公式输入/Mermaid CSP 复刻页），以及开发态与 VSIX 安装态共用的 119 项真实 VSCode 1.86.2 宿主集成用例（另有空窗口激活实测路径）。单元格删除边界、跨行拖选标记保护、中格退格后的网格绘制、Tab 可见行导航、格内粘贴换行、多表行号、中文候选写回、侧栏两态绘制与大纲层级保真（含伪标题排除、长大纲可滚动、图标尺寸与去抖取消路径）、跨格选区/整表删除、公式与 Mermaid 的绘制层断言（KaTeX 字体探针、`paint.math`/`paint.mermaid`）均有回归保护，执行记录见人工验证清单；这不代表真实 IME、物理鼠标和视觉效果已由用户验收。发布基建（双语 README、CHANGELOG、VSIX 体积闸、发布脚本与 CI 自动发布）已落地，见「打包与发布」。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能数据与待验项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 和 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
->
-> 表格首轮交互未通过用户验收，已按 [#72 规格](docs/specs/table-interaction-rework.md) 与 #73–#75 重做：统一矩形格区、高亮和 Markdown 复制；满行满列结构删除、表头晋升与末行删尽；边沿悬停新增、点阵把手选择及插入式行列拖排。重做后编译、完整单测、62 项浏览器回归及 119 项宿主集成已通过（合并 main 后全量复跑），包含零宽格 IME、过期选区清理、跨表无效拖动及格区绘制断言。安装态首轮出现一次 Mermaid 可见性断言失败，同包复跑未复现，详见人工验证清单；用户复验仍待完成。
+> 当前状态：**MVP 主要功能已实施，整体验收未结**。一期双视图编辑、增量写回、任务、链接图片、双链、表格、查找、三态切换、独立设置页与源文件行号，二期公式渲染、Mermaid 图表与表格交互重做（[#72 规格](docs/specs/table-interaction-rework.md)）均已落地；自动化通过不等于真实 IME、物理鼠标与视觉观感已由用户验收。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；待验项与历轮执行记录见 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)；用户可见变更见 [CHANGELOG.md](CHANGELOG.md)。本文件是项目级 agent 规则的**单一事实源**。
 
 ## 约定
 
@@ -23,7 +19,7 @@ VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 - **测试**：`npm run test:unit`（vitest + `node --test` 启动器契约，纯逻辑 + jsdom 的 webview 控制器，无 VSCode 宿主依赖；`VSIDIAN_TEST_HOST_MODE=foreground` 时跳过独立桌面探针）；`npm run test:browser`（Playwright headless Chromium，用原生键盘/IME 驱动生产控制器验证表格光标与输入回流——keydown 注入测不到 `input.type` 回流路径，**涉及 webview 输入/光标行为的变更合并前必跑**，首次需 `npx playwright install chromium`；CI 的 browser job 在 Linux runner 上跑同一脚本并缓存浏览器二进制，通道同为 Playwright chromium，与本地默认一致，`VSIDIAN_TEST_BROWSER_CHANNEL=msedge` 仅本机借系统 Edge 调试用，不进 CI）；`npm run test:integration`（1.86.2 真宿主，fixture 由 `test/integration/fixtures.mjs` 统一生成，开发态 `runTest.mjs` 与安装态 `runInstalled.mjs` 及空窗口激活 `runSettingsActivation.mjs` 三条路径共用 `testHost.mjs` 启动策略：Windows 默认独立桌面不抢前台，`VSIDIAN_TEST_HOST_MODE=foreground` 切前台）。扩展注册 `onegayi.vsidian._test.*` 辅助命令供集成测试观测/注入（仅 `VSIDIAN_TEST_HOOKS=1` 时注册）。测试消息通道是**宿主侧门控、webview 侧被动接收**的分层设计：`_test.*` 注入命令（含向 webview 转发 `table.test.key`/`task.test.click`/`reading.test.image` 等）在宿主侧受 `VSIDIAN_TEST_HOOKS` 门控；webview 侧这些消息分支不做二次门控——webview 面板的消息源只有扩展自身（`panel.webview.postMessage`），封住注入源即封住入口，勿误判为 webview 未设防。
 - **打包与安装态回归（#15）**：`npx @vscode/vsce package --no-dependencies` 产出 VSIX（esbuild bundle 自包含，不带 node_modules；`.vscodeignore` 排除 src/test/docs）。`node test/integration/runInstalled.mjs` 把 VSIX 经 `--install-extension` 装入隔离 profile 的 1.86.2 便携宿主（安装注册链路真实走通；1.86 测试模式要求 `--extensionTestsPath` 依赖 `--extensionDevelopmentPath` 同时存在，故 dev path 指向安装解压目录——加载代码仍是 VSIX 产物而非仓库源码树）后跑同一集成套件。
 - **性能测量**：`node test/perf/runPerf.mjs`（1千/1万/10万行、10 KB/100 KB/1 MB、超长行、图片密集与大围栏；报告写 `docs/perf/data/perf-report.json`）；档位数据与解读汇总在 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md)。
-- **版本锁定**：依赖一律精确版本（无 `^`），提交 lockfile；`engines.vscode ^1.86.0` 与 `@types/vscode 1.86.0` 对齐。`@types/node` 锁 22.x（vitest 5 的 vite peer 要求数 >=20.19，类型不进产物，宿主代码仍按 Node 18 API 面编码）。版本依据探索笔记（orch 仓库 exploration/01）。
+- **版本锁定**：依赖一律精确版本（无 `^`），提交 lockfile；`engines.vscode ^1.86.0` 与 `@types/vscode 1.86.0` 对齐。`@types/node` 锁 22.x（vitest 5 的 vite peer 要求数 >=20.19，类型不进产物，宿主代码仍按 Node 18 API 面编码）。
 
 ## 打包与发布
 
@@ -58,7 +54,6 @@ vsidian/
 │       ├── ci.yml      # GitHub CI 工作流
 │       └── release.yml # v* 标签触发的发布工作流
 ├── .gitignore             # Git 忽略规则
-├── .scratch/              # MVP 开票草稿，临时目录
 ├── .vscode/               # VSCode 工作区配置
 │   ├── launch.json # F5 扩展宿主启动配置
 │   └── tasks.json  # 调试前编译任务
@@ -165,92 +160,7 @@ vsidian/
 │       ├── tableRegionSelection.ts # 表格格区状态与指针绘制
 │       ├── tableStructure.ts       # 表格导航与增删行列纯函数（#13）
 │       └── taskToggle.ts           # 任务勾选解析纯函数（#9）
-├── test/                  # 测试根
-│   ├── browser/     # 浏览器原生输入回归
-│   │   ├── tableCaret.mjs       # 表格原生键盘与IME回归
-│   │   └── tableCaretFixture.ts # 原生输入测试生产控制器装配
-│   ├── integration/ # 真宿主集成测试
-│   │   ├── fixtures.mjs              # 集成测试 fixture 单一事实源
-│   │   ├── hiddenDesktop.ps1         # Windows 独立桌面启动器
-│   │   ├── runInstalled.mjs          # VSIX 安装态集成回归启动器
-│   │   ├── runSettingsActivation.mjs # 空窗口激活实测启动器
-│   │   ├── runTest.mjs               # 集成测试启动器
-│   │   ├── settingsActivation/       # 空窗口命令激活实测套件（#33）
-│   │   │   └── index.ts # 空窗口命令激活实测套件
-│   │   ├── suite/                    # 集成测试套件
-│   │   │   ├── cases.ts # 集成测试用例
-│   │   │   └── index.ts # 集成测试入口 runner
-│   │   ├── testHost.mjs              # 集成宿主启动策略
-│   │   └── testHost.test.mjs         # 集成宿主启动契约测试
-│   ├── perf/        # 性能测量脚本与套件（#5）
-│   │   ├── gen-sample.mjs # 性能样例生成器（#5）
-│   │   ├── runPerf.mjs    # 性能测量启动器（#5）
-│   │   └── suite.ts       # 性能测量套件（#5）
-│   ├── release/     # 发布脚本契约测试目录
-│   │   └── release.test.mjs # 发布脚本纯函数契约测试
-│   └── unit/        # vitest 单元契约测试
-│       ├── appliedUnackedRace.test.ts       # 已应用未确认竞态契约测试
-│       ├── changeMapping.test.ts            # 变更重定位契约
-│       ├── compositionBuffer.test.ts        # 组合期间缓冲契约测试
-│       ├── conflictRetention.test.ts        # 冲突保留与暂停契约测试
-│       ├── documentSession.test.ts          # 文档会话契约
-│       ├── editorChromeCssContract.test.ts  # 编辑器铬件主题适配契约测试
-│       ├── find.test.ts                     # 查找会话契约测试（#14）
-│       ├── findSession.test.ts              # 查找匹配语义测试（#14）
-│       ├── headingPaintCssContract.test.ts  # 标题绘制样式契约测试
-│       ├── historyForwarding.test.ts        # 撤销重做转发契约测试
-│       ├── imageResource.test.ts            # 图片资源管理器契约测试
-│       ├── lineNumberCssContract.test.ts    # 行号公式与 CSS 双写钉子测试
-│       ├── lineNumbers.test.ts              # 行号装配契约测试（#34）
-│       ├── linkInteraction.test.ts          # 链接交互契约测试（#10）
-│       ├── linkTarget.test.ts               # 链接目标分类契约测试
-│       ├── liveDecorations.test.ts          # Live 装饰契约测试
-│       ├── liveMath.test.ts                 # live 公式装饰契约测试（#59）
-│       ├── liveMermaid.test.ts              # Mermaid 装饰契约（#60）
-│       ├── liveTable.test.ts                # live 表格装饰测试（#12）
-│       ├── markdownDoc.test.ts              # 文档工具契约测试
-│       ├── mathPaintCssContract.test.ts     # 公式绘制样式契约测试（#59）
-│       ├── mathScan.test.ts                 # 公式形态学契约测试（#59）
-│       ├── mermaidFence.test.ts             # Mermaid 围栏形态契约（#60）
-│       ├── mermaidPaintCssContract.test.ts  # Mermaid 样式契约（#60）
-│       ├── mermaidRender.test.ts            # Mermaid 渲染管线契约（#60）
-│       ├── newline.test.ts                  # 换行协调契约
-│       ├── outline.test.ts                  # 大纲标题提取契约测试
-│       ├── outlineCssContract.test.ts       # 大纲绘制样式契约测试
-│       ├── outlinePanel.test.ts             # 大纲面板交互契约测试
-│       ├── perfProbe.test.ts                # 性能探针契约测试
-│       ├── protocol.test.ts                 # 消息协议校验契约
-│       ├── readingBlocks.test.ts            # 阅读块切分契约测试
-│       ├── readingMarkdown.test.ts          # 渲染层契约测试
-│       ├── readingMath.test.ts              # 阅读公式渲染契约测试（#59）
-│       ├── readingMermaid.test.ts           # Mermaid 阅读块契约（#60）
-│       ├── readingTable.test.ts             # 阅读表格契约测试（#12）
-│       ├── readingView.test.ts              # 阅读视图 DOM 契约测试
-│       ├── readingViewport.test.ts          # 视口窗口纯函数契约测试
-│       ├── readingVirtualView.test.ts       # 虚拟化装配契约测试
-│       ├── settings.test.ts                 # 设置纯逻辑契约测试
-│       ├── settingsInteraction.test.ts      # 设置交互契约测试
-│       ├── settingsPage.test.ts             # 设置页 UI 契约测试
-│       ├── settingsPageHost.test.ts         # 设置页宿主生命周期测试
-│       ├── settingsService.test.ts          # 设置服务契约测试
-│       ├── sidebarLayout.test.ts            # 右侧栏布局契约测试
-│       ├── sidebarLayoutCssContract.test.ts # 右侧栏样式契约测试
-│       ├── suspendResume.test.ts            # 暂停恢复契约测试
-│       ├── tableCells.test.ts               # 单元格拆分契约测试（#12）
-│       ├── tableCreate.test.ts              # 建表与本地化契约测试
-│       ├── tableOps.test.ts                 # 表格导航与结构命令链路契约（#13）
-│       ├── tablePaintCssContract.test.ts    # 表格绘制样式契约测试
-│       ├── tableRegion.test.ts              # 矩形格区与编辑契约测试
-│       ├── tableRegionCssContract.test.ts   # 格区与悬停控件样式契约
-│       ├── tableStructure.test.ts           # 表格结构操作纯函数契约（#13）
-│       ├── taskInteraction.test.ts          # 任务勾选交互契约测试（#9）
-│       ├── taskToggle.test.ts               # 任务勾选解析纯函数契约测试
-│       ├── viewCycle.test.ts                # 三态视图编排契约测试
-│       ├── viewMode.test.ts                 # 模式切换状态机契约测试
-│       ├── webviewSync.test.ts              # webview 同步契约
-│       ├── wikilinkInteraction.test.ts      # 双链交互契约测试（#11）
-│       ├── wikilinkParse.test.ts            # 双链形态学契约测试（#11）
-│       └── wikilinkTarget.test.ts           # 双链目标解析契约测试（#11）
+├── test/…                 # 测试根
 ├── tsconfig.json          # TypeScript 类型检查配置
 └── vitest.config.ts       # vitest 单元测试配置
 <!-- file-tree:tree:end -->
