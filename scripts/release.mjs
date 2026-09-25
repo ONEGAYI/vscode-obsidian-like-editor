@@ -17,14 +17,14 @@ import { fileURLToPath } from 'node:url'
 
 export const SIZE_LIMITS = {
   // 解压总体积：#59 KaTeX 后基线约 1.05 MB，#60 加入 mermaid.js 独立产物
-  // （约 2.62 MB）后基线约 4.1 MB（实测见 AGENTS.md「打包与发布」）——
+  // （约 2.60 MB）后基线约 4.1 MB（实测见 AGENTS.md「打包与发布」）——
   // 警告与失败线为基线 + 功能增长余量，防"意外塞进大文件"而非卡正常演进。
   totalWarnBytes: 4.5 * 1024 * 1024,
   totalMaxBytes: 5.5 * 1024 * 1024,
   // 一般单文件：mermaid.js（刻意 vendored 的独立产物，minify 后实测
-  // 2,724,795 B ≈ 2.60 MB）是最大单项，警告线 3 MB 在其上留小余量、
+  // 2,727,077 B ≈ 2.60 MB）是最大单项，警告线 3 MB 在其上留小余量、
   // 失败线 4 MB 拦截意外超大文件（如误升 mermaid 12.x 的 5.3 MB 产物）。
-  // 主 bundle（main.js 约 0.83 MB，含 CM6 + KaTeX）随之不再触发单文件
+  // 主 bundle（main.js 约 0.80 MB，含 CM6 + KaTeX）随之不再触发单文件
   // 警告——其增长由总量线约束，属本阈值调整的已接受取舍。
   fileWarnBytes: 3 * 1024 * 1024,
   fileMaxBytes: 4 * 1024 * 1024,

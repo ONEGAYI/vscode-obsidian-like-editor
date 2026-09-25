@@ -133,7 +133,7 @@
 
 ## Mermaid 图表（#60）
 
-#60 起两种视图渲染语言标记为 `mermaid` 的围栏代码块（mermaid 11.12.2 vendored 独立产物 `out/webview/mermaid.js`，存在 mermaid 围栏时按需 `<script>` 加载）。**形态声明**：info string 精确匹配 `mermaid`（trim 后全等，大小写敏感）；普通围栏与外层长围栏内的伪围栏、缩进 ≥4 的围栏不渲染；未闭合围栏降级为源码。语法/渲染失败按**错误态**降级（错误信息 + 源码可读，不吞后续块，错误结果缓存不重试）；明暗主题联动重渲染（缓存随主题清空）。围栏内链接不做跳转处理（securityLevel `strict`，显示为纯文本）。
+#60 起两种视图渲染语言标记为 `mermaid` 的围栏代码块（mermaid 11.12.2 vendored 独立产物 `out/webview/mermaid.js`，存在 mermaid 围栏时按需 `<script>` 加载）。**形态声明**：info string 精确匹配 `mermaid`（trim 后全等，大小写敏感）；普通围栏与外层长围栏内的伪围栏、缩进 ≥4 视觉列的围栏（Tab 按 CommonMark 折算到下一 4 倍制表位）不渲染；未闭合围栏降级为源码。语法/渲染失败按**错误态**降级（错误信息 + 源码可读，不吞后续块，错误结果缓存不重试）；明暗主题联动重渲染（缓存随主题清空）。围栏内链接不做跳转处理（securityLevel `strict`，显示为纯文本）。
 
 | 本项目稳定类名 | 用途 | Obsidian 对应选择器 | 核对结果 |
 | --- | --- | --- | --- |
@@ -145,9 +145,9 @@
 行为边界（非样式映射，随 #60 记录）：
 
 - 形态学单一事实源 `src/shared/mermaid.ts`（CommonMark 围栏状态机行扫描，含非 mermaid 围栏的嵌套抑制），阅读侧为 markdown-it fence 渲染规则——两处判定逐条对齐；已知差异（引用行 `> ```mermaid` live 显源码、阅读渲染）记录于 `docs/perf/2026-09-mermaid-rendering.md`，降级方向安全。
-- 渲染产物按源文本 LRU 缓存（64 条）；同一缓存条目插入多个容器时克隆改写全部 SVG id 与引用（文档内 id 唯一、内嵌 `<style>` 选择器不串图）。
+- 渲染产物按源文本 LRU 缓存（64 条，条目携带主题代次戳，主题切换后旧代次条目不命中）；同一缓存条目插入多个容器时克隆改写全部 SVG id 与引用——含多值 id 引用属性（`aria-labelledby` / `aria-describedby` 按空白分词逐段改写；文档内 id 唯一、内嵌 `<style>` 选择器不串图）。
 - SVG 经 DOM API 插入专用容器，**不经过** sanitizeReadingDom（净化层剥 `<style>` 会毁配色）——安全边界由 mermaid 自产 SVG + `securityLevel:'strict'` + webview CSP 三层兜底。
-- live 跨行 replace 装饰走 StateField（CM6 约束），围栏表增量重建以变更前最后一个已闭合围栏为顶层锚点。
+- live 跨行 replace 装饰走 StateField（CM6 约束），围栏表增量重建以变更前最后一个已闭合围栏为顶层锚点；无锚点回溯以文末开放围栏开启行（trailingOpenStart）为窗口下界（幻影围栏防护），尾部开放按批增量续扫并在 8192 行熔断。
 
 ## 悬浮提示等既有稳定类（沿用 #4/#5，与 Obsidian 无对应）
 

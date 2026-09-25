@@ -212,14 +212,14 @@ export type WebviewToHost =
       liveImageCount?: number
       /** live 视口内双链数（#11；范围外 widget 与范围内 mark 共用类名） */
       liveWikilinkCount?: number
-  /** #59：live 视口内公式渲染数（范围外 KaTeX widget 与降级 span 共用类名） */
-  liveMathCount?: number
-  /** #59：阅读挂载块内公式数（KaTeX span / 降级 span） */
-  readingMathCount?: number
-  /** #60：live 视口内 mermaid 容器数（渲染 widget 与降级态共用类名） */
-  liveMermaidCount?: number
-  /** #60：阅读挂载块内 mermaid 容器数（渲染 / 降级态共用类名） */
-  readingMermaidCount?: number
+      /** #59：live 视口内公式渲染数（范围外 KaTeX widget 与降级 span 共用类名） */
+      liveMathCount?: number
+      /** #59：阅读挂载块内公式数（KaTeX span / 降级 span） */
+      readingMathCount?: number
+      /** #60：live 视口内 mermaid 容器数（渲染 widget 与降级态共用类名） */
+      liveMermaidCount?: number
+      /** #60：阅读挂载块内 mermaid 容器数（渲染 / 降级态共用类名） */
+      readingMermaidCount?: number
       /** 阅读挂载块内链接数（#10；屏外块不创建，无 DOM） */
       readingLinkCount?: number
       /** 阅读挂载块内图片数（#10） */

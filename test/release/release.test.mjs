@@ -32,9 +32,9 @@ function makeEntries() {
     { size: 41308, name: 'extension/out/webview/main.css' },
     { size: 5683, name: 'extension/out/webview/settings.js' },
     { size: 902, name: 'extension/out/webview/settings.css' },
-    // #60 Mermaid 独立产物（minify 后实测 2,724,795 B 的代表值；低于 3MB
+    // #60 Mermaid 独立产物（minify 后实测 2,727,077 B 的代表值；低于 3MB
     // 单文件警告线与 4MB 上限）
-    { size: 2724795, name: 'extension/out/webview/mermaid.js' },
+    { size: 2727077, name: 'extension/out/webview/mermaid.js' },
     { size: 3898, name: 'extension/media/css-contract-probe.css' },
     { size: 35761, name: 'extension/media/vsidian-icon-256.png' },
     ...katexFontEntries(),

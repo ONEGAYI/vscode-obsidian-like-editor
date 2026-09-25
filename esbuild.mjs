@@ -92,7 +92,7 @@ const targets = [
   {
     // Mermaid 独立产物（#60）：经 ESM 源打包（官方 UMD 的模块作用域下
     // 全局自赋值会落空抛错，见 mermaidEntry.ts 头注释），入口显式挂
-    // globalThis.mermaid；minify 后 2,724,795 B，与官方预压缩产物相当
+    // globalThis.mermaid；minify 后 2,727,077 B，与官方预压缩产物相当
     entryPoints: ['src/webview/mermaidEntry.ts'],
     outfile: 'out/webview/mermaid.js',
     ...webviewBase,
