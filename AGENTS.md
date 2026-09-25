@@ -12,7 +12,7 @@ VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 
 ## 技术栈与构建（工单 #2 确立）
 
-- **运行时**：TypeScript + CodeMirror 6（`@codemirror/state`、`@codemirror/view`、`@codemirror/commands`，单包组合，不用 `codemirror` 聚合包与 basicSetup/history——撤销栈归宿主文本管线）。阅读模式用 markdown-it（#8 起）；公式渲染 KaTeX 0.16.47 + `@vscode/markdown-it-katex` 1.1.2（#59，仅随包 woff2 字体）；Mermaid 11.12.2 独立产物按需懒加载（#60）。
+- **运行时**：TypeScript + CodeMirror 6（`@codemirror/state`、`@codemirror/view`、`@codemirror/commands`，单包组合，不用 `codemirror` 聚合包与 basicSetup/history——撤销栈归宿主文本管线）。阅读模式用 markdown-it（#8 起）；公式渲染 KaTeX 0.16.47 + `@vscode/markdown-it-katex` 1.1.2（#59，仅随包 woff2 字体）；Mermaid 11.12.2 独立产物按需懒加载（#60）；代码块卡片（#78–#85，规格 `docs/specs/code-block-card.md`）语法高亮为 Lezer 官方语言包 + `@codemirror/legacy-modes` StreamLanguage 统一引擎（`tok-*` 词表两端共用，`src/webview/codeHighlight.ts`），围栏表复用 `mermaidFencesField`，语言注册表在 `src/shared/codeLangs.ts`。
 - **宿主端**（`src/extension.ts`、`src/host/`）：`CustomTextEditorProvider`，保存/dirty/Hot Exit 由 VSCode 文本管线自动处理；`TextDocument` 为权威文本，编辑经 `WorkspaceEdit` 写回。
 - **webview 端**（`src/webview/`）：CM6 EditorView + `acquireVsCodeApi` 消息桥；`src/shared/` 为两端共享的消息协议单一事实源（不依赖 vscode/DOM）。协议约定 webview 全程 LF 坐标（CM6 内部把 `\r\n` 规范化为 `\n`，宿主侧 `NewlineCoordinator` 负责双向坐标与文本转换）。
 - **构建**：esbuild 多产物——宿主 `out/extension.js`（node18/cjs/external vscode）、编辑器 webview `out/webview/main.js` 与设置页 webview `out/webview/settings.js`（#33；chrome118/iife，CSS 随 import 打包为同名 `.css`）；`npm run compile` 另跑 `tsc --noEmit` 做类型检查（esbuild 不查类型）。
@@ -76,6 +76,7 @@ vsidian/
 │   ├── design/   # 设计文档（选择器映射等）
 │   │   └── obsidian-selector-map.md # Obsidian 选择器映射表
 │   ├── perf/     # 性能实测数据与测量工具说明
+│   │   ├── 2026-09-code-block-card.md           # 代码块卡片性能实测（#85）
 │   │   ├── 2026-09-live-syntax-decorations.md   # 语法树装饰与大围栏细分实测（#8）
 │   │   ├── 2026-09-math-rendering.md            # 公式渲染性能实测（#59）
 │   │   ├── 2026-09-mermaid-rendering.md         # Mermaid 性能与边界（#60）
@@ -89,6 +90,7 @@ vsidian/
 │   │   ├── obsidian-live-preview-editor.md # Obsidian 技术栈与选型调研
 │   │   └── obsidian-viewport-rendering.md  # 视口渲染性能补充调研
 │   └── specs/    # 产品规格
+│       ├── code-block-card.md          # 代码块卡片功能规格
 │       ├── manual-verification.md      # 人工验证清单
 │       ├── mvp-issues.md               # MVP GitHub Issue 索引
 │       ├── mvp.md                      # MVP 规格主文档
@@ -119,6 +121,7 @@ vsidian/
 │   │   └── wikilinkTarget.ts     # 宿主侧双链目标解析纯逻辑（#11）
 │   ├── shared/      # 两端共享纯逻辑
 │   │   ├── changeMapping.ts # 变更重定位纯函数
+│   │   ├── codeLangs.ts     # 代码块语言注册表与别名路由
 │   │   ├── math.ts          # 公式形态学纯函数（#59）
 │   │   ├── mermaid.ts       # Mermaid 围栏形态学（#60）
 │   │   ├── newline.ts       # CRLF/LF 换行协调器
@@ -126,9 +129,11 @@ vsidian/
 │   │   ├── settings.ts      # 设置定义与读写纯逻辑
 │   │   └── wikilink.ts      # 双链形态学单一事实源（#11）
 │   └── webview/     # webview 端实现
+│       ├── codeHighlight.ts        # 语法高亮引擎装配与缓存
 │       ├── css.d.ts                # CSS 导入类型声明
 │       ├── findSession.ts          # 查找匹配纯函数（#14）
 │       ├── imageResource.ts        # 图片资源状态机（#10）
+│       ├── liveCodeCard.ts         # Live 代码块卡片装饰
 │       ├── liveDecorations.ts      # 语法树驱动 Live 装饰（#8）
 │       ├── liveLineNumbers.ts      # 表格段首行号与绘制探针
 │       ├── liveLinks.ts            # live 链接装饰与跳转（#10）
@@ -143,6 +148,7 @@ vsidian/
 │       ├── outline.ts              # 大纲全文解析与面板装配
 │       ├── perfProbe.ts            # webview 性能探针（#5）
 │       ├── readingBlocks.ts        # markdown-it 阅读块切分
+│       ├── readingCodeCard.ts      # 阅读代码块卡片增强
 │       ├── readingMarkdown.ts      # markdown-it 安全渲染层
 │       ├── readingProbe.ts         # 阅读视图性能探针
 │       ├── readingView.ts          # 阅读视图 DOM 构建与锚点定位

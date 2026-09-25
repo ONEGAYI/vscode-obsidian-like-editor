@@ -121,6 +121,42 @@ export function generateMermaidDenseSample(blocks = 120) {
   return out.join('\n')
 }
 
+// 代码块密集样例（工单 #85）：js/python 围栏与普通段落交替——卡片装饰
+// 全量重建、高亮解析缓存命中与击键增量的宿主车道数据载体。
+export function generateCodeDenseSample(blocks = 200) {
+  const out = ['# 代码块密集性能样例', '']
+  for (let i = 1; i <= blocks; i++) {
+    const kind = i % 3
+    if (kind === 1) {
+      out.push(
+        '```js', `// 模块 ${i}`, `import { data${i} } from './m${i}'`, '',
+        `export function calc${i}(x) {`, `  const y = x * ${i} + data${i}.length`,
+        '  // 常规注释行', `  return y > 0 ? \`值${i}=\${y}\` : null`, '}', '```', '',
+      )
+    } else if (kind === 2) {
+      out.push(
+        '```python', `def calc_${i}(x):`, `    data = load(${i})`, '    # 常规注释',
+        `    return [v * ${i} for v in data if v > 0]`, '```', '',
+      )
+    } else {
+      out.push(`第 ${i} 段 普通段落样本行，固定宽度内容，作为击键延迟的测量目标。`, '')
+    }
+  }
+  out.push('结尾段落。', '')
+  return out.join('\n')
+}
+
+// 超大代码围栏样例（工单 #85）：单一超过高亮行数上限（4096）的 js 围栏——
+// 着色跳过降级与块内击键成本的观测载体。
+export function generateCodeGiantFenceSample(lines = 6000) {
+  const out = ['# 超大代码围栏样例', '', '```js']
+  for (let i = 1; i <= lines; i++) {
+    out.push(`const v${i} = compute(${i}); // 行 ${i}`)
+  }
+  out.push('```', '', '结尾段落。', '')
+  return out.join('\n')
+}
+
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].replace(/\\/g, '/')}`).href) {
   const lines = Number(process.argv[2])
   const outFile = process.argv[3]
