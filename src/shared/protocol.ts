@@ -398,6 +398,8 @@ export interface PaintProbe {
   scrollerDisplay: string | null
   /** 行号栏 computed user-select（'none' = 禁选；栏未装配为 null） */
   gutterUserSelect: string | null
+  /** 真宿主中通过文字可见性、面积与命中检查的行号文本。 */
+  visibleLineNumbers?: string[]
   /** CM6 明暗声明当前激活态（EditorView.darkTheme facet 实值）。随宿主
    *  body 主题 class 动态跟随；激活后 baseTheme 内建变体接管 caret 等
    *  颜色——本扩展不硬编码光标色（深色主题黑底黑光标回归的观测位） */
@@ -586,6 +588,8 @@ function isPaintProbe(v: unknown): v is PaintProbe {
     typeof v.textVisible === 'boolean' &&
     isNullOrString(v.scrollerDisplay) &&
     isNullOrString(v.gutterUserSelect) &&
+    (v.visibleLineNumbers === undefined || (Array.isArray(v.visibleLineNumbers) &&
+      v.visibleLineNumbers.every((number) => typeof number === 'string'))) &&
     typeof v.darkTheme === 'boolean' &&
     isNullOrString(v.caretColor) &&
     (v.table === undefined || (

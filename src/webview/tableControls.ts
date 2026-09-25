@@ -173,8 +173,11 @@ class TableControlsView {
       }
       const rect = element.getBoundingClientRect()
       const top = rect.top - editorRect.top
+      // 行抓手留在行号栏外：原来的正文左侧 24px 会覆盖段首行号。
+      const gutter = this.view.dom.querySelector<HTMLElement>('.cm-gutters')
+      const handleLeft = (gutter?.getBoundingClientRect().left ?? rect.left) - editorRect.left - 12
       const handle = this.makeButton('vsidian-table-row-handle', `选择或拖动第 ${index + 1} 行`,
-        rect.left - editorRect.left - 24, top + rect.height / 2, () => {
+        handleLeft, top + rect.height / 2, () => {
           if (this.suppressNextClick) { this.suppressNextClick = false; return }
           this.selected = { tableFrom: rows[0]!.lineFrom, row: lineFrom }
           this.applySelection()

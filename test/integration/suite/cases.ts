@@ -281,6 +281,7 @@ interface ViewState {
     textVisible: boolean
     scrollerDisplay: string | null
     gutterUserSelect: string | null
+    visibleLineNumbers?: string[]
     darkTheme: boolean
     caretColor: string | null
     table?: {
@@ -1882,6 +1883,28 @@ export const cases: Array<[string, () => Promise<void>]> = [
       '删除后剩余文字须在网格绘制层可见')
     assert(await doc.save(), '清空单元格保存失败')
     assert(await readDisk(name) === cleared, '落盘内容只能清空当前格，表格标记必须完整')
+  }],
+
+  ['安全表格仅绘制段首行号，格内光标与设置切换不恢复重叠编号', async () => {
+    await openWithEditor('table42.md')
+    await waitSessionReady('table42.md')
+    const uri = wsUri('table42.md').toString()
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
+    const expected = ['1', '2', '3', '7', '8', '9']
+    const before = await waitViewState('table42.md', (v) => (v.paint?.visibleLineNumbers?.length ?? 0) > 0)
+    assert(JSON.stringify(before.paint?.visibleLineNumbers) === JSON.stringify(expected),
+      `表格只绘制段首 3，隐藏 4/5/6：${JSON.stringify(before.paint?.visibleLineNumbers)}`)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.cellClick', rowIndex: 1, columnIndex: 0 })
+    const clicked = await waitViewState('table42.md', (v) => v.tableGrid?.selectedRowIsGrid === true)
+    assert(JSON.stringify(clicked.paint?.visibleLineNumbers) === JSON.stringify(expected),
+      `单元格激活后仍只绘制表格段首行号：${JSON.stringify(clicked.paint?.visibleLineNumbers)}`)
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': false })
+    await waitViewState('table42.md', (v) => v.lineGutter?.on === false)
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
+    const restored = await waitViewState('table42.md', (v) => v.lineGutter?.on === true)
+    assert(JSON.stringify(restored.paint?.visibleLineNumbers) === JSON.stringify(expected),
+      '重新开启行号应保留表格段首策略')
   }],
 
   ['实时预览活动格保留网格与抓手，格内输入经 CM6 写回（#42）', async () => {

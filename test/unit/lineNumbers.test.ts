@@ -49,10 +49,33 @@ function gutterTexts(c: WebviewSyncController): string[] {
 }
 
 describe('默认装配与源行编号', () => {
+  it('安全表格只显示段首源行号，隐藏分隔行与数据行编号', () => {
+    const { bridge } = makeBridge()
+    const c = mount(bridge)
+    init(c, '前文\n\n| A | B |\n| --- | --- |\n| 甲 | 乙 |\n\n后文')
+    expect(gutterTexts(c).filter(Boolean)).toEqual(['1', '2', '3', '6', '7'])
+    c.getView()!.dispatch({ selection: { anchor: c.getView()!.state.doc.line(5).from + 2 } })
+    expect(gutterTexts(c).filter(Boolean)).toEqual(['1', '2', '3', '6', '7'])
+    c.dispose()
+  })
+
   it('mount 后默认显示行号栏（定义默认 true，无需等待设置快照）', () => {
     const { bridge } = makeBridge()
     const c = mount(bridge)
     expect(c.getView()!.dom.querySelector('.cm-lineNumbers')).not.toBeNull()
+  })
+
+  it('非安全表格保留源码行号，修复列数后切换段首策略', () => {
+    const { bridge } = makeBridge()
+    const c = mount(bridge)
+    init(c, '| A | B |\n| --- | --- |\n| 甲 | 乙 | 多列 |')
+    expect(gutterTexts(c).filter(Boolean)).toEqual(['1', '2', '3'])
+    const line = c.getView()!.state.doc.line(3)
+    c.getView()!.dispatch({ changes: { from: line.from, to: line.to, insert: '| 甲 | 乙 |' } })
+    expect(gutterTexts(c).filter(Boolean)).toEqual(['1'])
+    c.getView()!.dispatch({ changes: { from: 0, insert: '前文\n\n' } })
+    expect(gutterTexts(c).filter(Boolean)).toEqual(['1', '2', '3'])
+    c.dispose()
   })
 
   it('init 多行文档后行号从 1 起逐行编号（空行同样编号，源行语义）', () => {

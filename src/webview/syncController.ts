@@ -25,7 +25,8 @@
 // - seq 持久化：经 bridge.setState 保存，webview 重载（retainContextWhenHidden
 //   关闭导致的状态重建）后继续编号，宿主按 seq 幂等去重
 import { Annotation, ChangeSet, Compartment, EditorState, type Extension, type Text } from '@codemirror/state'
-import { EditorView, keymap, lineNumbers } from '@codemirror/view'
+import { EditorView, keymap } from '@codemirror/view'
+import { liveLineNumbers, paintedLineNumbers } from './liveLineNumbers'
 import {
   isHostToWebview,
   type CssProbeReport,
@@ -2272,7 +2273,7 @@ export class WebviewSyncController {
     }
     this.lineNumbersOn = on
     this.view?.dispatch({
-      effects: this.lineNumbersCompartment.reconfigure(on ? lineNumbers() : []),
+      effects: this.lineNumbersCompartment.reconfigure(on ? liveLineNumbers() : []),
     })
   }
 
@@ -2409,6 +2410,7 @@ export class WebviewSyncController {
       textVisible,
       scrollerDisplay: view.scrollDOM ? getComputedStyle(view.scrollDOM).display : null,
       gutterUserSelect: guttersEl ? getComputedStyle(guttersEl).userSelect : null,
+      visibleLineNumbers: paintedLineNumbers(view),
       darkTheme: view.state.facet(EditorView.darkTheme),
       caretColor,
       table: {
@@ -2489,7 +2491,7 @@ export class WebviewSyncController {
       // 行号栏（#34）：源文件行号经 Compartment 装配（设置开关热重配，
       // mount 时按定义默认开）；列在流内、与正文以固定间距相隔的布局
       // 见 main.css 的 #34 段（行号列宽随位数自适应，无降级机制）
-      this.lineNumbersCompartment.of(this.lineNumbersOn ? lineNumbers() : []),
+      this.lineNumbersCompartment.of(this.lineNumbersOn ? liveLineNumbers() : []),
       // 标题实时预览装饰（#5 切片）：直接装饰（StateField）+ 间接装饰
       // （ViewPlugin 按 visibleRanges），见 liveDecorations.ts 头注释
       livePreviewDecorations,

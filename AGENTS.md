@@ -107,6 +107,7 @@ vsidian/
 │       ├── findSession.ts        # 查找匹配纯函数（#14）
 │       ├── imageResource.ts      # 图片资源状态机（#10）
 │       ├── liveDecorations.ts    # 语法树驱动 Live 装饰（#8）
+│       ├── liveLineNumbers.ts    # 表格段首行号与绘制探针
 │       ├── liveLinks.ts          # live 链接装饰与跳转（#10）
 │       ├── main.css              # webview 全局布局样式
 │       ├── main.ts               # webview 启动入口
