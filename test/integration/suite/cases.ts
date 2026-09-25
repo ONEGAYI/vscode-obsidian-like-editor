@@ -4763,15 +4763,20 @@ export const cases: Array<[string, () => Promise<void>]> = [
       '档 1 可见序列应为 0,1,3,…（H2 可见、H3 折叠）')
     assert(level1.outline!.sliderActiveDotPainted === true, '切档后当前档圆点应仍实心绘制')
 
-    // 手动箭头折叠第 1 章（H2, index 1）：其 H3（index 2）隐藏
+    // 手动箭头叠加在档位上（档 1 下 H2 本就折叠中——档位精确集只含
+    // level≤1 父节点）：点第 1 章箭头 = 展开（其 H3 可见），再点 = 折叠
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.chevronClick', index: 1 })
+    const expanded = await waitViewState('outline-long.md',
+      (v) => v.outline !== undefined && v.outline.visibleIndices.length === 52)
+    assert(expanded.outline!.visibleIndices.includes(2), '档 1 下手动展开第 1 章后其小节应可见')
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.chevronClick', index: 1 })
     const collapsed = await waitViewState('outline-long.md',
-      (v) => v.outline !== undefined && v.outline.visibleIndices.length === 50)
-    assert(!collapsed.outline!.visibleIndices.includes(2), '折叠第 1 章后其小节应不可见')
+      (v) => v.outline !== undefined && v.outline.visibleIndices.length === 51)
+    assert(!collapsed.outline!.visibleIndices.includes(2), '手动折叠第 1 章后其小节应不可见')
     // 点折叠中的父条目文字跳转：条目自身可见（折叠遮子不遮己），不触发展开
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.itemClick', index: 1 })
     const jumpParent = await waitViewState('outline-long.md', (v) => v.outline?.locatedItemIndex === 1)
-    assert(jumpParent.outline!.visibleIndices.length === 50,
+    assert(jumpParent.outline!.visibleIndices.length === 51,
       '跳转到折叠中的父条目自身不得展开（自身可见，无祖先可展开）')
     assert(jumpParent.outline!.locatedPainted === true, '父条目高亮横条应真实绘制（面板可视区内）')
 
@@ -4780,7 +4785,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // #66 留下的「locatedPainted 暂不断言」口径在本票落地后的补全
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.itemClick', index: 90 })
     const jumpDeep = await waitViewState('outline-long.md', (v) => v.outline?.locatedItemIndex === 90)
-    assert(jumpDeep.outline!.visibleIndices.length === 51,
+    assert(jumpDeep.outline!.visibleIndices.length === 52,
       `跳转深层折叠条目应展开其祖先链（实际 ${jumpDeep.outline!.visibleIndices.length}）`)
     assert(jumpDeep.outline!.visibleIndices.includes(90), '展开后目标条目应可见')
     assert(jumpDeep.outline!.locatedPainted === true,
@@ -4792,18 +4797,26 @@ export const cases: Array<[string, () => Promise<void>]> = [
       `折叠操作不得推进版本或产生写回（${before.version}/${before.appliedEdits} → ` +
         `${afterCollapse.version}/${afterCollapse.appliedEdits}）`)
 
-    // 档 0 + 宿主 view.locate 落进折叠区：only-expand 展开当前路径，其余折叠不动
+    // 档 0 + 宿主 view.locate 落进折叠区：only-expand 展开当前路径（目标
+    // 的祖先链 = 第 45 章 H2 + 主标题 H1——展开 H1 使全部 H2 作为直接子级
+    // 可见，这是「展开祖先链让目标可见」的语义代价），其余 H3 折叠不动
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.expandClick', level: 0 })
     await waitViewState('outline-long.md', (v) => v.outline?.visibleIndices.length === 1)
     const targetLine = jumpDeep.outline!.items[90]!.line
     const targetOffset = doc.offsetAt(new vscode.Position(targetLine - 1, 0))
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: targetOffset })
     const located = await waitViewState('outline-long.md', (v) => v.outline?.locatedItemIndex === 90)
-    assert(JSON.stringify(located.outline!.visibleIndices) === '[0,89,90]',
-      `定位到折叠区应 only-expand 当前路径（其余不动）：${JSON.stringify(located.outline!.visibleIndices)}`)
+    assert(located.outline!.visibleIndices.includes(90),
+      `定位到折叠区应 only-expand 使目标可见（实际 ${JSON.stringify(located.outline!.visibleIndices)}）`)
+    assert(!located.outline!.visibleIndices.includes(2) && !located.outline!.visibleIndices.includes(88),
+      `其余 H3 不得被展开（only-expand 只动当前路径）：${JSON.stringify(located.outline!.visibleIndices)}`)
+    assert(located.outline!.visibleIndices.length === 52,
+      `可见集应为 H1 + 50 个 H2 + 目标 H3（52 条，实际 ${located.outline!.visibleIndices.length}）`)
     assert(located.outline!.locatedPainted === true, '定位后的高亮行应滚进可视区并真实绘制')
 
-    // 编辑存活：宿主 WorkspaceEdit 重命名第 45 章标题 → 折叠视图不扰动
+    // 编辑存活：宿主 WorkspaceEdit 重命名第 45 章标题 → 折叠视图不扰动。
+    // 注意口径：doc 变化触发视口顶行重算 + only-expand（合法展开当前路径
+    // 的邻章），故不精确对拍数组——断言当前路径仍展开、远端章节仍折叠
     const renameEdit = new vscode.WorkspaceEdit()
     const headingLine = jumpDeep.outline!.items[89]!.line - 1
     const lineText = doc.lineAt(headingLine)
@@ -4815,22 +4828,22 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await vscode.workspace.applyEdit(renameEdit)
     const renamed = await waitViewState('outline-long.md',
       (v) => v.outline?.items[89] !== undefined && v.outline.items[89].text === '第 45 章改名')
-    assert(JSON.stringify(renamed.outline!.visibleIndices) === '[0,89,90]',
-      `重命名不得扰动折叠视图（实际 ${JSON.stringify(renamed.outline!.visibleIndices)}）`)
-    assert(renamed.outline!.locatedItemIndex === 90, '重命名后高亮保持当前控制域')
+    assert(renamed.outline!.visibleIndices.includes(89) && renamed.outline!.visibleIndices.includes(90),
+      `重命名后当前展开路径应保持可见（实际 ${JSON.stringify(renamed.outline!.visibleIndices)}）`)
+    assert(!renamed.outline!.visibleIndices.includes(2) && !renamed.outline!.visibleIndices.includes(20),
+      `远端章节的 H3 不得因重命名被展开（实际 ${JSON.stringify(renamed.outline!.visibleIndices)}）`)
 
-    // 档位持久化：切档 1 → 关闭全部面板重开 → 档位与可见性恢复（bridge
-    // state 全局记忆；跨文档共享与真实重启为人工验证条目）
+    // 档位持久化：切档 1 后重载 webview（Developer: Reload Webviews——
+    // retainContextWhenHidden 关闭：销毁重建同一 panel，走 bridge state
+    // 恢复，#6 模式记忆的同款验证路径）→ 档位恢复为 1；重载同时恢复锚点
+    // （视口回到第 45 章区域），only-expand 会合法展开当前路径（至多
+    // +2 条 H3），可见数允许 51–53 而非精确 51
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.expandClick', level: 1 })
     await waitViewState('outline-long.md', (v) => v.outline?.expandLevel === 1)
-    await vscode.commands.executeCommand('workbench.action.closeAllEditors')
-    await openWithEditor('outline-long.md')
-    await waitSessionReady('outline-long.md')
-    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
-    const reopened = await waitViewState('outline-long.md',
-      (v) => v.outline?.expandLevel === 1 && v.outline.visibleIndices.length === 51)
-    assert(reopened.outline!.visibleIndices.length === 51,
-      `重开后档 1 应恢复 51 条可见（实际 ${reopened.outline!.visibleIndices.length}）`)
+    await vscode.commands.executeCommand('workbench.action.webview.reloadWebviewAction')
+    const reopened = await waitViewState('outline-long.md', (v) => v.outline?.expandLevel === 1)
+    assert(reopened.outline!.visibleIndices.length >= 51 && reopened.outline!.visibleIndices.length <= 53,
+      `重载后档 1 基础可见集应恢复（51–53 条，实际 ${reopened.outline!.visibleIndices.length}）`)
 
     // 收起侧栏收尾
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })

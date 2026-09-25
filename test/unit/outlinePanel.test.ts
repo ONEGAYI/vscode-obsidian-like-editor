@@ -703,6 +703,26 @@ describe('档位持久化与手动折叠存活（#67）', () => {
     expect(collapseDom(p2).chevrons()).toHaveLength(0)
   })
 
+  it('空文档输入首批标题：按档位精确集初始化（非空序列才走迁移，全父展开是空序列误径）', () => {
+    // 真实宿主重载恢复的实测路径：controller 先在初始空 doc 上跑过首场
+    // （outlineDoc 非空但 outlineItems 为空），真文档到达时不得按「全部
+    // 新增」迁移（会把全部父节点自动展开，档 0/1 失守）——空序列没有可
+    // 迁移的折叠状态，按档位初始化
+    const h = makeBridge()
+    const { c: controller, parent } = mountOutline(h, '只有正文\n')
+    openSidebar(controller)
+    controller.handleHostMessage({ kind: 'outline.test.expandClick', level: 1 })
+    // 模拟装载期空文档首场后真文档到达：直接替换全文
+    controller.getView()!.dispatch({
+      changes: { from: 0, to: controller.getView()!.state.doc.length, insert: COLLAPSE_DOC },
+    })
+    const state = viewState(controller, h)
+    expect(state.outline?.items).toHaveLength(6)
+    expect(state.outline?.expandLevel).toBe(1)
+    expect(state.outline?.visibleIndices).toEqual([0, 1, 3, 5]) // 档 1 精确集，而非全展开
+    expect(collapseDom(parent).hiddenIndices()).toEqual([2, 4])
+  })
+
   it('probe 绘制证据字段随 view.state 回报（jsdom 无布局容错为 false）', () => {
     const h = makeBridge()
     const { c: controller } = mountOutline(h, COLLAPSE_DOC)

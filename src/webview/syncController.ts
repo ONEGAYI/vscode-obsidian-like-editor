@@ -2100,8 +2100,10 @@ export class WebviewSyncController {
     const prevExpanded = this.outlineExpanded
     this.outlineItems = items
     this.outlineFacts = outlineCollapseFacts(items)
-    if (firstRender) {
-      // 首场：档位精确集（手动折叠是会话态，重载后从这里重置）
+    if (firstRender || prevItems.length === 0) {
+      // 首场或旧序列为空（空文档、或真实宿主装载期先在初始空 doc 上跑过
+      // 首场——重载恢复实测路径）：没有可迁移的折叠状态，按档位精确集
+      // 初始化（手动折叠是会话态，重载后从这里重置）
       this.outlineExpanded = outlineExpandSetForLevel(items, this.outlineExpandLevel)
     } else {
       this.outlineExpanded = migrateOutlineExpanded(prevItems, items, prevExpanded)
