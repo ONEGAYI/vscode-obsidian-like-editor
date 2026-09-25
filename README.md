@@ -15,8 +15,8 @@
 
 ### 基本用法
 
-- **打开文档**：对 `.md` 文件右键 →「打开方式…」→「Vsidian」（默认打开仍是原生文本编辑器，不自动接管）。
-- **双视图切换**：命令面板 →「切换实时预览与阅读模式」，或编辑器工具栏按钮；源码位置锚点保持（不按滚动百分比跳变）。
+- **打开文档**：`.md` 文件默认由本扩展打开（#38 起注册为默认编辑器）；想改回原生，用右键「打开方式…」选文本编辑器，或「Reopen With… → Configure default editor for '*.md'…」修改关联设置。
+- **三态视图切换**：编辑器标题栏按钮在实时预览 → 阅读模式 → 源码编辑器之间循环（按钮只显示下一步的目标与图标，源码编辑器态显示铅笔按钮一键切回）；命令面板也有「切换到下一视图模式」及三个显式目标命令。最近一次停留的模式跨窗口全局记住；源码位置锚点保持（不按滚动百分比跳变）。
 - **实时预览**（live）：CodeMirror 6 全文承载，视口外不创建 DOM；左侧行号与源文件行一一对应（可在设置页开关，见下）；标题符号在光标进入该标题时显形，列表与引用的行首符号仅在标记附近显形；链接、图片和双链仅在光标进入各自范围时显示源码。
 - **阅读模式**（reading）：markdown-it 渲染的分块按需挂载，10 万块级文档挂载量与体量无关。
 - **任务勾选**：两种视图点击 checkbox 写回源文本，支持撤销。
@@ -34,13 +34,13 @@ npm install                     # 安装锁定依赖（版本全部精确锁定�
 npm run compile                 # esbuild 双产物 + tsc 类型检查
 npm run watch                   # esbuild watch
 npm run test:unit               # vitest 单元/契约测试（无宿主依赖）
-npm run test:integration        # @vscode/test-electron 1.86.2 真宿主集成测试（75 例）
+npm run test:integration        # @vscode/test-electron 1.86.2 真宿主集成测试（87 例）
 node test/integration/runInstalled.mjs  # VSIX 安装态回归（先 package 出 VSIX）
 node test/perf/runPerf.mjs      # 性能档位测量（报告写 docs/perf/data/）
 npx @vscode/vsce package --no-dependencies  # 打包 VSIX（bundle 自包含，不带 node_modules）
 ```
 
-调试：VSCode 以**文件夹工作区**打开本仓库根目录，按 F5 运行「Vsidian: 启动扩展开发宿主」。启动前会执行 `npm run compile`，开发宿主加载当前工作树的 `out/extension.js`。调试端口固定为 46186；端口被占用时修改 `.vscode/launch.json` 中的 `port`。在新窗口对 `.md` 文件执行「Reopen With…」选择「Vsidian」。
+调试：VSCode 以**文件夹工作区**打开本仓库根目录，按 F5 运行「Vsidian: 启动扩展开发宿主」。启动前会执行 `npm run compile`，开发宿主加载当前工作树的 `out/extension.js`。调试端口固定为 46186；端口被占用时修改 `.vscode/launch.json` 中的 `port`。开发宿主打开 `.md` 文件默认进入 Vsidian；若被弹回原生编辑器，说明全局记忆停留在源码态，点标题栏铅笔按钮即可切回。
 
 ### 架构速览
 
@@ -51,7 +51,7 @@ npx @vscode/vsce package --no-dependencies  # 打包 VSIX（bundle 自包含，�
 
 ## 验证与性能
 
-- 当前开发工作树回归：773 单元测试 + 75 集成用例（真实 1.86.2 宿主）通过；安装态与人工验收另见[验证清单](docs/specs/manual-verification.md)。
+- 当前开发工作树回归：803 单元测试 + 87 集成用例（真实 1.86.2 宿主）通过；安装态与人工验收另见[验证清单](docs/specs/manual-verification.md)。
 - 性能实测与功能验证矩阵：[docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md)。
 - 人工验证项（IME/鼠标手感/远程环境）：[docs/specs/manual-verification.md](docs/specs/manual-verification.md)。
 

@@ -1088,7 +1088,8 @@ export class WebviewSyncController {
   // 不触发保存、未保存内容原地保留），只做容器显隐、锚点映射与选区恢复。
   // 宿主 TextDocument 版本因此不受切换影响。
 
-  /** 切换入口（宿主 view.mode.set 消息与工具栏按钮共用） */
+  /** 切换入口（宿主 view.mode.set 消息驱动；#38 起由宿主标题栏三态命令
+   *  与命令面板命令编排，webview 工具栏已移除） */
   private setViewMode(target: 'live' | 'reading' | 'toggle'): void {
     const next: ViewMode =
       target === 'toggle' ? (this.viewMode === 'live' ? 'reading' : 'live') : target
@@ -1143,7 +1144,7 @@ export class WebviewSyncController {
     }
   }
 
-  /** 容器显隐与按钮文案（稳定类名 vsidian-view-live / vsidian-view-reading） */
+  /** 容器显隐（稳定类名 vsidian-view-live / vsidian-view-reading） */
   private applyModeDom(mode: ViewMode): void {
     this.viewMode = mode
     if (this.liveWrapper) {
@@ -1151,10 +1152,6 @@ export class WebviewSyncController {
     }
     if (this.readingContainer) {
       this.readingContainer.style.display = mode === 'reading' ? '' : 'none'
-    }
-    const btn = this.toolbar?.querySelector<HTMLButtonElement>('button.vsidian-mode-toggle')
-    if (btn) {
-      btn.textContent = mode === 'live' ? '切换到阅读模式' : '切换到实时预览'
     }
     this.persistState()
     // 模式变化主动回报（宿主缓存常新：表格结构命令在 reading 面板上据此
@@ -1480,18 +1477,12 @@ export class WebviewSyncController {
     })
   }
 
-  /** 切换入口工具栏（#6）：按钮与宿主命令走同一状态机。
-   *  #33 增设「设置」按钮：打开宿主级 Vsidian 设置页面板（webview 无权
-   *  自建面板，必须经 settings.open 出站） */
+  /** webview 工具栏：仅承载 #33 设置按钮（打开宿主级 Vsidian 设置页面板，
+   *  webview 无权自建面板，必须经 settings.open 出站）。#6 的模式切换按钮
+   *  已按 #38 迁移至编辑器标题栏三态命令，不再在正文上方渲染 */
   private buildToolbar(): HTMLElement {
     const bar = document.createElement('div')
     bar.className = 'vsidian-toolbar'
-    const btn = document.createElement('button')
-    btn.type = 'button'
-    btn.className = 'vsidian-mode-toggle'
-    btn.textContent = '切换到阅读模式'
-    btn.addEventListener('click', () => this.setViewMode('toggle'))
-    bar.appendChild(btn)
     const settingsBtn = document.createElement('button')
     settingsBtn.type = 'button'
     settingsBtn.className = 'vsidian-settings-toggle'
@@ -1501,7 +1492,6 @@ export class WebviewSyncController {
     bar.appendChild(settingsBtn)
     return bar
   }
-
   // ---- 查找会话（#14）----
   // UI 形态：webview 内浮动层（custom editor webview 不可用 VSCode 原生
   // find 控件）。入口：Mod-F 拦截、宿主 view.find.open（命令面板共用）、
