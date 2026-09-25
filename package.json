@@ -1,10 +1,21 @@
 {
   "name": "vsidian",
   "displayName": "Vsidian",
-  "icon": "media/vsidian-icon.png",
-  "description": "在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验",
+  "icon": "media/vsidian-icon-256.png",
+  "description": "类 Obsidian 的 Markdown 编辑体验：实时预览 + 阅读双视图 | Obsidian-like Markdown editing (live preview + reading)",
   "version": "0.1.0",
   "publisher": "onegayi",
+  "license": "MIT",
+  "keywords": [
+    "markdown",
+    "obsidian",
+    "live preview",
+    "wysiwyg",
+    "note",
+    "notes",
+    "wikilink",
+    "table"
+  ],
   "engines": {
     "vscode": "^1.86.0"
   },
@@ -131,16 +142,21 @@
     "compile": "node esbuild.mjs && tsc --noEmit",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
-    "test:unit": "vitest run && node --test test/integration/testHost.test.mjs",
+    "test:unit": "vitest run && node --test test/integration/testHost.test.mjs test/release/release.test.mjs",
     "test:integration": "node esbuild.mjs && node ./test/integration/runTest.mjs",
     "test:browser": "node test/browser/tableCaret.mjs",
+    "release:check": "node scripts/release.mjs",
+    "release": "node scripts/release.mjs --upload",
     "vscode:prepublish": "node esbuild.mjs --production"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/ONEGAYI/vsidian.git"
   },
-  "private": true,
+  "bugs": {
+    "url": "https://github.com/ONEGAYI/vsidian/issues"
+  },
+  "homepage": "https://github.com/ONEGAYI/vsidian#readme",
   "dependencies": {
     "@codemirror/commands": "6.11.1",
     "@codemirror/lang-markdown": "6.5.2",

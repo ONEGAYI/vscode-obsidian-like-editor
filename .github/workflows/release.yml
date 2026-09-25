@@ -1,0 +1,58 @@
+# 发布工作流：推送 v* 标签触发。scripts/release.mjs 负责提取 CHANGELOG 最新
+# 段落、打包 VSIX 并做包内容/体积检查（失败即中止），随后创建 GitHub Release
+# 附带该 VSIX——release 与 Marketplace 发布的是同一份字节。
+#
+# Marketplace 发布为可选 job，两道开关都配置后才会执行：
+#   1. Settings → Secrets and variables → Actions → Secrets → VSCE_PAT
+#      （Azure DevOps PAT，Organization 选 All accessible organizations，
+#       Scope 选 Marketplace → Manage）
+#   2. Settings → Secrets and variables → Actions → Variables → MARKETPLACE_PUBLISH = true
+# 配置完成前，推 tag 只产出 GitHub Release，不影响市场。
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # release 脚本校验 HEAD 精确命中 v<version> 标签，需完整历史与标签
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: 安装依赖
+        run: npm ci
+      - name: 打包、检查并创建 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: npm run release
+
+  marketplace:
+    name: marketplace
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: vars.MARKETPLACE_PUBLISH == 'true'
+    steps:
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      # 从刚创建的 Release 下载 VSIX 再发布，确保上市场的正是 release 附带的产物
+      - name: 从 Release 下载 VSIX
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$GITHUB_REF_NAME" --pattern '*.vsix'
+      - name: 发布到 VSCode Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx --yes @vscode/vsce publish --no-dependencies --packagePath ./*.vsix
