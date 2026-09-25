@@ -201,8 +201,7 @@ const FIND_DOC = [
 
 // #34 行号样例：标题/软换行长段/列表/表格/代码块/空行混合——源行编号
 // 与视觉行解耦的断言载体（长段折行时 renderedLines 超过源行数）
-const LINENUMBERS_DOC = [
-  '# 行号样例',
+const LINENUMBERS_DOC = [  '# 行号样例',
   '',
   '这是一个故意写得很长的段落，用于验证软换行只是视觉折行、不新增源文件行号：当段落宽度超过编辑器视口宽度时文本发生折行，行号栏仍按源文件的物理行逐一编号，与渲染后的视觉行数解耦，阅读模式与实时预览共用同一份源文本行语义。',
   '',
@@ -216,6 +215,48 @@ const LINENUMBERS_DOC = [
   '```text',
   '代码块第一行',
   '代码块第二行',
+  '```',
+  '',
+  '结尾段落。',
+  '',
+].join('\n')
+
+// #54 大纲样例：跨级标题、同名标题（不丢失不合并）、ATX 全级别、Setext
+// 两级别、frontmatter 与代码围栏内伪标题（排除断言载体）
+const OUTLINE_DOC = [
+  '---',
+  'title: 大纲样例',
+  '# frontmatter 内伪标题',
+  '---',
+  '',
+  '# 文档主标题',
+  '',
+  '## 同名标题',
+  '',
+  '普通段落。',
+  '',
+  '### 三级标题',
+  '',
+  '## 同名标题',
+  '',
+  '# 跨级回一级',
+  '',
+  'Setext 一级',
+  '===========',
+  '',
+  'Setext 二级',
+  '-----------',
+  '',
+  '#### 四级标题',
+  '',
+  '##### 五级标题',
+  '',
+  '###### 六级标题',
+  '',
+  '```text',
+  '# 围栏内伪标题',
+  'Setext 伪标题',
+  '=============',
   '```',
   '',
   '结尾段落。',
@@ -320,6 +361,7 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   writeFileSync(path.join(wsDir, 'links.md'), LINKS_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'links2.md'), LINKS_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'linenumbers.md'), LINENUMBERS_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'outline.md'), OUTLINE_DOC, 'utf8')
   writeFileSync(path.join(wsDir, '链接目标.md'), '# 链接目标\n中文目标文档内容。\n', 'utf8')
   writeFileSync(path.join(wsDir, '无扩展名目标.md'), '# 无扩展名目标\n省略扩展名解析目标。\n', 'utf8')
   mkdirSync(path.join(wsDir, '子 目录'), { recursive: true })

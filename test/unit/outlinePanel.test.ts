@@ -1,0 +1,368 @@
+// @vitest-environment jsdom
+// 大纲面板交互契约（#54）：侧栏顶栏「大纲」按钮与面板的显隐状态机、
+// 大纲随当前文档文本更新（含未保存编辑）、面板切换零写回零出站。
+// - 数据源：CM6 全文（webview 文本模型，含未确认输入），与视口渲染无关，
+//   与 live/reading 模式无关（reading 下 CM6 doc 仍是权威文本模型）
+// - 更新时机：可见时去抖刷新 + view.state.request 前即时校准（与 #14 查找
+//   会话的 findEnsureFresh 同模式）；数据未变不重建 DOM
+// - 面板切换是纯视图状态：零 edit.request、文本不变、经 bridge state 持久化
+// - outline.test.click 测试钩子驱动与用户点击同一处理器
+import { describe, it, expect } from 'vitest'
+import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
+import type { WebviewToHost } from '../../src/shared/protocol'
+
+// jsdom 无布局：CM6 视口测量的零值 polyfill（与 sidebarLayout.test.ts 同款）
+if (typeof Range !== 'undefined' && Range.prototype.getClientRects === undefined) {
+  ;(Range.prototype as unknown as { getClientRects(): DOMRectList }).getClientRects =
+    () => [] as unknown as DOMRectList
+  ;(Range.prototype as unknown as { getBoundingClientRect(): DOMRect }).getBoundingClientRect =
+    () => new DOMRect(0, 0, 0, 0)
+}
+
+const DOC_URI = 'file:///d%3A/notes/outline.md'
+
+const DOC = [
+  '# 文档主标题',
+  '',
+  '## 同名标题',
+  '',
+  '### 三级标题',
+  '',
+  '## 同名标题',
+  '',
+  'Setext 一级',
+  '===',
+  '',
+  '```text',
+  '# 围栏内伪标题',
+  '```',
+  '',
+  '结尾段落。',
+  '',
+].join('\n')
+
+/** 期望大纲（级别 + 文字）：同名不合并、跨级保留、伪标题排除 */
+const EXPECTED_ITEMS: Array<[number, string]> = [
+  [1, '文档主标题'],
+  [2, '同名标题'],
+  [3, '三级标题'],
+  [2, '同名标题'],
+  [1, 'Setext 一级'],
+]
+
+interface BridgeHarness {
+  bridge: VsCodeBridge
+  sent: WebviewToHost[]
+  saved: () => Record<string, unknown> | undefined
+}
+
+function makeBridge(saved?: Record<string, unknown>): BridgeHarness {
+  const sent: WebviewToHost[] = []
+  let state = saved
+  const bridge: VsCodeBridge = {
+    postMessage: (m) => sent.push(m as WebviewToHost),
+    getState: <T,>() => state as T | undefined,
+    setState: (s) => {
+      state = s as Record<string, unknown>
+    },
+  }
+  return { bridge, sent, saved: () => state }
+}
+
+function mountOutline(h: BridgeHarness, text = DOC): { c: WebviewSyncController; parent: HTMLElement } {
+  const c = new WebviewSyncController(h.bridge)
+  const parent = document.createElement('div')
+  c.mount(parent)
+  c.handleHostMessage({ kind: 'init', sessionId: 's1', docUri: DOC_URI, version: 1, text })
+  return { c, parent }
+}
+
+function viewState(c: WebviewSyncController, h: BridgeHarness) {
+  const before = h.sent.length
+  c.handleHostMessage({ kind: 'view.state.request' })
+  const msg = h.sent.slice(before).find((m) => m.kind === 'view.state')
+  if (!msg) {
+    throw new Error('view.state 未回报')
+  }
+  return msg as Extract<WebviewToHost, { kind: 'view.state' }>
+}
+
+function openSidebar(c: WebviewSyncController): void {
+  c.handleHostMessage({ kind: 'sidebar.test.click' })
+}
+
+function outlineDom(parent: HTMLElement) {
+  const sidebar = parent.querySelector<HTMLElement>('.vsidian-sidebar')!
+  return {
+    sidebar,
+    toggle: sidebar.querySelector<HTMLButtonElement>(
+      '.vsidian-sidebar-toolbar-actions button.vsidian-outline-toggle',
+    ),
+    panel: sidebar.querySelector<HTMLElement>('.vsidian-outline-panel'),
+    itemTexts: () =>
+      [...sidebar.querySelectorAll<HTMLElement>('.vsidian-outline-item')].map((el) => el.textContent ?? ''),
+    itemLevels: () =>
+      [...sidebar.querySelectorAll<HTMLElement>('.vsidian-outline-item')].map((el) =>
+        Number(el.dataset['vsidianLevel']),
+      ),
+  }
+}
+
+describe('大纲按钮与面板 DOM（#54）', () => {
+  it('侧栏顶栏按钮容器含「大纲」按钮：aria-label/title/aria-controls 齐备', () => {
+    const h = makeBridge()
+    const { parent } = mountOutline(h)
+    const d = outlineDom(parent)
+    expect(d.toggle, '侧栏顶栏应有 vsidian-outline-toggle 按钮').toBeTruthy()
+    expect(d.toggle!.getAttribute('aria-label')).toBe('大纲')
+    expect(d.toggle!.getAttribute('title')).toBe('大纲')
+    expect(d.toggle!.getAttribute('aria-controls')).toBe('vsidian-outline-panel')
+  })
+
+  it('大纲面板容器存在且有可访问名称（role=region + aria-label），id 与按钮 aria-controls 对应', () => {
+    const h = makeBridge()
+    const { parent } = mountOutline(h)
+    const d = outlineDom(parent)
+    expect(d.panel, '侧栏应有 vsidian-outline-panel 面板容器').toBeTruthy()
+    expect(d.panel!.id).toBe('vsidian-outline-panel')
+    expect(d.panel!.getAttribute('role')).toBe('region')
+    expect(d.panel!.getAttribute('aria-label')).toBe('大纲')
+  })
+
+  it('默认 active：展开侧栏即见大纲（面板显隐唯一开关是侧栏容器类）', () => {
+    const h = makeBridge()
+    const { c, parent } = mountOutline(h)
+    const d = outlineDom(parent)
+    // 收起态侧栏整体 display:none，active 类仍表达「面板将显示」
+    expect(d.sidebar.classList.contains('vsidian-outline-active')).toBe(true)
+    expect(d.toggle!.getAttribute('aria-expanded')).toBe('true')
+    openSidebar(c)
+    expect(d.sidebar.classList.contains('vsidian-outline-active')).toBe(true)
+  })
+})
+
+describe('大纲内容：全文标题序列（验收核心）', () => {
+  it('展开侧栏后，大纲面板条目 = 全文标题的级别与文字序列（同名不合并、跨级保留）', () => {
+    const h = makeBridge()
+    const { c, parent } = mountOutline(h)
+    openSidebar(c)
+    const d = outlineDom(parent)
+    expect(d.itemTexts()).toEqual(EXPECTED_ITEMS.map(([, text]) => text))
+    expect(d.itemLevels()).toEqual(EXPECTED_ITEMS.map(([level]) => level))
+  })
+
+  it('条目携带级别类名（level-1..6）与 data-level，供 CSS 缩进与断言', () => {
+    const h = makeBridge()
+    const { c, parent } = mountOutline(h)
+    openSidebar(c)
+    const items = [...parent.querySelectorAll<HTMLElement>('.vsidian-outline-item')]
+    expect(items[0]!.className).toContain('vsidian-outline-level-1')
+    expect(items[1]!.className).toContain('vsidian-outline-level-2')
+    expect(items[2]!.className).toContain('vsidian-outline-level-3')
+    expect(items.map((el) => el.dataset['vsidianLevel'])).toEqual(['1', '2', '3', '2', '1'])
+  })
+
+  it('大纲覆盖全文：屏外标题同样纳入（不依赖视口渲染）', () => {
+    // 长文档：CM6 视口只渲染少量行，大纲仍取全文标题
+    const lines: string[] = []
+    for (let i = 1; i <= 400; i++) {
+      lines.push(`# 第 ${i} 个标题`, '', `第 ${i} 段正文。`, '')
+    }
+    const h = makeBridge()
+    const { c } = mountOutline(h, lines.join('\n'))
+    openSidebar(c)
+    const state = viewState(c, h)
+    expect(state.outline?.items.length).toBe(400)
+    expect(state.outline?.items[0]!.text).toBe('第 1 个标题')
+    expect(state.outline?.items[399]!.text).toBe('第 400 个标题')
+    // renderedLines 受视口限制，远小于全文标题数（大纲与视口渲染解耦的旁证）
+    expect(state.renderedLines).toBeLessThan(400)
+  })
+
+  it('无标题文档显示空态占位（面板有可见内容与高度语义）', () => {
+    const h = makeBridge()
+    const { c, parent } = mountOutline(h, '只有正文\n没有标题\n')
+    openSidebar(c)
+    const d = outlineDom(parent)
+    expect(d.itemTexts()).toEqual([])
+    expect(
+      parent.querySelector('.vsidian-outline-empty')?.textContent,
+      '空态占位应存在且可读',
+    ).toBeTruthy()
+  })
+})
+
+describe('编辑后大纲随当前文本更新（含未保存编辑）', () => {
+  it('live 输入新标题后，view.state 的大纲序列即时反映（request 前校准）', async () => {
+    const h = makeBridge()
+    const { c, parent } = mountOutline(h)
+    openSidebar(c)
+    // 在文档末尾追加一个新二级标题（未保存：无 ack 前本地已是新文本）
+    const doc = c.getView()!.state.doc
+    c.getView()!.dispatch({ changes: { from: doc.length, insert: '## 新增标题\n' } })
+    const state = viewState(c, h)
+    expect(state.outline?.items.map((i) => [i.level, i.text])).toEqual([
+      ...EXPECTED_ITEMS,
+      [2, '新增标题'],
+    ])
+    const d = outlineDom(parent)
+    expect(d.itemTexts()).toContain('新增标题')
+  })
+
+  it('修改既有标题文字后，大纲对应条目更新', () => {
+    const h = makeBridge()
+    const { c, parent } = mountOutline(h)
+    openSidebar(c)
+    const from = DOC.indexOf('文档主标题')
+    c.getView()!.dispatch({ changes: { from, to: from + '文档主标题'.length, insert: '改名后的主标题' } })
+    const state = viewState(c, h)
+    expect(state.outline?.items[0]!.text).toBe('改名后的主标题')
+    expect(outlineDom(parent).itemTexts()[0]).toBe('改名后的主标题')
+  })
+
+  it('删除全部标题后大纲清空、显示空态', () => {
+    const h = makeBridge()
+    const { c, parent } = mountOutline(h, '# 唯一标题\n正文\n')
+    openSidebar(c)
+    c.getView()!.dispatch({ changes: { from: 0, to: '# 唯一标题'.length, insert: '普通行' } })
+    const state = viewState(c, h)
+    expect(state.outline?.items).toEqual([])
+    expect(outlineDom(parent).itemTexts()).toEqual([])
+    expect(parent.querySelector('.vsidian-outline-empty')).toBeTruthy()
+  })
+
+  it('非标题正文编辑不重建条目 DOM（数据未变跳过重建）', () => {
+    const h = makeBridge()
+    const { c, parent } = mountOutline(h)
+    openSidebar(c)
+    const first = parent.querySelectorAll<HTMLElement>('.vsidian-outline-item')[0]!
+    const marker = Object.freeze({ tag: 'keep' })
+    ;(first as unknown as Record<string, unknown>)['__marker'] = marker
+    const from = DOC.indexOf('结尾段落')
+    c.getView()!.dispatch({ changes: { from, to: from + 2, insert: '开篇' } })
+    viewState(c, h) // 触发即时校准
+    const after = parent.querySelectorAll<HTMLElement>('.vsidian-outline-item')[0]!
+    expect((after as unknown as Record<string, unknown>)['__marker']).toBe(marker)
+  })
+})
+
+describe('面板切换状态机与零写回（验收核心）', () => {
+  it('点击大纲按钮：active 翻转、aria-expanded 同步、面板条目 DOM 隐藏但保留', () => {
+    const h = makeBridge()
+    const { c, parent } = mountOutline(h)
+    openSidebar(c)
+    const d = outlineDom(parent)
+    d.toggle!.click()
+    expect(d.sidebar.classList.contains('vsidian-outline-active')).toBe(false)
+    expect(d.toggle!.getAttribute('aria-expanded')).toBe('false')
+    expect(d.itemTexts()).toEqual(EXPECTED_ITEMS.map(([, text]) => text))
+    d.toggle!.click()
+    expect(d.sidebar.classList.contains('vsidian-outline-active')).toBe(true)
+    expect(d.toggle!.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('outline.test.click 测试钩子驱动与用户点击同一处理器', () => {
+    const h = makeBridge()
+    const { c, parent } = mountOutline(h)
+    openSidebar(c)
+    const d = outlineDom(parent)
+    c.handleHostMessage({ kind: 'outline.test.click' })
+    expect(d.sidebar.classList.contains('vsidian-outline-active')).toBe(false)
+    c.handleHostMessage({ kind: 'outline.test.click' })
+    expect(d.sidebar.classList.contains('vsidian-outline-active')).toBe(true)
+  })
+
+  it('面板切换与大纲展示全程零 edit.request、文本不变（不写回、不入撤销历史）', () => {
+    const h = makeBridge()
+    const { c } = mountOutline(h)
+    openSidebar(c)
+    const editsBefore = h.sent.filter((m) => m.kind === 'edit.request').length
+    const textBefore = viewState(c, h).text
+    c.handleHostMessage({ kind: 'outline.test.click' })
+    c.handleHostMessage({ kind: 'outline.test.click' })
+    expect(h.sent.filter((m) => m.kind === 'edit.request').length).toBe(editsBefore)
+    expect(viewState(c, h).text).toBe(textBefore)
+    expect(viewState(c, h).outline?.active).toBe(true)
+  })
+
+  it('本地未确认输入在面板切换后保留', () => {
+    const h = makeBridge()
+    const { c } = mountOutline(h)
+    openSidebar(c)
+    c.getView()!.dispatch({ changes: { from: 0, insert: '未保存前缀' } })
+    c.handleHostMessage({ kind: 'outline.test.click' })
+    c.handleHostMessage({ kind: 'outline.test.click' })
+    expect(viewState(c, h).text.startsWith('未保存前缀')).toBe(true)
+  })
+})
+
+describe('大纲与模式切换正交（两模式共用侧栏）', () => {
+  it('切到 reading 再切回 live：大纲序列不变（数据源是 CM6 全文，非阅读渲染）', () => {
+    const h = makeBridge()
+    const { c } = mountOutline(h)
+    openSidebar(c)
+    c.handleHostMessage({ kind: 'view.mode.set', mode: 'reading' })
+    let state = viewState(c, h)
+    expect(state.viewMode).toBe('reading')
+    expect(state.outline?.items.map((i) => [i.level, i.text])).toEqual(EXPECTED_ITEMS)
+    c.handleHostMessage({ kind: 'view.mode.set', mode: 'live' })
+    state = viewState(c, h)
+    expect(state.viewMode).toBe('live')
+    expect(state.outline?.items.map((i) => [i.level, i.text])).toEqual(EXPECTED_ITEMS)
+  })
+})
+
+describe('持久化与重载恢复', () => {
+  it('outlineActive 写入 bridge state（与 sidebarOpen 合并互不覆盖）', () => {
+    const h = makeBridge()
+    const { c } = mountOutline(h)
+    c.handleHostMessage({ kind: 'outline.test.click' })
+    const saved = h.saved() as { sidebarOpen?: boolean; outlineActive?: boolean; viewMode?: string }
+    expect(saved.outlineActive).toBe(false)
+    expect(saved.sidebarOpen).toBe(false)
+    c.handleHostMessage({ kind: 'view.mode.set', mode: 'reading' })
+    const saved2 = h.saved() as { outlineActive?: boolean; viewMode?: string }
+    expect(saved2.viewMode).toBe('reading')
+    expect(saved2.outlineActive).toBe(false)
+  })
+
+  it('重载后恢复非默认 active 态（新 controller 同一 state）', () => {
+    const h = makeBridge()
+    const { c } = mountOutline(h)
+    c.handleHostMessage({ kind: 'outline.test.click' })
+    openSidebar(c) // 展开但 active=false
+    const parent2 = document.createElement('div')
+    const c2 = new WebviewSyncController(h.bridge)
+    c2.mount(parent2)
+    c2.handleHostMessage({ kind: 'init', sessionId: 's1', docUri: DOC_URI, version: 1, text: DOC })
+    const state = viewState(c2, h)
+    expect(state.sidebar?.open).toBe(true)
+    expect(state.outline?.active).toBe(false)
+  })
+})
+
+describe('view.state 的 outline 观测（jsdom 无布局的容错口径）', () => {
+  it('面板收起（active=false）时 items 仍回报数据（计算基于文档而非面板可见性）', () => {
+    const h = makeBridge()
+    const { c } = mountOutline(h)
+    openSidebar(c)
+    c.handleHostMessage({ kind: 'outline.test.click' })
+    const state = viewState(c, h)
+    expect(state.outline?.active).toBe(false)
+    expect(state.outline?.items.map((i) => i.text)).toEqual(EXPECTED_ITEMS.map(([, t]) => t))
+  })
+
+  it('侧栏收起时 outline 字段仍回报（open=false、绘制字段容错）', () => {
+    const h = makeBridge()
+    const { c } = mountOutline(h)
+    const state = viewState(c, h)
+    const probe = state.outline
+    expect(probe).toBeDefined()
+    expect(probe!.active).toBe(true)
+    expect(probe!.toggleAriaLabel).toBe('大纲')
+    expect(probe!.panelAriaLabel).toBe('大纲')
+    // jsdom 无布局/无 CSS 引擎：绘制命中容错为 false（真宿主断言见集成）
+    expect(probe!.togglePainted).toBe(false)
+    expect(probe!.panelPainted).toBe(false)
+  })
+})

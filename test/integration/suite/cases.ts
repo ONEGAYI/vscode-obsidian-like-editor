@@ -431,6 +431,15 @@ interface ViewState {
     toggleAriaLabel: string | null
     settingsAriaLabel: string | null
   }
+  /** #54 大纲观测：面板态、绘制层证据与全文标题序列（protocol.ts OutlineProbe） */
+  outline?: {
+    active: boolean
+    togglePainted: boolean
+    panelPainted: boolean
+    items: Array<{ level: number; text: string; line: number }>
+    toggleAriaLabel: string | null
+    panelAriaLabel: string | null
+  }
 }
 
 /** #7 阅读视图探针回报（reading.perf.report） */
@@ -4323,5 +4332,157 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // 收起侧栏收尾（避免跨用例状态泄漏）
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
     await waitViewState('untouched.md', (v) => v.sidebar?.open === false)
+  }],
+
+  // ---- #54 右侧栏大纲面板 ----
+
+  ['大纲面板展开：绘制层可见与全文标题序列一致（#54）', async () => {
+    // 绘制层断言口径（视觉层断言必查）：大纲按钮与面板可见性经
+    // elementFromPoint 命中证明（侧栏收起 / 面板 display:none / 样式注入
+    // 失效时命中必失败）；内容一致性经 view.state 的 outline.items 对拍
+    // 源文本文档标题（跨级、同名不合并，伪标题排除）。
+    await openWithEditor('outline.md')
+    await waitSessionReady('outline.md')
+    const uri = wsUri('outline.md').toString()
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+
+    // 收起态：大纲按钮在侧栏内（display:none 继承），命中必失败
+    const collapsed = await waitViewState('outline.md', (v) => v.outline !== undefined)
+    assert(collapsed.outline!.active === true, '大纲面板默认 active（展开侧栏即见大纲）')
+    assert(collapsed.outline!.togglePainted === false, '侧栏收起时大纲按钮不得可见')
+    assert(collapsed.outline!.toggleAriaLabel === '大纲',
+      `大纲按钮可访问名称应为「大纲」，实际 ${String(collapsed.outline!.toggleAriaLabel)}`)
+
+    // 展开：按钮与面板真实绘制（elementFromPoint 命中），可访问名称齐备
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    const opened = await waitViewState('outline.md', (v) => v.sidebar?.open === true)
+    assert(opened.outline!.togglePainted === true,
+      `大纲按钮应真实可见（命中失败：${JSON.stringify(opened.outline)}）`)
+    assert(opened.outline!.panelPainted === true,
+      `大纲面板应真实绘制（elementFromPoint 应命中面板：${JSON.stringify(opened.outline)}）`)
+    assert(opened.outline!.panelAriaLabel === '大纲',
+      `大纲面板可访问名称应为「大纲」，实际 ${String(opened.outline!.panelAriaLabel)}`)
+    assert(opened.paint?.textVisible === true, '展开态正文应仍可见')
+
+    // 内容一致：大纲 = 源文本文档标题的级别/文字/起始行序列（跨级、同名、
+    // Setext 语义与伪标题排除一次对拍）
+    const expected: Array<[number, string, number]> = [
+      [1, '文档主标题', 6],
+      [2, '同名标题', 8],
+      [3, '三级标题', 12],
+      [2, '同名标题', 14],
+      [1, '跨级回一级', 16],
+      [1, 'Setext 一级', 18],
+      [2, 'Setext 二级', 21],
+      [4, '四级标题', 24],
+      [5, '五级标题', 26],
+      [6, '六级标题', 28],
+    ]
+    const items = opened.outline!.items
+    assert(items.length === expected.length,
+      `大纲条目数应为 ${expected.length}（伪标题排除、同名不合并），实际 ${items.length}：${JSON.stringify(items)}`)
+    for (let i = 0; i < expected.length; i++) {
+      const [level, text, line] = expected[i]!
+      assert(items[i]!.level === level && items[i]!.text === text && items[i]!.line === line,
+        `大纲第 ${i + 1} 项应为 [${level}, ${text}, ${line}]，实际 ${JSON.stringify(items[i])}`)
+    }
+
+    // 展示大纲零写回：版本与写回计数不变（面板是纯视图状态）
+    const afterOpen = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterOpen.version === before.version,
+      `展开侧栏显示大纲不得推进文档版本（${before.version} → ${afterOpen.version}）`)
+    assert(afterOpen.appliedEdits === before.appliedEdits, '显示大纲不得产生写回')
+
+    // 收起侧栏收尾（避免跨用例状态泄漏）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline.md', (v) => v.sidebar?.open === false)
+  }],
+
+  ['大纲面板切换与编辑更新：active 两态绘制证据、文本变更后大纲跟随（#54）', async () => {
+    await openWithEditor('outline.md')
+    await waitSessionReady('outline.md')
+    const uri = wsUri('outline.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('outline.md'))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline.md', (v) => v.sidebar?.open === true && v.outline?.panelPainted === true)
+
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    const baselineItems = (await waitViewState('outline.md', (v) => v.outline !== undefined))
+      .outline!.items
+
+    // 点击大纲按钮：面板隐藏（绘制层证据翻转）、数据保留、零写回
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.click' })
+    const hidden = await waitViewState('outline.md', (v) => v.outline?.active === false)
+    assert(hidden.outline!.panelPainted === false,
+      `active=false 后大纲面板不得绘制（${JSON.stringify(hidden.outline)}）`)
+    assert(hidden.outline!.items.length === baselineItems.length, '面板隐藏不影响大纲数据')
+    const afterHide = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterHide.version === before.version && afterHide.appliedEdits === before.appliedEdits,
+      '切换大纲面板不得推进版本或产生写回（不写回、不入撤销历史）')
+
+    // 再点回：面板重新绘制
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.click' })
+    const shown = await waitViewState('outline.md', (v) => v.outline?.active === true)
+    assert(shown.outline!.panelPainted === true, '重新激活后大纲面板应恢复绘制')
+
+    // 编辑标题：大纲随当前文本（含未保存编辑）更新——文档末尾追加二级标题
+    const endOffset = doc.getText().length
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'sync.test.edit',
+      offset: endOffset,
+      text: '\n## 集成新增标题\n',
+    })
+    const updated = await waitViewState('outline.md',
+      (v) => v.outline !== undefined && v.outline.items.length === baselineItems.length + 1)
+    const last = updated.outline!.items[updated.outline!.items.length - 1]!
+    assert(last.level === 2 && last.text === '集成新增标题',
+      `新增标题应入大纲末项 [2, 集成新增标题]，实际 ${JSON.stringify(last)}`)
+
+    // 撤销这笔编辑（回到原文），大纲同步回落（撤销后写回链路的另一面）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    const undone = await waitViewState('outline.md', (v) =>
+      v.outline !== undefined && v.outline.items.length === baselineItems.length)
+    assert(undone.outline!.items.every((item, i) =>
+      item.level === baselineItems[i]!.level && item.text === baselineItems[i]!.text),
+      '撤销编辑后大纲应回落为原序列')
+    if (doc.isDirty) {
+      await doc.save()
+    }
+
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline.md', (v) => v.sidebar?.open === false)
+  }],
+
+  ['大纲与模式切换正交：两模式下序列不变、面板持续绘制（#54）', async () => {
+    await openWithEditor('outline.md')
+    await waitSessionReady('outline.md')
+    const uri = wsUri('outline.md').toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    const live = await waitViewState('outline.md',
+      (v) => v.sidebar?.open === true && v.outline?.panelPainted === true)
+    const liveItems = live.outline!.items.map((i) => [i.level, i.text])
+
+    // 切到阅读模式：大纲仍来自 CM6 全文（非阅读渲染），面板持续绘制
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const reading = await waitViewState('outline.md',
+      (v) => v.viewMode === 'reading' && v.outline !== undefined)
+    assert(reading.outline!.panelPainted === true,
+      `阅读模式下大纲面板应持续绘制（${JSON.stringify(reading.outline)}）`)
+    assert(
+      JSON.stringify(reading.outline!.items.map((i) => [i.level, i.text])) === JSON.stringify(liveItems),
+      '模式切换不得改变大纲序列（数据源是 CM6 全文，非阅读渲染）')
+    assert((reading.readingBlockCount ?? 0) > 0, '阅读模式正文应正常渲染')
+
+    // 切回 live：序列仍不变
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'live' })
+    const backLive = await waitViewState('outline.md', (v) => v.viewMode === 'live' && v.outline !== undefined)
+    assert(
+      JSON.stringify(backLive.outline!.items.map((i) => [i.level, i.text])) === JSON.stringify(liveItems),
+      '切回 live 后大纲序列应不变')
+
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline.md', (v) => v.sidebar?.open === false)
   }],
 ]

@@ -262,6 +262,101 @@ body {
   stroke-width: 3px;
 }
 
+/* ---- #54 大纲面板 ----
+   显隐唯一开关是侧栏容器的 vsidian-outline-active 类（与 #53 的
+   sidebar-open 类同模式）：默认 display:none，active 时 flex 列 + 纵向
+   滚动（超长大纲不撑破侧栏）。条目按级别缩进（用户可见的层级表达），
+   长标题单行省略。 */
+#app .vsidian-sidebar .vsidian-outline-panel {
+  display: none;
+}
+
+#app .vsidian-sidebar.vsidian-outline-active .vsidian-outline-panel {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  min-height: 0;
+  box-sizing: border-box;
+  padding: 4px 0;
+}
+
+.vsidian-sidebar .vsidian-outline-item {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: inherit;
+  font-size: var(--vsidian-outline-font-size, 12px);
+  line-height: 22px;
+  cursor: default;
+  user-select: none;
+}
+
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-1 {
+  padding-inline-start: 0;
+}
+
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-2 {
+  padding-inline-start: 10px;
+}
+
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-3 {
+  padding-inline-start: 20px;
+}
+
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-4 {
+  padding-inline-start: 30px;
+}
+
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-5 {
+  padding-inline-start: 40px;
+}
+
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-6 {
+  padding-inline-start: 50px;
+}
+
+/* 空态占位：无标题文档的弱化反馈（保持面板可读内容与高度语义） */
+.vsidian-sidebar .vsidian-outline-empty {
+  opacity: 0.7;
+  padding: 8px 10px;
+  font-size: var(--vsidian-outline-font-size, 12px);
+}
+
+/* 侧栏顶栏按钮（#54「大纲」）：与主编辑区顶栏图标按钮同形态（透明底、
+   悬停高亮跟随 VSCode 变量）。active 态背景高亮的唯一来源是
+   outline-active 类规则（非 active 时透明底，两态差异可被集成 computed
+   背景断言捕获，样式失效时两态同值） */
+#app .vsidian-sidebar .vsidian-sidebar-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  box-sizing: border-box;
+  cursor: pointer;
+  color: var(--vscode-editor-foreground);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+}
+
+#app .vsidian-sidebar .vsidian-sidebar-toolbar button:hover,
+#app .vsidian-sidebar .vsidian-sidebar-toolbar button:focus-visible {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
+  outline: none;
+}
+
+#app .vsidian-sidebar .vsidian-toolbar-actions button svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+#app .vsidian-sidebar.vsidian-outline-active .vsidian-sidebar-toolbar button.vsidian-outline-toggle {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
+}
+
 /* ---- Live Preview 语法装饰（#8：标题之外的覆盖语法）----
    行级类（vsidian-code/quote/list/hr/frontmatter-line）只做背景/边框等着色，
    不改变行高（行高估算不因装饰失真；标题字号仍由 #5 的标题行类承担）。

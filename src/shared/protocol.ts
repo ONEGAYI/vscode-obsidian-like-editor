@@ -113,6 +113,9 @@ export type HostToWebview =
    *  处理器（纯视图状态翻转，零写回）。宿主测试无法向 webview 派发真实鼠标
    *  事件，以此通道验证真实宿主内的布局切换与绘制 */
   | { kind: 'sidebar.test.click' }
+  /** 测试钩子（#54）：点击侧栏顶栏的大纲按钮，驱动与用户点击同一处理器
+   *  （纯视图状态翻转，零写回）。与 sidebar.test.click 同通道形态 */
+  | { kind: 'outline.test.click' }
   /** 测试钩子（#21）：在真实 webview 的 CM6 中输入，验证暂停态即时留存。 */
   | { kind: 'sync.test.edit'; offset: number; text: string; closeAfter?: boolean }
   /** 测试钩子：组合候选写入首行 DOM，经过 CM6 MutationObserver 的真实输入链。 */
@@ -236,6 +239,8 @@ export type WebviewToHost =
       paint?: PaintProbe
       /** 右侧栏观测（#53；布局态与绘制层证据，旧 webview 缺省） */
       sidebar?: SidebarProbe
+      /** 大纲观测（#54；面板态、绘制层证据与标题序列，旧 webview 缺省） */
+      outline?: OutlineProbe
     }
       /** 阅读视图性能探针回报（#7）：滚动往返期间的挂载/回收与解析观测 */
   | {
@@ -574,9 +579,31 @@ export interface SidebarProbe {
   settingsAriaLabel: string | null
 }
 
+/**
+ * 大纲观测（#54）：面板态与绘制层证据。命中类字段（*Painted）走
+ * elementFromPoint——面板只有真实绘制（侧栏展开 + 面板 active + 样式表
+ * 显隐规则生效）时才可能命中，样式失效（如 CSP 拦截注入）时 DOM 存在但
+ * 命中失败。items 是全文标题序列（数据源 = CM6 全文解析，含未保存编辑；
+ * 与视口渲染和 live/reading 模式无关）。jsdom 无布局与 CSS 引擎：命中恒
+ * false，名称容错为 null（probe 未装配时字段缺省），真宿主断言见集成。
+ */
+export interface OutlineProbe {
+  /** 大纲面板 active 态（状态机实值；侧栏收起时面板同样不可见） */
+  active: boolean
+  /** 大纲按钮中心点 elementFromPoint 命中自身（侧栏展开 + 按钮真实绘制） */
+  togglePainted: boolean
+  /** 大纲面板容器中心点命中面板内（面板内容真实绘制，非 display:none） */
+  panelPainted: boolean
+  /** 全文标题序列（级别 1–6 / 文字 / 起始行 1 基） */
+  items: Array<{ level: number; text: string; line: number }>
+  /** 大纲按钮可访问名称 */
+  toggleAriaLabel: string | null
+  /** 大纲面板可访问名称（role=region + aria-label） */
+  panelAriaLabel: string | null
+}
+
 /** 表格结构操作码校验（#13） */
-function isTableEditOp(v: unknown): v is TableEditOp {
-  return (
+function isTableEditOp(v: unknown): v is TableEditOp {  return (
     v === 'insertRowAbove' ||
     v === 'insertRowBelow' ||
     v === 'deleteRow' ||
@@ -655,6 +682,34 @@ function isSidebarProbe(v: unknown): v is SidebarProbe {
     (v.sidebarWidthPx === null || isNonNegativeNumber(v.sidebarWidthPx)) &&
     isNullOrString(v.toggleAriaLabel) &&
     isNullOrString(v.settingsAriaLabel)
+  )
+}
+
+/** #54 大纲条目序列校验：level 1–6 整数、text 字符串（可为空）、line 正整数 */
+function isOutlineItems(v: unknown): v is OutlineProbe['items'] {
+  return (
+    Array.isArray(v) &&
+    v.every(
+      (item) =>
+        isObject(item) &&
+        typeof item.level === 'number' && Number.isInteger(item.level) &&
+        item.level >= 1 && item.level <= 6 &&
+        isString(item.text) &&
+        typeof item.line === 'number' && Number.isInteger(item.line) && item.line >= 1,
+    )
+  )
+}
+
+/** #54 大纲观测校验：active/命中布尔、items 序列、名称字符串或 null */
+function isOutlineProbe(v: unknown): v is OutlineProbe {
+  return (
+    isObject(v) &&
+    typeof v.active === 'boolean' &&
+    typeof v.togglePainted === 'boolean' &&
+    typeof v.panelPainted === 'boolean' &&
+    isOutlineItems(v.items) &&
+    isNullOrString(v.toggleAriaLabel) &&
+    isNullOrString(v.panelAriaLabel)
   )
 }
 
@@ -949,6 +1004,7 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.lineGutter === undefined || isLineGutterProbe(v.lineGutter)) &&
         (v.paint === undefined || isPaintProbe(v.paint)) &&
         (v.sidebar === undefined || isSidebarProbe(v.sidebar)) &&
+        (v.outline === undefined || isOutlineProbe(v.outline)) &&
         (v.typography === undefined || isTypographyProbe(v.typography))
       )
     case 'reading.perf.report':
@@ -1118,6 +1174,8 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
     case 'table.test.drag':
       return isNonNegativeInt(v.sourceIndex) && isNonNegativeInt(v.targetSlot)
     case 'sidebar.test.click':
+      return true
+    case 'outline.test.click':
       return true
     case 'sync.test.edit':
       return isNonNegativeInt(v.offset) && isString(v.text) &&
