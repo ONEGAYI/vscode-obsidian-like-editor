@@ -109,6 +109,10 @@ export type HostToWebview =
   | { kind: 'table.test.select'; axis: 'row' | 'column'; index: number }
   /** 测试钩子（#43）：真实 webview DOM 的点阵抓手拖动事件。 */
   | { kind: 'table.test.drag'; sourceIndex: number; targetSlot: number }
+  /** 测试钩子（#53）：点击主编辑区顶栏的侧栏切换按钮，驱动与用户点击同一
+   *  处理器（纯视图状态翻转，零写回）。宿主测试无法向 webview 派发真实鼠标
+   *  事件，以此通道验证真实宿主内的布局切换与绘制 */
+  | { kind: 'sidebar.test.click' }
   /** 测试钩子（#21）：在真实 webview 的 CM6 中输入，验证暂停态即时留存。 */
   | { kind: 'sync.test.edit'; offset: number; text: string; closeAfter?: boolean }
   /** 测试钩子：组合候选写入首行 DOM，经过 CM6 MutationObserver 的真实输入链。 */
@@ -230,6 +234,8 @@ export type WebviewToHost =
       typography?: TypographyProbe
       /** 绘制层探针（P0 回归）：正文可见性与 CM6 注入样式存活观测 */
       paint?: PaintProbe
+      /** 右侧栏观测（#53；布局态与绘制层证据，旧 webview 缺省） */
+      sidebar?: SidebarProbe
     }
       /** 阅读视图性能探针回报（#7）：滚动往返期间的挂载/回收与解析观测 */
   | {
@@ -537,6 +543,37 @@ export interface FindSessionProbe {
   currentTo: number | null
 }
 
+/**
+ * 右侧栏观测（#53）：布局态与绘制层证据。命中类字段（*Painted）走
+ * elementFromPoint——侧栏/按钮只有真实绘制（非 display:none、非零尺寸、
+ * 无覆盖遮挡）时才可能命中，几何或存在性探针测不出样式失效；线宽字段
+ * 是 computed stroke-width 文本（图标两态粗细差异的唯一来源是样式表的
+ * vsidian-sidebar-open 类规则）。jsdom 无布局与 CSS 引擎：命中恒 false、
+ * 线宽/宽度容错为 null，真宿主断言见集成。
+ */
+export interface SidebarProbe {
+  /** 侧栏展开态（状态机实值） */
+  open: boolean
+  /** 侧栏顶栏中心点 elementFromPoint 命中侧栏容器（展开态的绘制证据） */
+  sidebarToolbarPainted: boolean
+  /** 侧栏切换按钮中心点命中按钮自身（按钮真实可见且可点） */
+  togglePainted: boolean
+  /** 齿轮设置按钮中心点命中自身（图标化入口真实可见） */
+  settingsPainted: boolean
+  /** 切换图标竖线 computed stroke-width（收起细线 1.5px / 展开粗线 3px） */
+  toggleBarStrokeWidth: string | null
+  /** 切换图标外框 computed stroke-width（两态恒定对照） */
+  toggleFrameStrokeWidth: string | null
+  /** 主编辑区内容宽度 px（收起=全宽；展开=随侧栏收缩）；无布局为 null */
+  mainWidthPx: number | null
+  /** 侧栏宽度 px（收起时元素不占位为 0）；无布局为 null */
+  sidebarWidthPx: number | null
+  /** 切换按钮可访问名称（状态一致性观测：随收起/展开变化） */
+  toggleAriaLabel: string | null
+  /** 齿轮设置按钮可访问名称 */
+  settingsAriaLabel: string | null
+}
+
 /** 表格结构操作码校验（#13） */
 function isTableEditOp(v: unknown): v is TableEditOp {
   return (
@@ -601,6 +638,23 @@ function isLineGutterProbe(v: unknown): v is LineGutterProbe {
     isNonNegativeInt(v.count) &&
     (v.first === null || isString(v.first)) &&
     (v.last === null || isString(v.last))
+  )
+}
+
+/** #53 右侧栏观测校验：open/命中布尔、线宽与名称字符串或 null、宽度非负数或 null */
+function isSidebarProbe(v: unknown): v is SidebarProbe {
+  return (
+    isObject(v) &&
+    typeof v.open === 'boolean' &&
+    typeof v.sidebarToolbarPainted === 'boolean' &&
+    typeof v.togglePainted === 'boolean' &&
+    typeof v.settingsPainted === 'boolean' &&
+    isNullOrString(v.toggleBarStrokeWidth) &&
+    isNullOrString(v.toggleFrameStrokeWidth) &&
+    (v.mainWidthPx === null || isNonNegativeNumber(v.mainWidthPx)) &&
+    (v.sidebarWidthPx === null || isNonNegativeNumber(v.sidebarWidthPx)) &&
+    isNullOrString(v.toggleAriaLabel) &&
+    isNullOrString(v.settingsAriaLabel)
   )
 }
 
@@ -894,6 +948,7 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.settings === undefined || isSettingsPayload(v.settings)) &&
         (v.lineGutter === undefined || isLineGutterProbe(v.lineGutter)) &&
         (v.paint === undefined || isPaintProbe(v.paint)) &&
+        (v.sidebar === undefined || isSidebarProbe(v.sidebar)) &&
         (v.typography === undefined || isTypographyProbe(v.typography))
       )
     case 'reading.perf.report':
@@ -1062,6 +1117,8 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return (v.axis === 'row' || v.axis === 'column') && isNonNegativeInt(v.index)
     case 'table.test.drag':
       return isNonNegativeInt(v.sourceIndex) && isNonNegativeInt(v.targetSlot)
+    case 'sidebar.test.click':
+      return true
     case 'sync.test.edit':
       return isNonNegativeInt(v.offset) && isString(v.text) &&
         (v.closeAfter === undefined || typeof v.closeAfter === 'boolean')

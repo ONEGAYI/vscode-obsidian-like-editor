@@ -418,6 +418,19 @@ interface ViewState {
       borderLeftWidthValues: string[]
     } | null
   }
+  /** #53 右侧栏观测：布局态与绘制层证据（结构见 src/shared/protocol.ts SidebarProbe） */
+  sidebar?: {
+    open: boolean
+    sidebarToolbarPainted: boolean
+    togglePainted: boolean
+    settingsPainted: boolean
+    toggleBarStrokeWidth: string | null
+    toggleFrameStrokeWidth: string | null
+    mainWidthPx: number | null
+    sidebarWidthPx: number | null
+    toggleAriaLabel: string | null
+    settingsAriaLabel: string | null
+  }
 }
 
 /** #7 阅读视图探针回报（reading.perf.report） */
@@ -4186,5 +4199,129 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // 还原默认开启，避免影响后续用例（与 #34 既有用例同款跨用例状态清理）
     await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
     await waitViewState('linenumbers.md', (v) => v.lineGutter?.on === true)
+  }],
+
+  // ---- #53 顶栏图标化与右侧栏布局 ----
+
+  ['右侧栏收起→展开→收起循环：绘制层证据与图标两态线宽（#53）', async () => {
+    // 绘制层断言口径（视觉层断言必查）：侧栏可见性经 elementFromPoint 命中
+    // 证明（display:none、零尺寸或覆盖遮挡时命中失败）；图标两态粗细经
+    // computed stroke-width 证明（差异唯一来源是样式表的 open 类规则，
+    // 样式失效时两态同值）。DOM 存在性与几何坐标不能替代这些证据。
+    await openWithEditor('lf.md')
+    await waitSessionReady('lf.md')
+    const uri = wsUri('lf.md').toString()
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+
+    // 收起态：按钮与齿轮入口真实可见，侧栏不可见，竖线为细线
+    const collapsed = await waitViewState('lf.md', (v) => v.sidebar !== undefined)
+    assert(collapsed.sidebar!.open === false, '初始应为收起态')
+    assert(collapsed.sidebar!.togglePainted === true,
+      `切换按钮应真实可见（命中测试失败：${JSON.stringify(collapsed.sidebar)}）`)
+    assert(collapsed.sidebar!.settingsPainted === true,
+      `齿轮设置按钮应真实可见（命中测试失败：${JSON.stringify(collapsed.sidebar)}）`)
+    assert(collapsed.sidebar!.sidebarToolbarPainted === false, '收起时侧栏顶栏不得可见（命中应失败）')
+    assert(collapsed.sidebar!.settingsAriaLabel === '打开 Vsidian 设置',
+      `齿轮可访问名称应为「打开 Vsidian 设置」，实际 ${String(collapsed.sidebar!.settingsAriaLabel)}`)
+    assert(collapsed.sidebar!.toggleAriaLabel === '展开右侧栏',
+      `收起态切换按钮名称应为「展开右侧栏」，实际 ${String(collapsed.sidebar!.toggleAriaLabel)}`)
+    assert(Math.abs(parseFloat(collapsed.sidebar!.toggleBarStrokeWidth ?? 'x') - 1.5) < 0.01,
+      `收起态图标竖线应为细线 1.5px，实际 ${String(collapsed.sidebar!.toggleBarStrokeWidth)}`)
+    assert(collapsed.paint?.textVisible === true, '收起态正文应可见')
+    const collapsedMainWidth = collapsed.sidebar!.mainWidthPx ?? 0
+    assert(collapsedMainWidth > 0, '收起态主编辑区应有宽度')
+
+    // 展开：侧栏顶栏真实绘制于右侧空出区域，竖线变粗，主编辑区收缩
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    const opened = await waitViewState('lf.md', (v) => v.sidebar?.open === true)
+    assert(opened.sidebar!.sidebarToolbarPainted === true,
+      `展开时侧栏顶栏应实际绘制（elementFromPoint 应命中侧栏：${JSON.stringify(opened.sidebar)}）`)
+    assert(Math.abs(parseFloat(opened.sidebar!.toggleBarStrokeWidth ?? 'x') - 3) < 0.01,
+      `展开态图标竖线应为粗线 3px，实际 ${String(opened.sidebar!.toggleBarStrokeWidth)}`)
+    // 外框线宽两态恒定（对照：证明粗细变化只发生在竖线）
+    assert(Math.abs(parseFloat(opened.sidebar!.toggleFrameStrokeWidth ?? 'x') -
+      parseFloat(collapsed.sidebar!.toggleFrameStrokeWidth ?? 'x')) < 0.01,
+      '图标外框线宽两态应恒定（差异只应在竖线）')
+    assert(opened.sidebar!.toggleAriaLabel === '收起右侧栏',
+      `展开态切换按钮名称应为「收起右侧栏」，实际 ${String(opened.sidebar!.toggleAriaLabel)}`)
+    assert((opened.sidebar!.sidebarWidthPx ?? 0) > 200,
+      `侧栏应占出宽度（约 280px），实际 ${String(opened.sidebar!.sidebarWidthPx)}`)
+    assert((opened.sidebar!.mainWidthPx ?? 0) < collapsedMainWidth - 200,
+      `主编辑区宽度应随侧栏收缩（${collapsedMainWidth} → ${String(opened.sidebar!.mainWidthPx)}）`)
+    assert(opened.sidebar!.togglePainted === true,
+      '展开态切换按钮应仍可见（随主编辑区右边界移动后仍可命中）')
+    assert(opened.paint?.textVisible === true, '展开态正文应仍可见（布局收缩不遮挡正文）')
+
+    // 切换全程零写回、零版本推进（侧栏是纯视图状态）
+    const afterToggle = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterToggle.version === before.version,
+      `切换侧栏不得推进文档版本（${before.version} → ${afterToggle.version}）`)
+    assert(afterToggle.appliedEdits === before.appliedEdits, '切换侧栏不得产生写回')
+
+    // 收起回归：侧栏顶栏重新不可见、竖线回细线、名称回「展开右侧栏」
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    const recollapsed = await waitViewState('lf.md', (v) => v.sidebar?.open === false)
+    assert(recollapsed.sidebar!.sidebarToolbarPainted === false, '收起后侧栏顶栏应不可见')
+    assert(Math.abs(parseFloat(recollapsed.sidebar!.toggleBarStrokeWidth ?? 'x') - 1.5) < 0.01,
+      `收起回归后图标竖线应回细线 1.5px，实际 ${String(recollapsed.sidebar!.toggleBarStrokeWidth)}`)
+    assert(recollapsed.sidebar!.toggleAriaLabel === '展开右侧栏',
+      `收起回归后名称应回「展开右侧栏」，实际 ${String(recollapsed.sidebar!.toggleAriaLabel)}`)
+    assert(Math.abs((recollapsed.sidebar!.mainWidthPx ?? 0) - collapsedMainWidth) < 2,
+      `收起回归后主编辑区宽度应复原（${collapsedMainWidth} → ${String(recollapsed.sidebar!.mainWidthPx)}）`)
+  }],
+
+  ['右侧栏与模式切换正交：两模式共用布局、零撤销记录、正文可编辑（#53）', async () => {
+    // untouched.md 无任何前序用例编辑：全新面板 + 干净撤销栈基线
+    await openWithEditor('untouched.md')
+    await waitSessionReady('untouched.md')
+    const uri = wsUri('untouched.md').toString()
+    const baseline = '未触碰文档\n保持原样\n'
+    const doc = await vscode.workspace.openTextDocument(wsUri('untouched.md'))
+    assert(doc.getText() === baseline, 'untouched.md 应为 fixture 原文')
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+
+    // live 下展开侧栏
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('untouched.md', (v) => v.sidebar?.open === true)
+
+    // 切到 reading：侧栏保持展开且同样真实绘制（两模式共用同一布局）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const readingOpen = await waitViewState('untouched.md',
+      (v) => v.viewMode === 'reading' && v.sidebar?.open === true)
+    assert(readingOpen.sidebar!.sidebarToolbarPainted === true,
+      `阅读模式侧栏应同样展开绘制（${JSON.stringify(readingOpen.sidebar)}）`)
+    assert((readingOpen.readingBlockCount ?? 0) > 0, '阅读模式正文应正常渲染（块数 > 0）')
+
+    // 切回 live：侧栏状态不因模式切换丢失
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'live' })
+    const liveOpen = await waitViewState('untouched.md',
+      (v) => v.viewMode === 'live' && v.sidebar?.open === true)
+    assert(liveOpen.sidebar!.sidebarToolbarPainted === true, '切回 live 后侧栏应仍展开绘制')
+
+    // 模式与侧栏切换全程零写回、零版本推进（不产生文档撤销记录）
+    const afterSwitches = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterSwitches.version === before.version,
+      `切换模式/侧栏不得推进文档版本（${before.version} → ${afterSwitches.version}）`)
+    assert(afterSwitches.appliedEdits === before.appliedEdits, '切换不得产生写回')
+    assert(doc.getText() === baseline, '切换不得修改文档内容')
+
+    // 展开态下正文仍可编辑（布局不影响输入链路）：一笔编辑经标准链路写回
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'sync.test.edit',
+      offset: 0,
+      text: '# ',
+    })
+    await poll('展开态编辑写入权威', () => (doc.getText() === `# ${baseline}` ? true : undefined))
+
+    // 撤销一次即回原文：撤销栈里只有这笔编辑（侧栏/模式切换未入栈）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('撤销一次还原', () => (doc.getText() === baseline ? true : undefined))
+    if (doc.isDirty) {
+      await doc.save()
+    }
+
+    // 收起侧栏收尾（避免跨用例状态泄漏）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('untouched.md', (v) => v.sidebar?.open === false)
   }],
 ]

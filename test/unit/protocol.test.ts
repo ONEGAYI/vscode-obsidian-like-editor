@@ -243,6 +243,64 @@ describe('isWebviewToHost', () => {
     expect(isWebviewToHost(base)).toBe(true)
   })
 
+  it('view.state 的 sidebar 观测（#53）：合法样本接受、字段非法拒绝', () => {
+    const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
+    // 合法：open 布尔；绘制命中布尔；线宽/名称字符串或 null；宽度非负数或 null
+    expect(
+      isWebviewToHost({
+        ...base,
+        sidebar: {
+          open: true,
+          sidebarToolbarPainted: true,
+          togglePainted: true,
+          settingsPainted: true,
+          toggleBarStrokeWidth: '3px',
+          toggleFrameStrokeWidth: '1.5px',
+          mainWidthPx: 620,
+          sidebarWidthPx: 280,
+          toggleAriaLabel: '收起右侧栏',
+          settingsAriaLabel: '打开 Vsidian 设置',
+        },
+      }),
+    ).toBe(true)
+    expect(
+      isWebviewToHost({
+        ...base,
+        sidebar: {
+          open: false,
+          sidebarToolbarPainted: false,
+          togglePainted: false,
+          settingsPainted: false,
+          toggleBarStrokeWidth: null,
+          toggleFrameStrokeWidth: null,
+          mainWidthPx: null,
+          sidebarWidthPx: null,
+          toggleAriaLabel: null,
+          settingsAriaLabel: null,
+        },
+      }),
+    ).toBe(true)
+    // 非法：open 非布尔 / 命中字段非布尔 / 线宽非字符串非 null / 宽度负数
+    expect(isWebviewToHost({ ...base, sidebar: { open: 1 } })).toBe(false)
+    expect(
+      isWebviewToHost({ ...base, sidebar: { open: true, togglePainted: 'yes' } }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({ ...base, sidebar: { open: true, toggleBarStrokeWidth: 3 } }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({ ...base, sidebar: { open: true, mainWidthPx: -5 } }),
+    ).toBe(false)
+    // 缺省合法（向后兼容：侧栏观测未装配的旧 webview）
+    expect(isWebviewToHost(base)).toBe(true)
+  })
+
+  it('sidebar.test.click 测试钩子消息校验（#53）', () => {
+    expect(isHostToWebview({ kind: 'sidebar.test.click' })).toBe(true)
+    expect(isHostToWebview({ kind: 'sidebar.test.click', extra: 1 })).toBe(true)
+    expect(isHostToWebview({ kind: 'sidebar.test.clickx' })).toBe(false)
+  })
+
   it('表格绘制样本校验：可见性和边框计算值类型必须可信', () => {
     const base = { kind: 'view.state', text: '| A |', docLength: 5, lineCount: 1, renderedLines: 1 }
     const table = {

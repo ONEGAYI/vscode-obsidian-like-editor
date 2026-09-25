@@ -83,8 +83,8 @@ describe('设置快照拉取与缓存（#33）', () => {
   })
 })
 
-describe('工具栏设置入口（#33）', () => {
-  it('工具栏含「设置」按钮，点击发送 settings.open', () => {
+describe('工具栏设置入口（#33；#53 图标化）', () => {
+  it('工具栏含齿轮设置按钮（内联 SVG + 可访问名称），点击发送 settings.open', () => {
     const { bridge, sent } = makeBridge()
     const parent = document.createElement('div')
     const c = new WebviewSyncController(bridge)
@@ -93,20 +93,26 @@ describe('工具栏设置入口（#33）', () => {
       '.vsidian-toolbar button.vsidian-settings-toggle',
     )
     expect(btn, '工具栏应含 vsidian-settings-toggle 按钮').toBeTruthy()
-    expect(btn!.textContent).toContain('设置')
+    // #53 起设置入口图标化为齿轮：无文字、有内联 SVG 与可访问名称
+    expect(btn!.querySelector('svg'), '设置按钮应为内联 SVG 齿轮图标').toBeTruthy()
+    expect(btn!.textContent).not.toContain('设置')
+    expect(btn!.getAttribute('aria-label')).toBe('打开 Vsidian 设置')
+    expect(btn!.getAttribute('title')).toBe('打开 Vsidian 设置')
     btn!.click()
     expect(sent).toContainEqual({ kind: 'settings.open' })
   })
 
-  it('模式按钮已迁移，工具栏仅剩设置入口（#38 合并语义）', () => {
+  it('模式按钮已迁移，工具栏仅剩设置与侧栏切换入口（#38/#53 合并语义）', () => {
     // #33 基线上工具栏并存模式按钮与设置按钮；#38 将模式切换迁移至编辑器
-    // 标题栏三态命令，工具栏只保留设置按钮（both-mains 融合后的契约）
+    // 标题栏三态命令；#53 增设右侧栏切换按钮——工具栏恰两入口，无模式按钮
     const { bridge } = makeBridge()
     const parent = document.createElement('div')
     const c = new WebviewSyncController(bridge)
     c.mount(parent)
     expect(parent.querySelector('.vsidian-toolbar button.vsidian-settings-toggle')).toBeTruthy()
+    expect(parent.querySelector('.vsidian-toolbar button.vsidian-sidebar-toggle')).toBeTruthy()
     expect(parent.querySelector('.vsidian-toolbar button.vsidian-mode-toggle')).toBeNull()
+    expect(parent.querySelectorAll('.vsidian-toolbar button')).toHaveLength(2)
   })
 })
 
