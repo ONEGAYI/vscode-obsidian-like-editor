@@ -187,6 +187,33 @@ describe('SVG id 唯一性：缓存复用的克隆重写', () => {
     }
   })
 
+  it('多值 id 引用属性（aria-labelledby 双值，D-6）：按空白分词逐段改写，各段指向现存 id', async () => {
+    const svgMulti = (code: string) =>
+      `<svg id="mmd-root" xmlns="http://www.w3.org/2000/svg">` +
+      `<g id="mmd-a"><g id="mmd-b"><text>${code}</text></g></g>` +
+      `<path aria-labelledby="mmd-root mmd-a mmd-b"></path></svg>`
+    __setMermaidApiForTest(makeApi(svgMulti))
+    const a = makeContainer()
+    const b = makeContainer()
+    renderMermaidInto(a, 'A-->B')
+    await settle()
+    renderMermaidInto(b, 'A-->B')
+    await settle()
+    const ids = [
+      ...a.querySelectorAll('[id]'),
+      ...b.querySelectorAll('[id]'),
+    ].map((el) => el.id)
+    expect(new Set(ids).size).toBe(ids.length) // id 值本身照常改写唯一
+    for (const p of [...a.querySelectorAll('[aria-labelledby]'), ...b.querySelectorAll('[aria-labelledby]')]) {
+      const refs = (p.getAttribute('aria-labelledby') ?? '').split(/\s+/).filter((s) => s !== '')
+      expect(refs, p.outerHTML).toHaveLength(3)
+      for (const ref of refs) {
+        // 多值引用的每一段都指向文档内现存 id（克隆后不残留旧前缀）
+        expect(document.getElementById(ref), p.outerHTML).not.toBeNull()
+      }
+    }
+  })
+
   it('extractSvgIds：收集 svg 内全部 id 属性值', () => {
     const ids = extractSvgIds(SAMPLE_SVG('x'))
     expect(ids.sort()).toEqual(['mmd-arrow', 'mmd-node', 'mmd-root'])
@@ -217,6 +244,36 @@ describe('主题联动', () => {
     await settle()
     expect(api.configs).toHaveLength(0)
     expect(api.rendered).toHaveLength(0)
+  })
+
+  it('主题切换与在途渲染竞态（D-1）：在途 run 的结果不写旧主题缓存，容器最终为新主题 SVG', async () => {
+    // 复现路径：run1 在途时切换主题 → 清缓存并重发 run2 → run1 完成
+    // 写回旧主题缓存条目 → run2 命中旧缓存 → 容器永久滞留旧主题。
+    // 修复后 run1 的结果按主题代次丢弃，run2 真实以新主题渲染。
+    let dark = false
+    let releaseFirst: (() => void) | null = null
+    const api: MermaidApi = {
+      initialize() {},
+      render(_id, code) {
+        if (!dark) {
+          return new Promise((resolve) => {
+            releaseFirst = () => resolve({ svg: `<svg id="m"><title>light-${code}</title></svg>` })
+          })
+        }
+        return Promise.resolve({ svg: `<svg id="m"><title>dark-${code}</title></svg>` })
+      },
+    }
+    __setMermaidApiForTest(api)
+    const el = makeContainer()
+    renderMermaidInto(el, 'A-->B')
+    await settle()
+    expect(releaseFirst).not.toBeNull() // 旧主题 render 在途
+    dark = true
+    setMermaidDarkTheme(true) // 在途时切换：清缓存并重发（run2 入队）
+    releaseFirst!() // run1 完成：代次已过 → 应用后不写缓存
+    await settle(12)
+    // run2 未命中旧主题缓存 → 真实以新主题渲染覆盖容器
+    expect(el.querySelector('title')?.textContent).toBe('dark-A-->B')
   })
 })
 
@@ -260,5 +317,31 @@ describe('懒加载：URI 注入链路', () => {
     __resetMermaidRenderStateForTest()
     expect(await ensureMermaidApi()).toBeNull()
     expect(document.head.querySelector('script')).toBeNull()
+  })
+
+  it('脚本加载失败后置失败终态：不重复注入 script、后续渲染走降级（D-5）', async () => {
+    ;(globalThis as Record<string, unknown>)['__vsidianMermaidUri'] = 'https://res.invalid/mermaid.js'
+    try {
+      const first = ensureMermaidApi()
+      await settle(2)
+      const script = document.head.querySelector<HTMLScriptElement>(
+        'script[src="https://res.invalid/mermaid.js"]')
+      expect(script).not.toBeNull()
+      script!.onerror?.(new Event('error') as ErrorEvent)
+      expect(await first).toBeNull()
+      // 失败后再次请求：置失败终态直接返回 null——不注入第二个 script，
+      // 也不产出依赖真实装载的 pending promise（渲染走降级）
+      const second = ensureMermaidApi()
+      const outcome = await Promise.race([
+        second.then((v) => `resolved:${String(v)}`),
+        new Promise<string>((r) => setTimeout(() => r('pending'), 50)),
+      ])
+      expect(outcome).toBe('resolved:null')
+      expect(
+        document.head.querySelectorAll('script[src="https://res.invalid/mermaid.js"]'),
+      ).toHaveLength(1)
+    } finally {
+      delete (globalThis as Record<string, unknown>)['__vsidianMermaidUri']
+    }
   })
 })

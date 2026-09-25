@@ -24,7 +24,9 @@
 //
 // 主题联动：SVG 的主题样式在渲染时烘焙进内嵌 <style>，明暗切换时清空缓存
 // 并重渲染当前在文档中的全部容器（live widget 与阅读容器共用同一 data 属性
-// 形态，统一扫描）。
+// 形态，统一扫描）。缓存条目携带主题代次戳（themeGen）：在途渲染完成时若
+// 代次已过（渲染期间切换了主题），结果应用到容器但不写缓存——否则后续
+// 渲染会命中旧主题缓存条目，容器永久滞留旧主题（主题竞态修复）。
 import { MERMAID_CLASS_NAMES, MERMAID_CODE_ATTR, MERMAID_STATE_ATTR } from '../shared/mermaid'
 
 /** mermaid API 面（仅本模块消费的能力；真实实现来自懒加载的全局） */
@@ -45,13 +47,18 @@ export const mermaidRenderStats = {
 }
 
 type CacheEntry =
-  | { kind: 'ok'; svg: string; ids: string[] }
-  | { kind: 'error'; message: string }
+  | { kind: 'ok'; svg: string; ids: string[]; gen: number }
+  | { kind: 'error'; message: string; gen: number }
 
 let api: MermaidApi | null = null
 let loadPromise: Promise<MermaidApi | null> | null = null
+/** 注入失败终态：script onerror（或装载后全局缺失）后不再重试注入——
+ *  webview 内资源 URI 固定，重注入只会堆积失败 script，渲染统一走降级 */
+let loadFailed = false
 let initialized = false
 let dark = false
+/** 主题代次戳：setMermaidDarkTheme 递增；缓存条目记录写入时的代次 */
+let themeGen = 0
 let renderSeq = 0
 let instanceSeq = 0
 const cache = new Map<string, CacheEntry>()
@@ -87,7 +94,8 @@ function initializeMermaid(): void {
 }
 
 /** 确保 mermaid API 可用：已注入直取；否则按需注入 <script>（真实网络装
- *  载由浏览器环境完成；失败/无 URI 返回 null，调用方降级为错误态） */
+ *  载由浏览器环境完成；失败/无 URI 返回 null，调用方降级为错误态）。
+ *  注入失败置终态不再重试（资源 URI 固定，重试无意义；渲染降级） */
 export function ensureMermaidApi(): Promise<MermaidApi | null> {
   if (api) {
     return Promise.resolve(api)
@@ -96,6 +104,9 @@ export function ensureMermaidApi(): Promise<MermaidApi | null> {
   if (direct) {
     api = direct
     return Promise.resolve(api)
+  }
+  if (loadFailed) {
+    return Promise.resolve(null)
   }
   if (loadPromise) {
     return loadPromise
@@ -112,11 +123,16 @@ export function ensureMermaidApi(): Promise<MermaidApi | null> {
       const loaded = mermaidGlobal()
       if (loaded) {
         api = loaded
+      } else {
+        // 脚本装载完成但全局未挂上（产物内容异常）：同样置终态，
+        // 重注入同一 URI 不会改变结果
+        loadFailed = true
       }
-      loadPromise = api ? loadPromise : null
+      loadPromise = null
       resolve(api)
     }
     script.onerror = () => {
+      loadFailed = true
       loadPromise = null
       resolve(null)
     }
@@ -158,8 +174,15 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+/** 已知的多值 id 引用属性（属性值是以空白分隔的 id 引用列表，如
+ *  aria-labelledby="a b"）——单值的 ="id" 整体替换不命中它们，需按空白
+ *  分词逐段改写（mermaid 11.12.2 产物实测仅单值，此处把能力补齐并防
+ *  未来版本引入多值形态） */
+const MULTI_REF_ATTRS = ['aria-labelledby', 'aria-describedby'] as const
+
 /** 克隆改写：属性值（="id"）与引用（#id，后随非 id 字符为边界）同步替换。
- *  键按长度降序处理，防前缀 id 的引用边界歧义。 */
+ *  键按长度降序处理，防前缀 id 的引用边界歧义。多值引用属性按空白分词
+ *  逐段替换（保持原空白分隔形态）。 */
 function rewriteSvgIds(svg: string, mapping: Map<string, string>): string {
   let out = svg
   const keys = [...mapping.keys()].sort((a, b) => b.length - a.length)
@@ -168,6 +191,13 @@ function rewriteSvgIds(svg: string, mapping: Map<string, string>): string {
     out = out
       .replaceAll(`="${oldId}"`, `="${newId}"`)
       .replace(new RegExp(`#${escapeRegExp(oldId)}(?![\\w-])`, 'g'), `#${newId}`)
+  }
+  for (const attr of MULTI_REF_ATTRS) {
+    out = out.replace(
+      new RegExp(`(${attr}=")([^"]*)(")`, 'g'),
+      (_m, pre: string, value: string, post: string) =>
+        `${pre}${value.split(/(\s+)/).map((tok) => mapping.get(tok) ?? tok).join('')}${post}`,
+    )
   }
   return out
 }
@@ -201,21 +231,28 @@ function applyEntry(container: HTMLElement, code: string, entry: CacheEntry): vo
 }
 
 function applyUnavailable(container: HTMLElement, code: string): void {
-  applyEntry(container, code, { kind: 'error', message: '图表渲染器不可用（mermaid.js 未能加载）' })
+  applyEntry(container, code, { kind: 'error', message: '图表渲染器不可用（mermaid.js 未能加载）', gen: themeGen })
 }
 
-/** 串行渲染一个源码（缓存优先；未命中入队 render 并写缓存） */
+/** 串行渲染一个源码（缓存优先；未命中入队 render 并写缓存）。
+ *  缓存条目携带主题代次：命中检查对旧代次条目视为未命中；run 完成时
+ *  代次已过（渲染期间切了主题）则结果应用到容器但不写缓存——防止
+ *  主题切换后的重渲染命中旧主题条目（主题竞态）。 */
 function renderCached(target: MermaidApi, code: string): Promise<CacheEntry> {
   const hit = cache.get(code)
-  if (hit) {
+  if (hit && hit.gen === themeGen) {
     mermaidRenderStats.cacheHits += 1
     cache.delete(code)
     cache.set(code, hit) // LRU touch
     return Promise.resolve(hit)
   }
+  if (hit) {
+    cache.delete(code) // 旧代次残留：淘汰后重渲染
+  }
   const run = renderQueue.then(async (): Promise<CacheEntry> => {
+    const startGen = themeGen
     const again = cache.get(code)
-    if (again) {
+    if (again && again.gen === themeGen) {
       mermaidRenderStats.cacheHits += 1
       return again
     }
@@ -226,15 +263,19 @@ function renderCached(target: MermaidApi, code: string): Promise<CacheEntry> {
     mermaidRenderStats.renders += 1
     try {
       const { svg } = await target.render(`vsidian-mmd-r${renderSeq}`, code)
-      const entry: CacheEntry = { kind: 'ok', svg, ids: extractSvgIds(svg) }
-      cache.set(code, entry)
-      evictCache()
+      const entry: CacheEntry = { kind: 'ok', svg, ids: extractSvgIds(svg), gen: startGen }
+      if (startGen === themeGen) {
+        cache.set(code, entry)
+        evictCache()
+      }
       return entry
     } catch (e) {
       mermaidRenderStats.errors += 1
-      const entry: CacheEntry = { kind: 'error', message: errorMessage(e) }
-      cache.set(code, entry)
-      evictCache()
+      const entry: CacheEntry = { kind: 'error', message: errorMessage(e), gen: startGen }
+      if (startGen === themeGen) {
+        cache.set(code, entry)
+        evictCache()
+      }
       return entry
     }
   })
@@ -284,14 +325,15 @@ export function renderMermaidIn(root: ParentNode): void {
   }
 }
 
-/** 主题联动：切换明暗时以新主题重新 initialize、清空缓存并重渲染当前
- *  在文档中的全部容器（等值跳过；真实切换由 syncController.applyHostTheme
- *  驱动）。 */
+/** 主题联动：切换明暗时递增主题代次、以新主题重新 initialize、清空缓存
+ *  并重渲染当前在文档中的全部容器（等值跳过；真实切换由
+ *  syncController.applyHostTheme 驱动）。 */
 export function setMermaidDarkTheme(next: boolean): void {
   if (next === dark) {
     return
   }
   dark = next
+  themeGen += 1
   if (api) {
     initializeMermaid()
   } else {
@@ -321,14 +363,17 @@ export function mermaidDarkTheme(): boolean {
 export function __setMermaidApiForTest(mock: MermaidApi | null): void {
   api = mock
   loadPromise = null
+  loadFailed = false
   initialized = false
 }
 
 export function __resetMermaidRenderStateForTest(): void {
   api = null
   loadPromise = null
+  loadFailed = false
   initialized = false
   dark = false
+  themeGen = 0
   renderSeq = 0
   instanceSeq = 0
   renderQueue = Promise.resolve()
