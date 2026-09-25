@@ -82,6 +82,22 @@ describe('控制域几何：子树与同级组（跨级挂靠语义）', () => {
     expect(outlineSubtreeIndices(items, 7)).toEqual([7])
   })
 
+  it('同名标题逐项独立（不合并；子树与同级按文档序索引区分）', () => {
+    const dup = Text.of(['# 同名', '', '## 同名', '', '正文', '', '## 同名', '', '# 同名', ''].join('\n').split('\n'))
+    const dupItems = extractOutline(dup)
+    expect(dupItems.map((i) => [i.level, i.line])).toEqual([[1, 1], [2, 3], [2, 7], [1, 9]])
+    // 第二个同名 H2（index 2）的控制域不含第一个（索引序天然区分）
+    expect(outlineSubtreeIndices(dupItems, 2)).toEqual([2])
+    expect(outlineSectionLineRange(dupItems, 2, dup.lines)).toEqual({ startLine: 7, endLine: 8 })
+    // 第一个 H1 的子树 = 前两个同名 H2；末个同名 H1 是顶层独立段
+    expect(outlineSubtreeIndices(dupItems, 0)).toEqual([0, 1, 2])
+    expect(outlineSectionLineRange(dupItems, 3, dup.lines)).toEqual({ startLine: 9, endLine: dup.lines })
+    // 删除第二个同名 H2：只删其段，第一个同名段完整保留
+    const change = outlineDeleteChange(dup, dupItems, 2)!
+    const after = dup.toString().slice(0, change.offset) + change.text + dup.toString().slice(change.offset + change.length)
+    expect(after.split('\n').filter((l) => l === '## 同名')).toHaveLength(1)
+  })
+
   it('子树越界与空序列防御：返回空数组', () => {
     expect(outlineSubtreeIndices([], 0)).toEqual([])
     expect(outlineSubtreeIndices(items, -1)).toEqual([])
