@@ -1156,6 +1156,12 @@ export class WebviewSyncController {
    * 暂停/暂缓态每笔输入立即刷新宿主快照。两种状态的输入不在宿主 pending
    * 内，延后发送会在快速关闭或断连时留下无法取回的窗口。正常输入仍走
    * 增量 edit.request，不发送全文。
+   *
+   * #49 唯一例外：组合期间的暂缓输入不逐笔上报（见 recordLocalChangeSet
+   * 暂缓分支注释）。暂停态（enterSuspended 进入时与暂停中的每笔输入）不受
+   * 该例外影响，仍立即快照——暂停非高频路径，且组合中进入暂停时本地文本
+   * 已脱离正常出站链路（inFlight/deferredLocal 均被清空），快照是此时唯一
+   * 的取回通道，不放宽。
    */
   private reportConflictSnapshot(): void {
     if (!this.sessionId || (!this.suspended && !this.deferredLocal)) {
@@ -2002,7 +2008,16 @@ export class WebviewSyncController {
         ? this.deferredLocal.compose(changeSet)
         : changeSet
       this.unconfirmed = this.unconfirmed ? this.unconfirmed.compose(changeSet) : changeSet
-      this.reportConflictSnapshot()
+      // 组合期间不逐笔上报全文快照（#49）：IME 候选更新从第二笔起必然触碰
+      // 未确认区间进入本分支，逐笔 conflict.report 意味着大文档下每个候选
+      // 都全文序列化 + postMessage。组合结束 flush 后 deferredLocal 经
+      // sendDeferredLocal 以单笔 edit.request 出站、文本进入宿主权威文档，
+      // 取回语义由 VSCode 文本管线兜底；丢失窗口仅限组合进行中（候选未
+      // 上屏）快速关闭/断连，与 VSCode 原生编辑器同类行为一致。组合外
+      // （composing === false）的暂缓输入保持逐笔快照，取回兜底不放宽。
+      if (!this.composing) {
+        this.reportConflictSnapshot()
+      }
       return
     }
     const baseChanges = this.toBaseChanges(changes)
