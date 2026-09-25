@@ -9,8 +9,12 @@ import { chromium } from 'playwright'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const bundle = path.join(root, 'out/test/browser/tableCaret.js')
-// #59 公式依赖：katex.min.css 经 import 进入 bundle，需字体 loader（与
-// esbuild.mjs 的 webviewBase 同口径；裁剪插件去掉 woff/ttf 回退引用）
+// #59 公式依赖（与 esbuild.mjs 生产构建同口径）：
+// - 裸导入 `katex` 重定向到官方预压缩 UMD（dist/katex.min.js，约 272 KB），
+//   与 esbuild 的 ESM 源打包相比省 500 KB+；
+// - fixture 经 `import 'katex/dist/katex.min.css'` 引入 KaTeX 样式，本插件
+//   裁掉 css 里的 woff/ttf 字体回退引用（只留 woff2，chrome/chromium 足够），
+//   字体文件由 loader 产物化到 out/test/browser/assets/。
 const katexFontStrip = {
   name: 'katex-font-fallback-strip',
   setup(b) {
@@ -21,9 +25,17 @@ const katexFontStrip = {
     }))
   },
 }
+const katexMinJs = {
+  name: 'katex-min-js',
+  setup(b) {
+    b.onResolve({ filter: /^katex$/ }, () => ({
+      path: path.resolve(root, 'node_modules/katex/dist/katex.min.js'),
+    }))
+  },
+}
 await build({ entryPoints: [path.join(root, 'test/browser/tableCaretFixture.ts')],
   bundle: true, outfile: bundle, format: 'iife',
-  loader: { '.woff2': 'file' }, assetNames: 'assets/[name]', plugins: [katexFontStrip] })
+  loader: { '.woff2': 'file' }, assetNames: 'assets/[name]', plugins: [katexFontStrip, katexMinJs] })
 const browser = await chromium.launch({ headless: true,
   channel: process.env.VSIDIAN_TEST_BROWSER_CHANNEL || undefined })
 let passed = 0
@@ -405,6 +417,22 @@ try {
         assert.equal(left.source, 0, '离开公式后不得残留源码态')
         assert.equal(left.rendered, initial.rendered, '离开后渲染态恢复')
         assert.equal(left.text, source, '切换显隐不得改写源文')
+        // A9：真实鼠标点击渲染态公式元素 → 进入源码态（光标落在公式范围内、
+        // 该公式渲染态消失），光标再离开恢复渲染——locate 移动光标之外补充
+        // page.mouse 原生路径
+        const renderedEl = page.locator('.cm-content .vsidian-math').first()
+        await renderedEl.click()
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+        const clicked = await mathState()
+        assert(clicked.source >= 1, `真实鼠标点击渲染态公式应显源码: ${JSON.stringify(clicked)}`)
+        assert.equal(clicked.rendered + clicked.source, initial.rendered,
+          `点击后公式总数不变（一显一隐切换）: ${JSON.stringify(clicked)}`)
+        assert(clicked.head >= inlineAt && clicked.head <= inlineAt + '$x^2$'.length,
+          `点击后光标应落在公式范围内: ${JSON.stringify(clicked)}`)
+        await locate(0)
+        const afterClick = await mathState()
+        assert.equal(afterClick.source, 0, '鼠标进入的源码态同样随光标离开恢复')
+        assert.equal(afterClick.text, source, '鼠标路径不得改写源文')
       } else if (scenario === 'inline-edit') {
         await focusEditor()
         await locate(inlineAt + 4) // 光标在 x^2 的 2 后
