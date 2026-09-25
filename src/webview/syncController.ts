@@ -111,6 +111,12 @@ import {
   outlineLevelChanges,
   outlineRenameChange,
 } from './outlineSection'
+import {
+  outlineDropAllowed,
+  outlineDropPositionAt,
+  outlineMovePlan,
+  type OutlineDropPosition,
+} from './outlineDrag'
 import { locateOutlineIndex } from './outlineLocate'
 import { resolveStaleTaskToggle } from './taskToggle'
 import { VirtualReadingView } from './readingVirtualView'
@@ -456,6 +462,20 @@ export class WebviewSyncController {
   private outlineMenuDismissKey: ((e: KeyboardEvent) => void) | undefined
   /** 重命名编辑态的条目索引（null = 无编辑态；条目内容区被 input 替换） */
   private outlineRenameIndex: number | null = null
+  /** #70 拖拽会话态：条目 pointerdown 时记录（源索引 + doc 锚点快照），
+   *  超阈值 pointermove 进入拖拽态（moved）并计算落点；pointerup 执行
+   *  移动计划写回。null = 无拖拽 */
+  private outlineDragState: {
+    fromIndex: number
+    doc: Text
+    startX: number
+    startY: number
+    moved: boolean
+    targetIndex: number | null
+    position: OutlineDropPosition | null
+  } | null = null
+  /** #70 拖拽收尾后吞一次面板 click（位移超阈值的拖拽后补发 click 不触发跳转） */
+  private outlineSuppressClick = false
 
   // ---- 查找会话状态（#14）----
   /** 查找是纯只读视图状态：不写 TextDocument、不入撤销栈、零出站消息。
@@ -763,6 +783,8 @@ export class WebviewSyncController {
     // #69：菜单浮层与重命名编辑态随卸载退出（document 监听一并摘除）
     this.closeOutlineMenu()
     this.outlineRenameIndex = null
+    // #70：拖拽会话随卸载退出（document 监听一并摘除）
+    this.cancelOutlineDrag()
     this.sidebarEl?.remove()
     this.sidebarEl = undefined
     this.mainEl?.remove()
@@ -1020,6 +1042,12 @@ export class WebviewSyncController {
             bubbles: true, cancelable: true,
           }))
         }
+        break
+      }
+      case 'outline.test.drag': {
+        // 测试钩子（#70）：真实条目 pointer 事件序列驱动拖拽链路（与用户
+        // 拖拽同一处理器）；宿主测试无法向 webview 派发真实鼠标事件
+        this.runOutlineDragTest(message.from, message.to, message.position, message.action)
         break
       }
       case 'table.test.key': {
@@ -2021,6 +2049,12 @@ export class WebviewSyncController {
     // 同序渲染，DOM 序号即数据索引）。点击按目标分流：箭头 = 单条折叠/
     // 展开（纯视图），文字 = 纯视图定位跳转（零写回、零出站、不入撤销栈）
     panel.addEventListener('click', (event) => {
+      // #70：拖拽收尾后浏览器补发的 click 不触发跳转/折叠（只吞一次）
+      if (this.outlineSuppressClick) {
+        this.outlineSuppressClick = false
+        event.stopPropagation()
+        return
+      }
       const target = event.target as HTMLElement | null
       const chevron = target?.closest?.(`.${OUTLINE_CLASS_NAMES.chevron}`)
       if (chevron instanceof HTMLElement && panel.contains(chevron)) {
@@ -2062,6 +2096,49 @@ export class WebviewSyncController {
       if (index >= 0) {
         this.openOutlineMenu(index, event.clientX, event.clientY)
       }
+    })
+    // #70 拖拽排序：条目 pointerdown 委托（与 click/contextmenu 同模式——
+    // 条目 DOM 重建不丢监听）。位移超 4px 才进入拖拽态（点击/箭头操作不受
+    // 扰动）；启动即记 doc 锚点快照并校准数据（条目索引与文档坐标对齐）。
+    // 命中隐藏条目不启动（折叠遮蔽/搜索过滤的条目不可拖）
+    panel.addEventListener('pointerdown', (event) => {
+      if (this.outlineDragState || this.view === undefined) {
+        return
+      }
+      if (event.pointerType === 'mouse' && event.button !== 0) {
+        return // 仅主键拖拽；右键走 contextmenu
+      }
+      const target = event.target as HTMLElement | null
+      const itemEl = target?.closest?.(`.${OUTLINE_CLASS_NAMES.item}`)
+      if (!(itemEl instanceof HTMLElement) || !panel.contains(itemEl)) {
+        return
+      }
+      if (itemEl.classList.contains(OUTLINE_CLASS_NAMES.hidden)) {
+        return
+      }
+      const index = Array.from(
+        panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`),
+      ).indexOf(itemEl)
+      if (index < 0) {
+        return
+      }
+      this.outlineEnsureFresh() // 数据与条目 DOM 对齐（拖拽锚点前提）
+      if (!panel.contains(itemEl)) {
+        return // 校准触发了重建：按下时的元素已脱挂，放弃启动（防错位）
+      }
+      this.outlineDragState = {
+        fromIndex: index,
+        doc: this.view.state.doc,
+        startX: event.clientX,
+        startY: event.clientY,
+        moved: false,
+        targetIndex: null,
+        position: null,
+      }
+      document.addEventListener('pointermove', this.onOutlineDragMove)
+      document.addEventListener('pointerup', this.onOutlineDragEnd)
+      document.addEventListener('pointercancel', this.onOutlineDragCancel)
+      document.addEventListener('keydown', this.onOutlineDragEscape, true)
     })
     this.outlineToggleBtn = toggle
     this.outlinePanelEl = panel
@@ -2145,6 +2222,8 @@ export class WebviewSyncController {
       // #69：侧栏收起时浮层（菜单）与重命名编辑态随之退出
       this.closeOutlineMenu()
       this.cancelOutlineRename()
+      // #70：拖拽会话随之退出（面板不可见，落点失去意义）
+      this.cancelOutlineDrag()
     }
   }
 
@@ -2181,6 +2260,8 @@ export class WebviewSyncController {
       // #69：面板关闭时浮层（菜单）与重命名编辑态随之退出
       this.closeOutlineMenu()
       this.cancelOutlineRename()
+      // #70：拖拽会话随之退出（面板不可见，落点失去意义）
+      this.cancelOutlineDrag()
     }
   }
 
@@ -2276,6 +2357,9 @@ export class WebviewSyncController {
       // （重命名提交路径已在 finishOutlineRename 先清状态，此处无重入）
       this.closeOutlineMenu()
       this.outlineRenameIndex = null
+      // #70：条目 DOM 重建使拖拽锚点与落点指示过期——取消拖拽（零写回；
+      // 写回路径自身即时 ensureFresh 时序列未变不进此分支，拖拽不被误杀）
+      this.cancelOutlineDrag()
       // #68 搜索态：重建后按当前词条重算过滤（新序列的命中链并入展开集）
       if (this.outlineSearchState !== null) {
         this.applyOutlineSearch()
@@ -2614,6 +2698,183 @@ export class WebviewSyncController {
     renderOutlineItems(panel, this.outlineItems, this.outlineFacts.hasChildren)
     this.applyOutlineCollapseDom()
     this.applyOutlineHighlight()
+  }
+
+  // ---- 大纲拖拽排序（#70）----
+  // 移动原子 = 控制域（outlineDrag.ts 的移动计划纯函数单一事实源）；一次
+  // 拖拽 = 一次 CM6 事务 dispatch（applyOutlineEdits，单笔 edit.request =
+  // 宿主撤销一次），写后即时 ensureFresh（折叠/搜索/高亮随 #67 迁移与
+  // #68 重算自动存活）。交互链路：条目 pointerdown 记锚点 → 超阈值
+  // pointermove 进入拖拽态并逐次计算落点（三态命中 + 有效性）→ pointerup
+  // 写回 / Esc·pointercancel 取消。落点指示是纯类切换（dragging 源条目
+  // 弱化 + drop-before/after 插入线 + drop-inside 包裹高亮），拖拽期间
+  // 条目 DOM 不重建（锚点防御兜底）。不可见条目（折叠遮蔽/搜索过滤）
+  // 不构成合法落点——用户看不到的位置不构成拖拽意图。
+
+  /** 拖拽 pointermove：超阈值进入拖拽态；计算落点并施加指示类。
+   *  命中目标优先取事件目标链（合成事件路径），真实布局回退
+   *  elementFromPoint（指针物理位置） */
+  private readonly onOutlineDragMove = (event: PointerEvent): void => {
+    const drag = this.outlineDragState
+    const panel = this.outlinePanelEl
+    if (!drag || !panel) {
+      return
+    }
+    if (!drag.moved) {
+      if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 4) {
+        return
+      }
+      drag.moved = true
+    }
+    const nodes = panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)
+    for (const el of nodes) {
+      el.classList.toggle(OUTLINE_CLASS_NAMES.dragging, el === nodes[drag.fromIndex])
+      el.classList.remove(
+        OUTLINE_CLASS_NAMES.dropBefore,
+        OUTLINE_CLASS_NAMES.dropAfter,
+        OUTLINE_CLASS_NAMES.dropInside,
+      )
+    }
+    drag.targetIndex = null
+    drag.position = null
+    const hit = (event.target as Element | null)?.closest?.(`.${OUTLINE_CLASS_NAMES.item}`)
+      ?? document.elementFromPoint?.(event.clientX, event.clientY)?.closest(`.${OUTLINE_CLASS_NAMES.item}`)
+    if (!(hit instanceof HTMLElement) || !panel.contains(hit)) {
+      return
+    }
+    if (hit.classList.contains(OUTLINE_CLASS_NAMES.hidden)) {
+      return // 不可见条目不作为落点（口径见区块头）
+    }
+    const index = Array.from(nodes).indexOf(hit)
+    if (index < 0 || !outlineDropAllowed(this.outlineItems, drag.fromIndex, index)) {
+      return // 拖入自身控制域内部：无有效落点（不显示指示、drop 无写回）
+    }
+    const rect = hit.getBoundingClientRect()
+    if (rect.height <= 0) {
+      return // 无布局环境（防御）：几何不可知，不构成落点
+    }
+    const position = outlineDropPositionAt(rect.top, rect.height, event.clientY)
+    drag.targetIndex = index
+    drag.position = position
+    hit.classList.add(
+      position === 'before' ? OUTLINE_CLASS_NAMES.dropBefore
+        : position === 'after' ? OUTLINE_CLASS_NAMES.dropAfter
+          : OUTLINE_CLASS_NAMES.dropInside,
+    )
+  }
+
+  /** 拖拽 pointerup：有效落点执行移动计划写回（一次编辑事务）；锚点过期
+   *  （拖拽期间文档被改写）放弃。收尾后吞一次补发 click */
+  private readonly onOutlineDragEnd = (): void => {
+    const drag = this.outlineDragState
+    if (!drag) {
+      return
+    }
+    const perform = drag.moved && drag.targetIndex !== null && drag.position !== null
+    const { fromIndex, targetIndex, position, doc: snapshot } = drag
+    this.cancelOutlineDrag()
+    if (!perform) {
+      return
+    }
+    this.outlineSuppressClick = true
+    const view = this.view
+    // 锚点防御（#69 菜单同思路）：拖拽期间 doc 已变则索引与坐标失效
+    if (!view || view.state.doc !== snapshot) {
+      return
+    }
+    const plan = outlineMovePlan(view.state.doc, this.outlineItems, fromIndex, targetIndex!, position!)
+    if (plan) {
+      this.applyOutlineEdits(plan.changes) // 内部 ensureFresh 即时刷新大纲
+    }
+  }
+
+  /** pointercancel（系统手势接管等）：视作取消，零写回 */
+  private readonly onOutlineDragCancel = (): void => {
+    this.cancelOutlineDrag()
+  }
+
+  /** Esc 取消拖拽（拖拽期间 document capture keydown）：零写回 */
+  private readonly onOutlineDragEscape = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape') {
+      this.cancelOutlineDrag()
+    }
+  }
+
+  /** 结束拖拽会话（幂等）：摘除 document 监听、清指示类与状态 */
+  private cancelOutlineDrag(): void {
+    if (!this.outlineDragState) {
+      return
+    }
+    this.outlineDragState = null
+    document.removeEventListener('pointermove', this.onOutlineDragMove)
+    document.removeEventListener('pointerup', this.onOutlineDragEnd)
+    document.removeEventListener('pointercancel', this.onOutlineDragCancel)
+    document.removeEventListener('keydown', this.onOutlineDragEscape, true)
+    this.clearOutlineDragDom()
+  }
+
+  /** 清拖拽指示类（条目 DOM 全量幂等清除） */
+  private clearOutlineDragDom(): void {
+    const panel = this.outlinePanelEl
+    panel?.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`).forEach((el) => {
+      el.classList.remove(
+        OUTLINE_CLASS_NAMES.dragging,
+        OUTLINE_CLASS_NAMES.dropBefore,
+        OUTLINE_CLASS_NAMES.dropAfter,
+        OUTLINE_CLASS_NAMES.dropInside,
+      )
+    })
+  }
+
+  /** #70 测试钩子驱动真实拖拽链路：向真实条目派发 pointer 事件序列
+   *  （pointerdown → 超阈值 move → 目标三态区域 move），action 决定收尾
+   *  （hover 留悬停态供 probe 观测 / drop 补 pointerup 写回 / escape 按
+   *  Esc 取消）。落点 Y 取目标条目的 12%/50%/88% 分位（25% 容差内稳定
+   *  命中 before/inside/after） */
+  private runOutlineDragTest(
+    from: number,
+    to: number,
+    position: OutlineDropPosition,
+    action: 'hover' | 'drop' | 'escape',
+  ): void {
+    const panel = this.outlinePanelEl
+    if (!panel) {
+      return
+    }
+    // 会话卫生：上一轮 hover 留下的悬停会话先取消（否则 pointerdown 守卫
+    // 拒绝新会话——集成用例连续驱动时必需）
+    if (this.outlineDragState) {
+      this.cancelOutlineDrag()
+    }
+    const nodes = panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)
+    const fromEl = nodes[from]
+    const toEl = nodes[to]
+    if (!fromEl || !toEl) {
+      return
+    }
+    const fromRect = fromEl.getBoundingClientRect()
+    const toRect = toEl.getBoundingClientRect()
+    const yRatio = position === 'before' ? 0.12 : position === 'after' ? 0.88 : 0.5
+    const y = toRect.top + toRect.height * yRatio
+    const fire = (type: string, target: Element, x: number, yy: number): void => {
+      target.dispatchEvent(new MouseEvent(type, {
+        bubbles: true, cancelable: true, clientX: x, clientY: yy,
+      }))
+    }
+    fire('pointerdown', fromEl, fromRect.left + 20, fromRect.top + fromRect.height / 2)
+    // 超阈值 move（起点右下偏移 > 4px，目标链路外先进入拖拽态）
+    fire('pointermove', panel, fromRect.left + 60, fromRect.top + fromRect.height / 2 + 12)
+    fire('pointermove', toEl, toRect.left + 40, y)
+    if (action === 'hover') {
+      return
+    }
+    if (action === 'escape') {
+      document.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Escape', bubbles: true, cancelable: true,
+      }))
+      return
+    }
+    fire('pointerup', toEl, toRect.left + 40, y)
   }
 
   // ---- 大纲定位与常驻高亮（#66）----
@@ -3981,6 +4242,44 @@ export class WebviewSyncController {
       menuPainted: hitPaintedElement(this.outlineMenuEl, this.outlineMenuEl),
       submenuVisible: this.collectOutlineSubmenuVisible(),
       renamingIndex: this.outlineRenameIndex,
+      // #70 拖拽观测：源/落点索引与三态实值（悬停态经 outline.test.drag
+      // action=hover 驱动后采集）+ 落点指示绘制证据
+      draggingIndex: this.outlineDragState?.moved ? this.outlineDragState.fromIndex : null,
+      dropTargetIndex: this.outlineDragState?.targetIndex ?? null,
+      dropPosition: this.outlineDragState?.position ?? null,
+      dropHintPainted: this.collectOutlineDropHintPainted(),
+    }
+  }
+
+  /** #70 落点指示绘制证据：带指示类的条目中心点命中自身（真实布局）且
+   *  computed 插入线（box-shadow）或包裹高亮（outline 非虚线宽 > 0 /
+   *  背景非全透明）任一可读——样式失效时类在而视觉差异不在，此处捕获。
+   *  jsdom 无布局恒 false，真宿主断言见集成 */
+  private collectOutlineDropHintPainted(): boolean {
+    const panel = this.outlinePanelEl
+    if (!panel) {
+      return false
+    }
+    const el = panel.querySelector<HTMLElement>(
+      `.${OUTLINE_CLASS_NAMES.dropBefore}, .${OUTLINE_CLASS_NAMES.dropAfter}, ` +
+      `.${OUTLINE_CLASS_NAMES.dropInside}`,
+    )
+    if (!el || !hitPaintedElement(el, el)) {
+      return false
+    }
+    try {
+      const cs = getComputedStyle(el)
+      if (cs.boxShadow !== '' && cs.boxShadow !== 'none') {
+        return true
+      }
+      const outlineWidth = Number.parseFloat(cs.outlineWidth)
+      if (cs.outlineStyle !== 'none' && cs.outlineStyle !== '' &&
+          Number.isFinite(outlineWidth) && outlineWidth > 0) {
+        return true
+      }
+      return paintedWithVisibleBackground(el)
+    } catch {
+      return false
     }
   }
 

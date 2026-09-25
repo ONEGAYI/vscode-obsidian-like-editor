@@ -134,6 +134,9 @@
 | `.vsidian-outline-nomatch` | #68 无匹配占位（有词条零命中的可读反馈，与「无标题」空态同口径弱化） | 无 | 本项目自有 |
 | `.vsidian-outline-menu`（+ `-item` / `-host` / `-submenu` / `-danger` / `-cue`） | #69 右键菜单浮层（挂侧栏内 absolute；菜单项为 button 键盘可达；子菜单显隐唯一开关是父项宿主的 `:hover`/`:focus-within`；danger 红字标删除） | 无（VSCode 原生上下文菜单为宿主级） | 本项目自有；颜色跟随 `--vscode-menu-*` 变量族 |
 | `.vsidian-outline-rename-input` | #69 重命名行内编辑态输入框（条目内容区被 input 替换，编辑原文含行内标记） | 无 | 本项目自有；VSCode 输入框三变量（前景/背景/边框） |
+| `.vsidian-outline-dragging` | #70 拖动中的源条目（整体半透明弱化，类切换是两态差异唯一来源） | 无 | 本项目自有 |
+| `.vsidian-outline-drop-before` / `.vsidian-outline-drop-after` | #70 目标上/下缘插入线（inset box-shadow 不占布局、不与 located 背景冲突；颜色跟随 `--vscode-focusBorder`） | 无 | 本项目自有 |
+| `.vsidian-outline-drop-inside` | #70 目标包裹高亮（outline 内缩一圈 + 半透明背景，与 located 同变量族——「放入成为子标题」的视觉区分） | 无 | 本项目自有 |
 
 行为边界（非样式映射，随 #65 记录）：
 
@@ -150,6 +153,12 @@
 
 - 搜索纯函数单一事实源在 `src/webview/outlineSearch.ts`：大小写不敏感子串匹配 plainText（剥标记口径，`**粗体**` 输「粗体」命中），不做正则；命中条目与匹配路径祖先保留，其余隐藏（hidden 类与折叠遮蔽共用）；命中链自动并入展开集（只增不减，搜索态手动折叠优先）；进入搜索时快照展开集、清空时原样回放（QO 同款语义），编辑重建时快照随展开集同款迁移，搜索态切档时快照基准同步为档位精确集。
 - 片段级高亮在文本层切分（命中子串跨语义 span 边界时各文本节点内各自成段），mark 生命周期 = 条目渲染级（词条或序列变化随重建消失）；输入即时生效无去抖；located 常驻高亮在搜索态下回退到「折叠可见 ∧ 搜索保留」的最近祖先（链上无可见代表则高亮消失）；跳转到末尾不落光标（live 选区不动、不聚焦，reading 滚到末尾锚点块），双模式零写回；重置三合一 = 清搜索词 + 档位回默认 5 + 清手动折叠。
+
+行为边界（非样式映射，随 #70 记录）：
+
+- 拖拽排序移动计划纯函数单一事实源在 `src/webview/outlineDrag.ts`：移动原子 = 控制域（段尾空行属该域随段搬移，目标接缝可能从空行分隔退化为单换行分隔——Markdown 语义不变）；before/after 对齐目标层级、inside = 目标 level+1（插入点同 after 的段尾，层级差一）；子树递归同步调级逐条 clamp 1..6；一次拖拽 = 一次 CM6 事务（单笔 edit.request = 撤销一次）。
+- 落点三态判定：目标条目内上缘 25% before、下缘 25% after、中部 50% inside；拖入自身控制域内部（含自身、跨级挂靠后代）三态同拒（无指示、零写回）；不可见条目（折叠遮蔽/搜索过滤）不可拖也不构成落点。
+- 交互载体为 pointer 事件（非 HTML5 DnD——Playwright 真实鼠标可直接驱动、Esc 取消可控、与 #43 表格行拖拽同模式）；拖拽实现细节（pointerdown 委托 + document 级监听 + 拖拽后补发 click 吞噬 + 锚点快照防御）在 `syncController` 的 #70 区块。
 
 ## 悬浮提示等既有稳定类（沿用 #4/#5，与 Obsidian 无对应）
 

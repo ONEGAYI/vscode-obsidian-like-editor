@@ -725,6 +725,33 @@ body {
   outline: none;
 }
 
+/* ---- #70 大纲拖拽排序：源条目提示与三态落点指示 ----
+   类切换是两态差异唯一来源（与 located/collapsed 同模式）：
+   - dragging：拖动中的源条目整体弱化（源位置提示——用户看到"这段正在
+     被搬走"），不改变布局（透明度不触发重排）
+   - drop-before / drop-after：目标条目上/下缘插入线（inset box-shadow，
+     不占布局空间、不与 located 背景冲突），颜色跟随 VSCode 焦点变量
+   - drop-inside：目标包裹高亮（outline 内缩一圈 + 半透明背景，与 located
+     同变量族）——「放入成为子标题」的视觉区分 */
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-dragging {
+  opacity: 0.45;
+}
+
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-drop-before {
+  box-shadow: inset 0 2px 0 0 var(--vscode-focusBorder, #4fc1ff);
+}
+
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-drop-after {
+  box-shadow: inset 0 -2px 0 0 var(--vscode-focusBorder, #4fc1ff);
+}
+
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-drop-inside {
+  outline: 1px solid var(--vscode-focusBorder, #4fc1ff);
+  outline-offset: -1px;
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.14));
+  border-radius: 4px;
+}
+
 /* 侧栏顶栏按钮（#54「大纲」）：与主编辑区顶栏图标按钮同形态（透明底、
    悬停高亮跟随 VSCode 变量）。active 态背景高亮的唯一来源是
    outline-active 类规则（非 active 时透明底，两态差异可被集成 computed

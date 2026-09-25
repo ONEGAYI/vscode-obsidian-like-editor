@@ -501,6 +501,14 @@ interface ViewState {
     submenuVisible: boolean
     /** #69 重命名编辑态条目索引（null = 无编辑态） */
     renamingIndex: number | null
+    /** #70 拖拽态源条目索引（null = 无拖拽；仅 moved 后回报） */
+    draggingIndex: number | null
+    /** #70 有效落点目标索引（null = 未悬停或落点无效） */
+    dropTargetIndex: number | null
+    /** #70 落点三态（null = 无有效落点） */
+    dropPosition: 'before' | 'after' | 'inside' | null
+    /** #70 落点指示绘制证据（指示条目中心命中 + 插入线/包裹高亮可读） */
+    dropHintPainted: boolean
   }
 }
 
@@ -5180,5 +5188,208 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // 收起侧栏收尾
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
     await waitViewState('outline-menu.md', (v) => v.sidebar?.open === false)
+  }],
+
+  // ---- #70 大纲拖拽排序 ----
+
+  ['大纲拖拽三态写回：全文对拍、控制域外零变更、单事务撤销（#70）', async () => {
+    // 断言口径：写操作对权威文档生效（doc.getText 全文对拍）+ sessionState 的
+    // appliedEdits 每次拖拽恰好 +1（单笔 edit.request）+ history.request undo
+    // 完整回滚（单事务可一次撤销）。outline.test.drag 驱动真实 pointer 事件
+    // 序列（与用户拖拽同一处理器链）。fixture 条目序：0 甲(H1) 1 乙(H2)
+    // 2 丁(H4,跨级挂乙) 3 丙(H2) 4 戊(H1)；甲的子树含乙丁丙
+    await openWithEditor('outline-drag.md')
+    await waitSessionReady('outline-drag.md')
+    const uri = wsUri('outline-drag.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('outline-drag.md'))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-drag.md',
+      (v) => v.sidebar?.open === true && v.outline?.panelPainted === true && v.outline.items.length === 5)
+    const original = doc.getText()
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    const drag = (from: number, to: number, position: string, action: string): Thenable<unknown> =>
+      vscode.commands.executeCommand(CMD.postToPanel, uri,
+        { kind: 'outline.test.drag', from, to, position, action })
+
+    // before 落点：丁(H4) 拖到丙(H2) 之前 → 对齐 H2
+    await drag(2, 3, 'before', 'drop')
+    const beforeDrop = await waitViewState('outline-drag.md', (v) =>
+      v.outline?.items[2] !== undefined && v.outline.items[2].text === '丁' && v.outline.items[2].level === 2)
+    assert(beforeDrop.outline!.items.map((i) => [i.level, i.text]).map(String).join() ===
+      [[1, '甲'], [2, '乙'], [2, '丁'], [2, '丙'], [1, '戊']].map(String).join(),
+      'before 落点条目序与调级（实际 ' + JSON.stringify(beforeDrop.outline!.items.map((i) => [i.level, i.text])) + '）')
+    assert(doc.getText() === [
+      '---', 'title: 拖拽', '---', '',
+      '# 甲', '甲内容。', '## 乙', '乙内容。', '## 丁', '丁内容。', '## 丙', '丙内容。', '# 戊', '戊内容。',
+    ].join('\n'), 'before 落点全文对拍')
+    let state = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(state.appliedEdits - before.appliedEdits === 1, 'before 落点应为单笔写回')
+    // 撤销一次完整回滚（单事务）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await waitViewState('outline-drag.md', (v) => v.outline?.items[2]?.text === '丁' && v.outline.items[2].level === 4)
+    assert(doc.getText() === original, '单次撤销应完整回滚 before 拖拽')
+
+    // #67 迁移交互：before 拖拽把丁移出乙子树后乙降格为叶（展开键被
+    // safeFilter 丢弃），undo 回滚文本后乙重新成为父节点但键已丢——丁处于
+    // 折叠遮蔽态。重设档位 5 恢复全展开再继续（隐藏条目不可拖是既定口径）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.expandClick', level: 5 })
+    await waitViewState('outline-drag.md', (v) => v.outline?.visibleIndices.length === 5)
+    // inside 落点：丁拖到丙内部 → 降 H3 成为丙的最后子级（物理移到丙段尾）
+    await drag(2, 3, 'inside', 'drop')
+    const insideDrop = await waitViewState('outline-drag.md', (v) =>
+      v.outline?.items[3] !== undefined && v.outline.items[3].text === '丁' && v.outline.items[3].level === 3)
+    assert(doc.getText() === [
+      '---', 'title: 拖拽', '---', '',
+      '# 甲', '甲内容。', '## 乙', '乙内容。', '## 丙', '丙内容。', '### 丁', '丁内容。', '# 戊', '戊内容。',
+    ].join('\n'), 'inside 落点全文对拍')
+    assert(JSON.stringify(insideDrop.outline!.items.map((i) => [i.level, i.text])) ===
+      JSON.stringify([[1, '甲'], [2, '乙'], [2, '丙'], [3, '丁'], [1, '戊']]),
+      'inside 落点条目序与调级')
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await waitViewState('outline-drag.md', (v) => v.outline?.items[3]?.text === '丙')
+    assert(doc.getText() === original, '单次撤销应完整回滚 inside 拖拽')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.expandClick', level: 5 })
+    await waitViewState('outline-drag.md', (v) => v.outline?.visibleIndices.length === 5)
+
+    // after 落点：乙（含跨级子丁）拖到戊之后 → 乙升 H1、丁随行 H3；
+    // 插入点为文档末尾（文末无尾换行 → 搬移段前置换行）
+    await drag(1, 4, 'after', 'drop')
+    const afterDrop = await waitViewState('outline-drag.md', (v) =>
+      v.outline?.items[2] !== undefined && v.outline.items[2].text === '戊')
+    assert(doc.getText() === [
+      '---', 'title: 拖拽', '---', '',
+      '# 甲', '甲内容。', '## 丙', '丙内容。', '# 戊', '戊内容。',
+      '# 乙', '乙内容。', '### 丁', '丁内容。', '',
+    ].join('\n'), 'after 落点全文对拍（子树随行递归调级 + 末尾前置换行）')
+    assert(JSON.stringify(afterDrop.outline!.items.map((i) => [i.level, i.text])) ===
+      JSON.stringify([[1, '甲'], [2, '丙'], [1, '戊'], [1, '乙'], [3, '丁']]),
+      'after 落点条目序与子树递归调级')
+    state = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(state.appliedEdits - before.appliedEdits === 3, '三态拖拽各一笔写回（累计 +3）')
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await waitViewState('outline-drag.md', (v) => v.outline?.items[1]?.text === '乙' && v.outline.items[1].level === 2)
+    assert(doc.getText() === original, '单次撤销应完整回滚 after 拖拽（正文与大纲同步还原）')
+    if (doc.isDirty) {
+      await doc.save()
+    }
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-drag.md', (v) => v.sidebar?.open === false)
+  }],
+
+  ['大纲拖拽无效落点与悬停观测：拒绝零写回、落点指示绘制层证据（#70）', async () => {
+    // 断言口径（视觉层断言必查）：dropHintPainted 是落点指示的中心点命中 +
+    // computed 插入线/包裹高亮可读（样式失效时类在而视觉差异不在）；无效
+    // 落点（拖入自身子树）不显示指示、drop 零写回；Esc 取消零写回
+    await openWithEditor('outline-drag.md')
+    await waitSessionReady('outline-drag.md')
+    const uri = wsUri('outline-drag.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('outline-drag.md'))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-drag.md',
+      (v) => v.sidebar?.open === true && v.outline?.panelPainted === true && v.outline.items.length === 5)
+    const original = doc.getText()
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    // 无效悬停：甲的子树含乙丁丙 → 目标乙（inside）无有效落点
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'outline.test.drag', from: 0, to: 1, position: 'inside', action: 'hover' })
+    const invalidHover = await waitViewState('outline-drag.md', (v) => v.outline?.draggingIndex === 0)
+    assert(invalidHover.outline!.dropTargetIndex === null, '拖入自身子树不得出现有效落点')
+    assert(invalidHover.outline!.dropPosition === null, '无效落点三态应为 null')
+    assert(invalidHover.outline!.dropHintPainted === false, '无效落点不得绘制指示')
+    // 有效悬停：丙 → 戊 上缘（before），绘制层证据成立
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'outline.test.drag', from: 3, to: 4, position: 'before', action: 'hover' })
+    const validHover = await waitViewState('outline-drag.md', (v) => v.outline?.dropTargetIndex === 4)
+    assert(validHover.outline!.draggingIndex === 3, '悬停态应回报拖拽源')
+    assert(validHover.outline!.dropPosition === 'before', '悬停态应回报三态')
+    assert(validHover.outline!.dropHintPainted === true,
+      `落点指示应真实绘制（命中失败：${JSON.stringify(validHover.outline)}）`)
+    // 无效落点 drop（丁在甲子树内）：零写回
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'outline.test.drag', from: 0, to: 2, position: 'after', action: 'drop' })
+    await waitViewState('outline-drag.md', (v) => v.outline?.draggingIndex === null)
+    await new Promise((r) => setTimeout(r, 150))
+    const afterInvalid = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterInvalid.appliedEdits === before.appliedEdits, '无效落点 drop 不得写回')
+    assert(doc.getText() === original, '无效落点 drop 后文档保持')
+    // Esc 取消：零写回、状态清空
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'outline.test.drag', from: 3, to: 0, position: 'after', action: 'escape' })
+    const escaped = await waitViewState('outline-drag.md', (v) => v.outline?.draggingIndex === null)
+    assert(escaped.outline!.dropTargetIndex === null, 'Esc 后落点清空')
+    const afterEsc = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterEsc.appliedEdits === before.appliedEdits, 'Esc 取消不得写回')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-drag.md', (v) => v.sidebar?.open === false)
+  }],
+
+  ['大纲折叠与搜索态下的拖拽：视图状态随写回存活重算（#70）', async () => {
+    // 折叠态：No-Expand 下拖可见条目（戊 → 甲之前），写回后折叠迁移语义
+    // 保持（戊升至首位、甲的子树仍折叠遮蔽）；搜索态：词条保持、过滤对
+    // 新序列重算
+    await openWithEditor('outline-drag.md')
+    await waitSessionReady('outline-drag.md')
+    const uri = wsUri('outline-drag.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('outline-drag.md'))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-drag.md',
+      (v) => v.sidebar?.open === true && v.outline?.items.length === 5)
+    const original = doc.getText()
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    // No-Expand：乙丁丙折叠遮蔽（可见 = 甲、戊）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.expandClick', level: 0 })
+    await waitViewState('outline-drag.md', (v) =>
+      JSON.stringify(v.outline?.visibleIndices) === JSON.stringify([0, 4]))
+    // 戊(index 4) → 甲(index 0) 之前（before；两者皆可见，合法落点）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'outline.test.drag', from: 4, to: 0, position: 'before', action: 'drop' })
+    const folded = await waitViewState('outline-drag.md', (v) =>
+      v.outline?.items[0]?.text === '戊' && v.outline.items[0].level === 1)
+    // 尾部换行说明：删除自 # 戊 行首起，丙内容行的终止符留在原位（行尾
+    // 换行不属于被搬移的戊段——段自标题行首起算）
+    assert(doc.getText() === [
+      '---', 'title: 拖拽', '---', '',
+      '# 戊', '戊内容。', '# 甲', '甲内容。', '## 乙', '乙内容。', '#### 丁', '丁内容。', '## 丙', '丙内容。', '',
+    ].join('\n'), '折叠态拖拽写回全文对拍')
+    // 折叠迁移：档位仍 0；戊（新首位，叶）与甲（父，子树仍折叠）可见
+    assert(folded.outline!.expandLevel === 0, '档位不受拖拽影响')
+    assert(JSON.stringify(folded.outline!.visibleIndices) === JSON.stringify([0, 1]),
+      `折叠遮蔽语义应随写回存活（实际 ${JSON.stringify(folded.outline!.visibleIndices)}）`)
+    // 撤销回原
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await waitViewState('outline-drag.md', (v) => v.outline?.items[0]?.text === '甲')
+    assert(doc.getText() === original, '撤销应回原文')
+    // 搜索态：词条「丁」只保留 甲乙丁（丙戊过滤隐藏）；丁 → 甲之前
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.expandClick', level: 5 })
+    await waitViewState('outline-drag.md', (v) => v.outline?.visibleIndices.length === 5)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.searchInput', text: '丁' })
+    await waitViewState('outline-drag.md', (v) =>
+      JSON.stringify(v.outline?.filteredVisibleIndices) === JSON.stringify([0, 1, 2]))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'outline.test.drag', from: 2, to: 0, position: 'before', action: 'drop' })
+    const searched = await waitViewState('outline-drag.md', (v) =>
+      v.outline?.items[0]?.text === '丁' && v.outline.items[0].level === 1)
+    assert(doc.getText() === [
+      '---', 'title: 拖拽', '---', '',
+      '# 丁', '丁内容。', '# 甲', '甲内容。', '## 乙', '乙内容。', '## 丙', '丙内容。', '# 戊', '戊内容。',
+    ].join('\n'), '搜索态拖拽写回全文对拍')
+    // 搜索态存活：词条保持，过滤对新序列重算（丁升至首位且无祖先 → 仅命中项可见）
+    assert(searched.outline!.searchQuery === '丁' && searched.outline!.searchActive === true,
+      '搜索词条与态应随写回保持')
+    assert(JSON.stringify(searched.outline!.filteredVisibleIndices) === JSON.stringify([0]),
+      `过滤可见集应重算（实际 ${JSON.stringify(searched.outline!.filteredVisibleIndices)}）`)
+    // 清搜索、撤销回原、收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.searchInput', text: '' })
+    await waitViewState('outline-drag.md', (v) => v.outline?.searchActive === false)
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await waitViewState('outline-drag.md', (v) => v.outline?.items[0]?.text === '甲' && v.outline.items.length === 5)
+    assert(doc.getText() === original, '撤销后应回原文')
+    const final = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(final.appliedEdits - before.appliedEdits === 2, '折叠与搜索态拖拽各一笔写回')
+    if (doc.isDirty) {
+      await doc.save()
+    }
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-drag.md', (v) => v.sidebar?.open === false)
   }],
 ]

@@ -143,6 +143,19 @@ export type HostToWebview =
   /** 测试钩子（#69）：向重命名输入框注入文本并以 Enter/Esc 收尾（真实
    *  keydown 链路；须先经 menuClick command='rename' 进入重命名态） */
   | { kind: 'outline.test.renameKey'; text: string; key: 'enter' | 'escape' }
+  /** 测试钩子（#70）：向真实大纲条目派发 pointer 事件序列（pointerdown →
+   *  超阈值 pointermove 进入拖拽态 → pointermove 到目标条目的三态落点区
+   *  域），驱动与用户拖拽同一处理器链。action=hover 停在悬停态（供 probe
+   *  观测拖拽态与落点指示），drop 以 pointerup 收尾执行写回，escape 悬停
+   *  后按 Esc 取消（零写回）。宿主测试无法向 webview 派发真实鼠标事件，
+   *  以此通道验证真实宿主内的拖拽链路 */
+  | {
+      kind: 'outline.test.drag'
+      from: number
+      to: number
+      position: 'before' | 'after' | 'inside'
+      action: 'hover' | 'drop' | 'escape'
+    }
   /** 测试钩子（#21）：在真实 webview 的 CM6 中输入，验证暂停态即时留存。 */
   | { kind: 'sync.test.edit'; offset: number; text: string; closeAfter?: boolean }
   /** 测试钩子：组合候选写入首行 DOM，经过 CM6 MutationObserver 的真实输入链。 */
@@ -733,6 +746,17 @@ export interface OutlineProbe {
   submenuVisible: boolean
   /** #69 重命名编辑态：正在行内编辑的条目索引（null = 无编辑态） */
   renamingIndex: number | null
+  /** #70 拖拽态：正在拖拽的源条目索引（null = 无拖拽） */
+  draggingIndex: number | null
+  /** #70 当前有效落点目标索引（null = 未悬停在条目上或落点无效——
+   *  拖入自身控制域内部不显示落点） */
+  dropTargetIndex: number | null
+  /** #70 落点三态（dropTargetIndex 非空时的位置语义；null = 无有效落点） */
+  dropPosition: 'before' | 'after' | 'inside' | null
+  /** #70 落点指示绘制证据：带指示类的条目中心点命中自身且 computed
+   *  插入线（box-shadow）或包裹高亮（outline/背景）可读（真实绘制；
+   *  无拖拽或 jsdom 无布局时 false，真宿主断言见集成） */
+  dropHintPainted: boolean
 }
 
 /** 表格结构操作码校验（#13） */
@@ -848,14 +872,15 @@ function isOutlineItems(v: unknown): v is OutlineProbe['items'] {
   )
 }
 
-/** #54/#65/#66/#67/#68/#69 大纲观测校验：active/命中布尔、图标尺寸与滚动几何（null 或
+/** #54/#65/#66/#67/#68/#69/#70 大纲观测校验：active/命中布尔、图标尺寸与滚动几何（null 或
  *  非负数）、items 序列、名称字符串或 null、style 绘制证据（缺省或字段字符
  *  串或 null）、located 索引（null 或非负整数）/文字（字符串或 null）/绘制
  *  命中布尔、#67 档位（0–5 整数）/可见索引序列（非负整数数组）/滑块与箭头
  *  绘制命中布尔、#68 搜索词（字符串）/搜索态布尔/组合可见索引序列/工具条
  *  绘制命中布尔/按钮与占位文案（字符串或 null）/命中片段与占位绘制命中布
  *  尔、#69 菜单开合布尔/目标索引（null 或非负整数）/菜单与子菜单绘制布尔/
- *  重命名索引（null 或非负整数） */
+ *  重命名索引（null 或非负整数）、#70 拖拽源索引与落点目标索引（null 或
+ *  非负整数）/落点三态（null 或 before/after/inside）/落点指示绘制布尔 */
 function isOutlineProbe(v: unknown): v is OutlineProbe {
   return (
     isObject(v) &&
@@ -899,7 +924,11 @@ function isOutlineProbe(v: unknown): v is OutlineProbe {
     (v.menuTargetIndex === null || isNonNegativeInt(v.menuTargetIndex)) &&
     typeof v.menuPainted === 'boolean' &&
     typeof v.submenuVisible === 'boolean' &&
-    (v.renamingIndex === null || isNonNegativeInt(v.renamingIndex))
+    (v.renamingIndex === null || isNonNegativeInt(v.renamingIndex)) &&
+    (v.draggingIndex === null || isNonNegativeInt(v.draggingIndex)) &&
+    (v.dropTargetIndex === null || isNonNegativeInt(v.dropTargetIndex)) &&
+    (v.dropPosition === null || v.dropPosition === 'before' || v.dropPosition === 'after' || v.dropPosition === 'inside') &&
+    typeof v.dropHintPainted === 'boolean'
   )
 }
 
@@ -1427,6 +1456,10 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return true
     case 'outline.test.renameKey':
       return isString(v.text) && (v.key === 'enter' || v.key === 'escape')
+    case 'outline.test.drag':
+      return isNonNegativeInt(v.from) && isNonNegativeInt(v.to) &&
+        (v.position === 'before' || v.position === 'after' || v.position === 'inside') &&
+        (v.action === 'hover' || v.action === 'drop' || v.action === 'escape')
     case 'sync.test.edit':
       return isNonNegativeInt(v.offset) && isString(v.text) &&
         (v.closeAfter === undefined || typeof v.closeAfter === 'boolean')
