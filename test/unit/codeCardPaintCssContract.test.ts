@@ -54,4 +54,17 @@ describe('代码块卡片 CSS 契约（#79）', () => {
     expect(ln).toMatch(/color:\s*var\(--vscode-editorLineNumber-foreground/)
     expect(ln).toMatch(/user-select:\s*none/)
   })
+
+  it('复制按钮：悬停卡片显现、✓ 反馈态切换图标（#81）', () => {
+    const btn = rule('#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-copy')
+    expect(btn).toMatch(/opacity:\s*0/)
+    // 悬停/focus 显现规则（组选择器，hover 段在块中部）
+    const reveal = (css.match(/[^{}]+\{[^{}]*\}/g) ?? []).filter((b) =>
+      b.split('{')[0]!.includes('.vsidian-code-card-header:hover .vsidian-code-card-copy') &&
+      /opacity:\s*1/.test(b.split('{')[1] ?? ''))
+    expect(reveal, '悬停显现规则（opacity 0→1）应存在').toHaveLength(1)
+    expect(
+      rule('#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-copy-done .vsidian-code-card-copy-icon-check'),
+    ).toMatch(/display:\s*inline-flex/)
+  })
 })

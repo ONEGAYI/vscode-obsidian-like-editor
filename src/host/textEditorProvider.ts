@@ -700,6 +700,10 @@ export function createTextEditorProvider(
         // 设置页 webview 链路，不经文档会话）
         openSettings: () => settings?.page.open(),
         requestSettings: () => settings?.service.getSnapshot() ?? {},
+        // #81 代码块复制执行端口（vscode.env.clipboard，webview 无剪贴板权限）
+        copyCode: (text: string): void => {
+          void vscode.env.clipboard.writeText(text)
+        },
       })
       entry.panels.set(sessionId, webviewPanel)
       // #38：记忆为 reading 的面板登记待恢复——就绪后首份 view.state 到达

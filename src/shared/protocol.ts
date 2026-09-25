@@ -73,6 +73,9 @@ export type HostToWebview =
    *  完全相同的处理器链路（校验 → 出站 edit.request）。宿主测试无法向
    *  webview 派发真实鼠标事件，以此通道验证真实宿主内的勾选写回 */
   | { kind: 'task.test.click'; view: 'live' | 'reading'; index: number }
+  /** 测试钩子（#81）：按序号点击卡片头部复制按钮（驱动与用户点击相同的
+   *  处理器链路：effect → codeblock.copy 出站 → 宿主剪贴板写入） */
+  | { kind: 'codecard.test.copy'; index: number }
   /** 图片解析结果（#10）：reqId 对应 image.request。ok 时 src 为可直接作
    *  img.src 的地址——工作区文件经 asWebviewUri 的 webview 资源 URI
    *  （本地与远程工作区同通道）；失败附原因码供错误态与重试呈现 */
@@ -292,6 +295,10 @@ export type WebviewToHost =
   /** 图片资源解析请求（#10）：非 http(s) 直连的工作区图源经宿主解析为
    *  webview 可加载地址（reqId 会话面板内自增，对应 image.result） */
   | { kind: 'image.request'; sessionId: string; docUri: string; reqId: number; src: string }
+  /** 代码块复制请求（#81）：卡片头部复制按钮点击 → 宿主剪贴板 API 写入。
+   *  text 为代码体原文（两条围栏行之间，不含围栏与 info string，LF 坐标）；
+   *  webview 不触碰剪贴板权限，写入执行归宿主 */
+  | { kind: 'codeblock.copy'; sessionId: string; docUri: string; text: string }
   /** 打开 Vsidian 设置页（#33）：编辑器工具栏「设置」按钮 → 宿主
    *  createWebviewPanel。无 sessionId/docUri——打开设置页不依赖任何文档
    *  会话（无文档打开时同样可用） */
@@ -509,6 +516,8 @@ export interface PaintProbe {
     cardLineCount: number
     /** #80 视口内卡内行号文本序列（如 ['1','2','3']；关闭或无行为 null） */
     lineNumberTexts?: string[] | null
+    /** #81 呈现态复制按钮在场数（编辑态所在块不发射按钮） */
+    copyCount?: number
   }
   /** #55 标题行绘制观测：视口内已挂载的 .vsidian-heading-inview 行的
    *  distinct 计算值（box-shadow 应为 'none'、border-left-width 应为
@@ -848,7 +857,8 @@ function isPaintProbe(v: unknown): v is PaintProbe {
       isNonNegativeInt(v.code.headerCount) &&
       isNonNegativeInt(v.code.cardLineCount) &&
       (v.code.lineNumberTexts === undefined || v.code.lineNumberTexts === null ||
-        (Array.isArray(v.code.lineNumberTexts) && v.code.lineNumberTexts.every(isString)))
+        (Array.isArray(v.code.lineNumberTexts) && v.code.lineNumberTexts.every(isString))) &&
+      (v.code.copyCount === undefined || isNonNegativeInt(v.code.copyCount))
     )) &&
     (v.heading === undefined || v.heading === null || (
       isObject(v.heading) &&
@@ -1142,6 +1152,12 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         isNonNegativeInt(v.srcStart) &&
         isNonNegativeInt(v.srcEnd)
       )
+    case 'codeblock.copy':
+      return (
+        isString(v.sessionId) &&
+        isString(v.docUri) &&
+        isString(v.text)
+      )
     case 'image.request':
       return (
         isString(v.sessionId) &&
@@ -1240,6 +1256,8 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
         (v.view === 'live' || v.view === 'reading') &&
         isNonNegativeInt(v.index)
       )
+    case 'codecard.test.copy':
+      return isNonNegativeInt(v.index)
     case 'image.result':
       if (!isPositiveInt(v.reqId)) {
         return false

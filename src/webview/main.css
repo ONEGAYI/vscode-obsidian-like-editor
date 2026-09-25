@@ -485,6 +485,54 @@ body {
   user-select: none;
 }
 
+/* 复制按钮（#81）：悬停卡片显现（focus-visible 键盘可达）；编辑态按钮
+   不发射（非 CSS 隐藏）；✓ 反馈本地切换约 1.2s */
+#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  box-sizing: border-box;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--vscode-editor-foreground, inherit);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
+}
+
+#app .cm-editor .cm-scroller .vsidian-code-card-header:hover .vsidian-code-card-copy,
+#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-copy:focus-visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-copy:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
+}
+
+#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-copy .vsidian-code-card-copy-icon-check {
+  display: none;
+}
+
+#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-copy-done .vsidian-code-card-copy-icon-copy {
+  display: none;
+}
+
+#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-copy-done .vsidian-code-card-copy-icon-check {
+  display: inline-flex;
+  color: var(--vscode-testing-iconPassed, #73c991);
+}
+
+#app .cm-editor .cm-scroller .vsidian-code-card-header .vsidian-code-card-copy-done {
+  opacity: 1;
+  visibility: visible;
+}
+
 /* 行内格式 span（mark 按各自范围显形；类名为稳定样式入口，Obsidian 对应
    .cm-header-N/.cm-strong/.cm-emphasis/.cm-inline-code，见映射表） */
 #app .cm-editor .cm-scroller .vsidian-strong {

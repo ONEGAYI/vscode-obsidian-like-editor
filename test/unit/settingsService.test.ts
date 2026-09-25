@@ -38,12 +38,13 @@ function makeStorage(writes: Array<{ key: string; value: unknown }> = []): Setti
 }
 
 describe('快照读取', () => {
-  it('生产注册表（#34 起）：快照为定义默认值（三项均开）', () => {
+  it('生产注册表（#34 起）：快照为定义默认值（四项均开）', () => {
     const svc = new SettingsService(makeStorage(), PRODUCTION_SETTING_DEFINITIONS)
     expect(svc.getSnapshot()).toEqual({
       'editor.lineNumbers': true,
       'codeblock.card': true,
       'codeblock.lineNumbers': true,
+      'codeblock.copyButton': true,
     })
   })
 

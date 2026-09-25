@@ -27,7 +27,7 @@
 import { Annotation, ChangeSet, Compartment, EditorSelection, EditorState, Prec, type Extension, type Text } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { liveLineNumbers, paintedLineNumbers } from './liveLineNumbers'
-import { CODE_CARD_CLASS_NAMES, codeCardConfigFacet, liveCodeCard, type CodeCardConfig } from './liveCodeCard'
+import { CODE_CARD_CLASS_NAMES, codeCardConfigFacet, codeCardCopyRequest, liveCodeCard, type CodeCardConfig } from './liveCodeCard'
 import {
   isHostToWebview,
   type CssProbeReport,
@@ -47,6 +47,8 @@ import {
 import {
   CODEBLOCK_CARD_DEFAULT,
   CODEBLOCK_CARD_KEY,
+  CODEBLOCK_COPY_BUTTON_DEFAULT,
+  CODEBLOCK_COPY_BUTTON_KEY,
   CODEBLOCK_LINE_NUMBERS_DEFAULT,
   CODEBLOCK_LINE_NUMBERS_KEY,
   SHOW_LINE_NUMBERS_DEFAULT,
@@ -1079,6 +1081,16 @@ export class WebviewSyncController {
             : LIVE_CLASS_NAMES.taskCheckbox
         const boxes = root?.querySelectorAll<HTMLInputElement>(`input.${cls}`)
         boxes?.[message.index]?.click()
+        break
+      }
+      case 'codecard.test.copy': {
+        // 测试钩子（#81）：按序号点击卡片头部复制按钮（驱动与用户点击相同
+        // 的处理器链路：effect → codeblock.copy 出站 → 宿主剪贴板写入）
+        const scope = this.viewMode === 'reading' ? this.readingContainer : this.view?.contentDOM
+        const buttons = scope?.querySelectorAll<HTMLButtonElement>(
+          `.${CODE_CARD_CLASS_NAMES.copy}`,
+        )
+        buttons?.[message.index]?.click()
         break
       }
       case 'image.result':
@@ -2662,11 +2674,11 @@ export class WebviewSyncController {
   }
 
   /**
-   * 应用代码块卡片设置（#79/#80；settings.snapshot / settings.changed 到达时）：
-   * card 总开关读 codeblock.card、行号子开关读 codeblock.lineNumbers（缺键回
-   * 定义默认、非布尔忽略——与行号同口径）；copyButton/highlight 由后续工单
-   * 接入，暂保持默认开。经 Compartment.reconfigure 热重配 codeCardConfigFacet
-   * （卡片装饰 StateField 检测到 facet 变化时对围栏表全量重建），EditorView 不重建
+   * 应用代码块卡片设置（#79–#81；settings.snapshot / settings.changed 到达时）：
+   * card 总开关、行号/复制子开关分别读 codeblock.* 键（缺键回定义默认、
+   * 非布尔忽略——与行号同口径）；highlight 由 #83 接入，暂保持默认开。
+   * 经 Compartment.reconfigure 热重配 codeCardConfigFacet（卡片装饰
+   * StateField 检测到 facet 变化时对围栏表全量重建），EditorView 不重建
    */
   private applyCodeCardSetting(): void {
     const bool = (raw: unknown, fallback: boolean): boolean =>
@@ -2674,19 +2686,44 @@ export class WebviewSyncController {
     const next: CodeCardConfig = {
       card: bool(this.settings?.[CODEBLOCK_CARD_KEY], CODEBLOCK_CARD_DEFAULT),
       lineNumbers: bool(this.settings?.[CODEBLOCK_LINE_NUMBERS_KEY], CODEBLOCK_LINE_NUMBERS_DEFAULT),
-      copyButton: this.codeCardConfig.copyButton,
+      copyButton: bool(this.settings?.[CODEBLOCK_COPY_BUTTON_KEY], CODEBLOCK_COPY_BUTTON_DEFAULT),
       highlight: this.codeCardConfig.highlight,
     }
-    if (next.card === this.codeCardConfig.card && next.lineNumbers === this.codeCardConfig.lineNumbers) {
+    if (
+      next.card === this.codeCardConfig.card &&
+      next.lineNumbers === this.codeCardConfig.lineNumbers &&
+      next.copyButton === this.codeCardConfig.copyButton
+    ) {
       return
     }
     this.codeCardConfig = next
     this.view?.dispatch({
-      effects: this.codeCardCompartment.reconfigure([
-        codeCardConfigFacet.of(next),
-        liveCodeCard,
-      ]),
+      effects: this.codeCardCompartment.reconfigure(this.codeCardExtension()),
     })
+  }
+
+  /** 卡片扩展装配（#79–#81）：facet + 装饰 StateField + 复制请求转发监听。
+   *  初次装配与设置热重配共用，保证监听器在默认配置下同样在场 */
+  private codeCardExtension() {
+    return [
+      codeCardConfigFacet.of(this.codeCardConfig),
+      liveCodeCard,
+      // #81 复制请求转发：零写回事务携带 effect → codeblock.copy 出站
+      EditorView.updateListener.of((update) => {
+        for (const tr of update.transactions) {
+          for (const eff of tr.effects) {
+            if (eff.is(codeCardCopyRequest) && this.sessionId) {
+              this.bridge.postMessage({
+                kind: 'codeblock.copy',
+                sessionId: this.sessionId,
+                docUri: this.docUri,
+                text: eff.value,
+              })
+            }
+          }
+        }
+      }),
+    ]
   }
 
   /** 行号栏观测（#34 view.state 扩展字段）。过滤 CM6 的隐藏测量探针
@@ -2979,28 +3016,38 @@ export class WebviewSyncController {
     const mermaid = mermaidEl
       ? { visible: mermaidVisible, display: mermaidDisplay, ...mermaidCounts }
       : undefined
-    // #79 代码块卡片绘制探针：当前激活视图取头部横带（可见性 = rect 有
-    // 面积 + elementFromPoint 命中）；label 取首个头部语言标签文本
+    // #79 代码块卡片绘制探针：当前激活视图取头部横带。CM6 挂载缓冲内的
+    // 头部可能滚出可视裁剪区（rect 在视口外，elementFromPoint 不命中），
+    // 故遍历取首个「rect 有面积 + 在视口内 + elementFromPoint 命中」的
+    // 头部；全部未命中时回落首个（display 探针仍可用）
     const codeScope = this.viewMode === 'reading' ? this.readingContainer : view.contentDOM
-    const cardHeader = codeScope?.querySelector<HTMLElement>(
-      `.${CODE_CARD_CLASS_NAMES.header}`,
-    ) ?? null
+    const cardHeaders = codeScope
+      ? [...codeScope.querySelectorAll<HTMLElement>(`.${CODE_CARD_CLASS_NAMES.header}`)]
+      : []
+    let cardHeader: HTMLElement | null = null
     let codeCardVisible = false
-    let codeCardDisplay: string | null = null
-    if (cardHeader) {
-      codeCardDisplay = getComputedStyle(cardHeader).display
+    for (const header of cardHeaders) {
       try {
-        const rect = cardHeader.getBoundingClientRect()
-        if (rect.width > 0 && rect.height > 0) {
+        const rect = header.getBoundingClientRect()
+        if (
+          rect.width > 0 && rect.height > 0 &&
+          rect.bottom > 0 && rect.top < window.innerHeight
+        ) {
           const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
-          if (hit && cardHeader.contains(hit)) {
+          if (hit && header.contains(hit)) {
+            cardHeader = header
             codeCardVisible = true
+            break
           }
         }
       } catch {
         // jsdom 无布局与 elementFromPoint；真宿主才能证明实际可见。
       }
+      if (!cardHeader) {
+        cardHeader = header
+      }
     }
+    const codeCardDisplay = cardHeader ? getComputedStyle(cardHeader).display : null
     const code = cardHeader
       ? {
         visible: codeCardVisible,
@@ -3019,6 +3066,11 @@ export class WebviewSyncController {
             .map((el) => el.textContent ?? '')
             .filter((t) => t !== '')
           : [],
+        // #81 呈现态复制按钮在场数（编辑态块不发射；悬停显现是 CSS 态，
+        // DOM 常驻才能被此计数与宿主点击钩子命中）
+        copyCount: codeScope
+          ? codeScope.querySelectorAll(`.${CODE_CARD_CLASS_NAMES.copy}`).length
+          : 0,
       }
       : undefined
     return {
@@ -3270,7 +3322,7 @@ export class WebviewSyncController {
       liveMermaid,
       // #79 代码块卡片：呈现态围栏收起 + 头部横带 + 卡片行类（配置经
       // Compartment 热重配，围栏表复用上方 mermaidFencesField）
-      this.codeCardCompartment.of([codeCardConfigFacet.of(this.codeCardConfig), liveCodeCard]),
+      this.codeCardCompartment.of(this.codeCardExtension()),
       // 表格单元格输入钩子（#12）：表格行内键入 | 转义写回 \|；
       // 编辑面即 CM6 源文本行，同步链路复用本控制器的标准出站路径
       tableEditing,

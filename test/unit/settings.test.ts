@@ -51,6 +51,15 @@ describe('生产注册表（#34 起含实际设置项）', () => {
     expect(isSettingDefinition(def)).toBe(true)
   })
 
+  it('注册「复制按钮」：键 codeblock.copyButton、boolean、默认开启（#81）', () => {
+    const def = PRODUCTION_SETTING_DEFINITIONS[3]
+    expect(def.key).toBe('codeblock.copyButton')
+    expect(def.type).toBe('boolean')
+    expect(def.default).toBe(true)
+    expect(def.title).toBe('复制按钮')
+    expect(isSettingDefinition(def)).toBe(true)
+  })
+
   it('键与消费方常量一致：webview/宿主经 SHOW_LINE_NUMBERS_KEY 读同一键', () => {
     expect(SHOW_LINE_NUMBERS_KEY).toBe('editor.lineNumbers')
     expect(SHOW_LINE_NUMBERS_DEFAULT).toBe(true)

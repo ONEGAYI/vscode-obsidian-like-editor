@@ -447,6 +447,8 @@ interface ViewState {
       cardLineCount: number
       /** #80 视口内卡内行号文本序列 */
       lineNumberTexts?: string[] | null
+      /** #81 呈现态复制按钮在场数 */
+      copyCount?: number
     }
     /** #55：标题行左缘绘制观测（distinct computed 值；无挂载标题行为 null） */
     heading?: {
@@ -4874,13 +4876,15 @@ export const cases: Array<[string, () => Promise<void>]> = [
       v.viewMode === 'reading' && (v.readingMermaidCount ?? -1) === 6)
   }],
 
-  ['live 代码块卡片：呈现态头部绘制、编辑态保留、零写回与设置开关（#79）', async () => {
+  ['live 代码块卡片：呈现态头部绘制、编辑态保留、零写回与设置开关（#79/#80/#81）', async () => {
     await openWithEditor('code-card.md')
     await waitSessionReady('code-card.md')
     const uri = wsUri('code-card.md').toString()
     const diskBefore = await readDisk('code-card.md')
+    // 定位到文档首（光标在全部围栏外）：顶部卡片在可视区内，绘制层命中
+    // 才可断言（挂载缓冲外的滚动位置 rect 在视口外，elementFromPoint 不命中）
     await vscode.commands.executeCommand(CMD.postToPanel, uri, {
-      kind: 'view.locate', offset: diskBefore.indexOf('结尾段落'),
+      kind: 'view.locate', offset: 0,
     })
     // 呈现态：4 张卡片（js/text/裸围栏/未知语言）头部绘制，mermaid 走图表管线
     const present = await waitViewState('code-card.md', (v) => v.paint?.code?.headerCount === 4)
@@ -4891,20 +4895,34 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const ln = present.paint?.code?.lineNumberTexts
     assert(Array.isArray(ln) && ln.slice(0, 4).join(',') === '1,2,3,4',
       `js 块卡内行号应为 1..4，实际 ${JSON.stringify(ln)}`)
-    // 编辑态：光标进入首块代码体 → 头部与卡片行保留（外壳不撤）
+    // #81 呈现态每张卡片一个复制按钮
+    assert(present.paint?.code?.copyCount === 4,
+      `呈现态应 4 个复制按钮，实际 ${present.paint?.code?.copyCount}`)
+    // 编辑态：光标进入首块代码体 → 头部与卡片行保留，该块复制按钮隐藏
     const body = present.text.indexOf('const a = 1')
     await vscode.commands.executeCommand(CMD.postToPanel, uri, {
       kind: 'view.locate', offset: body + 2,
     })
     const editing = await waitViewState('code-card.md', (v) =>
-      (v.selectionOffset ?? -1) >= body && (v.selectionOffset ?? -1) <= body + 6)
+      (v.selectionOffset ?? -1) >= body && (v.selectionOffset ?? -1) <= body + 6 &&
+      v.paint?.code?.copyCount === 3)
     assert(editing.paint?.code?.headerCount === 4, `编辑态卡片头部应保留，实际 ${editing.paint?.code?.headerCount}`)
     // 离开恢复呈现态；纯视图交互零写回
     await vscode.commands.executeCommand(CMD.postToPanel, uri, {
       kind: 'view.locate', offset: 0,
     })
-    await waitViewState('code-card.md', (v) => (v.selectionOffset ?? 0) === 0 && v.paint?.code?.headerCount === 4)
+    await waitViewState('code-card.md', (v) =>
+      (v.selectionOffset ?? 0) === 0 && v.paint?.code?.headerCount === 4 && v.paint?.code?.copyCount === 4)
     assert(await readDisk('code-card.md') === diskBefore, '卡片显隐交互不得改写源文')
+    // #81 复制链路：点击 text 块（第 2 张）复制按钮 → 宿主剪贴板收到代码体
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'codecard.test.copy', index: 1,
+    })
+    await poll('剪贴板收到 text 块代码体', async () => {
+      const text = await vscode.env.clipboard.readText()
+      return text === 'hello' ? true : undefined
+    })
+    assert(await readDisk('code-card.md') === diskBefore, '复制不得改写源文')
     // 设置总开关：关闭 → 卡片消失；重开 → 恢复（Compartment 热重配）
     await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.card': false })
     await waitViewState('code-card.md', (v) => v.paint?.code === undefined)
@@ -4918,5 +4936,12 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.lineNumbers': true })
     await waitViewState('code-card.md', (v) =>
       v.paint?.code?.headerCount === 4 && (v.paint.code.lineNumberTexts?.length ?? 0) > 0)
+    // #81 复制子开关：关闭 → 按钮消失、卡片保留；重开恢复
+    await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.copyButton': false })
+    await waitViewState('code-card.md', (v) =>
+      v.paint?.code?.headerCount === 4 && (v.paint.code.copyCount ?? 0) === 0)
+    await vscode.commands.executeCommand(CMD.setSettings, { 'codeblock.copyButton': true })
+    await waitViewState('code-card.md', (v) =>
+      v.paint?.code?.headerCount === 4 && (v.paint.code.copyCount ?? 0) === 4)
   }],
 ]

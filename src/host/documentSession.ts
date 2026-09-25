@@ -58,6 +58,9 @@ export interface PanelPort {
   /** #33 设置快照拉取（vscode 层注入：SettingsService.getSnapshot；面板
    *  init 后的 settings.get 以 settings.snapshot 响应） */
   requestSettings?(): SettingsPayload
+  /** #81 代码块复制执行（vscode 层注入：vscode.env.clipboard.writeText）；
+   *  只读交互，暂停态同样放行 */
+  copyCode?(text: string): void
 }
 
 /** 会话通知（#4）：冲突暂停、复制请求、面板关闭时存在未确认输入等需要
@@ -431,6 +434,15 @@ export class DocumentSession {
           srcStart: message.srcStart,
           srcEnd: message.srcEnd,
         })
+        return Promise.resolve()
+      }
+      case 'codeblock.copy': {
+        // #81 代码块复制请求：webview 只上报代码体原文，剪贴板写入执行
+        // 归宿主（webview 不触碰剪贴板权限）；只读交互，暂停态同样放行
+        if (!panel.ready || message.docUri !== this.docUri) {
+          return Promise.resolve()
+        }
+        panel.port.copyCode?.(message.text)
         return Promise.resolve()
       }
       case 'image.request': {

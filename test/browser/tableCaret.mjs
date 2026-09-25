@@ -1041,6 +1041,33 @@ console.log(`[原生输入] mermaid ${mermaidPassed} 项通过`)
       s = await states()
       assert.equal(s.headers.length, 1, '键盘离开围栏后头部保留')
 
+      // 5c) 复制按钮（#81）：悬停卡片显现 → 点击经宿主通道复制代码体（不含
+      //     围栏与本次输入的 x 前改动？含 x：代码体即当前源文），✓ 反馈落类，
+      //     点击不得把光标带进围栏（保持呈现态）
+      const header = page.locator('.vsidian-code-card-header').first()
+      await header.hover()
+      const copyBtn = header.locator('.vsidian-code-card-copy')
+      await copyBtn.click()
+      await page.waitForFunction(() => {
+        const m = window.__lastHostMessage
+        return m && m.kind === 'codeblock.copy' && m.text === 'const a = 1;x'
+      })
+      const copyState = await page.evaluate(() => {
+        const b = document.querySelector('.vsidian-code-card-copy')
+        return {
+          done: b?.classList.contains('vsidian-code-card-copy-done') ?? false,
+          fenceVisible: [...document.querySelectorAll('.cm-content .cm-line')]
+            .some((l) => l.textContent.includes('```')),
+          head: window.readEditor().head,
+        }
+      })
+      assert(copyState.done, '点击后按钮应带 ✓ 反馈类')
+      assert(!copyState.fenceVisible, '点击复制不得把光标带进围栏（保持呈现态）')
+      await page.waitForFunction(() => {
+        const b = document.querySelector('.vsidian-code-card-copy')
+        return b && !b.classList.contains('vsidian-code-card-copy-done')
+      }, null, { timeout: 4000 })
+
       // 6) 最终文本与手工构造逐字节一致；无页面异常
       const expected = ['前文', '', '```js', 'const a = 1;x', '```', '', '后文', ''].join('\n')
       assert.equal((await states()).text, expected, '全部交互后文本必须逐字节一致')

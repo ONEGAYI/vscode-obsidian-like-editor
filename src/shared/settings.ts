@@ -59,9 +59,16 @@ export const CODEBLOCK_LINE_NUMBERS_KEY = 'codeblock.lineNumbers'
 export const CODEBLOCK_LINE_NUMBERS_DEFAULT = true
 
 /**
+ * #81「复制按钮」子开关：卡片头部悬停显现的复制按钮（点击经宿主剪贴板
+ * API 复制代码体）。依附卡片总开关；编辑态（光标在块内）始终隐藏。
+ */
+export const CODEBLOCK_COPY_BUTTON_KEY = 'codeblock.copyButton'
+export const CODEBLOCK_COPY_BUTTON_DEFAULT = true
+
+/**
  * 生产设置定义注册表：#33 交付空状态页面与完整数据链路，#34 加入首个
  * 实际设置项「显示行号」（设置页自此渲染真实开关），#79 加入「代码块卡片」，
- * #80 加入「卡内行号」。
+ * #80 加入「卡内行号」，#81 加入「复制按钮」。
  */
 export const PRODUCTION_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
   {
@@ -84,6 +91,13 @@ export const PRODUCTION_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     default: CODEBLOCK_LINE_NUMBERS_DEFAULT,
     title: '卡内行号',
     description: '卡片内代码行行首显示块内行号（每块从 1 起，围栏行不占号）。需开启「代码块卡片」。',
+  },
+  {
+    key: CODEBLOCK_COPY_BUTTON_KEY,
+    type: 'boolean',
+    default: CODEBLOCK_COPY_BUTTON_DEFAULT,
+    title: '复制按钮',
+    description: '卡片头部悬停显示复制按钮，点击复制整块代码（不含围栏行）。需开启「代码块卡片」。',
   },
 ]
 

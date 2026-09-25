@@ -16,7 +16,7 @@
 //   边界）、未闭合围栏（状态机不产出）；缩进代码块不是围栏，天然不参与
 // - 设置经 codeCardConfigFacet（syncController 的 Compartment 热重配，
 //   #79 仅 card 生效；lineNumbers/copyButton 见 #80/#81，highlight 见 #83）
-import { Facet, RangeSet, StateField, type Extension, type Range, type Text } from '@codemirror/state'
+import { Facet, RangeSet, StateEffect, StateField, type Extension, type Range, type Text } from '@codemirror/state'
 import type { EditorSelection } from '@codemirror/state'
 import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view'
 import { liveDecorationsField, selectionTouchesRange } from './liveDecorations'
@@ -40,7 +40,73 @@ export const CODE_CARD_CLASS_NAMES = {
   headerActions: 'vsidian-code-card-header-actions',
   /** 卡内行号（#80：代码行行首 widget，每块从 1，围栏行不占号） */
   linenumber: 'vsidian-code-card-linenumber',
+  /** 复制按钮（#81：悬停显现，点击复制代码体；编辑态不发射） */
+  copy: 'vsidian-code-card-copy',
+  /** 复制按钮 ✓ 反馈修饰（点击后约 1.2s） */
+  copyDone: 'vsidian-code-card-copy-done',
+  /** 复制按钮内的复制/对勾图标 span 修饰 */
+  copyIconCopy: 'vsidian-code-card-copy-icon-copy',
+  copyIconCheck: 'vsidian-code-card-copy-icon-check',
+  /** 折叠 chevron（#82：点击收起/展开代码体；收起态转向） */
+  fold: 'vsidian-code-card-fold',
+  /** 折叠收起态修饰（chevron 转向；头部仍保留） */
+  foldCollapsed: 'vsidian-code-card-fold-collapsed',
 } as const
+
+/**
+ * 复制请求 effect（#81）：按钮点击 → 零写回事务携带代码体原文，由
+ * syncController 的 updateListener 转发 codeblock.copy 出站（宿主剪贴板）。
+ * 不落文档、不产生撤销历史。
+ */
+export const codeCardCopyRequest = StateEffect.define<string>()
+
+/**
+ * 折叠切换 effect（#82）：chevron 点击 → 零写回事务携带围栏起始位置，
+ * 由 codeCardFoldField 消费（视图态，不写源文件、不跨会话持久化）。
+ */
+export const codeCardFoldToggle = StateEffect.define<number>()
+
+/**
+ * 折叠状态（#82）：已收起围栏的起始位置集合。视图态——重开文档后全展开。
+ * 值按围栏起始位置标识，docChanged 时随 ChangeSet 映射；映射后不匹配任何
+ * 当前围栏起始位置的条目修剪掉（围栏删除后残留不至于误伤后来者）。
+ */
+export const codeCardFoldField = StateField.define<ReadonlySet<number>>({
+  create: () => new Set<number>(),
+  update(value, tr) {
+    let next = value
+    for (const eff of tr.effects) {
+      if (eff.is(codeCardFoldToggle)) {
+        next = new Set(next)
+        if (!next.delete(eff.value)) {
+          next.add(eff.value)
+        }
+      }
+    }
+    if (tr.docChanged) {
+      const mapped = new Set<number>()
+      for (const pos of next) {
+        mapped.add(tr.changes.mapPos(pos, 1))
+      }
+      next = mapped
+    }
+    if (next !== value) {
+      // 修剪：不再是任何围栏起始位置的条目（围栏被删/改写后自愈）
+      const fences = tr.state.field(mermaidFencesField, false)
+      if (fences) {
+        const starts = new Set(fences.spans.map((s) => s.from))
+        const pruned = new Set<number>()
+        for (const pos of next) {
+          if (starts.has(pos)) {
+            pruned.add(pos)
+          }
+        }
+        next = pruned
+      }
+    }
+    return next
+  },
+})
 
 /** 卡片运行配置（设置驱动；#79 仅消费 card） */
 export interface CodeCardConfig {
@@ -62,19 +128,28 @@ export const codeCardConfigFacet = Facet.define<CodeCardConfig, CodeCardConfig>(
 })
 
 /**
- * 头部横带 widget：语言标签 + 右侧按钮区（按钮由 #81/#82 装配）。
- * ignoreEvent=false 交给 CM6 定位；按钮事件各自处理。
+ * 头部横带 widget：语言标签 + 右侧按钮区（复制按钮 #81；折叠 chevron #82）。
+ * ignoreEvent=false 交给 CM6 定位；复制按钮自行拦截 mousedown 防 CM6 落选区
+ * 进块（进入即切编辑态撤走按钮）。copy=false（编辑态或设置关闭）时不渲染
+ * 按钮——eq 含 copy/code，状态切换时 CM6 重建 DOM。
  */
 export class CodeCardHeaderWidget extends WidgetType {
   constructor(
     readonly label: string,
     readonly languageId: string | null,
+    readonly copy: boolean,
+    readonly code: string,
   ) {
     super()
   }
 
   eq(other: CodeCardHeaderWidget): boolean {
-    return other.label === this.label && other.languageId === this.languageId
+    return (
+      other.label === this.label &&
+      other.languageId === this.languageId &&
+      other.copy === this.copy &&
+      other.code === this.code
+    )
   }
 
   toDOM(): HTMLElement {
@@ -86,6 +161,9 @@ export class CodeCardHeaderWidget extends WidgetType {
     label.textContent = this.label
     const actions = document.createElement('span')
     actions.className = CODE_CARD_CLASS_NAMES.headerActions
+    if (this.copy) {
+      actions.appendChild(buildCopyButton(this.code))
+    }
     div.append(label, actions)
     return div
   }
@@ -93,6 +171,48 @@ export class CodeCardHeaderWidget extends WidgetType {
   ignoreEvent(): boolean {
     return false
   }
+}
+
+/** 复制按钮 DOM（#81）：悬停显现由 CSS 承担；点击派发零写回 effect，
+ *  ✓ 反馈本地切换（约 1.2s 后复原）。mousedown 阻断 CM6 的点击落位。 */
+function buildCopyButton(code: string): HTMLButtonElement {
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.className = CODE_CARD_CLASS_NAMES.copy
+  btn.setAttribute('aria-label', '复制代码')
+  btn.title = '复制代码'
+  const copyIcon = document.createElement('span')
+  copyIcon.className = CODE_CARD_CLASS_NAMES.copyIconCopy
+  copyIcon.setAttribute('aria-hidden', 'true')
+  copyIcon.innerHTML =
+    '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3">' +
+    '<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"></rect>' +
+    '<path d="M10.5 3.5h-7a1 1 0 0 0-1 1v7"></path></svg>'
+  const checkIcon = document.createElement('span')
+  checkIcon.className = CODE_CARD_CLASS_NAMES.copyIconCheck
+  checkIcon.setAttribute('aria-hidden', 'true')
+  checkIcon.innerHTML =
+    '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8">' +
+    '<path d="M3.5 8.5l3 3 6-7"></path></svg>'
+  btn.append(copyIcon, checkIcon)
+  btn.addEventListener('mousedown', (event) => {
+    // 头部是块 widget，落位点会进围栏区间（切编辑态撤走按钮）——阻断落位
+    event.preventDefault()
+  })
+  btn.addEventListener('click', () => {
+    // findFromDOM 只认携带 cmTile 的节点（本版本 CM6 的 Tile.get 语义）：
+    // 按钮自身是头部 widget 的子孙、无标记，须从头部根节点查找
+    const root = btn.closest(`.${CODE_CARD_CLASS_NAMES.header}`)
+    const view = root ? EditorView.findFromDOM(root) : EditorView.findFromDOM(btn)
+    if (view) {
+      view.dispatch({ effects: codeCardCopyRequest.of(code) })
+    }
+    btn.classList.add(CODE_CARD_CLASS_NAMES.copyDone)
+    setTimeout(() => {
+      btn.classList.remove(CODE_CARD_CLASS_NAMES.copyDone)
+    }, 1200)
+  })
+  return btn
 }
 
 // ---- 装饰实例缓存（增量与全量产出相同实例，RangeSet.eq 前提） ----
@@ -110,11 +230,20 @@ function cardLineDeco(cls: string): ReturnType<typeof Decoration.line> {
 }
 
 const headerDecos = new Map<string, ReturnType<typeof Decoration.widget>>()
-function headerDeco(label: string, languageId: string | null): ReturnType<typeof Decoration.widget> {
-  const key = `${label}\u0000${languageId ?? ''}`
+function headerDeco(
+  label: string,
+  languageId: string | null,
+  copy: boolean,
+  code: string,
+): ReturnType<typeof Decoration.widget> {
+  const key = `${label}\u0000${languageId ?? ''}\u0000${copy ? 1 : 0}\u0000${code}`
   let deco = headerDecos.get(key)
   if (!deco) {
-    deco = Decoration.widget({ widget: new CodeCardHeaderWidget(label, languageId), block: true, side: -1 })
+    deco = Decoration.widget({
+      widget: new CodeCardHeaderWidget(label, languageId, copy, code),
+      block: true,
+      side: -1,
+    })
     headerDecos.set(key, deco)
   }
   return deco
@@ -174,7 +303,7 @@ export function buildCodeCardDecorations(
   selection: EditorSelection,
   fm: { end: number } | null,
   fences: readonly FenceSpan[],
-  config: Pick<CodeCardConfig, 'lineNumbers'> = { lineNumbers: true },
+  config: Pick<CodeCardConfig, 'lineNumbers' | 'copyButton'> = { lineNumbers: true, copyButton: true },
 ): Array<Range<Decoration>> {
   const out: Array<Range<Decoration>> = []
   for (const fence of fences) {
@@ -189,7 +318,10 @@ export function buildCodeCardDecorations(
     const lang = resolveCodeLanguage(fence.info)
     const trimmed = fence.info.trim()
     const label = lang?.displayName ?? (trimmed === '' ? 'Plain text' : trimmed)
-    out.push(headerDeco(label, lang?.id ?? null).range(fence.from, fence.from))
+    const editing = selectionTouchesRange(selection, fence.from, fence.to)
+    // 复制按钮：设置开启且非编辑态（编辑态隐藏，规格 #81）
+    const copy = config.copyButton && !editing
+    out.push(headerDeco(label, lang?.id ?? null, copy, fence.code).range(fence.from, fence.from))
     for (let n = openLine.number; n <= closeLine.number; n++) {
       const line = doc.line(n)
       const cls = [
@@ -207,7 +339,7 @@ export function buildCodeCardDecorations(
         out.push(linenumberDeco(n - openLine.number, widthCh).range(doc.line(n).from))
       }
     }
-    if (!selectionTouchesRange(selection, fence.from, fence.to)) {
+    if (!editing) {
       out.push(fenceHideDeco.range(openLine.from, openLine.to))
       out.push(fenceHideDeco.range(closeLine.from, closeLine.to))
     }

@@ -28,7 +28,7 @@ interface Item {
 }
 
 /** 装饰集合直驱（卡片装饰来自 StateField；围栏表来自 mermaidFencesField） */
-function decos(text: string, anchor: number, config?: { card?: boolean; lineNumbers?: boolean }): Item[] {
+function decos(text: string, anchor: number, config?: { card?: boolean; lineNumbers?: boolean; copyButton?: boolean }): Item[] {
   const state = EditorState.create({
     doc: text,
     extensions: [
@@ -37,7 +37,7 @@ function decos(text: string, anchor: number, config?: { card?: boolean; lineNumb
       codeCardConfigFacet.of({
         card: config?.card ?? true,
         lineNumbers: config?.lineNumbers ?? true,
-        copyButton: true,
+        copyButton: config?.copyButton ?? true,
         highlight: true,
       }),
       codeCardDecorations,
@@ -293,15 +293,62 @@ describe('卡内行号（#80）', () => {
   })
 })
 
+describe('复制按钮（#81）', () => {
+  it('呈现态：头部携带复制按钮与代码体原文', () => {
+    const w = decos(DOC, 0).find((i) => i.widget)!.widget!
+    expect(w.copy).toBe(true)
+    expect(w.code).toBe('let a = 1\n\nconst b = 2')
+  })
+
+  it('编辑态（光标在块内）：按钮不发射（隐藏）', () => {
+    for (const at of [FENCE_FROM, FENCE_FROM + 5, lineOf(DOC, CLOSE_LINE).from + 1]) {
+      expect(decos(DOC, at).find((i) => i.widget)!.widget!.copy, `at=${at}`).toBe(false)
+    }
+  })
+
+  it('非空选区与块相交：同单光标，按钮不发射', () => {
+    const state = EditorState.create({
+      doc: DOC,
+      extensions: [
+        liveDecorationsField,
+        mermaidFencesField,
+        codeCardConfigFacet.of({ card: true, lineNumbers: true, copyButton: true, highlight: true }),
+        codeCardDecorations,
+      ],
+      selection: EditorSelection.range(0, FENCE_FROM + 1),
+    })
+    expect(itemsOf(state.field(codeCardDecorations)).find((i) => i.widget)!.widget!.copy).toBe(false)
+  })
+
+  it('复制子开关关闭：两态均不发射按钮', () => {
+    expect(decos(DOC, 0, { copyButton: false }).find((i) => i.widget)!.widget!.copy).toBe(false)
+    expect(decos(DOC, FENCE_FROM + 4, { copyButton: false }).find((i) => i.widget)!.widget!.copy).toBe(false)
+  })
+
+  it('多块独立：光标在第一块内，其余块按钮保留', () => {
+    const text = '```js\na\n```\n\n```py\nx\n```'
+    const items = decos(text, text.indexOf('a'))
+    const widgets = items.filter((i) => i.widget).map((i) => i.widget!)
+    expect(widgets.map((w) => w.copy)).toEqual([false, true])
+  })
+})
+
 describe('头部 widget 形态', () => {
-  it('eq 按标签与语言 id 比较；toDOM 产出头部结构（标签 + 按钮区）', () => {
-    const w = new CodeCardHeaderWidget('JavaScript', 'javascript')
-    expect(w.eq(new CodeCardHeaderWidget('JavaScript', 'javascript'))).toBe(true)
-    expect(w.eq(new CodeCardHeaderWidget('Python', 'python'))).toBe(false)
+  it('eq 按标签/语言/copy/code 比较；toDOM 产出头部结构与复制按钮', () => {
+    const w = new CodeCardHeaderWidget('JavaScript', 'javascript', true, 'let a')
+    expect(w.eq(new CodeCardHeaderWidget('JavaScript', 'javascript', true, 'let a'))).toBe(true)
+    expect(w.eq(new CodeCardHeaderWidget('JavaScript', 'javascript', false, 'let a'))).toBe(false)
+    expect(w.eq(new CodeCardHeaderWidget('JavaScript', 'javascript', true, 'other'))).toBe(false)
     const dom = w.toDOM()
     expect(dom.className).toBe(CODE_CARD_CLASS_NAMES.header)
     expect(dom.querySelector(`.${CODE_CARD_CLASS_NAMES.headerLabel}`)!.textContent).toBe('JavaScript')
     expect(dom.querySelector(`.${CODE_CARD_CLASS_NAMES.headerActions}`)).not.toBeNull()
+    const btn = dom.querySelector(`button.${CODE_CARD_CLASS_NAMES.copy}`)!
+    expect(btn).not.toBeNull()
+    expect(btn.getAttribute('aria-label')).toBe('复制代码')
+    // copy=false 时按钮不渲染
+    const noCopy = new CodeCardHeaderWidget('JavaScript', 'javascript', false, 'let a').toDOM()
+    expect(noCopy.querySelector(`.${CODE_CARD_CLASS_NAMES.copy}`)).toBeNull()
   })
 
   it('纯数据构建可脱离 StateField 直驱（供对拍与阅读侧复用）', () => {

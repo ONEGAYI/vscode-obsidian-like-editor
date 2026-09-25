@@ -7,7 +7,17 @@ import { EditorView, keymap } from '@codemirror/view'
 import { defaultKeymap } from '@codemirror/commands'
 import '../../src/webview/main.css'
 
-const controller = new WebviewSyncController({ postMessage() {}, getState() {}, setState() {} })
+// 桥接 stub：记录最近一条出站消息（#81 复制链路断言依据；生产链路由宿主
+// 消费，测试只观测消息形态与载荷）
+const controller = new WebviewSyncController({
+  postMessage(message) {
+    ;(window as unknown as Record<string, unknown>)['__lastHostMessage'] = message
+  },
+  getState() {
+    return undefined
+  },
+  setState() {},
+})
 controller.mount(document.getElementById('app')!, [keymap.of(defaultKeymap)])
 Object.assign(window, { initTable(text: string) {
   controller.handleHostMessage({ kind: 'init', sessionId: 'native-input',
