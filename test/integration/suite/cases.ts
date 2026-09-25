@@ -567,6 +567,9 @@ async function waitViewState(
   file: string,
   match?: (v: ViewState) => boolean,
   panelIndex = 0,
+  /** 等待预算（默认 20s；mermaid 绘制层等重负载用例可放宽至 60s——
+   *  独立桌面宿主下高负载时段的懒加载解析 + 渲染偶发击穿默认预算） */
+  timeoutMs = 20000,
 ): Promise<ViewState> {
   return poll(`视图状态 ${file}`, async () => {
     const state = (await vscode.commands.executeCommand(CMD.viewState, wsUri(file).toString(), panelIndex)) as ViewState | undefined
@@ -574,7 +577,7 @@ async function waitViewState(
       return state
     }
     return undefined
-  })
+  }, timeoutMs)
 }
 
 /** #9 任务勾选 fixture（与 runTest.mjs 的 TASK_DOC 一致） */
@@ -4345,7 +4348,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
       kind: 'view.locate', offset: tailAnchor,
     })
     const state = await waitViewState('mermaid.md', (v) =>
-      (v.liveMermaidCount ?? -1) === 5 && v.paint?.mermaid?.rendered === 4)
+      (v.liveMermaidCount ?? -1) === 5 && v.paint?.mermaid?.rendered === 4, 0, 60000)
     assert(state.liveMermaidCount === 5,
       `live 围栏装饰数应为 5（4 有效 + 1 无效降级），实际 ${state.liveMermaidCount}`)
     // 绘制层断言（AGENTS 视觉层断言约定）：图真的画出来（rect 有面积 +
@@ -4381,11 +4384,13 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const editOffset = editing.selectionOffset ?? -1
     assert(editOffset >= fenceBody && editOffset <= fenceBody + 7,
       `光标应落在围栏区间（实际 ${editOffset}）`)
-    // 离开（回到文档首，围栏外）→ 恢复渲染
+    // 离开（回到文档首，围栏外）→ 恢复渲染：进入 4、离开 5 的完整往返
     await vscode.commands.executeCommand(CMD.postToPanel, uri, {
       kind: 'view.locate', offset: 0,
     })
-    await waitViewState('mermaid.md', (v) => (v.liveMermaidCount ?? -1) >= 4)
+    const restored = await waitViewState('mermaid.md', (v) => (v.liveMermaidCount ?? -1) === 5)
+    assert(restored.liveMermaidCount === 5,
+      `光标离开围栏后应恢复全部 5 个装饰（4 有效 + 1 降级），实际 ${restored.liveMermaidCount}`)
     // 纯视图交互零写回：磁盘不变（显隐切换不产生编辑事务）
     assert(await readDisk('mermaid.md') === diskBefore, '围栏显隐交互不得改写源文')
   }],
@@ -4396,7 +4401,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const uri = wsUri('mermaid.md').toString()
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
     const reading = await waitViewState('mermaid.md', (v) =>
-      v.viewMode === 'reading' && (v.readingMermaidCount ?? -1) === 5 && v.paint?.mermaid?.rendered === 4)
+      v.viewMode === 'reading' && (v.readingMermaidCount ?? -1) === 5 && v.paint?.mermaid?.rendered === 4, 0, 60000)
     assert(reading.readingMermaidCount === 5,
       `阅读图表容器数应为 5（4 渲染 + 1 降级），实际 ${reading.readingMermaidCount}`)
     assert(reading.paint?.mermaid?.visible === true, '阅读图表应真实绘制（rect + elementFromPoint）')
@@ -4414,17 +4419,17 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await vscode.commands.executeCommand(CMD.postToPanel, uri, {
       kind: 'view.locate', offset: tailAnchor,
     })
-    const live = await waitViewState('mermaid.md', (v) => (v.liveMermaidCount ?? -1) === 5)
+    const live = await waitViewState('mermaid.md', (v) => (v.liveMermaidCount ?? -1) === 5, 0, 60000)
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
     const reading = await waitViewState('mermaid.md', (v) =>
-      v.viewMode === 'reading' && (v.readingMermaidCount ?? -1) === 5)
+      v.viewMode === 'reading' && (v.readingMermaidCount ?? -1) === 5, 0, 60000)
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'live' })
     const tailAnchor2 = (await readDisk('mermaid.md')).indexOf('结尾段落')
     await vscode.commands.executeCommand(CMD.postToPanel, uri, {
       kind: 'view.locate', offset: tailAnchor2,
     })
     const back = await waitViewState('mermaid.md', (v) =>
-      v.viewMode === 'live' && (v.liveMermaidCount ?? -1) === 5)
+      v.viewMode === 'live' && (v.liveMermaidCount ?? -1) === 5, 0, 60000)
     assert(back.text === live.text, '模式切换不得改写文本')
     assert(back.docLength === live.docLength, '模式切换不得改变文档长度')
     assert(reading.text === live.text, '阅读渲染不写回')
