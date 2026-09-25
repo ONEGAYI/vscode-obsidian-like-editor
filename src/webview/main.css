@@ -371,6 +371,42 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* 零宽格没有可挂载原生 caret 的文字节点：仅在该格活动时将原生 caret
+   隐去，并在目标格内绘制同色光标。输入仍由 CM6 源文本管线处理。 */
+#app .cm-editor .cm-content:has(.vsidian-table-grid-empty-active) {
+  caret-color: transparent;
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-empty-active {
+  position: relative;
+}
+
+#app .cm-editor .cm-scroller .vsidian-table-grid-empty-active::after {
+  content: '';
+  display: none;
+  position: absolute;
+  left: 10px;
+  top: 4px;
+  height: 1.5em;
+  border-left: 1px solid currentColor;
+  pointer-events: none;
+  animation: vsidian-empty-caret-blink 1.2s steps(1, end) infinite;
+}
+
+#app .cm-editor.cm-focused .cm-scroller .vsidian-table-grid-empty-active::after {
+  display: block;
+}
+
+@keyframes vsidian-empty-caret-blink {
+  50% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #app .cm-editor .cm-scroller .vsidian-table-grid-empty-active::after {
+    animation: none;
+  }
+}
+
 #app .cm-editor .cm-scroller .vsidian-table-grid-row.vsidian-table-header-line > .vsidian-table-grid-cell {
   border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.45));
 }

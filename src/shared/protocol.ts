@@ -100,7 +100,7 @@ export type HostToWebview =
    *  真实键盘事件，以此通道验证导航装配 */
   | { kind: 'table.test.key'; key: 'tab' | 'shift-tab' | 'select-all' | 'backspace' | 'delete' }
   /** 测试钩子（#42）：在真实 webview 网格单元格派发鼠标点击及当前位置输入。 */
-  | { kind: 'table.test.cellClick'; rowIndex: number; columnIndex: number; point?: 'edge' | 'middle' }
+  | { kind: 'table.test.cellClick'; rowIndex: number; columnIndex: number; point?: 'edge' | 'middle' | 'right-edge' }
   | { kind: 'table.test.type'; text: string }
   /** 测试钩子（#43）：点击真实行/列抓手，验证选中态实际绘制。 */
   | { kind: 'table.test.select'; axis: 'row' | 'column'; index: number }
@@ -413,6 +413,8 @@ export interface PaintProbe {
   /** #42/#43 表格绘制：真宿主文本命中与计算样式；无表格/未选中为 null。 */
   table?: {
     cellVisible: boolean
+    /** 真宿主光标（零宽格使用格内绘制指示）的命中列；无可见光标时为 null。 */
+    caretGridColumn?: number | null
     gridDisplay: string | null
     cellBorderWidth: string | null
     rowOutlineColor: string | null
@@ -597,6 +599,8 @@ function isPaintProbe(v: unknown): v is PaintProbe {
     (v.table === undefined || (
       isObject(v.table) &&
       typeof v.table.cellVisible === 'boolean' &&
+      (v.table.caretGridColumn === undefined || v.table.caretGridColumn === null ||
+        isNonNegativeInt(v.table.caretGridColumn)) &&
       isNullOrString(v.table.gridDisplay) &&
       isNullOrString(v.table.cellBorderWidth) &&
       isNullOrString(v.table.rowOutlineColor) &&
@@ -1014,7 +1018,7 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
         v.key === 'backspace' || v.key === 'delete'
     case 'table.test.cellClick':
       return isNonNegativeInt(v.rowIndex) && isNonNegativeInt(v.columnIndex) &&
-        (v.point === undefined || v.point === 'edge' || v.point === 'middle')
+        (v.point === undefined || v.point === 'edge' || v.point === 'middle' || v.point === 'right-edge')
     case 'table.test.type':
       return isString(v.text)
     case 'table.test.select':

@@ -286,6 +286,7 @@ interface ViewState {
     caretColor: string | null
     table?: {
       cellVisible: boolean
+      caretGridColumn?: number | null
       gridDisplay: string | null
       cellBorderWidth: string | null
       rowOutlineColor: string | null
@@ -2046,6 +2047,42 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const live = await waitViewState('table42-empty.md', (v) => v.text === edited)
     assert(live.tableGrid?.selectedRowIsGrid === true, '空单元格输入后仍须保持网格')
     assert(live.tableGrid?.selectedRowCells[0]?.includes('新') === true, '空格输入应留在目标格')
+  }],
+
+  ['三列表格中格点击与空格输入：可见光标绘在目标列', async () => {
+    const name = 'table-middle-click.md'
+    const before = '| 左 | sss | 右 |\n| --- | --- | --- |\n| 带 |  | 末 |\n| 带 || 末 |\n'
+    await vscode.workspace.fs.writeFile(wsUri(name), Buffer.from(before))
+    await openWithEditor(name)
+    await waitSessionReady(name)
+    const uri = wsUri(name).toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri(name))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.cellClick', rowIndex: 0, columnIndex: 1, point: 'right-edge' })
+    const header = await waitViewState(name, (v) => v.tableGrid?.selectedRowIsGrid === true)
+    assert(header.paint?.table?.caretGridColumn === 1,
+      `点击表头中格后光标须在中列绘出：${JSON.stringify(header.paint?.table)}`)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.type', text: '中' })
+    await poll('表头中格写回', () => doc.getText().includes('sss中') ? true : undefined)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.cellClick', rowIndex: 1, columnIndex: 1, point: 'right-edge' })
+    const empty = await waitViewState(name, (v) => v.tableGrid?.selectedRowIsGrid === true &&
+      v.selectionOffset !== header.selectionOffset)
+    assert(empty.paint?.table?.caretGridColumn === 1,
+      `点击数据行空中格后光标须在中列绘出：${JSON.stringify(empty.paint?.table)}`)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.type', text: '空' })
+    await poll('空中格写回', () => doc.getText().includes('| 带 |  空| 末 |') ? true : undefined)
+    const latest = await waitViewState(name, (v) => v.tableGrid?.selectedRowCells[1]?.includes('空') === true)
+    assert(latest.tableGrid?.selectedRowCells[2]?.includes('末') === true, '右格不得接收中格输入')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.cellClick', rowIndex: 2, columnIndex: 1, point: 'right-edge' })
+    const zero = await waitViewState(name, (v) => v.tableGrid?.selectedRowCells[1] === '')
+    assert(zero.paint?.table?.caretGridColumn === 1,
+      `点击零宽空中格后光标须在中列绘出：${JSON.stringify(zero.paint?.table)}`)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'table.test.type', text: '零' })
+    await poll('零宽空中格写回', () => doc.getText().includes('| 带 |零| 末 |') ? true : undefined)
+    assert(await doc.save(), '三列表格保存失败')
+    assert((await readDisk(name)) === doc.getText(), '三列点击写回与磁盘回读须一致')
   }],
 
   ['阅读视图表格：真实 table 只读呈现与样式入口（#12）', async () => {

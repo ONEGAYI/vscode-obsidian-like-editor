@@ -526,6 +526,47 @@ describe('单元格编辑权威链路', () => {
     view.destroy()
   })
 
+  it.each(['text', 'empty', 'zero'] as const)('三列表格点击中间 %s 格后输入保持在第二列', (kind) => {
+    const row = kind === 'text' ? '| 带 | sss | 右 |'
+      : kind === 'empty' ? '| 带 |  | 右 |' : '| 带 || 右 |'
+    const doc = '| A | B | C |\n| --- | --- | --- |\n' + row + '\n'
+    const view = new EditorView({
+      parent: document.body.appendChild(document.createElement('div')),
+      state: EditorState.create({ doc, extensions: [livePreviewDecorations, tableEditing] }),
+    })
+    const cells = view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')[1]!
+      .querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')
+    expect(cells).toHaveLength(3)
+    const middle = cells[1]!
+    const ranges = splitTableRowCells(row, doc.indexOf(row))
+    const right = ranges[2]!.contentFrom
+    const hit = vi.spyOn(view, 'posAtCoords').mockReturnValue(right)
+    middle.dispatchEvent(new MouseEvent('mousedown', {
+      bubbles: true, cancelable: true, button: 0, buttons: 1, clientX: 440, clientY: 50,
+    }))
+    middle.dispatchEvent(new MouseEvent('mouseup', {
+      bubbles: true, cancelable: true, button: 0, clientX: 440, clientY: 50,
+    }))
+    const cursor = view.state.selection.main.head
+    expect(cursor).toBeGreaterThanOrEqual(ranges[1]!.contentFrom)
+    expect(cursor).toBeLessThanOrEqual(ranges[1]!.contentTo)
+    expect(view.state.selection.main.assoc).toBe(-1)
+    if (kind === 'zero') {
+      expect(view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-table-grid-row')[1]!
+        .querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')[1]!
+        .classList.contains('vsidian-table-grid-empty-active')).toBe(true)
+    }
+    view.dispatch({ changes: { from: cursor, insert: '中' }, userEvent: 'input.type' })
+    const editedLine = view.state.doc.line(3)
+    const editedCells = splitTableRowCells(editedLine.text, editedLine.from)
+    expect(editedLine.text.slice(editedCells[1]!.contentFrom - editedLine.from,
+      editedCells[1]!.contentTo - editedLine.from)).toContain('中')
+    expect(editedLine.text.slice(editedCells[2]!.contentFrom - editedLine.from,
+      editedCells[2]!.contentTo - editedLine.from)).toBe('右')
+    hit.mockRestore()
+    view.destroy()
+  })
+
   it.each(['backward', 'forward'] as const)('单元格边界 %s 删除不会删掉隐藏的表格标记', (direction) => {
     const from = TABLE_DOC.indexOf('苹果')
     const view = makeEditView(TABLE_DOC, direction === 'backward' ? from : from + 2)

@@ -225,15 +225,18 @@ function tableGridCellDeco(align: TableAlign | null): ReturnType<typeof Decorati
 
 /** 零宽空格仍须占一列；widget 仅在该行进入 CM6 视口时生成 DOM。 */
 class EmptyTableCellWidget extends WidgetType {
+  constructor(private readonly active = false) { super() }
   toDOM(): HTMLElement {
     const span = document.createElement('span')
-    span.className = LIVE_CLASS_NAMES.tableGridCell
+    span.className = this.active
+      ? `${LIVE_CLASS_NAMES.tableGridCell} vsidian-table-grid-empty-active`
+      : LIVE_CLASS_NAMES.tableGridCell
     span.setAttribute('aria-label', '空单元格')
     span.addEventListener('mousedown', (event) => {
       const view = EditorView.findFromDOM(span)
       if (!view) return
       const pos = view.posAtDOM(span)
-      view.dispatch({ selection: EditorSelection.single(pos), scrollIntoView: true })
+      view.dispatch({ selection: EditorSelection.create([EditorSelection.cursor(pos, -1)]), scrollIntoView: true })
       event.preventDefault()
     })
     return span
@@ -243,6 +246,7 @@ class EmptyTableCellWidget extends WidgetType {
   }
 }
 const emptyTableCellDeco = Decoration.widget({ widget: new EmptyTableCellWidget() })
+const activeEmptyTableCellDeco = Decoration.widget({ widget: new EmptyTableCellWidget(true) })
 
 type GridRowKind = 'header' | 'row'
 interface TableGridPlan {
@@ -380,6 +384,7 @@ function emitTableRowMarks(
   doc: Text,
   node: SyntaxNode,
   path: SyntaxNode[],
+  selection: EditorSelection,
   grid: boolean,
   columns?: number,
 ): void {
@@ -394,7 +399,8 @@ function emitTableRowMarks(
     if (grid) {
       out.push(cell.to > cell.from
         ? tableGridCellDeco(aligns?.[col] ?? null).range(cell.from, cell.to)
-        : emptyTableCellDeco.range(cell.from))
+        : (selection.ranges.some((range) => range.empty && range.head === cell.from)
+          ? activeEmptyTableCellDeco : emptyTableCellDeco).range(cell.from))
     }
     if (cell.contentTo > cell.contentFrom) {
       const deco = tableCellDeco(header, aligns && col < aligns.length ? aligns[col]! : null)
@@ -592,7 +598,7 @@ function emitForRange(
         if (lineNo >= fromLine && lineNo <= toLine) {
           addLineCls(lineNo, LIVE_CLASS_NAMES.tableHeaderLine)
           const grid = gridPlans.get(tableAncestor(path)?.from ?? -1)
-          emitTableRowMarks(out, doc, node, path, Boolean(grid && gridLines.has(lineNo)), grid?.columns)
+          emitTableRowMarks(out, doc, node, path, selection, Boolean(grid && gridLines.has(lineNo)), grid?.columns)
         }
         return
       }
@@ -600,7 +606,7 @@ function emitForRange(
         const lineNo = doc.lineAt(node.from).number
         if (lineNo >= fromLine && lineNo <= toLine) {
           const grid = gridPlans.get(tableAncestor(path)?.from ?? -1)
-          emitTableRowMarks(out, doc, node, path, Boolean(grid && gridLines.has(lineNo)), grid?.columns)
+          emitTableRowMarks(out, doc, node, path, selection, Boolean(grid && gridLines.has(lineNo)), grid?.columns)
         }
         return
       }
@@ -1196,6 +1202,9 @@ const gridCellMouseSelection = EditorView.mouseSelectionStyle.of((view, event) =
   const hit = (e: MouseEvent) => clamp(view.posAtCoords({ x: e.clientX, y: e.clientY }) ?? from)
   const start = hit(event)
   let anchor = event.shiftKey ? clamp(view.state.selection.main.anchor) : start
+  const selection = (head: number) => anchor === head
+    ? EditorSelection.create([EditorSelection.cursor(head, head === to ? -1 : head === from ? 1 : 0)])
+    : EditorSelection.single(anchor, head)
   const word = event.detail === 2 ? view.state.wordAt(start) : null
   let startFrom = event.detail >= 3 ? from : word ? clamp(word.from) : start
   let startTo = event.detail >= 3 ? to : word ? clamp(word.to) : start
@@ -1203,7 +1212,7 @@ const gridCellMouseSelection = EditorView.mouseSelectionStyle.of((view, event) =
   return {
     get(current, extend) {
       const end = hit(current)
-      if (extend) return EditorSelection.single(anchor, end)
+      if (extend) return selection(end)
       if (event.detail >= 3) return EditorSelection.single(from, to)
       if (word) {
         const currentWord = view.state.wordAt(end)
@@ -1211,7 +1220,7 @@ const gridCellMouseSelection = EditorView.mouseSelectionStyle.of((view, event) =
           ? EditorSelection.single(startTo, clamp(currentWord?.from ?? end))
           : EditorSelection.single(startFrom, clamp(currentWord?.to ?? end))
       }
-      return EditorSelection.single(anchor, end)
+      return selection(end)
     },
     update(update) {
       if (!update.docChanged) return
@@ -1244,8 +1253,10 @@ function clampGridCellPointer(event: MouseEvent, view: EditorView): boolean {
   const from = range.contentFrom
   const to = range.contentTo
   const hit = view.state.selection.main.head
-  if (hit !== null && hit >= from && hit <= to) return false
-  view.dispatch({ selection: EditorSelection.single(hit === null || hit < from ? from : to) })
+  if (hit >= from && hit < to) return false
+  const pos = hit < from ? from : to
+  if (hit === to && view.state.selection.main.assoc === -1) return false
+  view.dispatch({ selection: EditorSelection.create([EditorSelection.cursor(pos, pos === to ? -1 : 1)]) })
   event.preventDefault()
   return true
 }

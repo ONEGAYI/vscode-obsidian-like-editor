@@ -107,9 +107,11 @@ describe('CM6 dark 声明随宿主主题热跟随', () => {
   })
 })
 
-describe('光标颜色零硬编码钉子（main.css 源文本）', () => {
-  it('不得出现 caret-color 或 .cm-cursor/.cm-selectionBackground 颜色覆盖规则', () => {
-    expect(css, 'caret 颜色应由 baseTheme 明暗变体接管，不写 caret-color').not.toMatch(/caret-color/)
+describe('光标颜色按主题适配（main.css 源文本）', () => {
+  it('只允许零宽格隐藏原生光标，其他位置交给 baseTheme 明暗变体', () => {
+    expect(css.match(/caret-color\s*:/g)).toHaveLength(1)
+    expect(css).toMatch(/#app \.cm-editor \.cm-content:has\(\.vsidian-table-grid-empty-active\)\s*\{\s*caret-color:\s*transparent;/)
+    expect(css).toMatch(/\.vsidian-table-grid-empty-active::after[\s\S]*?border-left:\s*1px solid currentColor;/)
     expect(css, '未启用 drawSelection，不应残留 .cm-cursor 颜色规则').not.toMatch(/\.cm-cursor/)
     expect(css, '未启用 drawSelection，不应残留 .cm-selectionBackground 颜色规则')
       .not.toMatch(/\.cm-selectionBackground/)

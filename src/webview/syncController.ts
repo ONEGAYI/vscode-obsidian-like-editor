@@ -750,7 +750,8 @@ export class WebviewSyncController {
           const cell = row?.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')[message.columnIndex]
           if (cell) {
             const rect = cell.getBoundingClientRect()
-            const x = rect.left + Math.min(message.point === 'middle' ? 35 : 15,
+            const x = rect.left + Math.min(message.point === 'right-edge' ? rect.width - 2
+              : message.point === 'middle' ? 35 : 15,
               Math.max(1, rect.width - 1))
             const y = rect.top + rect.height / 2
             cell.dispatchEvent(new MouseEvent('mousedown', {
@@ -2410,6 +2411,48 @@ export class WebviewSyncController {
     } catch {
       // jsdom 无布局和 elementFromPoint；真宿主才能证明实际可见。
     }
+    let caretGridColumn: number | null = null
+    try {
+      const selection = window.getSelection()
+      if (selection?.isCollapsed && selection.rangeCount > 0 &&
+          selection.focusNode && view.contentDOM.contains(selection.focusNode)) {
+        const rect = selection.getRangeAt(0).getBoundingClientRect()
+        // 零宽格的 DOM Selection 锚在 .cm-content 上，浏览器给出 0×0 Range；
+        // CM6 仍能按光标关联侧返回实际排版坐标。
+        const point = rect.height > 0 ? rect : view.coordsAtPos(
+          view.state.selection.main.head, view.state.selection.main.assoc || -1)
+        if (point) {
+          const hit = document.elementFromPoint(point.left + 1,
+            (point.top + point.bottom) / 2)
+          const cell = hit?.closest<HTMLElement>('.vsidian-table-grid-row > .vsidian-table-grid-cell')
+          const row = cell?.parentElement
+          if (cell && row) {
+            caretGridColumn = [...row.querySelectorAll(':scope > .vsidian-table-grid-cell')].indexOf(cell)
+          }
+        }
+      }
+    } catch {
+      // jsdom 无绘制位置；只有真实宿主可断言光标所在格。
+    }
+    const activeEmpty = view.contentDOM.querySelector<HTMLElement>('.vsidian-table-grid-empty-active')
+    if (activeEmpty) {
+      try {
+        const rect = activeEmpty.getBoundingClientRect()
+        const caretStyle = getComputedStyle(activeEmpty, '::after')
+        const nativeCaret = getComputedStyle(contentEl).caretColor
+        const hit = document.elementFromPoint(rect.left + 11, rect.top + 14)
+        if (rect.width > 0 && rect.height > 0 &&
+            Number.parseFloat(caretStyle.borderLeftWidth) > 0 &&
+            (nativeCaret === 'transparent' || nativeCaret === 'rgba(0, 0, 0, 0)') &&
+            hit && activeEmpty.contains(hit)) {
+          const row = activeEmpty.parentElement
+          if (row) caretGridColumn = [...row.querySelectorAll(':scope > .vsidian-table-grid-cell')]
+            .indexOf(activeEmpty)
+        }
+      } catch {
+        // 绘制探针不干预编辑状态。
+      }
+    }
     const cellStyle = firstCell ? getComputedStyle(firstCell) : null
     const rowStyle = selectedRow ? getComputedStyle(selectedRow) : null
     const rowCellStyle = selectedRowCell ? getComputedStyle(selectedRowCell) : null
@@ -2434,6 +2477,7 @@ export class WebviewSyncController {
       caretColor,
       table: {
         cellVisible,
+        caretGridColumn,
         gridDisplay: gridRow ? getComputedStyle(gridRow).display : null,
         cellBorderWidth: cellStyle?.borderLeftWidth ?? null,
         rowOutlineColor: rowStyle?.outlineColor ?? null,
