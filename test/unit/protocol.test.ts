@@ -480,6 +480,73 @@ describe('isWebviewToHost', () => {
     expect(isHostToWebview({ kind: 'outline.test.itemClick' })).toBe(false)
   })
 
+  it('view.state 的 outline 观测（#67）：expandLevel/visibleIndices/滑块与箭头绘制字段校验', () => {
+    const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
+    const legal = {
+      active: true,
+      togglePainted: false,
+      panelPainted: false,
+      toggleIconSizePx: null,
+      panelScrollHeightPx: null,
+      panelClientHeightPx: null,
+      items: [] as unknown[],
+      toggleAriaLabel: null,
+      panelAriaLabel: null,
+      locatedItemIndex: null,
+      locatedText: null,
+      locatedPainted: false,
+    }
+    // 合法：档位 0-5 整数、可见索引非负整数数组、三个绘制命中布尔
+    expect(isWebviewToHost({
+      ...base,
+      outline: { ...legal, expandLevel: 0, visibleIndices: [0, 1, 3],
+        sliderPainted: true, sliderActiveDotPainted: true, chevronPainted: false },
+    })).toBe(true)
+    expect(isWebviewToHost({
+      ...base,
+      outline: { ...legal, expandLevel: 5, visibleIndices: [], sliderPainted: false,
+        sliderActiveDotPainted: false, chevronPainted: false },
+    })).toBe(true)
+    // 非法：档位越界（-1、6）、小数、字符串
+    for (const level of [-1, 6, 2.5, '2']) {
+      expect(isWebviewToHost({ ...base, outline: { ...legal, expandLevel: level,
+        visibleIndices: [], sliderPainted: false, sliderActiveDotPainted: false, chevronPainted: false } }))
+        .toBe(false)
+    }
+    // 非法：visibleIndices 非数组 / 含负数 / 含非整数
+    expect(isWebviewToHost({ ...base, outline: { ...legal, expandLevel: 2, visibleIndices: '0',
+      sliderPainted: false, sliderActiveDotPainted: false, chevronPainted: false } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, expandLevel: 2, visibleIndices: [0, -1],
+      sliderPainted: false, sliderActiveDotPainted: false, chevronPainted: false } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, expandLevel: 2, visibleIndices: [0.5],
+      sliderPainted: false, sliderActiveDotPainted: false, chevronPainted: false } })).toBe(false)
+    // 非法：绘制字段非布尔
+    expect(isWebviewToHost({ ...base, outline: { ...legal, expandLevel: 2, visibleIndices: [],
+      sliderPainted: 1, sliderActiveDotPainted: false, chevronPainted: false } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, expandLevel: 2, visibleIndices: [],
+      sliderPainted: false, sliderActiveDotPainted: 'x', chevronPainted: false } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, expandLevel: 2, visibleIndices: [],
+      sliderPainted: false, sliderActiveDotPainted: false, chevronPainted: null } })).toBe(false)
+  })
+
+  it('outline.test.expandClick / outline.test.chevronClick 测试钩子消息校验（#67）', () => {
+    // expandClick：档位 0-5 整数
+    for (const level of [0, 1, 2, 3, 4, 5]) {
+      expect(isHostToWebview({ kind: 'outline.test.expandClick', level })).toBe(true)
+    }
+    expect(isHostToWebview({ kind: 'outline.test.expandClick', level: -1 })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.expandClick', level: 6 })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.expandClick', level: 1.5 })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.expandClick', level: '2' })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.expandClick' })).toBe(false)
+    // chevronClick：非负整数 index（与 itemClick 同口径）
+    expect(isHostToWebview({ kind: 'outline.test.chevronClick', index: 0 })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.chevronClick', index: 3, extra: 1 })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.chevronClick', index: -1 })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.chevronClick', index: '0' })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.chevronClick' })).toBe(false)
+  })
+
   it('表格绘制样本校验：可见性和边框计算值类型必须可信', () => {
     const base = { kind: 'view.state', text: '| A |', docLength: 5, lineCount: 1, renderedLines: 1 }
     const table = {
