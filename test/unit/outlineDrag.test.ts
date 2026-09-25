@@ -31,7 +31,10 @@ function applyChanges(
   return out
 }
 
-/** 变更序列不变式：升序且互不重叠（CM6 单事务 dispatch 的前提） */
+/** 变更序列不变式：升序且互不重叠（CM6 单事务 dispatch 的前提）。
+ *  接缝处的相邻段（前段终点 === 后段起点）合法——「删源段 + 插入搬移段」
+ *  在插入点紧邻源段之后时正是此形态（生产判据 outlineChangesOrdered
+ *  同口径：只拦真重叠与乱序，见 R2-7 契约测试） */
 function assertOrderedChanges(
   changes: ReadonlyArray<{ offset: number; length: number; text: string }>,
   docLength: number,
@@ -41,7 +44,7 @@ function assertOrderedChanges(
     expect(c.offset, `变更起点应为非负（实际 ${c.offset}）`).toBeGreaterThanOrEqual(0)
     expect(c.offset + c.length, `变更终点不得越界（实际 ${c.offset + c.length} > ${docLength}）`)
       .toBeLessThanOrEqual(docLength)
-    expect(c.offset, `变更应升序（${c.offset} 应大于前项终点 ${prevEnd}）`).toBeGreaterThan(prevEnd)
+    expect(c.offset, `变更应升序且不重叠（${c.offset} 不应小于前项终点 ${prevEnd}）`).toBeGreaterThanOrEqual(prevEnd)
     prevEnd = c.offset + c.length
   }
 }
@@ -305,6 +308,53 @@ describe('移动计划：容器内 / 缩进标题的搬移原子（第 3 轮复�
     const result = applyChanges(text, plan.changes)
     expect(result).toBe('- # T\n\n# 顶层\n顶层内容\n')
     assertMovedSegmentIsolated(text, result, plan)
+  })
+})
+
+describe('移动计划：深层嵌套容器（每层 ≥4 空格缩进）的搬移原子（第 4 轮复核 P2）', () => {
+  it('4 空格嵌套 ATX：movedText 逐字节含列表标记、正文与分隔线（原位搬移文档不变）', () => {
+    // 旧实现把标题区算到远处的 `---`：搬移段变成 `    # 孙\n\n`——`- ` 标记、
+    // 段内正文与分隔线途中被删（用户可见的数据丢失）
+    const text = '  - 父\n    - # 孙\n    正文\n---\n\n# 顶层\n顶层内容\n'
+    const doc = Text.of(text.split('\n'))
+    const items = extractOutline(doc)
+    const plan = outlineMovePlan(doc, items, 0, 1, 'before')!
+    assertOrderedChanges(plan.changes, doc.length)
+    expect(plan.movedText).toBe('    - # 孙\n    正文\n---\n\n')
+    // 拖到紧邻的下一段之前（物理位置不变的原地搬移）：文档逐字节不变
+    const result = applyChanges(text, plan.changes)
+    expect(result).toBe(text)
+    assertMovedSegmentIsolated(text, result, plan)
+  })
+
+  it('四层嵌套（每层 4 空格递进）：movedText 与写回结果同样逐字节保留', () => {
+    const text = '- 一\n    - 二\n        - 三\n            - # 四\n            正文\n---\n\n# 顶层\n顶层内容\n'
+    const doc = Text.of(text.split('\n'))
+    const items = extractOutline(doc)
+    const plan = outlineMovePlan(doc, items, 0, 1, 'before')!
+    assertOrderedChanges(plan.changes, doc.length)
+    expect(plan.movedText).toBe('            - # 四\n            正文\n---\n\n')
+    const result = applyChanges(text, plan.changes)
+    expect(result).toBe(text)
+    assertMovedSegmentIsolated(text, result, plan)
+  })
+
+  it('深层嵌套内的 Setext 标题被搬移：整标题区（内容+下划线）规范化为 ATX，列表标记保留', () => {
+    // 内容行 `    - T`（嵌套列表项，内容列 6）、下划线 `      ===`（同内容列）
+    // ——旧实现标题区起点校验被拒 → 兜底把 `- ` 一起替换，movedText 变成
+    // `    # T\n\n`（嵌套列表标记丢失、块结构改变）；Setext → ATX 规范化与
+    // 既有口径一致（只能表达 1–2 级），故原位搬移后文档为规范化形态
+    const text = '  - 父\n    - T\n      ===\n\n# 顶层\n顶层内容\n'
+    const doc = Text.of(text.split('\n'))
+    const items = extractOutline(doc)
+    const plan = outlineMovePlan(doc, items, 0, 1, 'before')!
+    assertOrderedChanges(plan.changes, doc.length)
+    expect(plan.movedText).toBe('    - # T\n\n')
+    const result = applyChanges(text, plan.changes)
+    expect(result).toBe('  - 父\n    - # T\n\n# 顶层\n顶层内容\n')
+    // 搬移段外的字节逐字节零变更（`  - 父` 与 `# 顶层` 段原样）
+    expect(result.startsWith('  - 父\n')).toBe(true)
+    expect(result.endsWith('\n# 顶层\n顶层内容\n')).toBe(true)
   })
 })
 

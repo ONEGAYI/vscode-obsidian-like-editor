@@ -11,7 +11,9 @@
 //   headingSpan）为准——真条目的几何不再靠行文本启发式推断（第 3 轮复核
 //   ①②③）；启发式（结构前缀 + ATX/Setext 判定）只作手写/陈旧条目的兜底，
 //   且已按结构前缀口径与容器判据修正（Unicode 空白不当前缀、缩进后的容器
-//   标记可识别、标记链相等即同一容器、列表项内容列续行可认）
+//   标记可识别、标记链相等即同一容器、列表项内容列续行可认）；第 4 轮复核
+//   P2：结构前缀扫描不再设缩进上限（深层嵌套容器的标记链照常识别，内容列
+//   与语法树起点对齐，权威范围因此对深层嵌套成立）
 // - outlineCollapse.ts 的展开集合状态机消费同款父子结构（栈算法在此
 //   复算 parents——两边输入同为「文档序 level 序列」，语义由契约测试对拍）
 // - 变更计划全部输出 SerChange（升序互不重叠）：调用方一次 CM6 事务
@@ -151,24 +153,28 @@ interface StructuralPrefix {
 }
 
 /**
- * 行文本 → 结构前缀（≤3 个 ASCII 空白缩进 + 容器标记链，可交错嵌套）与
+ * 行文本 → 结构前缀（任意长度 ASCII 空白缩进 + 容器标记链，可交错嵌套）与
  * 余下内容。**只认 ASCII 空格/制表符与容器标记**：U+3000/NBSP 等 Unicode
  * 空白是标题内容而非缩进（第 3 轮复核 ①：按 trimStart 切前缀会把它们吞进
  * 前缀，使非 ASCII 空白开头的标题被改写成非标题）。缩进计入前缀当且仅当
  * 其后是容器标记或 ATX 标记（`  - # T` 的 `  - `、`   # T` 的 `   `），否则
  * 留在 rest（`  ===` 的 rest 仍是自身，Setext 续行判定据此比较行首空白数）。
+ *
+ * 缩进**不设上限**（第 4 轮复核 P2）：≤3 空格是 ATX 标题的 CommonMark 规则
+ * ——那是「这行是不是标题」的判定，归解析器（extractOutline 只产真标题）；
+ * 本扫描器的职责仅是「认出容器标记链」。嵌套容器的缩进按父级内容列递进
+ * （`  - 父` 的内容列 4 上的 `    - # 孙`），深层嵌套必然出现 ≥4 空格——
+ * 设上限会让标记链认不出来、内容列算短，权威范围校验因此被拒并回落几何
+ * 启发式（实测把正文与分隔线整段当标题区吞掉）。
  */
 export function outlineSplitContainerPrefix(text: string): StructuralPrefix {
   let pos = 0
   const markers: string[] = []
   for (;;) {
-    // 每层容器标记前允许 ≤3 个 ASCII 空白的缩进（CommonMark 缩进口径；4 空格
-    // 及以上不是标题——交给解析器与既有语义处理）
+    // 每层容器标记前允许任意长度的 ASCII 空白缩进（是否算标题由解析器判）
     let k = pos
-    let indent = 0
-    while (indent < 3 && (text[k] === ' ' || text[k] === '\t')) {
+    while (text[k] === ' ' || text[k] === '\t') {
       k += 1
-      indent += 1
     }
     if (text[k] === '>') {
       markers.push('>')
@@ -217,7 +223,13 @@ export function outlineHeadingPrefix(doc: Text, item: { line: number }): string 
  *  review-loops 第 2 轮：按容器标记链之后的内容判定——`> # T` / `   # T` /
  *  `- # T` 都是 ATX 标题，此前按列 0 判定会让它们落入 Setext 扫描。
  *  第 3 轮复核 ③：改为在结构前缀（含「缩进后的容器标记」）之后判定，且不
- *  做 trimStart（Unicode 空白不是 ATX 标记前置） */
+ *  做 trimStart（Unicode 空白不是 ATX 标记前置）。
+ *  第 4 轮复核 P2（缩进上限放宽的已知副作用）：缩进 ≥4 的 `    # T` 现在也
+ *  判是 ATX（旧口径判否 → 进入 Setext 下划线扫描）。该行不是真标题（4 空格
+ *  `#` 是缩进代码块，解析器不产条目——契约测试钉住），只可能来自手写/陈旧
+ *  条目：单行收敛比旧口径（可能命中远处 `===` 把两行当标题区）更保守。
+ *  放宽放在扫描器而非权威范围校验内：内容列、前缀、续行判定三处共用同一
+ *  口径，分叉会让「起点等于内容列」的校验失去单一事实源 */
 function isAtxLine(lineText: string): boolean {
   return ATX_MARK_RE.test(outlineSplitContainerPrefix(lineText).rest)
 }
@@ -259,10 +271,14 @@ function sameContainerAsHeading(first: StructuralPrefix, candidate: StructuralPr
 
 /**
  * 权威标题区（outline.ts 的 headingSpan = 语法树 heading 节点范围）：
- * 越界（起点 <0 或终点 > doc.length）、倒置（from > to）、与条目行号不同源、
- * 或起点不等于标题内容列（写回会重复/丢失字节）时返回 null——调用方回退
- * 几何启发式（手写/陈旧条目）。真条目恒命中：节点范围与内容列同口径
- * （复核 ③ 的口径单一化）。
+ * 越界（起点 <0 或终点 > doc.length）、退化范围、与条目行号不同源、或起点
+ * 不等于标题内容列（写回会重复/丢失字节）时返回 null——调用方回退几何
+ * 启发式（手写/陈旧条目）。退化范围含两种同源形态：倒置（from > to）与零长
+ * （from === to）——零长范围虽落在合法位置，但按它替换等于「不改任何字节又
+ * 插入一行 ATX 文本」，结果是拼接标题（`# 新名` 紧贴原标题），必须一并回退
+ * 到兜底的单行标题区。真条目恒命中：节点范围与内容列同口径（复核 ③ 的口径
+ * 单一化），且节点范围非零长（from = 内容起点 < 标题块行尾 = to；零长形态
+ * 只可能来自未来生产者交出的退化范围，属纵深防御）。
  */
 function authoritativeHeadingSpan(doc: Text, item: RewritableItem): { from: number; to: number } | null {
   const span = item.headingSpan
@@ -270,7 +286,7 @@ function authoritativeHeadingSpan(doc: Text, item: RewritableItem): { from: numb
     return null
   }
   const { from, to } = span
-  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to > doc.length || from > to) {
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to > doc.length || from >= to) {
     return null
   }
   const line = doc.lineAt(from)
@@ -305,8 +321,8 @@ export function outlineHeadingSpan(doc: Text, item: RewritableItem): { from: num
     return { from: contentFrom, to: start.to }
   }
   const first = outlineSplitContainerPrefix(startText)
-  // Setext：向下逐行找同容器的下划线行（内容行可多行；下划线行缩进 ≤3 空格
-  // 属行内缩进，按结构前缀之后的余下内容判定）
+  // Setext：向下逐行找同容器的下划线行（内容行可多行；下划线行自身的行首
+  // 缩进按结构前缀之后的余下内容判定，不设上限——续行可落在嵌套容器缩进上）
   for (let n = startLine + 1; n <= doc.lines; n++) {
     const line = doc.line(n)
     const lineText = doc.sliceString(line.from, line.to)
