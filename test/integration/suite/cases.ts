@@ -2752,9 +2752,11 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(state.appliedEdits === 0, `歧义/缺失链路不得产生 applyEdit，实际 ${state.appliedEdits}`)
     assert(state.version === versionBefore, `版本不得变化（${versionBefore} → ${state.version}）`)
 
-    // 大小写语义随宿主平台：Windows 本地（NTFS 语义）大小写不敏感命中
-    //（面板此前未退场——以上拦截意图不打开编辑器）
-    await injectWikilink(uri, process.platform === 'win32' ? 'casenote' : 'CaseNote')
+    // 大小写语义随宿主平台：两平台注入同名小写 'casenote'——Windows 本地
+    //（NTFS 语义）不敏感命中 CaseNote.md；POSIX 宿主严格匹配为 not-found
+    //（注入端不得按平台翻转：精确名 'CaseNote' 在严格语义下必然命中打开，
+    // 与下方 not-found 断言矛盾，Linux 宿主上必超时）
+    await injectWikilink(uri, 'casenote')
     if (process.platform === 'win32') {
       await poll('大小写不敏感目标被打开', () =>
         vscode.window.activeTextEditor?.document.uri.toString() === wsUri('CaseNote.md').toString()
