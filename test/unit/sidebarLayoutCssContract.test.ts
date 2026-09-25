@@ -65,7 +65,7 @@ describe('侧栏布局骨架 CSS 契约（#53）', () => {
     const bar = rule('#app .vsidian-sidebar .vsidian-sidebar-toolbar')
     expect(bar).toMatch(/height:\s*var\(--vsidian-toolbar-height,\s*30px\)/)
     // 顶栏按钮与面板内容左对齐（同一左右内边距，侧栏观感统一）
-    expect(bar).toMatch(/padding:\s*0 8px/)
+    expect(bar).toMatch(/padding:\s*0 12px/)
     const mainBar = rule('#app .vsidian-toolbar')
     expect(mainBar).toMatch(/height:\s*var\(--vsidian-toolbar-height,\s*30px\)/)
     expect(rule('#app .vsidian-sidebar .vsidian-sidebar-panel')).toMatch(/flex:\s*1 1 auto/)

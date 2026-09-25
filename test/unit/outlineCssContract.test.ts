@@ -48,11 +48,11 @@ describe('大纲面板显隐（#54）', () => {
     expect(panel).toMatch(/min-height:\s*0/)
   })
 
-  it('面板内容与侧栏边缘有内边距（左右 8px，不贴边框线）', () => {
+  it('面板内容与侧栏边缘有内边距（左右 12px，不贴边框线）', () => {
     // 用户可见的留白：级 1 条目缩进为 0，面板本体须自带左右 padding，
     // 否则内容直接顶着侧栏左缘分隔线/右缘
     const panel = rule('#app .vsidian-sidebar.vsidian-outline-active .vsidian-outline-panel')
-    expect(panel).toMatch(/padding:\s*4px 8px/)
+    expect(panel).toMatch(/padding:\s*4px 12px/)
   })
 })
 
