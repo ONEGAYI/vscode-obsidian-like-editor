@@ -442,6 +442,11 @@ interface ViewState {
     items: Array<{ level: number; text: string; line: number }>
     toggleAriaLabel: string | null
     panelAriaLabel: string | null
+    /** #66 当前控制域条目（视口顶行向上最近标题；null = 无标题/首标题前） */
+    locatedItemIndex: number | null
+    locatedText: string | null
+    /** 高亮横条绘制证据（中心点命中 + computed 背景非全透明） */
+    locatedPainted: boolean
   }
 }
 
@@ -4535,6 +4540,95 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(opened.outline!.items[100]!.text === '第 50 章小节',
       `末条应为「第 50 章小节」，实际 ${JSON.stringify(opened.outline!.items[100])}`)
     assert(opened.paint?.textVisible === true, '长大纲展开态正文应仍可见')
+
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-long.md', (v) => v.sidebar?.open === false)
+  }],
+
+  // ---- #66 大纲点击跳转与常驻高亮 ----
+
+  ['大纲点击跳转与常驻高亮：双模式定位、绘制层高亮、零写回、防抖动护栏（#66）', async () => {
+    // 断言口径（视觉层断言必查）：
+    // - 点击跳转：live 光标落标题行首（selectionOffset 对拍宿主 offset）、
+    //   reading 锚点为标题块 start（readingAnchorStart 对拍）——复用
+    //   view.locate 双模式路径，零 edit.request / 版本不变
+    // - 常驻高亮：locatedItemIndex/locatedText 状态对拍 + locatedPainted
+    //   绘制层证据（elementFromPoint 命中 + computed 背景非全透明——
+    //   样式注入失效时高亮横条不可见，此断言必失败）
+    // - 防抖动护栏：跳转居中滚动后视口顶行在目标标题上方（上一控制域），
+    //   程序性滚动不得把高亮反向改写回上一章——真宿主有真实滚动事件，
+    //   护栏语义在此可真实验证（浏览器回归同款断言的宿主侧对应）
+    await openWithEditor('outline-long.md')
+    await waitSessionReady('outline-long.md')
+    const uri = wsUri('outline-long.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('outline-long.md'))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-long.md', (v) => v.sidebar?.open === true && v.outline?.panelPainted === true)
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+
+    // 首屏高亮：文档初始位于顶部，视口顶行在主标题控制域（首条目在面板
+    // 可视区内——绘制层断言要求 located 条目可被 elementFromPoint 命中）
+    const initial = await waitViewState('outline-long.md',
+      (v) => v.outline?.locatedItemIndex === 0 && v.outline?.locatedPainted === true)
+    assert(initial.outline!.locatedText === '长文档主标题',
+      `首屏高亮应为主标题，实际 ${JSON.stringify(initial.outline!.locatedItemIndex)} ${String(initial.outline!.locatedText)}`)
+    assert(initial.outline!.locatedPainted === true,
+      `首屏高亮横条应真实绘制（命中 + 半透明背景）：${JSON.stringify(initial.outline)}`)
+
+    // live 点击「第 30 章」（items[59]，标题行）：光标落标题行首 + 高亮即时落位。
+    // 该条目在面板滚动区可视范围外（长大纲溢出），locatedPainted 的命中
+    // 口径不适用（#67 的「高亮行滚进大纲可视区」落地前不断言），绘制层
+    // 证据由首屏与下方 reading 可视区内条目覆盖
+    const chapter30Line = initial.outline!.items[59]!.line
+    assert(initial.outline!.items[59]!.text === '第 30 章',
+      `items[59] 应为「第 30 章」，实际 ${JSON.stringify(initial.outline!.items[59])}`)
+    const chapter30Offset = doc.offsetAt(new vscode.Position(chapter30Line - 1, 0))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.itemClick', index: 59 })
+    const jumped = await waitViewState('outline-long.md',
+      (v) => v.selectionOffset === chapter30Offset && v.outline?.locatedItemIndex === 59)
+    assert(jumped.outline!.locatedText === '第 30 章', '跳转后 locatedText 应为目标标题')
+
+    // 零写回：版本与写回计数不变（跳转是纯视图操作，不入撤销历史）
+    const afterJump = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterJump.version === before.version && afterJump.appliedEdits === before.appliedEdits,
+      `大纲跳转不得推进版本或产生写回（${before.version}/${before.appliedEdits} → ` +
+        `${afterJump.version}/${afterJump.appliedEdits}）`)
+
+    // 防抖动护栏：居中滚动的事件突发期（真宿主为真实 scroll 事件）过后，
+    // 高亮不得被视口顶行重算反向改写（无护栏时会回到第 29 章的控制域）
+    await new Promise((r) => setTimeout(r, 700))
+    const guarded = await waitViewState('outline-long.md', (v) => v.selectionOffset === chapter30Offset)
+    assert(guarded.outline!.locatedItemIndex === 59,
+      `程序性滚动不得改写跳转高亮（实际 ${guarded.outline!.locatedItemIndex}；` +
+        `无护栏时会被视口顶行重算到第 29 章附近）`)
+
+    // reading 点击「第 2 章」（items[3]，面板可视区内——locatedPainted 的
+    // elementFromPoint 命中口径成立）：锚点滚到标题块 + 高亮跟随 + 绘制层
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    await waitViewState('outline-long.md', (v) => v.viewMode === 'reading')
+    const chapter2Line = initial.outline!.items[3]!.line
+    assert(initial.outline!.items[3]!.text === '第 2 章',
+      `items[3] 应为「第 2 章」，实际 ${JSON.stringify(initial.outline!.items[3])}`)
+    const chapter2Offset = doc.offsetAt(new vscode.Position(chapter2Line - 1, 0))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.itemClick', index: 3 })
+    const readingJumped = await waitViewState('outline-long.md',
+      (v) => v.readingAnchorStart === chapter2Offset && v.outline?.locatedItemIndex === 3)
+    assert(readingJumped.outline!.locatedPainted === true,
+      `阅读模式高亮横条应真实绘制（located 条目在面板可视区内）：${JSON.stringify(readingJumped.outline)}`)
+    assert((readingJumped.readingBlockCount ?? 0) > 0, '阅读正文应正常渲染')
+
+    // 阅读跳转同样零写回
+    const afterReading = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterReading.version === before.version && afterReading.appliedEdits === before.appliedEdits,
+      '阅读模式跳转同样不得产生写回')
+
+    // 模式切换即时重算：切回 live 后 located 即时重算（非 null；具体值随
+    // 锚点恢复滚动位置而定）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'live' })
+    const backLive = await waitViewState('outline-long.md',
+      (v) => v.viewMode === 'live' && v.outline !== undefined && v.outline.locatedItemIndex !== null)
+    assert(backLive.outline!.locatedItemIndex! >= 0, '切回 live 后应即时重算 located')
 
     // 收起侧栏收尾
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
