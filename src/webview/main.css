@@ -116,12 +116,10 @@ body {
    baseTheme 内建变体接管（light: caret black / dark: caret white），
    本扩展不硬编码颜色（#34 验收决议） */
 
-/* 间接装饰（视口内纯样式，不改变高度）：标题行左缘强调与光标所在标题行的强调提示。
-   --vsidian-heading-accent 为稳定 CSS 变量入口（ADR-0004），外部片段可覆盖 */
-#app .cm-editor .cm-scroller .vsidian-heading-inview {
-  box-shadow: inset 3px 0 0 var(--vsidian-heading-accent, var(--vscode-textLink-foreground, #4fc1ff));
-}
-
+/* 间接装饰（视口内纯样式，不改变高度）：仅保留光标所在标题行的行背景强调提示。
+   #55 移除视口内标题行左缘竖线（inset box-shadow 规则及其左缘强调色公开
+   变量一并撤销，选择器映射已同步）；.vsidian-heading-inview 类保留，
+   限定 active 背景只落在视口内标题行 */
 #app .cm-editor .cm-scroller .vsidian-heading-inview.vsidian-heading-active {
   background-color: var(--vscode-editor-lineHighlightBackground, rgba(128, 128, 128, 0.12));
 }
@@ -130,24 +128,262 @@ body {
    .vsidian-view-live 为 live 视图稳定容器类（Obsidian 对应
    .markdown-source-view.mod-cm6；映射见 docs/design/obsidian-selector-map.md）。
    #38 起 webview 内切换工具栏已移除（入口迁移宿主标题栏命令），
-   容器占满全高、不再为工具栏扣减 */
+   #53 起 live/reading 容器同为 vsidian-main 的 flex 成员（顶栏高度扣减
+   由 flex 分配取代旧的 height 计算），容器随主编辑区收缩 */
 #app .vsidian-view-live .cm-editor {
   height: 100%;
 }
 
 #app .vsidian-view-live {
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
-/* #33 设置入口按钮：与模式按钮同一视觉规格（仅新增规则，不动既有排版） */
-.vsidian-toolbar .vsidian-settings-toggle {
-  font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size, 13px);
-  padding: 1px 10px;
+/* ---- #53 顶栏图标化与右侧栏布局 ----
+   骨架：#app > .vsidian-body（水平 flex）> .vsidian-main（主编辑区）+
+   .vsidian-sidebar（右侧栏）。侧栏显隐唯一开关是 body 容器的
+   vsidian-sidebar-open 类：收起（默认）侧栏零宽（width:0 + 边框归零 +
+   overflow:hidden）不占位，主编辑区占满全宽；展开过渡到目标宽 + 左缘
+   分隔线，主编辑区 flex:1 收缩，顶栏切换按钮（margin-left:auto）随之
+   移向中间。宽度过渡即展开/收起动画：内层子容器固定目标宽，过渡期间
+   由外层裁切（内容不随宽度挤压变形）；prefers-reduced-motion 下禁用。
+   公开变量入口（外部片段可覆盖）：--vsidian-sidebar-width（侧栏宽）/
+   --vsidian-toolbar-height（两侧顶栏高度，取同一值保证对齐）。 */
+#app .vsidian-body {
+  display: flex;
+  height: 100%;
+  min-width: 0;
+}
+
+#app .vsidian-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+#app .vsidian-sidebar {
+  display: flex;
+  flex: 0 0 auto;
+  width: 0;
+  box-sizing: border-box;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  border-left-width: 0;
+  background-color: var(--vscode-sideBar-background, transparent);
+  transition:
+    width 0.15s ease-out,
+    border-left-width 0.15s ease-out;
+}
+
+#app .vsidian-body.vsidian-sidebar-open .vsidian-sidebar {
+  width: var(--vsidian-sidebar-width, 280px);
+  border-left-width: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #app .vsidian-sidebar {
+    transition: none;
+  }
+}
+
+/* 侧栏自有顶栏：与主编辑区顶栏同高对齐（同一高度变量），本期为空按钮
+   容器（「大纲」等按钮由 #54 接入） */
+#app .vsidian-sidebar .vsidian-sidebar-toolbar {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  width: var(--vsidian-sidebar-width, 280px);
+  box-sizing: border-box;
+  height: var(--vsidian-toolbar-height, 30px);
+  padding: 0 12px;
+}
+
+#app .vsidian-sidebar .vsidian-sidebar-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* 侧栏面板区域（#54 起承载大纲面板）：flex 列容器把面板高度钳制在侧栏
+   剩余空间内（与 .vsidian-main 对正文容器的约束同构）——面板以
+   flex:1 + min-height:0 在此约束内滚动，无此约束时面板长到内容高度，
+   overflow-y 永不激活（超长大纲被裁到不可达，P1-1 回归） */
+#app .vsidian-sidebar .vsidian-sidebar-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  width: var(--vsidian-sidebar-width, 280px);
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 主编辑区顶栏（#53 图标化）：左端齿轮设置入口 + 右端侧栏切换按钮，
+   高度与侧栏顶栏共用同一变量（对齐） */
+#app .vsidian-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  height: var(--vsidian-toolbar-height, 30px);
+  box-sizing: border-box;
+  padding: 0 6px;
+}
+
+/* 顶栏图标按钮：透明底、悬停高亮跟随 VSCode 工具栏变量（与文字按钮
+   时代 secondary 按钮形态的 #33 样式解耦） */
+.vsidian-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  box-sizing: border-box;
   cursor: pointer;
-  color: var(--vscode-button-secondaryForeground);
-  background-color: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-editor-foreground);
+  background: transparent;
   border: none;
+  border-radius: 4px;
+}
+
+.vsidian-toolbar button:hover,
+.vsidian-toolbar button:focus-visible {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
+  outline: none;
+}
+
+.vsidian-toolbar button svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+/* 侧栏切换按钮推到主编辑区顶栏右端（工单：收起态位于主编辑区顶栏右端；
+   展开态随主编辑区右边界移向中间由 flex 布局自然承接） */
+.vsidian-toolbar .vsidian-sidebar-toggle {
+  margin-left: auto;
+}
+
+/* 两态图标线宽（用户截图规格：收起=右侧竖线较细，展开=右侧竖线较粗）。
+   差异唯一来源是这两条类切换规则——SVG 属性上不写 stroke-width，
+   样式失效时两态同值（集成绘制断言据此暴露） */
+.vsidian-toolbar .vsidian-sidebar-toggle .vsidian-sidebar-icon-frame {
+  stroke-width: 1.5px;
+}
+
+.vsidian-toolbar .vsidian-sidebar-toggle .vsidian-sidebar-icon-bar {
+  stroke-width: 1.5px;
+}
+
+#app .vsidian-body.vsidian-sidebar-open .vsidian-toolbar .vsidian-sidebar-toggle .vsidian-sidebar-icon-bar {
+  stroke-width: 3px;
+}
+
+/* ---- #54 大纲面板 ----
+   显隐唯一开关是侧栏容器的 vsidian-outline-active 类（与 #53 的
+   sidebar-open 类同模式）：默认 display:none，active 时 flex 列 + 纵向
+   滚动。滚动成立的前提（P1-1）：面板作为 .vsidian-sidebar-panel 的
+   flex 成员，高度被宿主钳制在侧栏剩余空间内（flex:1 + min-height:0
+   允许收缩），overflow-y 才有 scrollHeight > clientHeight 的滚动余量。
+   条目按级别缩进（用户可见的层级表达），长标题单行省略。 */
+#app .vsidian-sidebar .vsidian-outline-panel {
+  display: none;
+}
+
+#app .vsidian-sidebar.vsidian-outline-active .vsidian-outline-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+  box-sizing: border-box;
+  padding: 4px 12px;
+}
+
+.vsidian-sidebar .vsidian-outline-item {
+  /* flex 列面板内不收缩（P1-1 的另一半）：条目 overflow:hidden 使 flex
+     item 的 min-height:auto 解析为 0，缺此声明时高度约束生效后长面板的
+     条目被均匀压扁（行高 < 22px）、内容总高不再溢出容器，overflow-y
+     依旧永不激活 */
+  flex: 0 0 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: inherit;
+  font-size: var(--vsidian-outline-font-size, 12px);
+  line-height: 22px;
+  cursor: default;
+  user-select: none;
+}
+
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-1 {
+  padding-inline-start: 0;
+}
+
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-2 {
+  padding-inline-start: 10px;
+}
+
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-3 {
+  padding-inline-start: 20px;
+}
+
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-4 {
+  padding-inline-start: 30px;
+}
+
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-5 {
+  padding-inline-start: 40px;
+}
+
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-6 {
+  padding-inline-start: 50px;
+}
+
+/* 空态占位：无标题文档的弱化反馈（保持面板可读内容与高度语义） */
+.vsidian-sidebar .vsidian-outline-empty {
+  opacity: 0.7;
+  padding: 8px 10px;
+  font-size: var(--vsidian-outline-font-size, 12px);
+}
+
+/* 侧栏顶栏按钮（#54「大纲」）：与主编辑区顶栏图标按钮同形态（透明底、
+   悬停高亮跟随 VSCode 变量）。active 态背景高亮的唯一来源是
+   outline-active 类规则（非 active 时透明底，两态差异可被集成 computed
+   背景断言捕获，样式失效时两态同值） */
+#app .vsidian-sidebar .vsidian-sidebar-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  box-sizing: border-box;
+  cursor: pointer;
+  color: var(--vscode-editor-foreground);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+}
+
+#app .vsidian-sidebar .vsidian-sidebar-toolbar button:hover,
+#app .vsidian-sidebar .vsidian-sidebar-toolbar button:focus-visible {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
+  outline: none;
+}
+
+#app .vsidian-sidebar .vsidian-sidebar-toolbar-actions button svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+#app .vsidian-sidebar.vsidian-outline-active .vsidian-sidebar-toolbar button.vsidian-outline-toggle {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
 }
 
 /* ---- Live Preview 语法装饰（#8：标题之外的覆盖语法）----
@@ -577,7 +813,10 @@ body {
   --vsidian-reading-max-width: 760px;
   --vsidian-reading-line-height: var(--vsidian-content-line-height);
   --vsidian-reading-code-background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.12));
-  height: calc(100% - 30px);
+  /* #53 起为 vsidian-main 的 flex 成员（顶栏高度扣减由 flex 分配，
+     取代旧的固定 30px 减法高度） */
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   /* #7：滚动锚定由虚拟化视图自研（视口顶块平移补偿），关闭浏览器原生
      overflow-anchor 防止两套锚定对同一布局变化叠加补偿（实测会滚飞） */

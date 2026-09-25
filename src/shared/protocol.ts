@@ -109,6 +109,13 @@ export type HostToWebview =
   | { kind: 'table.test.select'; axis: 'row' | 'column'; index: number }
   /** 测试钩子（#43）：真实 webview DOM 的点阵抓手拖动事件。 */
   | { kind: 'table.test.drag'; sourceIndex: number; targetSlot: number }
+  /** 测试钩子（#53）：点击主编辑区顶栏的侧栏切换按钮，驱动与用户点击同一
+   *  处理器（纯视图状态翻转，零写回）。宿主测试无法向 webview 派发真实鼠标
+   *  事件，以此通道验证真实宿主内的布局切换与绘制 */
+  | { kind: 'sidebar.test.click' }
+  /** 测试钩子（#54）：点击侧栏顶栏的大纲按钮，驱动与用户点击同一处理器
+   *  （纯视图状态翻转，零写回）。与 sidebar.test.click 同通道形态 */
+  | { kind: 'outline.test.click' }
   /** 测试钩子（#21）：在真实 webview 的 CM6 中输入，验证暂停态即时留存。 */
   | { kind: 'sync.test.edit'; offset: number; text: string; closeAfter?: boolean }
   /** 测试钩子：组合候选写入首行 DOM，经过 CM6 MutationObserver 的真实输入链。 */
@@ -238,6 +245,10 @@ export type WebviewToHost =
       typography?: TypographyProbe
       /** 绘制层探针（P0 回归）：正文可见性与 CM6 注入样式存活观测 */
       paint?: PaintProbe
+      /** 右侧栏观测（#53；布局态与绘制层证据，旧 webview 缺省） */
+      sidebar?: SidebarProbe
+      /** 大纲观测（#54；面板态、绘制层证据与标题序列，旧 webview 缺省） */
+      outline?: OutlineProbe
     }
       /** 阅读视图性能探针回报（#7）：滚动往返期间的挂载/回收与解析观测 */
   | {
@@ -481,6 +492,15 @@ export interface PaintProbe {
     /** 当前激活视图内 .vsidian-mermaid 容器总数 */
     count: number
   }
+  /** #55 标题行绘制观测：视口内已挂载的 .vsidian-heading-inview 行的
+   *  distinct 计算值（box-shadow 应为 'none'、border-left-width 应为
+   *  '0px'——标题行不得绘制左缘竖线）；无挂载标题行为 null。
+   *  jsdom 无 CSS 引擎，值不可作单测断言依据（同 textVisible 口径） */
+  heading?: {
+    inviewCount: number
+    boxShadowValues: string[]
+    borderLeftWidthValues: string[]
+  } | null
 }
 
 /** #32 排版一致性探针：正文基础排版四项样本（null = 元素缺失/不可读） */
@@ -572,6 +592,68 @@ export interface FindSessionProbe {
   currentTo: number | null
 }
 
+/**
+ * 右侧栏观测（#53）：布局态与绘制层证据。命中类字段（*Painted）走
+ * elementFromPoint——侧栏/按钮只有真实绘制（非 display:none、非零尺寸、
+ * 无覆盖遮挡）时才可能命中，几何或存在性探针测不出样式失效；线宽字段
+ * 是 computed stroke-width 文本（图标两态粗细差异的唯一来源是样式表的
+ * vsidian-sidebar-open 类规则）。jsdom 无布局与 CSS 引擎：命中恒 false、
+ * 线宽/宽度容错为 null，真宿主断言见集成。
+ */
+export interface SidebarProbe {
+  /** 侧栏展开态（状态机实值） */
+  open: boolean
+  /** 侧栏顶栏中心点 elementFromPoint 命中侧栏容器（展开态的绘制证据） */
+  sidebarToolbarPainted: boolean
+  /** 侧栏切换按钮中心点命中按钮自身（按钮真实可见且可点） */
+  togglePainted: boolean
+  /** 齿轮设置按钮中心点命中自身（图标化入口真实可见） */
+  settingsPainted: boolean
+  /** 切换图标竖线 computed stroke-width（收起细线 1.5px / 展开粗线 3px） */
+  toggleBarStrokeWidth: string | null
+  /** 切换图标外框 computed stroke-width（两态恒定对照） */
+  toggleFrameStrokeWidth: string | null
+  /** 主编辑区内容宽度 px（收起=全宽；展开=随侧栏收缩）；无布局为 null */
+  mainWidthPx: number | null
+  /** 侧栏宽度 px（收起时元素不占位为 0）；无布局为 null */
+  sidebarWidthPx: number | null
+  /** 切换按钮可访问名称（状态一致性观测：随收起/展开变化） */
+  toggleAriaLabel: string | null
+  /** 齿轮设置按钮可访问名称 */
+  settingsAriaLabel: string | null
+}
+
+/**
+ * 大纲观测（#54）：面板态与绘制层证据。命中类字段（*Painted）走
+ * elementFromPoint——面板只有真实绘制（侧栏展开 + 面板 active + 样式表
+ * 显隐规则生效）时才可能命中，样式失效（如 CSP 拦截注入）时 DOM 存在但
+ * 命中失败。items 是全文标题序列（数据源 = CM6 全文解析，含未保存编辑；
+ * 与视口渲染和 live/reading 模式无关）。jsdom 无布局与 CSS 引擎：命中恒
+ * false，名称容错为 null（probe 未装配时字段缺省），真宿主断言见集成。
+ */
+export interface OutlineProbe {
+  /** 大纲面板 active 态（状态机实值；侧栏收起时面板同样不可见） */
+  active: boolean
+  /** 大纲按钮中心点 elementFromPoint 命中自身（侧栏展开 + 按钮真实绘制） */
+  togglePainted: boolean
+  /** 大纲面板容器中心点命中面板内（面板内容真实绘制，非 display:none） */
+  panelPainted: boolean
+  /** 大纲按钮图标 computed 宽度 px（预期 16px：选择器写错或样式失效时
+   *  SVG 回退默认尺寸溢出按钮盒，可测出死选择器回归） */
+  toggleIconSizePx: number | null
+  /** 大纲面板 scrollHeight px（内容总高；无布局环境为 0 或 null） */
+  panelScrollHeightPx: number | null
+  /** 大纲面板 clientHeight px（可视高；scrollHeight > clientHeight 即
+   *  面板高度被宿主约束且内容溢出——overflow-y:auto 由此激活滚动） */
+  panelClientHeightPx: number | null
+  /** 全文标题序列（级别 1–6 / 文字 / 起始行 1 基） */
+  items: Array<{ level: number; text: string; line: number }>
+  /** 大纲按钮可访问名称 */
+  toggleAriaLabel: string | null
+  /** 大纲面板可访问名称（role=region + aria-label） */
+  panelAriaLabel: string | null
+}
+
 /** 表格结构操作码校验（#13） */
 function isTableEditOp(v: unknown): v is TableEditOp {
   return (
@@ -639,6 +721,55 @@ function isLineGutterProbe(v: unknown): v is LineGutterProbe {
   )
 }
 
+/** #53 右侧栏观测校验：open/命中布尔、线宽与名称字符串或 null、宽度非负数或 null */
+function isSidebarProbe(v: unknown): v is SidebarProbe {
+  return (
+    isObject(v) &&
+    typeof v.open === 'boolean' &&
+    typeof v.sidebarToolbarPainted === 'boolean' &&
+    typeof v.togglePainted === 'boolean' &&
+    typeof v.settingsPainted === 'boolean' &&
+    isNullOrString(v.toggleBarStrokeWidth) &&
+    isNullOrString(v.toggleFrameStrokeWidth) &&
+    (v.mainWidthPx === null || isNonNegativeNumber(v.mainWidthPx)) &&
+    (v.sidebarWidthPx === null || isNonNegativeNumber(v.sidebarWidthPx)) &&
+    isNullOrString(v.toggleAriaLabel) &&
+    isNullOrString(v.settingsAriaLabel)
+  )
+}
+
+/** #54 大纲条目序列校验：level 1–6 整数、text 字符串（可为空）、line 正整数 */
+function isOutlineItems(v: unknown): v is OutlineProbe['items'] {
+  return (
+    Array.isArray(v) &&
+    v.every(
+      (item) =>
+        isObject(item) &&
+        typeof item.level === 'number' && Number.isInteger(item.level) &&
+        item.level >= 1 && item.level <= 6 &&
+        isString(item.text) &&
+        typeof item.line === 'number' && Number.isInteger(item.line) && item.line >= 1,
+    )
+  )
+}
+
+/** #54 大纲观测校验：active/命中布尔、图标尺寸与滚动几何（null 或非负数）、
+ *  items 序列、名称字符串或 null */
+function isOutlineProbe(v: unknown): v is OutlineProbe {
+  return (
+    isObject(v) &&
+    typeof v.active === 'boolean' &&
+    typeof v.togglePainted === 'boolean' &&
+    typeof v.panelPainted === 'boolean' &&
+    (v.toggleIconSizePx === null || isNonNegativeNumber(v.toggleIconSizePx)) &&
+    (v.panelScrollHeightPx === null || isNonNegativeNumber(v.panelScrollHeightPx)) &&
+    (v.panelClientHeightPx === null || isNonNegativeNumber(v.panelClientHeightPx)) &&
+    isOutlineItems(v.items) &&
+    isNullOrString(v.toggleAriaLabel) &&
+    isNullOrString(v.panelAriaLabel)
+  )
+}
+
 /** 绘制层探针校验：textVisible/darkTheme 布尔；display/userSelect/caretColor 字符串或 null */
 function isPaintProbe(v: unknown): v is PaintProbe {
   return (
@@ -690,6 +821,12 @@ function isPaintProbe(v: unknown): v is PaintProbe {
       isNonNegativeInt(v.mermaid.rendered) &&
       isNonNegativeInt(v.mermaid.error) &&
       isNonNegativeInt(v.mermaid.count)
+    )) &&
+    (v.heading === undefined || v.heading === null || (
+      isObject(v.heading) &&
+      isNonNegativeInt(v.heading.inviewCount) &&
+      Array.isArray(v.heading.boxShadowValues) && v.heading.boxShadowValues.every(isString) &&
+      Array.isArray(v.heading.borderLeftWidthValues) && v.heading.borderLeftWidthValues.every(isString)
     ))
   )
 }
@@ -947,6 +1084,8 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.settings === undefined || isSettingsPayload(v.settings)) &&
         (v.lineGutter === undefined || isLineGutterProbe(v.lineGutter)) &&
         (v.paint === undefined || isPaintProbe(v.paint)) &&
+        (v.sidebar === undefined || isSidebarProbe(v.sidebar)) &&
+        (v.outline === undefined || isOutlineProbe(v.outline)) &&
         (v.typography === undefined || isTypographyProbe(v.typography))
       )
     case 'reading.perf.report':
@@ -1115,6 +1254,10 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return (v.axis === 'row' || v.axis === 'column') && isNonNegativeInt(v.index)
     case 'table.test.drag':
       return isNonNegativeInt(v.sourceIndex) && isNonNegativeInt(v.targetSlot)
+    case 'sidebar.test.click':
+      return true
+    case 'outline.test.click':
+      return true
     case 'sync.test.edit':
       return isNonNegativeInt(v.offset) && isString(v.text) &&
         (v.closeAfter === undefined || typeof v.closeAfter === 'boolean')

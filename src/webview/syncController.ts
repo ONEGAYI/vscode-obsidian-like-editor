@@ -33,9 +33,11 @@ import {
   type FindSessionProbe,
   type LineGutterProbe,
   type LiveSyntaxProbe,
+  type OutlineProbe,
   type PaintProbe,
   type ReadingSyntaxProbe,
   type SerChange,
+  type SidebarProbe,
   type TypographyInheritSample,
   type TypographyProbe,
   type TypographySample,
@@ -66,6 +68,13 @@ import { runPerfProbe } from './perfProbe'
 import { runReadingPerfProbe } from './readingProbe'
 import { createReadingContainer, prepareReadingImages } from './readingView'
 import { READING_MARKDOWN_CLASS_NAMES } from './readingMarkdown'
+import {
+  buildOutlineDom,
+  extractOutline,
+  type OutlineItem,
+  outlineItemsEqual,
+  renderOutlineItems,
+} from './outline'
 import { resolveStaleTaskToggle } from './taskToggle'
 import { VirtualReadingView } from './readingVirtualView'
 import { blankRowInputPlan, runCreateTable, runTableEdit, tableEditing, tableRowsAt } from './tableEditing'
@@ -100,6 +109,10 @@ interface PersistedState {
   /** 最近一次模式锚点（UTF-16 offset）：live=光标主位，reading=锚点块 start */
   anchor?: number
   conflictRevision?: number
+  /** #53 右侧栏展开态（缺省收起） */
+  sidebarOpen?: boolean
+  /** #54 大纲面板 active 态（缺省激活：展开侧栏即见大纲，当前唯一面板） */
+  outlineActive?: boolean
 }
 
 /** 外部同步事务标记：updateListener 见到它即跳过（不回发）。
@@ -318,6 +331,36 @@ export class WebviewSyncController {
   private images: ImageResourceManager | undefined
   private toolbar: HTMLElement | undefined
 
+  // ---- 右侧栏布局状态（#53）----
+  /** 水平布局根（稳定类名 vsidian-body）：主编辑区 + 右侧栏 */
+  private bodyEl: HTMLElement | undefined
+  /** 主编辑区（稳定类名 vsidian-main）：顶栏 + 横幅 + live/reading 容器 */
+  private mainEl: HTMLElement | undefined
+  /** 右侧栏（稳定类名 vsidian-sidebar）：自有顶栏 + 面板容器（#54 接入内容） */
+  private sidebarEl: HTMLElement | undefined
+  /** 主编辑区顶栏的侧栏切换按钮（可访问名称随状态变化） */
+  private sidebarToggleBtn: HTMLButtonElement | undefined
+  /** 侧栏是纯 webview 视图状态（与 viewMode 同类）：切换零写回、
+   *  不入撤销栈、不触发出站消息；经 bridge state 持久化（重载恢复） */
+  private sidebarOpen: boolean
+
+  // ---- 大纲面板状态（#54）----
+  /** 大纲面板 active：与 sidebarOpen 同类的纯视图状态（零写回、零出站、
+   *  bridge state 持久化）；面板显隐唯一开关是侧栏容器的 outline-active 类 */
+  private outlineActive: boolean
+  /** 侧栏顶栏的大纲按钮（可访问名称恒「大纲」，aria-expanded 随 active） */
+  private outlineToggleBtn: HTMLButtonElement | undefined
+  /** 大纲面板容器（条目内容经 renderOutlineItems 维护） */
+  private outlinePanelEl: HTMLElement | undefined
+  /** 当前大纲数据（级别 + 文字 + 起始行；序列变化才重建条目 DOM） */
+  private outlineItems: OutlineItem[] = []
+  /** 大纲计算时的文档快照（Text 不可变，引用比较即版本失效判定） */
+  private outlineDoc: Text | null = null
+  /** 可见时的大纲去抖刷新句柄（250ms 尾随去抖：定时器随每次调用重置，
+   *  连续输入只在停顿 250ms 后解析一次——节流（定时器不重置）会让连续
+   *  输入每 250ms 解析一次，不是注释声称的语义） */
+  private outlineTimer: ReturnType<typeof setTimeout> | undefined
+
   // ---- 查找会话状态（#14）----
   /** 查找是纯只读视图状态：不写 TextDocument、不入撤销栈、零出站消息。
    *  匹配基于 webview 全文文本模型（CM6 doc），屏外内容同样命中 */
@@ -409,6 +452,8 @@ export class WebviewSyncController {
       ? Math.floor(saved.conflictRevision) : 0
     this.viewMode = saved?.viewMode === 'reading' ? 'reading' : 'live'
     this.modeAnchor = typeof saved?.anchor === 'number' && saved.anchor >= 0 ? Math.floor(saved.anchor) : null
+    this.sidebarOpen = saved?.sidebarOpen === true
+    this.outlineActive = saved?.outlineActive !== false
   }
 
   /** 创建编辑器视图并向宿主发送 ready（HTML 加载完成后调用一次） */
@@ -527,11 +572,25 @@ export class WebviewSyncController {
         srcEnd: Number.isInteger(srcEnd) ? srcEnd : srcStart,
       })
     })
-    parent.appendChild(this.toolbar)
-    parent.appendChild(this.banner)
-    parent.appendChild(this.liveWrapper)
-    parent.appendChild(this.readingContainer)
+    // #53 布局骨架：#app > body(水平) > main(主编辑区：顶栏+横幅+双视图)
+    // + sidebar(右侧栏)；findPanel 浮层仍直接挂 #app（以 #app 为定位包含块）
+    this.sidebarEl = this.buildSidebar()
+    this.mainEl = document.createElement('div')
+    this.mainEl.className = 'vsidian-main'
+    this.mainEl.appendChild(this.toolbar)
+    this.mainEl.appendChild(this.banner)
+    this.mainEl.appendChild(this.liveWrapper)
+    this.mainEl.appendChild(this.readingContainer)
+    this.bodyEl = document.createElement('div')
+    this.bodyEl.className = 'vsidian-body'
+    this.bodyEl.appendChild(this.mainEl)
+    this.bodyEl.appendChild(this.sidebarEl)
+    parent.appendChild(this.bodyEl)
     parent.appendChild(this.findPanel)
+    // 侧栏初始态（持久化恢复）落到 DOM 类与按钮可访问名称
+    this.applySidebarDom()
+    // 大纲面板初始态（持久化恢复）落到侧栏容器类与按钮 aria-expanded
+    this.applyOutlineDom()
     // webview 内键盘拦截（#14）：Mod-F 打开查找（custom editor webview 不可用
     // VSCode 原生 find 控件）；Esc 关闭并归还焦点。capture 阶段先行处理
     this.docKeydown = (e: KeyboardEvent) => {
@@ -572,6 +631,7 @@ export class WebviewSyncController {
       clearTimeout(this.flushTimer)
       this.flushTimer = undefined
     }
+    this.cancelOutlineRefresh()
     this.hostThemeObserver?.disconnect()
     this.hostThemeObserver = undefined
     if (this.docKeydown) {
@@ -594,6 +654,15 @@ export class WebviewSyncController {
     this.readingView = undefined
     this.readingContainer?.remove()
     this.readingContainer = undefined
+    this.sidebarToggleBtn = undefined
+    this.outlineToggleBtn = undefined
+    this.outlinePanelEl = undefined
+    this.sidebarEl?.remove()
+    this.sidebarEl = undefined
+    this.mainEl?.remove()
+    this.mainEl = undefined
+    this.bodyEl?.remove()
+    this.bodyEl = undefined
     this.images?.dispose()
     this.images = undefined
   }
@@ -747,6 +816,18 @@ export class WebviewSyncController {
         if (this.view && this.viewMode === 'live') {
           runCreateTable(this.view)
         }
+        break
+      }
+      case 'sidebar.test.click': {
+        // 测试钩子（#53）：点击真实侧栏切换按钮（与用户点击同一处理器；
+        // 纯视图状态翻转，零写回）
+        this.sidebarToggleBtn?.click()
+        break
+      }
+      case 'outline.test.click': {
+        // 测试钩子（#54）：点击真实大纲按钮（与用户点击同一处理器；
+        // 纯视图状态翻转，零写回）
+        this.outlineToggleBtn?.click()
         break
       }
       case 'table.test.key': {
@@ -1153,6 +1234,10 @@ export class WebviewSyncController {
       lineGutter: this.collectLineGutter(),
       // 绘制层探针（P0 回归）：正文可见性 / CM6 注入样式存活 / 行号禁选
       paint: this.collectPaint(),
+      // #53 右侧栏观测（布局态与绘制层证据）
+      sidebar: this.collectSidebar(),
+      // #54 大纲观测（面板态、绘制层证据与全文标题序列）
+      outline: this.collectOutline(),
     }
     this.bridge.postMessage(state)
   }
@@ -1663,7 +1748,7 @@ export class WebviewSyncController {
     }
   }
 
-  /** 持久化（合并写入）：seq、viewMode、anchor 共存互不覆盖 */
+  /** 持久化（合并写入）：seq、viewMode、anchor、sidebarOpen、outlineActive 共存互不覆盖 */
   private persistState(): void {
     const saved = this.bridge.getState<PersistedState>() ?? {}
     this.bridge.setState({
@@ -1672,23 +1757,170 @@ export class WebviewSyncController {
       conflictRevision: this.conflictRevision,
       viewMode: this.viewMode,
       anchor: this.modeAnchor ?? undefined,
+      sidebarOpen: this.sidebarOpen,
+      outlineActive: this.outlineActive,
     })
   }
 
-  /** webview 工具栏：仅承载 #33 设置按钮（打开宿主级 Vsidian 设置页面板，
-   *  webview 无权自建面板，必须经 settings.open 出站）。#6 的模式切换按钮
-   *  已按 #38 迁移至编辑器标题栏三态命令，不再在正文上方渲染 */
+  /** 主编辑区顶栏（#53 图标化）：左端齿轮设置按钮（打开宿主级 Vsidian
+   *  设置页面板——webview 无权自建面板，必须经 settings.open 出站），
+   *  右端右侧栏切换按钮（margin-left:auto 推靠）。#6 的模式切换按钮已按
+   *  #38 迁移至编辑器标题栏三态命令，不在顶栏渲染 */
   private buildToolbar(): HTMLElement {
     const bar = document.createElement('div')
     bar.className = 'vsidian-toolbar'
     const settingsBtn = document.createElement('button')
     settingsBtn.type = 'button'
     settingsBtn.className = 'vsidian-settings-toggle'
-    settingsBtn.textContent = '设置'
     settingsBtn.setAttribute('aria-label', '打开 Vsidian 设置')
+    settingsBtn.setAttribute('title', '打开 Vsidian 设置')
+    settingsBtn.appendChild(createSettingsGearIcon())
     settingsBtn.addEventListener('click', () => this.bridge.postMessage({ kind: 'settings.open' }))
+    const sidebarBtn = document.createElement('button')
+    sidebarBtn.type = 'button'
+    sidebarBtn.className = 'vsidian-sidebar-toggle'
+    sidebarBtn.setAttribute('aria-controls', 'vsidian-sidebar')
+    sidebarBtn.appendChild(createSidebarToggleIcon())
+    sidebarBtn.addEventListener('click', () => this.toggleSidebar())
+    this.sidebarToggleBtn = sidebarBtn
     bar.appendChild(settingsBtn)
+    bar.appendChild(sidebarBtn)
     return bar
+  }
+
+  /** 右侧栏骨架（#53）：自有顶栏（#54 起含「大纲」按钮）+ 面板区域
+   *  （#54 起含大纲面板容器）。侧栏显隐由 vsidian-body 的 open 类经 CSS
+   *  控制；大纲面板显隐由侧栏容器的 outline-active 类经 CSS 控制 */
+  private buildSidebar(): HTMLElement {
+    const sidebar = document.createElement('div')
+    sidebar.className = 'vsidian-sidebar'
+    sidebar.id = 'vsidian-sidebar'
+    const bar = document.createElement('div')
+    bar.className = 'vsidian-sidebar-toolbar'
+    const actions = document.createElement('div')
+    actions.className = 'vsidian-sidebar-toolbar-actions'
+    // #54 大纲按钮：侧栏顶栏当前唯一一项（点击切换对应面板的显隐）
+    const { toggle, panel } = buildOutlineDom()
+    toggle.addEventListener('click', () => this.toggleOutline())
+    this.outlineToggleBtn = toggle
+    this.outlinePanelEl = panel
+    actions.appendChild(toggle)
+    bar.appendChild(actions)
+    const panelHost = document.createElement('div')
+    panelHost.className = 'vsidian-sidebar-panel'
+    panelHost.appendChild(panel)
+    sidebar.appendChild(bar)
+    sidebar.appendChild(panelHost)
+    return sidebar
+  }
+
+  /** 侧栏切换（#53）：纯视图状态翻转（零写回、零出站），随后落 DOM 与持久化 */
+  private toggleSidebar(): void {
+    this.sidebarOpen = !this.sidebarOpen
+    this.applySidebarDom()
+    // 展开即见大纲：面板从不可见到可见，数据可能滞后（收起期间无刷新调度）
+    if (this.sidebarOpen && this.outlineActive) {
+      this.outlineEnsureFresh()
+    } else if (!this.sidebarOpen) {
+      this.cancelOutlineRefresh()
+    }
+  }
+
+  /** 侧栏状态落 DOM：body 容器的 open 类（CSS 显隐与图标粗细的唯一开关）
+   *  与切换按钮的可访问名称同步（名称反映当前可执行的动作） */
+  private applySidebarDom(): void {
+    if (this.bodyEl) {
+      this.bodyEl.classList.toggle('vsidian-sidebar-open', this.sidebarOpen)
+    }
+    const btn = this.sidebarToggleBtn
+    if (btn) {
+      const label = this.sidebarOpen ? '收起右侧栏' : '展开右侧栏'
+      btn.setAttribute('aria-label', label)
+      btn.setAttribute('title', label)
+      btn.setAttribute('aria-expanded', String(this.sidebarOpen))
+    }
+    this.persistState()
+  }
+
+  // ---- 大纲面板（#54）----
+  // 与 sidebarOpen / viewMode 同类：纯 webview 视图状态（零写回、零出站、
+  // 不入撤销栈），经 bridge state 持久化。数据源是 CM6 全文（含未保存编辑），
+  // 与视口渲染、live/reading 模式均无关（CM6 doc 在两模式下都是权威文本模型）。
+
+  /** 大纲按钮点击：active 翻转后落 DOM；再激活时校准数据（隐藏期间无调度） */
+  private toggleOutline(): void {
+    this.outlineActive = !this.outlineActive
+    this.applyOutlineDom()
+    if (this.outlineActive) {
+      this.outlineEnsureFresh()
+    } else {
+      this.cancelOutlineRefresh()
+    }
+  }
+
+  /** 大纲状态落 DOM：侧栏容器的 outline-active 类是面板显隐唯一开关
+   *  （CSS 控制；与 #53 的 sidebar-open 类同模式），按钮 aria-expanded 同步 */
+  private applyOutlineDom(): void {
+    if (this.sidebarEl) {
+      this.sidebarEl.classList.toggle('vsidian-outline-active', this.outlineActive)
+    }
+    this.outlineToggleBtn?.setAttribute('aria-expanded', String(this.outlineActive))
+    this.persistState()
+  }
+
+  /** 大纲面板当前是否用户可见（可见才值得去抖重算；不可见时数据由
+   *  view.state 回报前的即时校准兜底） */
+  private outlineVisible(): boolean {
+    return this.sidebarOpen && this.outlineActive
+  }
+
+  /** 取消未决的去抖回调：面板已不可见（侧栏收起或面板关闭）时，迟到触发
+   *  只会在隐藏面板上做无谓解析与 DOM 重建——重开路径有校准兜底 */
+  private cancelOutlineRefresh(): void {
+    if (this.outlineTimer !== undefined) {
+      clearTimeout(this.outlineTimer)
+      this.outlineTimer = undefined
+    }
+  }
+
+  /** 文档变化后的去抖刷新调度：仅可见时开启，避免不可见面板伴随每次按键
+   *  解析；连续输入只在停顿后解析一次（尾随去抖：定时器随每次调用重置） */
+  private scheduleOutlineRefresh(): void {
+    if (this.outlineTimer !== undefined) {
+      clearTimeout(this.outlineTimer)
+    }
+    this.outlineTimer = setTimeout(() => {
+      this.outlineTimer = undefined
+      this.outlineEnsureFresh()
+    }, 250)
+  }
+
+  /**
+   * 大纲新鲜度校准（与 #14 查找的 findEnsureFresh 同模式）：Text 引用比较
+   * 判过期，过期则解析。解析复用 liveDecorationsField 维护的增量解析树
+   * （TreeFragment.applyChanges + addTree 随每笔文档事务增量更新，见
+   * liveDecorations.ts）：该树与当前 state.doc 同步，大纲直接取用，不在
+   * 去抖定时器里再做一次全量 parse（10 万行文档全量解析约 256ms，是
+   * 主线程卡顿级；增量树的语义等价由单测对照钉住）。field 恒随
+   * livePreviewDecorations 装配（extensions 无条件注册），取不到时由
+   * extractOutline 内部回退全量解析（防御路径）。序列（级别 + 文字）
+   * 未变时只更新数据（行号），不重建条目 DOM——正文编辑不触碰大纲 DOM。
+   */
+  private outlineEnsureFresh(): void {
+    const view = this.view
+    const doc = view?.state.doc
+    if (!view || !doc || this.outlineDoc === doc) {
+      return
+    }
+    const firstRender = this.outlineDoc === null // 从未渲染：首场必落 DOM（含空态占位）
+    this.outlineDoc = doc
+    const tree = view.state.field(liveDecorationsField, false)?.tree
+    const items = extractOutline(doc, tree)
+    const changed = firstRender || !outlineItemsEqual(items, this.outlineItems)
+    this.outlineItems = items
+    if (changed && this.outlinePanelEl) {
+      renderOutlineItems(this.outlinePanelEl, items)
+    }
   }
   // ---- 查找会话（#14）----
   // UI 形态：webview 内浮动层（custom editor webview 不可用 VSCode 原生
@@ -2595,6 +2827,31 @@ export class WebviewSyncController {
     const columnFirstStyle = columnFirst ? getComputedStyle(columnFirst) : null
     const columnLastStyle = columnLast ? getComputedStyle(columnLast) : null
     const regionStyle = regionCell ? getComputedStyle(regionCell) : null
+    // #55 标题行左缘绘制观测：视口内标题行（.vsidian-heading-inview）的
+    // computed box-shadow / border-left-width distinct 集合——标题行不得
+    // 绘制左缘竖线（真宿主应分别为 'none' / '0px'）；无挂载标题行为 null
+    let headingPaint: {
+      inviewCount: number
+      boxShadowValues: string[]
+      borderLeftWidthValues: string[]
+    } | null = null
+    const inviewHeadings = Array.from(
+      view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-heading-inview'),
+    )
+    if (inviewHeadings.length > 0) {
+      const boxShadowValues = new Set<string>()
+      const borderLeftWidthValues = new Set<string>()
+      for (const el of inviewHeadings) {
+        const style = getComputedStyle(el)
+        boxShadowValues.add(style.boxShadow)
+        borderLeftWidthValues.add(style.borderLeftWidth)
+      }
+      headingPaint = {
+        inviewCount: inviewHeadings.length,
+        boxShadowValues: [...boxShadowValues].sort(),
+        borderLeftWidthValues: [...borderLeftWidthValues].sort(),
+      }
+    }
     // 光标取证：本扩展未启用 drawSelection，CM6 光标即原生 caret，颜色
     // 由 baseTheme 明暗变体决定（light=black / dark=white）。darkTheme 取
     // facet 实值（jsdom 可读），caretColor 取计算值（jsdom 无 CSS 引擎为 null）
@@ -2709,6 +2966,113 @@ export class WebviewSyncController {
       },
       math,
       mermaid,
+      heading: headingPaint,
+    }
+  }
+
+  /**
+   * #53 右侧栏观测：布局态与绘制层证据（语义见 protocol.ts SidebarProbe）。
+   * 命中类字段走 elementFromPoint——侧栏/按钮只有真实绘制（非 display:none、
+   * 非零尺寸、无覆盖遮挡）时才可能命中；线宽为 computed stroke-width 文本
+   * （两态差异唯一来源是样式表类规则）。jsdom 无布局与 CSS 引擎：命中恒
+   * false、线宽/名称容错为 null，真宿主断言见集成
+   */
+  private collectSidebar(): SidebarProbe {
+    const readStroke = (el: Element | null): string | null => {
+      if (!el) {
+        return null
+      }
+      try {
+        const value = getComputedStyle(el).strokeWidth
+        return value === '' ? null : value
+      } catch {
+        return null
+      }
+    }
+    const widthOf = (el: HTMLElement | null | undefined): number | null => {
+      if (!el) {
+        return null
+      }
+      try {
+        return el.getBoundingClientRect().width
+      } catch {
+        return null
+      }
+    }
+    const sidebarBar = this.sidebarEl?.querySelector<HTMLElement>('.vsidian-sidebar-toolbar') ?? null
+    return {
+      open: this.sidebarOpen,
+      sidebarToolbarPainted: hitPaintedElement(sidebarBar, this.sidebarEl),
+      togglePainted: hitPaintedElement(this.sidebarToggleBtn),
+      settingsPainted: hitPaintedElement(
+        this.toolbar?.querySelector<HTMLButtonElement>('button.vsidian-settings-toggle') ?? null,
+      ),
+      toggleBarStrokeWidth: readStroke(
+        this.sidebarToggleBtn?.querySelector('.vsidian-sidebar-icon-bar') ?? null,
+      ),
+      toggleFrameStrokeWidth: readStroke(
+        this.sidebarToggleBtn?.querySelector('.vsidian-sidebar-icon-frame') ?? null,
+      ),
+      mainWidthPx: widthOf(this.mainEl),
+      sidebarWidthPx: widthOf(this.sidebarEl),
+      toggleAriaLabel: this.sidebarToggleBtn?.getAttribute('aria-label') ?? null,
+      settingsAriaLabel:
+        this.toolbar?.querySelector<HTMLButtonElement>('button.vsidian-settings-toggle')
+          ?.getAttribute('aria-label') ?? null,
+    }
+  }
+
+  /**
+   * #54 大纲观测：面板态与绘制层证据（语义见 protocol.ts OutlineProbe）。
+   * 回报前先做新鲜度校准（所有 view.state 回报路径统一走这里）：Text 引用
+   * 未变时零成本，过期则解析一次（复用 liveDecorationsField 的增量树）。
+   * 命中字段走 elementFromPoint——侧栏展开 + 面板 active + 显隐样式表规则
+   * 生效（display:none/零尺寸时命中失败），DOM 存在性探不出样式失效。
+   * 图标尺寸与滚动几何为 computed/布局度量（长面板裁剪时中心点在宿主外、
+   * 命中失败，scrollHeight > clientHeight 证明高度约束生效）。jsdom 无布局
+   * 与 CSS 引擎：命中恒 false、几何度量透传 0、图标尺寸容错为 null，名称
+   * 在未装配时为 null，真宿主断言见集成。
+   */
+  private collectOutline(): OutlineProbe {
+    this.outlineEnsureFresh()
+    const iconSizeOf = (el: HTMLElement | null | undefined): number | null => {
+      const svg = el?.querySelector('svg')
+      if (!svg) {
+        return null
+      }
+      try {
+        const value = getComputedStyle(svg).width
+        const px = value === '' ? NaN : Number.parseFloat(value)
+        return Number.isFinite(px) ? px : null
+      } catch {
+        return null
+      }
+    }
+    const panel = this.outlinePanelEl
+    const dimensionOf = (
+      el: HTMLElement | null | undefined,
+      key: 'scrollHeight' | 'clientHeight',
+    ): number | null => {
+      if (!el) {
+        return null
+      }
+      try {
+        const value = el[key]
+        return Number.isFinite(value) ? value : null
+      } catch {
+        return null
+      }
+    }
+    return {
+      active: this.outlineActive,
+      togglePainted: hitPaintedElement(this.outlineToggleBtn),
+      panelPainted: hitPaintedElement(panel, panel),
+      toggleIconSizePx: iconSizeOf(this.outlineToggleBtn),
+      panelScrollHeightPx: dimensionOf(panel, 'scrollHeight'),
+      panelClientHeightPx: dimensionOf(panel, 'clientHeight'),
+      items: this.outlineItems.map((item) => ({ ...item })),
+      toggleAriaLabel: this.outlineToggleBtn?.getAttribute('aria-label') ?? null,
+      panelAriaLabel: this.outlinePanelEl?.getAttribute('aria-label') ?? null,
     }
   }
 
@@ -2834,6 +3198,11 @@ export class WebviewSyncController {
             }
           })
         }
+        // 大纲刷新调度（#54）：仅面板可见时去抖开启（不可见面板不伴随每次
+        // 按键全量解析；数据新鲜度由 view.state 回报前的即时校准兜底）
+        if (this.outlineVisible()) {
+          this.scheduleOutlineRefresh()
+        }
         for (const tr of update.transactions) {
           if (!tr.docChanged || tr.annotation(externalSync)) {
             continue
@@ -2887,6 +3256,93 @@ export class WebviewSyncController {
       })),
     ]
   }
+}
+
+const SVG_NS = 'http://www.w3.org/2000/svg'
+
+/** 绘制层命中探测（#53 起 sidebar/outline 探针共用）：元素中心点
+ *  elementFromPoint 命中 scope（缺省元素自身）才算真实绘制——display:none、
+ *  零尺寸或覆盖遮挡时命中失败，几何/存在性探针测不出样式失效 */
+function hitPaintedElement(
+  el: HTMLElement | null | undefined,
+  scope?: HTMLElement,
+): boolean {
+  if (!el) {
+    return false
+  }
+  try {
+    const r = el.getBoundingClientRect()
+    if (r.width <= 0 || r.height <= 0) {
+      return false
+    }
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+    const within = scope ?? el
+    return !!hit && within.contains(hit)
+  } catch {
+    return false
+  }
+}
+
+/** 齿轮设置图标（#53：lucide-cog 意象，内联 SVG，不引入图标库）。
+ *  线宽是图标自身笔画的恒定属性（stroke-width=2），不参与两态变化 */
+function createSettingsGearIcon(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg')
+  svg.setAttribute('viewBox', '0 0 24 24')
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('stroke', 'currentColor')
+  svg.setAttribute('stroke-width', '2')
+  svg.setAttribute('stroke-linecap', 'round')
+  svg.setAttribute('stroke-linejoin', 'round')
+  svg.setAttribute('aria-hidden', 'true')
+  const circle = document.createElementNS(SVG_NS, 'circle')
+  circle.setAttribute('cx', '12')
+  circle.setAttribute('cy', '12')
+  circle.setAttribute('r', '3.5')
+  const path = document.createElementNS(SVG_NS, 'path')
+  path.setAttribute(
+    'd',
+    'M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08'
+      + 'a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51'
+      + 'a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08'
+      + 'a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2'
+      + 'v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73'
+      + 'l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74'
+      + 'l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0'
+      + 'l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z',
+  )
+  svg.appendChild(path)
+  svg.appendChild(circle)
+  return svg
+}
+
+/** 侧栏切换图标（#53：Obsidian side-bar-right / lucide panel-right 意象）：
+ *  矩形外框 + 右侧竖线。两态粗细差异的唯一来源是样式表（收起细线 1.5px /
+ *  展开粗线 3px，随 vsidian-sidebar-open 类切换），SVG 属性上不写
+ *  stroke-width——样式失效时两态同值，集成绘制断言据此暴露 */
+function createSidebarToggleIcon(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg')
+  svg.setAttribute('viewBox', '0 0 16 16')
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('stroke', 'currentColor')
+  svg.setAttribute('stroke-linecap', 'round')
+  svg.setAttribute('stroke-linejoin', 'round')
+  svg.setAttribute('aria-hidden', 'true')
+  const frame = document.createElementNS(SVG_NS, 'rect')
+  frame.setAttribute('class', 'vsidian-sidebar-icon-frame')
+  frame.setAttribute('x', '1.75')
+  frame.setAttribute('y', '2.75')
+  frame.setAttribute('width', '12.5')
+  frame.setAttribute('height', '10.5')
+  frame.setAttribute('rx', '1.5')
+  const bar = document.createElementNS(SVG_NS, 'line')
+  bar.setAttribute('class', 'vsidian-sidebar-icon-bar')
+  bar.setAttribute('x1', '11')
+  bar.setAttribute('y1', '2.75')
+  bar.setAttribute('x2', '11')
+  bar.setAttribute('y2', '13.25')
+  svg.appendChild(frame)
+  svg.appendChild(bar)
+  return svg
 }
 
 /** VSCode webview 明暗主题判定：深色（vscode-dark）与暗色高对比

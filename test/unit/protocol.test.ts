@@ -243,6 +243,155 @@ describe('isWebviewToHost', () => {
     expect(isWebviewToHost(base)).toBe(true)
   })
 
+  it('view.state 的 sidebar 观测（#53）：合法样本接受、字段非法拒绝', () => {
+    const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
+    // 合法：open 布尔；绘制命中布尔；线宽/名称字符串或 null；宽度非负数或 null
+    expect(
+      isWebviewToHost({
+        ...base,
+        sidebar: {
+          open: true,
+          sidebarToolbarPainted: true,
+          togglePainted: true,
+          settingsPainted: true,
+          toggleBarStrokeWidth: '3px',
+          toggleFrameStrokeWidth: '1.5px',
+          mainWidthPx: 620,
+          sidebarWidthPx: 280,
+          toggleAriaLabel: '收起右侧栏',
+          settingsAriaLabel: '打开 Vsidian 设置',
+        },
+      }),
+    ).toBe(true)
+    expect(
+      isWebviewToHost({
+        ...base,
+        sidebar: {
+          open: false,
+          sidebarToolbarPainted: false,
+          togglePainted: false,
+          settingsPainted: false,
+          toggleBarStrokeWidth: null,
+          toggleFrameStrokeWidth: null,
+          mainWidthPx: null,
+          sidebarWidthPx: null,
+          toggleAriaLabel: null,
+          settingsAriaLabel: null,
+        },
+      }),
+    ).toBe(true)
+    // 非法：open 非布尔 / 命中字段非布尔 / 线宽非字符串非 null / 宽度负数
+    expect(isWebviewToHost({ ...base, sidebar: { open: 1 } })).toBe(false)
+    expect(
+      isWebviewToHost({ ...base, sidebar: { open: true, togglePainted: 'yes' } }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({ ...base, sidebar: { open: true, toggleBarStrokeWidth: 3 } }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({ ...base, sidebar: { open: true, mainWidthPx: -5 } }),
+    ).toBe(false)
+    // 缺省合法（向后兼容：侧栏观测未装配的旧 webview）
+    expect(isWebviewToHost(base)).toBe(true)
+  })
+
+  it('sidebar.test.click 测试钩子消息校验（#53）', () => {
+    expect(isHostToWebview({ kind: 'sidebar.test.click' })).toBe(true)
+    expect(isHostToWebview({ kind: 'sidebar.test.click', extra: 1 })).toBe(true)
+    expect(isHostToWebview({ kind: 'sidebar.test.clickx' })).toBe(false)
+  })
+
+  it('view.state 的 outline 观测（#54）：合法样本接受、字段非法拒绝', () => {
+    const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
+    // 合法：active 布尔；绘制命中布尔；图标尺寸与滚动几何 null 或非负数
+    // （jsdom 无布局时 null）；items 每项 level 1-6 整数 + 字符串文字 +
+    // 非负行号；名称字符串或 null
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: {
+          active: true,
+          togglePainted: true,
+          panelPainted: true,
+          toggleIconSizePx: 16,
+          panelScrollHeightPx: 1328,
+          panelClientHeightPx: 570,
+          items: [
+            { level: 1, text: '文档主标题', line: 1 },
+            { level: 2, text: '', line: 5 },
+          ],
+          toggleAriaLabel: '大纲',
+          panelAriaLabel: '大纲',
+        },
+      }),
+    ).toBe(true)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: {
+          active: false,
+          togglePainted: false,
+          panelPainted: false,
+          toggleIconSizePx: null,
+          panelScrollHeightPx: null,
+          panelClientHeightPx: null,
+          items: [],
+          toggleAriaLabel: null,
+          panelAriaLabel: null,
+        },
+      }),
+    ).toBe(true)
+    // 非法：active 非布尔 / 图标尺寸非 null 负数 / level 超界（0、7、
+    // 非整数） / text 非字符串 / line 负数
+    expect(isWebviewToHost({ ...base, outline: { active: 1 } })).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: {
+          active: true,
+          toggleIconSizePx: -16,
+          panelScrollHeightPx: null,
+          panelClientHeightPx: null,
+          items: [],
+          toggleAriaLabel: null,
+          panelAriaLabel: null,
+        },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: { active: true, items: [{ level: 0, text: 'x', line: 1 }] },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: { active: true, items: [{ level: 7, text: 'x', line: 1 }] },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: { active: true, items: [{ level: 2, text: 3, line: 1 }] },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: { active: true, items: [{ level: 2, text: 'x', line: -1 }] },
+      }),
+    ).toBe(false)
+    // 缺省合法（向后兼容：大纲观测未装配的旧 webview）
+    expect(isWebviewToHost(base)).toBe(true)
+  })
+
+  it('outline.test.click 测试钩子消息校验（#54）', () => {
+    expect(isHostToWebview({ kind: 'outline.test.click' })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.click', extra: 1 })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.clickx' })).toBe(false)
+  })
+
   it('表格绘制样本校验：可见性和边框计算值类型必须可信', () => {
     const base = { kind: 'view.state', text: '| A |', docLength: 5, lineCount: 1, renderedLines: 1 }
     const table = {
@@ -376,6 +525,24 @@ describe('isWebviewToHost', () => {
     ).toBe(false)
     // 缺省合法（无 mermaid 字段的旧样本）
     expect(isWebviewToHost(base)).toBe(true)
+  })
+
+  it('标题绘制样本校验（#55）：计数非负整数、计算值数组元素为字符串', () => {
+    const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 1 }
+    const paint = {
+      textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none',
+      darkTheme: false, caretColor: 'rgb(0, 0, 0)',
+      heading: { inviewCount: 2, boxShadowValues: ['none'], borderLeftWidthValues: ['0px'] },
+    }
+    // 合法：有挂载标题行 / 无挂载标题行（null）/ 字段缺省（旧 webview 兼容）
+    expect(isWebviewToHost({ ...base, paint })).toBe(true)
+    expect(isWebviewToHost({ ...base, paint: { ...paint, heading: null } })).toBe(true)
+    expect(isWebviewToHost({ ...base, paint: { textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none', darkTheme: false, caretColor: null } })).toBe(true)
+    // 非法：inviewCount 负数/非整数、计算值数组元素非字符串
+    expect(isWebviewToHost({ ...base, paint: { ...paint, heading: { ...paint.heading, inviewCount: -1 } } })).toBe(false)
+    expect(isWebviewToHost({ ...base, paint: { ...paint, heading: { ...paint.heading, inviewCount: 1.5 } } })).toBe(false)
+    expect(isWebviewToHost({ ...base, paint: { ...paint, heading: { ...paint.heading, boxShadowValues: ['none', 3] } } })).toBe(false)
+    expect(isWebviewToHost({ ...base, paint: { ...paint, heading: { ...paint.heading, borderLeftWidthValues: '0px' } } })).toBe(false)
   })
 
   it('拒绝 null、非对象与数组', () => {

@@ -643,6 +643,9 @@ export class DocumentSession {
     }
     const pending: PendingEdit = { seq: message.seq, changes: mapped, confirmed: false }
     panel.pending.push(pending)
+    // #52：快照 apply 前版本——兜底确认时据此推导 E 实际落地的权威版本
+    //（apply 窗口内到达的外部增量会把 doc.version 推进到高于 E 的值）
+    const versionBeforeApply = this.doc.version
     const ok = await this.doc.applyChanges(mapped)
     const entry = panel.pending.find((p) => p === pending)
     if (!entry) {
@@ -676,14 +679,42 @@ export class DocumentSession {
       return
     }
     if (!entry.confirmed) {
-      // applyEdit 已 resolve 但回流事件尚未到达（或被合并），以当前版本兜底确认；
-      // 记录 (version, changes) 供迟到回流匹配，防止重复广播（C-4）
-      this.confirmPending(panel, entry, this.doc.version)
-      this.confirmedEchoes.push({ version: this.doc.version, changes: mapped })
+      // applyEdit 已 resolve 但回流事件尚未到达（或被合并），以 E 实际落地的
+      // 权威版本兜底确认；记录 (version, changes) 供迟到回流匹配，防止重复
+      // 广播（C-4）。版本不得取 resolve 时点的 doc.version（#52）：窗口内
+      // 到达的外部增量已把它推进，E 的广播会与随后补发的暂存增量同版本，
+      // 被旁观面板的版本单调防线永久丢弃
+      const version = this.fallbackConfirmVersion(versionBeforeApply)
+      this.confirmPending(panel, entry, version)
+      this.confirmedEchoes.push({ version, changes: mapped })
       while (this.confirmedEchoes.length > ACK_CACHE_LIMIT) {
         this.confirmedEchoes.shift()
       }
     }
+  }
+
+  /** 兜底确认的版本推导（#52）：E 的回流未到达时，(apply 前版本, 当前版本]
+   *  内的其余版本号都已作为外部回流进过 versionLog（每次文档变更恰产生
+   *  一个携带其版本的回流事件，全局队列串行化保证同一时刻至多一笔「已
+   *  应用未确认」pending），E 实际应用的版本是区间内唯一缺失的版本号。
+   *  取该值广播/确认，保证随后按 version 有序补发的暂存增量不被 webview
+   *  的 C-4 单调防线丢弃。推导不出（版本号无一缺失，如回流被合并成单
+   * 事件）时退回当前版本，维持既有兜底语义。
+   *
+   *  排序假设（换宿主适配层需重新验证）：apply 窗口内落地的外部变更，其
+   *  回流事件先于 applyEdit 的 resolve 送达本会话——扩展宿主的同通道 RPC
+   *  按序投递、onDidChangeTextDocument 事件同步派发共同保证这一先后。
+   *  该假设成立，「resolve 时点的 versionLog」才完整覆盖窗口内除 E 外的
+   *  全部外部版本，缺失值才是 E 的实际版本；反之（回流晚于 resolve）会把
+   *  外部变更的版本误判给 E。 */
+  private fallbackConfirmVersion(versionBeforeApply: number): number {
+    const logged = new Set(this.versionLog.map((g) => g.version))
+    for (let v = versionBeforeApply + 1; v < this.doc.version; v++) {
+      if (!logged.has(v)) {
+        return v
+      }
+    }
+    return this.doc.version
   }
 
   /** 日志覆盖检查：baseVersion..current 之间的变更组必须连续可见。

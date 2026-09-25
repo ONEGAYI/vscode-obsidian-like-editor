@@ -8,6 +8,7 @@ An Obsidian-like Markdown editing experience in VS Code: a source-text-based edi
 
 - **Dual-view editor**: the live preview is backed by a full-document CodeMirror 6 instance (no DOM outside the viewport); reading mode renders markdown-it blocks mounted on demand — performance stays flat on 100k-line / 100k-block documents.
 - **Three-state cycling**: the title-bar button cycles **Live preview → Reading → Source editor**; the last-used mode is remembered globally across windows, and source positions are preserved when switching. `.md` / `.markdown` files open with Vsidian by default — right-click "Open With…" to revert to the native editor at any time.
+- **Right sidebar & outline**: the toolbar gear button opens the settings page; a toolbar toggle expands and collapses the right sidebar (thin/thick line icons, state remembered across panels). The **Outline** panel lists every heading of the current document live — ATX and Setext semantics, pseudo-headings inside code fences or frontmatter excluded — updating as you type. Both views share the same layout, and toggling never touches the document.
 - **Table editing**: well-formed tables render as a grid; click a cell to edit, drag across cells for a rectangular selection, and copy it as a standalone Markdown table. Hover near an edge to add rows or columns; click a dotted handle to select a row or column, or drag it to reorder. Tab / Shift+Tab navigate between cells, and typing `|` inside a cell is escaped automatically.
 - **Links, images & wikilinks**: links and `[[wikilinks]]` reveal their source as the cursor enters, and open with a single click; wikilinks support `[[note]]`, `[[path/note]]`, `[[note|alias]]`, and `[[note#heading]]`; ambiguous names open a candidate picker, missing targets show a hint instead of silently creating files; local images load through a host channel, and dangerous schemes such as `file://` and `javascript:` are blocked.
 - **Math rendering**: inline `$…$` and block `$$…$$` LaTeX formulas render in live preview and reading mode (KaTeX bundled locally, no CDN); the cursor entering a formula reveals its source for direct editing, parse failures fall back to readable raw text, and plain dollar amounts, escapes, and code spans are never misread as math.
@@ -40,7 +41,8 @@ Download the latest `vsidian-*.vsix` from [GitHub Releases](https://github.com/O
 | Delete table content | Delete / Backspace clears a partial region, removes fully selected rows/columns, or deletes a fully selected table; Backspace at the start of an empty row's first cell removes that row |
 | Reorder table rows & columns | Hover over the left/top edge for dotted handles; click to select or drag to the insertion line to move; the top row becomes the header |
 | Find | Ctrl+F / Cmd+F |
-| Settings | "Vsidian: 打开设置", or the toolbar settings button |
+| Right sidebar / outline | Toolbar toggle on the right; once open, click "Outline" |
+| Settings | "Vsidian: 打开设置", or the toolbar gear button |
 
 Current settings: **show line numbers** (on by default) — the live preview gutter shows source-file line numbers, and table segments show the first row's number; reading mode never shows line numbers.
 

@@ -438,6 +438,37 @@ interface ViewState {
       error: number
       count: number
     }
+    /** #55：标题行左缘绘制观测（distinct computed 值；无挂载标题行为 null） */
+    heading?: {
+      inviewCount: number
+      boxShadowValues: string[]
+      borderLeftWidthValues: string[]
+    } | null
+  }
+  /** #53 右侧栏观测：布局态与绘制层证据（结构见 src/shared/protocol.ts SidebarProbe） */
+  sidebar?: {
+    open: boolean
+    sidebarToolbarPainted: boolean
+    togglePainted: boolean
+    settingsPainted: boolean
+    toggleBarStrokeWidth: string | null
+    toggleFrameStrokeWidth: string | null
+    mainWidthPx: number | null
+    sidebarWidthPx: number | null
+    toggleAriaLabel: string | null
+    settingsAriaLabel: string | null
+  }
+  /** #54 大纲观测：面板态、绘制层证据与全文标题序列（protocol.ts OutlineProbe） */
+  outline?: {
+    active: boolean
+    togglePainted: boolean
+    panelPainted: boolean
+    toggleIconSizePx: number | null
+    panelScrollHeightPx: number | null
+    panelClientHeightPx: number | null
+    items: Array<{ level: number; text: string; line: number }>
+    toggleAriaLabel: string | null
+    panelAriaLabel: string | null
   }
 }
 
@@ -1496,10 +1527,23 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await openWithEditor('heading.md')
     await waitSessionReady('heading.md')
     // 光标初始在文档头的 # 标记处：该标记显形，另一标题的标记隐藏
-    const view = await waitViewState('heading.md', (v) => (v.headingLineCount ?? 0) >= 2)
+    const view = await waitViewState('heading.md', (v) => (v.headingLineCount ?? 0) >= 2 && v.paint?.heading != null)
     assert((view.headingActiveText ?? '').startsWith('#'), `光标贴近的标题标记应显形（# 开头）：${JSON.stringify(view.headingActiveText)}`)
     assert((view.headingHiddenText ?? '').startsWith('#') === false, `另一标题标记应隐藏（不以 # 开头）：${JSON.stringify(view.headingHiddenText)}`)
     assert((view.headingHiddenText ?? '') === '中部二级标题', `另一标题行 DOM 文本应为标题内容：${JSON.stringify(view.headingHiddenText)}`)
+
+    // #55 绘制层断言：标题行开头不绘制左缘竖线。正向控制先行——标题字号
+    // 须实际大于正文字号（样式注入失效时控制先失败，左缘断言才有意义）
+    const bodyFontPx = view.typography?.live?.fontSizePx
+    assert(bodyFontPx != null && (view.headingFontPx ?? 0) > bodyFontPx,
+      `正向控制失败：标题字号应大于正文（标题=${view.headingFontPx}px，正文=${bodyFontPx}px；样式注入失效会让左缘断言失去意义）`)
+    const headingPaint = view.paint!.heading!
+    assert(headingPaint.inviewCount >= 2,
+      `视口内应挂载至少 2 个标题行（H1/H2）供绘制观测，实际 ${headingPaint.inviewCount}`)
+    assert(JSON.stringify(headingPaint.boxShadowValues) === JSON.stringify(['none']),
+      `标题行不得以 box-shadow 绘制左缘竖线：${JSON.stringify(headingPaint.boxShadowValues)}`)
+    assert(JSON.stringify(headingPaint.borderLeftWidthValues) === JSON.stringify(['0px']),
+      `标题行不得以 border-left 绘制左缘竖线：${JSON.stringify(headingPaint.borderLeftWidthValues)}`)
 
     const uri = wsUri('heading.md').toString()
     const bodyOffset = '# 顶部'.length
@@ -1509,6 +1553,12 @@ export const cases: Array<[string, () => Promise<void>]> = [
       return v?.selectionOffset === bodyOffset ? v : undefined
     })
     assert((inBody.headingActiveText ?? '').startsWith('#'), `光标在标题正文时 # 应保持显形：${JSON.stringify(inBody.headingActiveText)}`)
+    // 光标位于标题正文时左缘同样无竖线（光标内外一致）
+    const inBodyPaint = inBody.paint?.heading
+    assert(inBodyPaint != null &&
+      JSON.stringify(inBodyPaint.boxShadowValues) === JSON.stringify(['none']) &&
+      JSON.stringify(inBodyPaint.borderLeftWidthValues) === JSON.stringify(['0px']),
+      `光标在标题正文时标题行也不得绘制左缘竖线：${JSON.stringify(inBodyPaint)}`)
 
     // 外部编辑把普通行改成标题：装饰随文本增量更新（doc.changed 广播路径）
     const before = view.headingLineCount ?? 0
@@ -4253,6 +4303,334 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // 还原默认开启，避免影响后续用例（与 #34 既有用例同款跨用例状态清理）
     await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
     await waitViewState('linenumbers.md', (v) => v.lineGutter?.on === true)
+  }],
+
+  // ---- #53 顶栏图标化与右侧栏布局 ----
+
+  ['右侧栏收起→展开→收起循环：绘制层证据与图标两态线宽（#53）', async () => {
+    // 绘制层断言口径（视觉层断言必查）：侧栏可见性经 elementFromPoint 命中
+    // 证明（display:none、零尺寸或覆盖遮挡时命中失败）；图标两态粗细经
+    // computed stroke-width 证明（差异唯一来源是样式表的 open 类规则，
+    // 样式失效时两态同值）。DOM 存在性与几何坐标不能替代这些证据。
+    await openWithEditor('lf.md')
+    await waitSessionReady('lf.md')
+    const uri = wsUri('lf.md').toString()
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+
+    // 收起态：按钮与齿轮入口真实可见，侧栏不可见，竖线为细线
+    const collapsed = await waitViewState('lf.md', (v) => v.sidebar !== undefined)
+    assert(collapsed.sidebar!.open === false, '初始应为收起态')
+    assert(collapsed.sidebar!.togglePainted === true,
+      `切换按钮应真实可见（命中测试失败：${JSON.stringify(collapsed.sidebar)}）`)
+    assert(collapsed.sidebar!.settingsPainted === true,
+      `齿轮设置按钮应真实可见（命中测试失败：${JSON.stringify(collapsed.sidebar)}）`)
+    assert(collapsed.sidebar!.sidebarToolbarPainted === false, '收起时侧栏顶栏不得可见（命中应失败）')
+    assert(collapsed.sidebar!.settingsAriaLabel === '打开 Vsidian 设置',
+      `齿轮可访问名称应为「打开 Vsidian 设置」，实际 ${String(collapsed.sidebar!.settingsAriaLabel)}`)
+    assert(collapsed.sidebar!.toggleAriaLabel === '展开右侧栏',
+      `收起态切换按钮名称应为「展开右侧栏」，实际 ${String(collapsed.sidebar!.toggleAriaLabel)}`)
+    assert(Math.abs(parseFloat(collapsed.sidebar!.toggleBarStrokeWidth ?? 'x') - 1.5) < 0.01,
+      `收起态图标竖线应为细线 1.5px，实际 ${String(collapsed.sidebar!.toggleBarStrokeWidth)}`)
+    assert(collapsed.paint?.textVisible === true, '收起态正文应可见')
+    const collapsedMainWidth = collapsed.sidebar!.mainWidthPx ?? 0
+    assert(collapsedMainWidth > 0, '收起态主编辑区应有宽度')
+
+    // 展开：侧栏顶栏真实绘制于右侧空出区域，竖线变粗，主编辑区收缩。
+    // 谓词等待动画终态（宽度过渡期间命中/宽度瞬时失真，轮询至到位）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    const opened = await waitViewState('lf.md', (v) => v.sidebar?.open === true &&
+      v.sidebar.sidebarToolbarPainted === true && (v.sidebar.sidebarWidthPx ?? 0) > 200)
+    assert(opened.sidebar!.sidebarToolbarPainted === true,
+      `展开时侧栏顶栏应实际绘制（elementFromPoint 应命中侧栏：${JSON.stringify(opened.sidebar)}）`)
+    assert(Math.abs(parseFloat(opened.sidebar!.toggleBarStrokeWidth ?? 'x') - 3) < 0.01,
+      `展开态图标竖线应为粗线 3px，实际 ${String(opened.sidebar!.toggleBarStrokeWidth)}`)
+    // 外框线宽两态恒定（对照：证明粗细变化只发生在竖线）
+    assert(Math.abs(parseFloat(opened.sidebar!.toggleFrameStrokeWidth ?? 'x') -
+      parseFloat(collapsed.sidebar!.toggleFrameStrokeWidth ?? 'x')) < 0.01,
+      '图标外框线宽两态应恒定（差异只应在竖线）')
+    assert(opened.sidebar!.toggleAriaLabel === '收起右侧栏',
+      `展开态切换按钮名称应为「收起右侧栏」，实际 ${String(opened.sidebar!.toggleAriaLabel)}`)
+    assert((opened.sidebar!.sidebarWidthPx ?? 0) > 200,
+      `侧栏应占出宽度（约 280px），实际 ${String(opened.sidebar!.sidebarWidthPx)}`)
+    assert((opened.sidebar!.mainWidthPx ?? 0) < collapsedMainWidth - 200,
+      `主编辑区宽度应随侧栏收缩（${collapsedMainWidth} → ${String(opened.sidebar!.mainWidthPx)}）`)
+    assert(opened.sidebar!.togglePainted === true,
+      '展开态切换按钮应仍可见（随主编辑区右边界移动后仍可命中）')
+    assert(opened.paint?.textVisible === true, '展开态正文应仍可见（布局收缩不遮挡正文）')
+
+    // 切换全程零写回、零版本推进（侧栏是纯视图状态）
+    const afterToggle = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterToggle.version === before.version,
+      `切换侧栏不得推进文档版本（${before.version} → ${afterToggle.version}）`)
+    assert(afterToggle.appliedEdits === before.appliedEdits, '切换侧栏不得产生写回')
+
+    // 收起回归：侧栏顶栏重新不可见、竖线回细线、名称回「展开右侧栏」
+    // （谓词等待收起动画终态：主编辑区宽度复原到基线 ±2px）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    const recollapsed = await waitViewState('lf.md', (v) => v.sidebar?.open === false &&
+      v.sidebar.sidebarToolbarPainted === false &&
+      Math.abs((v.sidebar.mainWidthPx ?? -999) - collapsedMainWidth) < 2)
+    assert(recollapsed.sidebar!.sidebarToolbarPainted === false, '收起后侧栏顶栏应不可见')
+    assert(Math.abs(parseFloat(recollapsed.sidebar!.toggleBarStrokeWidth ?? 'x') - 1.5) < 0.01,
+      `收起回归后图标竖线应回细线 1.5px，实际 ${String(recollapsed.sidebar!.toggleBarStrokeWidth)}`)
+    assert(recollapsed.sidebar!.toggleAriaLabel === '展开右侧栏',
+      `收起回归后名称应回「展开右侧栏」，实际 ${String(recollapsed.sidebar!.toggleAriaLabel)}`)
+    assert(Math.abs((recollapsed.sidebar!.mainWidthPx ?? 0) - collapsedMainWidth) < 2,
+      `收起回归后主编辑区宽度应复原（${collapsedMainWidth} → ${String(recollapsed.sidebar!.mainWidthPx)}）`)
+  }],
+
+  ['右侧栏与模式切换正交：两模式共用布局、零撤销记录、正文可编辑（#53）', async () => {
+    // untouched.md 无任何前序用例编辑：全新面板 + 干净撤销栈基线
+    await openWithEditor('untouched.md')
+    await waitSessionReady('untouched.md')
+    const uri = wsUri('untouched.md').toString()
+    const baseline = '未触碰文档\n保持原样\n'
+    const doc = await vscode.workspace.openTextDocument(wsUri('untouched.md'))
+    assert(doc.getText() === baseline, 'untouched.md 应为 fixture 原文')
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+
+    // live 下展开侧栏
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('untouched.md', (v) => v.sidebar?.open === true)
+
+    // 切到 reading：侧栏保持展开且同样真实绘制（两模式共用同一布局；
+    // 谓词含绘制命中，等侧栏展开宽度过渡完成）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const readingOpen = await waitViewState('untouched.md',
+      (v) => v.viewMode === 'reading' && v.sidebar?.open === true &&
+        v.sidebar.sidebarToolbarPainted === true)
+    assert(readingOpen.sidebar!.sidebarToolbarPainted === true,
+      `阅读模式侧栏应同样展开绘制（${JSON.stringify(readingOpen.sidebar)}）`)
+    assert((readingOpen.readingBlockCount ?? 0) > 0, '阅读模式正文应正常渲染（块数 > 0）')
+
+    // 切回 live：侧栏状态不因模式切换丢失（谓词含绘制命中，维持终态等待）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'live' })
+    const liveOpen = await waitViewState('untouched.md',
+      (v) => v.viewMode === 'live' && v.sidebar?.open === true &&
+        v.sidebar.sidebarToolbarPainted === true)
+    assert(liveOpen.sidebar!.sidebarToolbarPainted === true, '切回 live 后侧栏应仍展开绘制')
+
+    // 模式与侧栏切换全程零写回、零版本推进（不产生文档撤销记录）
+    const afterSwitches = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterSwitches.version === before.version,
+      `切换模式/侧栏不得推进文档版本（${before.version} → ${afterSwitches.version}）`)
+    assert(afterSwitches.appliedEdits === before.appliedEdits, '切换不得产生写回')
+    assert(doc.getText() === baseline, '切换不得修改文档内容')
+
+    // 展开态下正文仍可编辑（布局不影响输入链路）：一笔编辑经标准链路写回
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'sync.test.edit',
+      offset: 0,
+      text: '# ',
+    })
+    await poll('展开态编辑写入权威', () => (doc.getText() === `# ${baseline}` ? true : undefined))
+
+    // 撤销一次即回原文：撤销栈里只有这笔编辑（侧栏/模式切换未入栈）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('撤销一次还原', () => (doc.getText() === baseline ? true : undefined))
+    if (doc.isDirty) {
+      await doc.save()
+    }
+
+    // 收起侧栏收尾（避免跨用例状态泄漏）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('untouched.md', (v) => v.sidebar?.open === false)
+  }],
+
+  // ---- #54 右侧栏大纲面板 ----
+
+  ['大纲面板展开：绘制层可见与全文标题序列一致（#54）', async () => {
+    // 绘制层断言口径（视觉层断言必查）：大纲按钮与面板可见性经
+    // elementFromPoint 命中证明（侧栏收起 / 面板 display:none / 样式注入
+    // 失效时命中必失败）；内容一致性经 view.state 的 outline.items 对拍
+    // 源文本文档标题（跨级、同名不合并，伪标题排除）。
+    await openWithEditor('outline.md')
+    await waitSessionReady('outline.md')
+    const uri = wsUri('outline.md').toString()
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+
+    // 收起态：大纲按钮在侧栏内（display:none 继承），命中必失败
+    const collapsed = await waitViewState('outline.md', (v) => v.outline !== undefined)
+    assert(collapsed.outline!.active === true, '大纲面板默认 active（展开侧栏即见大纲）')
+    assert(collapsed.outline!.togglePainted === false, '侧栏收起时大纲按钮不得可见')
+    assert(collapsed.outline!.toggleAriaLabel === '大纲',
+      `大纲按钮可访问名称应为「大纲」，实际 ${String(collapsed.outline!.toggleAriaLabel)}`)
+
+    // 展开：按钮与面板真实绘制（elementFromPoint 命中），可访问名称齐备
+    // （谓词等待展开动画终态：过渡期间面板中心点可能未入视口）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    const opened = await waitViewState('outline.md', (v) => v.sidebar?.open === true &&
+      v.outline?.togglePainted === true && v.outline.panelPainted === true)
+    assert(opened.outline!.togglePainted === true,
+      `大纲按钮应真实可见（命中失败：${JSON.stringify(opened.outline)}）`)
+    assert(opened.outline!.panelPainted === true,
+      `大纲面板应真实绘制（elementFromPoint 应命中面板：${JSON.stringify(opened.outline)}）`)
+    // 图标尺寸 16px（P1-2 回归）：尺寸规则的类名曾写错（.vsidian-toolbar-actions
+    // vs DOM 实际 .vsidian-sidebar-toolbar-actions），选择器永不匹配时 SVG 回退
+    // 默认尺寸溢出 24px 按钮盒——computed 尺寸直接钉住「用户看到的图标大小」
+    assert(Math.abs((opened.outline!.toggleIconSizePx ?? -1) - 16) < 0.01,
+      `大纲按钮图标应为 16px（选择器命中与规则生效的 computed 证据），` +
+        `实际 ${String(opened.outline!.toggleIconSizePx)}`)
+    assert(opened.outline!.panelAriaLabel === '大纲',
+      `大纲面板可访问名称应为「大纲」，实际 ${String(opened.outline!.panelAriaLabel)}`)
+    assert(opened.paint?.textVisible === true, '展开态正文应仍可见')
+
+    // 内容一致：大纲 = 源文本文档标题的级别/文字/起始行序列（跨级、同名、
+    // Setext 语义与伪标题排除一次对拍）
+    const expected: Array<[number, string, number]> = [
+      [1, '文档主标题', 6],
+      [2, '同名标题', 8],
+      [3, '三级标题', 12],
+      [2, '同名标题', 14],
+      [1, '跨级回一级', 16],
+      [1, 'Setext 一级', 18],
+      [2, 'Setext 二级', 21],
+      [4, '四级标题', 24],
+      [5, '五级标题', 26],
+      [6, '六级标题', 28],
+    ]
+    const items = opened.outline!.items
+    assert(items.length === expected.length,
+      `大纲条目数应为 ${expected.length}（伪标题排除、同名不合并），实际 ${items.length}：${JSON.stringify(items)}`)
+    for (let i = 0; i < expected.length; i++) {
+      const [level, text, line] = expected[i]!
+      assert(items[i]!.level === level && items[i]!.text === text && items[i]!.line === line,
+        `大纲第 ${i + 1} 项应为 [${level}, ${text}, ${line}]，实际 ${JSON.stringify(items[i])}`)
+    }
+
+    // 展示大纲零写回：版本与写回计数不变（面板是纯视图状态）
+    const afterOpen = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterOpen.version === before.version,
+      `展开侧栏显示大纲不得推进文档版本（${before.version} → ${afterOpen.version}）`)
+    assert(afterOpen.appliedEdits === before.appliedEdits, '显示大纲不得产生写回')
+
+    // 收起侧栏收尾（避免跨用例状态泄漏）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline.md', (v) => v.sidebar?.open === false)
+  }],
+
+  ['大纲面板切换与编辑更新：active 两态绘制证据、文本变更后大纲跟随（#54）', async () => {
+    await openWithEditor('outline.md')
+    await waitSessionReady('outline.md')
+    const uri = wsUri('outline.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('outline.md'))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline.md', (v) => v.sidebar?.open === true && v.outline?.panelPainted === true)
+
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    const baselineItems = (await waitViewState('outline.md', (v) => v.outline !== undefined))
+      .outline!.items
+
+    // 点击大纲按钮：面板隐藏（绘制层证据翻转）、数据保留、零写回
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.click' })
+    const hidden = await waitViewState('outline.md', (v) => v.outline?.active === false)
+    assert(hidden.outline!.panelPainted === false,
+      `active=false 后大纲面板不得绘制（${JSON.stringify(hidden.outline)}）`)
+    assert(hidden.outline!.items.length === baselineItems.length, '面板隐藏不影响大纲数据')
+    const afterHide = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterHide.version === before.version && afterHide.appliedEdits === before.appliedEdits,
+      '切换大纲面板不得推进版本或产生写回（不写回、不入撤销历史）')
+
+    // 再点回：面板重新绘制
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.click' })
+    const shown = await waitViewState('outline.md', (v) => v.outline?.active === true)
+    assert(shown.outline!.panelPainted === true, '重新激活后大纲面板应恢复绘制')
+
+    // 编辑标题：大纲随当前文本（含未保存编辑）更新——文档末尾追加二级标题
+    const endOffset = doc.getText().length
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'sync.test.edit',
+      offset: endOffset,
+      text: '\n## 集成新增标题\n',
+    })
+    const updated = await waitViewState('outline.md',
+      (v) => v.outline !== undefined && v.outline.items.length === baselineItems.length + 1)
+    const last = updated.outline!.items[updated.outline!.items.length - 1]!
+    assert(last.level === 2 && last.text === '集成新增标题',
+      `新增标题应入大纲末项 [2, 集成新增标题]，实际 ${JSON.stringify(last)}`)
+
+    // 撤销这笔编辑（回到原文），大纲同步回落（撤销后写回链路的另一面）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    const undone = await waitViewState('outline.md', (v) =>
+      v.outline !== undefined && v.outline.items.length === baselineItems.length)
+    assert(undone.outline!.items.every((item, i) =>
+      item.level === baselineItems[i]!.level && item.text === baselineItems[i]!.text),
+      '撤销编辑后大纲应回落为原序列')
+    if (doc.isDirty) {
+      await doc.save()
+    }
+
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline.md', (v) => v.sidebar?.open === false)
+  }],
+
+  ['大纲与模式切换正交：两模式下序列不变、面板持续绘制（#54）', async () => {
+    await openWithEditor('outline.md')
+    await waitSessionReady('outline.md')
+    const uri = wsUri('outline.md').toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    const live = await waitViewState('outline.md',
+      (v) => v.sidebar?.open === true && v.outline?.panelPainted === true)
+    const liveItems = live.outline!.items.map((i) => [i.level, i.text])
+
+    // 切到阅读模式：大纲仍来自 CM6 全文（非阅读渲染），面板持续绘制
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const reading = await waitViewState('outline.md',
+      (v) => v.viewMode === 'reading' && v.outline !== undefined)
+    assert(reading.outline!.panelPainted === true,
+      `阅读模式下大纲面板应持续绘制（${JSON.stringify(reading.outline)}）`)
+    assert(
+      JSON.stringify(reading.outline!.items.map((i) => [i.level, i.text])) === JSON.stringify(liveItems),
+      '模式切换不得改变大纲序列（数据源是 CM6 全文，非阅读渲染）')
+    assert((reading.readingBlockCount ?? 0) > 0, '阅读模式正文应正常渲染')
+
+    // 切回 live：序列仍不变
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'live' })
+    const backLive = await waitViewState('outline.md', (v) => v.viewMode === 'live' && v.outline !== undefined)
+    assert(
+      JSON.stringify(backLive.outline!.items.map((i) => [i.level, i.text])) === JSON.stringify(liveItems),
+      '切回 live 后大纲序列应不变')
+
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline.md', (v) => v.sidebar?.open === false)
+  }],
+
+  ['长大纲面板可滚动：高度受宿主约束、超长内容溢出可滚（评审修复）', async () => {
+    // P1-1 回归（视觉层断言）：修复前面板无高度约束（height:auto 长到内容
+    // 高度），被宿主 overflow:hidden 裁剪——clientHeight==scrollHeight 使
+    // overflow-y 永不激活，末条不可达，且面板中心点落到宿主可视区外使
+    // panelPainted 误报 false（探针盲区，随本修复消解）。约束生效的另一半：
+    // 条目不收缩（flex:0 0 auto），否则条目被压扁后内容总高不溢出、滚动
+    // 依旧失效（overflow:hidden 使 flex item 的 min-height:auto 为 0）。
+    // 断言口径：scrollHeight > clientHeight 证明高度被宿主 flex 链约束、
+    // 条目未收缩且内容溢出（overflow-y:auto 由此激活滚动）；panelPainted
+    // 证明面板在可视区内真实绘制；条目计数证明长大纲数据完整。
+    await openWithEditor('outline-long.md')
+    await waitSessionReady('outline-long.md')
+    const uri = wsUri('outline-long.md').toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    const opened = await waitViewState('outline-long.md',
+      (v) => v.sidebar?.open === true && v.outline?.panelPainted === true)
+    const scrollHeight = opened.outline!.panelScrollHeightPx
+    const clientHeight = opened.outline!.panelClientHeightPx
+    assert(scrollHeight !== null && clientHeight !== null,
+      `长面板滚动几何应可读（scrollHeight/clientHeight 不为 null）：${JSON.stringify(opened.outline)}`)
+    assert(clientHeight > 0, `面板可视高度应为正（实际 ${clientHeight}）`)
+    assert(scrollHeight! > clientHeight! + 500,
+      `长大纲（101 标题）面板内容应显著溢出可视区（scrollHeight ${scrollHeight} 应比 ` +
+        `clientHeight ${clientHeight} 大 500px 以上；相等说明高度约束失效或条目被压扁，` +
+        `条目数 ${opened.outline!.items.length}）`)
+    assert(opened.outline!.items.length === 101,
+      `长大纲条目应为 101 项（1 主标题 + 50 章 + 50 小节），实际 ${opened.outline!.items.length}`)
+    assert(opened.outline!.items[100]!.text === '第 50 章小节',
+      `末条应为「第 50 章小节」，实际 ${JSON.stringify(opened.outline!.items[100])}`)
+    assert(opened.paint?.textVisible === true, '长大纲展开态正文应仍可见')
+
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-long.md', (v) => v.sidebar?.open === false)
   }],
 
   // ---- 工单 #59：公式渲染（KaTeX）实时预览/阅读/一致性 ----

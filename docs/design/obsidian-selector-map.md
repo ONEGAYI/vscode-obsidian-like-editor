@@ -1,6 +1,6 @@
 # Obsidian 选择器映射表（一期稳定样式契约）
 
-状态：工单 #6 交付物，2026-09-23；#8 补 span 级映射与阅读语义标签结构（2026-09-24）；#9 补任务勾选交互类（2026-09-24）；#10 补链接/图片映射（2026-09-24）；#12 补表格映射（2026-09-24）；#11 补双链映射（2026-09-24）；#42 补实时预览表格网格入口（2026-09-24）；#59 补公式映射（2026-09-25）；#60 补 Mermaid 图表映射（2026-09-25）。依据 [ADR-0004](../adr/0004-stable-styling-contract.md)。
+状态：工单 #6 交付物，2026-09-23；#8 补 span 级映射与阅读语义标签结构（2026-09-24）；#9 补任务勾选交互类（2026-09-24）；#10 补链接/图片映射（2026-09-24）；#12 补表格映射（2026-09-24）；#11 补双链映射（2026-09-24）；#42 补实时预览表格网格入口（2026-09-24）；#55 移除 live 标题行左缘竖线及其强调色变量（2026-09-25）；#59 补公式映射（2026-09-25）；#60 补 Mermaid 图表映射（2026-09-25）。依据 [ADR-0004](../adr/0004-stable-styling-contract.md)。
 
 本文记录一期已建立的稳定类名/CSS 变量入口与 Obsidian 同款选择器的核对结果，供二期自定义 CSS 片段兼容使用。**边界声明**：
 
@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | `.vsidian-heading-line-{1..6}`（挂在 `.cm-line` 行元素上） | `.HyperMD-header-{1..6}`（Obsidian live 的标题**行容器**类） | 语义等价（行级）。已验证：测试片段经 `.vsidian-heading-line-1` 修改 `text-decoration-color` 生效 |
 | `.vsidian-header-{1..6}`（#8：标题**内容 span**，mark 装饰） | `.cm-header-{1..6}`（Obsidian live 的标题行内 token 类） | 语义等价（span 级）。#8 起提供；类名保持 `vsidian-` 前缀，Obsidian 片段按原名定位不命中（经映射垫片兼容属二期） |
-| `.vsidian-heading-inview` / `.vsidian-heading-active` | 无直接对应（Obsidian 无活动行标题提示类） | 本项目自有扩展：视口内强调与光标所在标题行的强调提示；标题 `#` 在光标进入该标题行时显形 |
+| `.vsidian-heading-inview` / `.vsidian-heading-active` | 无直接对应（Obsidian 无活动行标题提示类） | 本项目自有扩展：光标所在标题行的行背景强调提示；标题 `#` 在光标进入该标题行时显形。#55 移除了视口内标题行左缘竖线（原 `inview` 单独绘制的 inset box-shadow）——`inview` 类保留，仅作 `active` 背景的作用域限定与间接装饰管线的观测入口，自身不再绘制样式 |
 
 ## live 视图行内与块级语法（#8 新增）
 
@@ -159,7 +159,7 @@
 
 | 变量 | 默认值 | 用途 | Obsidian 对应变量 |
 | --- | --- | --- | --- |
-| `--vsidian-heading-accent` | `var(--vscode-textLink-foreground, #4fc1ff)` | live 视口内标题左缘强调色 | `--heading-accent`?（Obsidian 各主题变量名不一，无官方统一名） |
+| ~~`--vsidian-heading-accent`~~ | — | ~~live 视口内标题左缘强调色~~（#55 随左缘竖线一并移除，不再公开） | — |
 | `--vsidian-reading-font-size` | `15px` | 阅读正文字号 | `--font-text-size`（语义对应，名称不同） |
 | `--vsidian-reading-max-width` | `760px` | 阅读块最大宽度 | `--file-line-width`（语义对应，名称不同） |
 | `--vsidian-reading-line-height` | `1.6` | 阅读正文行高 | `--line-height-normal`（语义对应，名称不同） |
