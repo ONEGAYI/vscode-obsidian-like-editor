@@ -32,6 +32,9 @@ function makeEntries() {
     { size: 41308, name: 'extension/out/webview/main.css' },
     { size: 5683, name: 'extension/out/webview/settings.js' },
     { size: 902, name: 'extension/out/webview/settings.css' },
+    // #60 Mermaid 独立产物（minify 后实测 2,724,795 B 的代表值；低于 3MB
+    // 单文件警告线与 4MB 上限）
+    { size: 2724795, name: 'extension/out/webview/mermaid.js' },
     { size: 3898, name: 'extension/media/css-contract-probe.css' },
     { size: 35761, name: 'extension/media/vsidian-icon-256.png' },
     ...katexFontEntries(),
@@ -85,13 +88,12 @@ test('unzip -l 解析：只提取"长度 日期 时间 路径"形态的文件行
   assert.equal(entries[1].name, 'extension/readme.md')
 })
 
-test('VSIX 检查：完整合法集合通过（#59 后 main.js 携带 KaTeX，超单文件警告线属预期）', () => {
+test('VSIX 检查：完整合法集合通过且零警告（#60 后单文件警告线 3MB，main.js 829KB 与 mermaid.js 2.62MB 均在线内）', () => {
   const result = inspectVsixEntries(makeEntries(), { iconPath: 'media/vsidian-icon-256.png' })
   assert.equal(result.ok, true)
-  // 唯一预期警告：vendored KaTeX 使 main.js（约 829KB）越过 700KB 警告线
-  //（未超 1MB 上限）；除此之外不得有其他警告（总量、字体单文件均在线内）
-  assert.deepEqual(result.warnings.filter((w) => !w.includes('out/webview/main.js')), [])
-  assert.ok(result.warnings.some((w) => w.includes('out/webview/main.js')))
+  // #60 阈值调整后：总量约 4.08MB < 4.5MB 警告线，全部单文件 < 3MB——
+  // 合法基线不再有预期警告（#59 期 main.js 超 700KB 警告线的口径作废）
+  assert.deepEqual(result.warnings, [])
 })
 
 test('VSIX 检查：缺少任一 KaTeX 字体报错（公式回落系统字体的防线）', () => {
@@ -146,10 +148,24 @@ test('VSIX 检查：icon 缺失或超限报错（原图不得混入包内）', (
   assert.ok(oversized.errors.some((e) => e.includes('图标')))
 })
 
+test('VSIX 检查：缺少 mermaid.js 报错（#60 图表渲染器懒加载产物的防线）', () => {
+  const missing = makeEntries().filter((e) => e.name !== 'extension/out/webview/mermaid.js')
+  const result = inspectVsixEntries(missing, { iconPath: 'media/vsidian-icon-256.png' })
+  assert.equal(result.ok, false)
+  assert.ok(result.errors.some((e) => e.includes('out/webview/mermaid.js')))
+})
+
 test('VSIX 检查：解压总体积与单文件双阈值（警告线与失败线）', () => {
-  const warn = inspectVsixEntries(
-    makeEntries().map((e) => ({ ...e, size: Math.max(e.size, Math.floor(SIZE_LIMITS.totalWarnBytes / makeEntries().length) + 1) })),
+  // 总量恰过警告线：放大最大条目 mermaid.js（增量后仍 < 4MB 单文件上限，
+  // 只触发总量警告不触发失败；#60 基线总量约 4.08MB，直接构造不再可靠）
+  const base = makeEntries()
+  const baseTotal = base.reduce((sum, e) => sum + e.size, 0)
+  const warnEntries = base.map((e) =>
+    e.name === 'extension/out/webview/mermaid.js'
+      ? { ...e, size: e.size + (Math.floor(SIZE_LIMITS.totalWarnBytes) - baseTotal) + 1 }
+      : e,
   )
+  const warn = inspectVsixEntries(warnEntries)
   assert.equal(warn.ok, true)
   assert.ok(warn.warnings.some((w) => w.includes('警告线')), '总量过警告线应有警告不失败')
 

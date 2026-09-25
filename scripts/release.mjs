@@ -16,13 +16,18 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const SIZE_LIMITS = {
-  // 解压总体积：当前基线约 0.75 MB（CM6 主 bundle 约 0.55 MB 为大头），
-  // 警告与失败线留足功能增长余量，防"意外塞进大文件"而非卡正常演进。
-  totalWarnBytes: 1.5 * 1024 * 1024,
-  totalMaxBytes: 2.5 * 1024 * 1024,
-  // 一般单文件（主 bundle 除外同样适用）：minify 后 main.js 约 0.55 MB。
-  fileWarnBytes: 700 * 1024,
-  fileMaxBytes: 1024 * 1024,
+  // 解压总体积：#59 KaTeX 后基线约 1.05 MB，#60 加入 mermaid.js 独立产物
+  // （约 2.62 MB）后基线约 4.1 MB（实测见 AGENTS.md「打包与发布」）——
+  // 警告与失败线为基线 + 功能增长余量，防"意外塞进大文件"而非卡正常演进。
+  totalWarnBytes: 4.5 * 1024 * 1024,
+  totalMaxBytes: 5.5 * 1024 * 1024,
+  // 一般单文件：mermaid.js（刻意 vendored 的独立产物，minify 后实测
+  // 2,724,795 B ≈ 2.60 MB）是最大单项，警告线 3 MB 在其上留小余量、
+  // 失败线 4 MB 拦截意外超大文件（如误升 mermaid 12.x 的 5.3 MB 产物）。
+  // 主 bundle（main.js 约 0.83 MB，含 CM6 + KaTeX）随之不再触发单文件
+  // 警告——其增长由总量线约束，属本阈值调整的已接受取舍。
+  fileWarnBytes: 3 * 1024 * 1024,
+  fileMaxBytes: 4 * 1024 * 1024,
   // 图标专项：Marketplace 展示只需 256×256，35 KB 已足够，百 KB 级即异常。
   iconMaxBytes: 100 * 1024,
 }
@@ -43,6 +48,8 @@ const REQUIRED_EXTENSION = [
   'out/webview/main.css',
   'out/webview/settings.js',
   'out/webview/settings.css',
+  // #60 Mermaid 独立产物（按需懒加载的渲染器；缺失时图表降级为错误态）
+  'out/webview/mermaid.js',
   'media/css-contract-probe.css',
 ]
 
