@@ -471,6 +471,8 @@ export class WebviewSyncController {
    *  移动计划写回。null = 无拖拽 */
   private outlineDragState: {
     fromIndex: number
+    /** 起始文档快照（终局写回前要求当前 doc 与它内容等价；条目坐标的
+     *  派生来源须等价于它，见 onOutlineDragEnd 的条目坐标防线） */
     doc: Text
     /** 起始指针 id（review-loops 第 2 轮：会话只由该指针的移动/释放驱动，
      *  多指针与「窗口外按下后拖入」的异指针事件既不推进也不收尾） */
@@ -2125,10 +2127,14 @@ export class WebviewSyncController {
       if (this.view === undefined) {
         return
       }
-      // 主指针守卫：次指针（多点触控第二指起，isPrimary=false）只作无效
-      // 输入丢弃——否则第二指落在条目上会直接新建会话、覆盖起始指针的
-      // 会话（与 document capture 层的残留清理同口径）
-      if (event.isPrimary === false) {
+      // 次指针守卫：只针对**触屏多点**（第二指起 isPrimary=false）——次指针
+      // 落在条目上只作无效输入丢弃，否则会直接新建会话、覆盖起始指针的会话
+      // （与 document capture 层的残留清理同口径）。判据必须带 pointerType
+      // ==='touch' 前提（review-loops 第 4 轮）：`new PointerEvent('pointerdown',
+      // {…})` 未显式赋 isPrimary 时引擎默认 false、pointerType 默认空串，只按
+      // isPrimary 判会静默拒掉整个合成事件路径（真机鼠标/笔恒 isPrimary=true，
+      // 现网不受影响；但未来任何用 PointerEvent 构造拖拽钩子的代码会失效）
+      if (event.pointerType === 'touch' && event.isPrimary === false) {
         return
       }
       // 启动判据只看按键位掩码、不限指针类型：触屏接触态 button=0（浏览器
@@ -2195,7 +2201,12 @@ export class WebviewSyncController {
     let dragStartX: number | null = null
     let dragging = false
     slider.row.addEventListener('pointerdown', (event) => {
-      if (event.pointerType === 'mouse' && event.button !== 0) {
+      // 启动判据与面板条目入口同口径（review-loops 第 4 轮对齐）：只看法定
+      // 按键（非主键不武装起始坐标），不设指针类型前提——旧判据带
+      // pointerType==='mouse' 前缀，笔 barrel（button=2/buttons=2）据此在滑块
+      // 行上会武装拖拽起点（实害有限：移动路径的 (buttons & 1) === 0 兜住
+      // 后续推进；对齐后连起点都不再武装，且与其余三处判据同一条不变式）
+      if (event.button !== 0) {
         return
       }
       dragStartX = event.clientX
@@ -2919,6 +2930,26 @@ export class WebviewSyncController {
       console.warn('[vsidian] 大纲拖拽放弃：编辑期间文档已被改写（锚点过期）')
       return
     }
+    // 条目坐标防线（review-loops 第 4 轮，P2 实测）：写回计划按**条目序列**
+    // 的行号算搬移范围，而序列的行号由 outlineItems 承载——它可能在拖拽期间
+    // 被去抖刷新换成中间态的行号：outlineEnsureFresh 只在序列变化（级别/原文/
+    // 可见文本/标记不同）时才 cancelOutlineDrag，序列逐字相同而行号平移
+    // （外部插入/删除正文行）时它照常把 items 换成新行号的序列，会话存活。
+    // 此时若上面那条判据放行（文档回到原文：实例换代但内容等价、eq 通过），
+    // 写回就变成「行号取自中间态 items、改动范围取自起始快照」，把错坐标写进
+    // 权威文档（实测：`#### 丁` 段与 `## 丙` 段被切走，文档错位且丢内容）。
+    // 故判据补上「items 是快照内容的派生物」这一半：items 的派生来源
+    // （outlineDoc，outlineItems 的唯一赋值点即 outlineEnsureFresh，二者恒同源）
+    // 必须仍与起始快照**内容等价**。doc.eq 只比内容不比坐标——它证明当前内容
+    // 等于起始内容，不证明手上的 items 行号还对应这份内容；而派生来源等价即
+    // items 的行号来自等价内容（内容相同 ⇒ 行号相同），可与当前 doc 直接对齐。
+    // 只比实例不比内容会误伤：正常 resync 只换 Text 实例（items 未换，或换过但
+    // 仍从等价内容派生），那两类坐标都仍然有效，照常写回（第 3 轮容错不回退）。
+    const itemsDoc = this.outlineDoc
+    if (itemsDoc === null || (itemsDoc !== snapshot && !itemsDoc.eq(snapshot))) {
+      console.warn('[vsidian] 大纲拖拽放弃：大纲条目坐标已随外部改写刷新（非起始快照派生）')
+      return
+    }
     const plan = outlineMovePlan(doc, this.outlineItems, fromIndex, targetIndex!, position!)
     if (plan) {
       this.applyOutlineEdits(plan.changes) // 内部 ensureFresh 即时刷新大纲
@@ -2938,10 +2969,15 @@ export class WebviewSyncController {
    *    按下都先复位；补发 click 恒在本次按下之后，故「只吞一次」口径不变
    *  - 清理残留拖拽会话：越界释放（up 不送达 webview，如释放在窗口原生
    *    chrome／另一窗口）留下的会话，任意一次新按下都证明该手势已结束
-   *  次指针（非 primary，如多点触控第二指）跳过第二条，不误杀进行中的拖拽 */
+   *  次指针（触屏多点第二指）跳过第二条，不误杀进行中的拖拽；判据带
+   *  pointerType==='touch' 前提（review-loops 第 4 轮）——合成 PointerEvent
+   *  的 isPrimary 默认为 false，只按它判会让残留清理在合成事件路径上整体失效 */
   private readonly outlinePointerdownEntry = (event: PointerEvent): void => {
     this.outlineSuppressClick = false
-    if (event.isPrimary === false || !this.outlineDragState) {
+    if (event.pointerType === 'touch' && event.isPrimary === false) {
+      return
+    }
+    if (!this.outlineDragState) {
       return
     }
     this.cancelOutlineDrag()

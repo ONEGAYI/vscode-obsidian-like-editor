@@ -12,7 +12,12 @@
 // （笔 barrel/eraser 同守）、面板委托的主指针（isPrimary）守卫、drop 锚点判据
 // 与重命名同为「实例或内容等价」（resync 重发同内容不丢弃）、重命名编辑态随
 // 条目重建放弃时留日志、写回兜底分支重建条目重放搜索高亮（mark 不丢）。
+// review-loops 第 4 轮补：drop 锚点判据加入「条目序列的派生来源」（中间态
+// 刷新把 items 换成平移行号后不得写回）、主指针判据收窄为只排除触屏次指针
+// （合成 PointerEvent 的默认 isPrimary=false 不再静默失效）、折叠滑块行入口
+// 与面板同口径（去掉 pointerType==='mouse' 前缀）。
 import { describe, it, expect, vi } from 'vitest'
+import type { Text } from '@codemirror/state'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
 import type { WebviewToHost } from '../../src/shared/protocol'
 
@@ -945,5 +950,261 @@ describe('写回兜底分支重建条目须重放搜索高亮（#68 mark 不丢�
       c.dispose()
       document.body.removeChild(parent)
     }
+  })
+})
+
+// review-loops 第 4 轮（P2，实测复现）：drop 锚点只比「当前 doc 与起始快照
+// 内容等价」，而**条目序列（outlineItems）的坐标**可能在拖拽期间被去抖刷新
+// 换成中间态行号——outlineEnsureFresh 只在序列变化（outlineItemsEqual 为假）
+// 时取消拖拽；序列逐字相同而行号平移（外部插入空行/增删正文行）时它照样替换
+// items。释放前文档若回到原文（实例换代、eq 通过），写回就拿中间态行号算搬移
+// 计划，把错坐标写进权威文档（内容错位并丢失）。
+// 修法见 syncController.onOutlineDragEnd：drop 时除比 doc 与起始快照内容等价
+// 外，还要求**当前 items 的派生来源**（this.outlineDoc，outlineItems 的唯一
+// 赋值点即 outlineEnsureFresh，二者恒同源）与起始快照内容等价——「items 是快照
+// 内容的派生物」成为判据的一部分。正常 resync（内容等价、实例换代且条目未换、
+// 或换了仍派生自等价内容）照常写回，不由本轮收紧误伤。
+describe('drop 锚点须含条目派生来源（review-loops 第 4 轮：中间态刷新）', () => {
+  it('中间态刷新（序列相同、行号平移）+ 释放前回到原文：不得按平移行号写回', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    stubRects(parent)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      dragTo(parent, 2, 4, 'before') // 丁(H4) → 戊(H1) 前
+      expect(viewState(c, h).outline?.draggingIndex).toBe(2)
+      // 外部改写：文首插入空行。条目序列逐字不变（级别/原文/可见文本/标记），
+      // 行号整体 +1 → itemsEqual 为真，条目 DOM 不重建，拖拽会话不被取消
+      c.handleHostMessage({
+        kind: 'doc.changed',
+        version: 2,
+        origin: 'external',
+        changes: [{ offset: 0, length: 0, text: '\n' }],
+      })
+      vi.advanceTimersByTime(300) // 250ms 去抖到期：items 换成平移后的行号
+      expect(
+        viewState(c, h).outline?.draggingIndex,
+        '前置条件：序列相同，会话未被过期行号刷新取消（缺陷窗口）',
+      ).toBe(2)
+      // 宿主 resync 发回原文：Text 实例换代、内容与起始快照等价
+      c.handleHostMessage({ kind: 'doc.resync', version: 9, text: DRAG_DOC })
+      firePointer(items(parent)[4]!, 'pointerup', 240, 500)
+      expect(editRequests(h), '条目坐标非起始快照派生：零写回（否则错位写入）').toHaveLength(0)
+      expect(c.getView()!.state.doc.toString(), '文档须保持原文').toBe(DRAG_DOC)
+      expect(
+        warn.mock.calls.map((args) => String(args[0])).some((t) => t.includes('大纲拖拽放弃')),
+        `放弃路径应留 console.warn（实际 ${JSON.stringify(warn.mock.calls)}）`,
+      ).toBe(true)
+    } finally {
+      vi.useRealTimers()
+      warn.mockRestore()
+      c.dispose()
+      document.body.removeChild(parent)
+    }
+  })
+
+  it('内容等价 resync（实例换代）后条目随去抖刷新重算：照常写回正确结果', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    stubRects(parent)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      dragTo(parent, 2, 4, 'before') // 丁 → 戊 前
+      const before = c.getView()!.state.doc
+      c.handleHostMessage({ kind: 'doc.resync', version: 7, text: DRAG_DOC })
+      const after = c.getView()!.state.doc
+      expect(after === before, '前置条件：resync 应换 Text 实例').toBe(false)
+      expect(after.eq(before), '前置条件：resync 内容应等价').toBe(true)
+      vi.advanceTimersByTime(300) // 去抖到期：items 从新实例重算（行号不变）
+      const itemsDoc = (c as unknown as { outlineDoc: Text | null }).outlineDoc
+      expect(itemsDoc === after, '前置条件：条目派生来源已换代（本轮判据必须容忍）').toBe(true)
+      firePointer(items(parent)[4]!, 'pointerup', 240, 500)
+      expect(editRequests(h), '内容等价换代的 resync 不得丢弃拖拽').toHaveLength(1)
+      expect(c.getView()!.state.doc.toString()).toBe(
+        '# 甲\n甲内容\n## 乙\n乙内容\n## 丙\n丙内容\n# 丁\n丁内容\n# 戊\n戊内容',
+      )
+    } finally {
+      vi.useRealTimers()
+      c.dispose()
+      document.body.removeChild(parent)
+    }
+  })
+
+  it('中间态刷新后文档仍为平移态（未回到原文）：drop 同样放弃（零写回）', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    stubRects(parent)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      dragTo(parent, 2, 4, 'before')
+      c.handleHostMessage({
+        kind: 'doc.changed',
+        version: 2,
+        origin: 'external',
+        changes: [{ offset: 0, length: 0, text: '\n' }],
+      })
+      vi.advanceTimersByTime(300)
+      firePointer(items(parent)[4]!, 'pointerup', 240, 500)
+      expect(editRequests(h), '文档已改（内容不等价）：零写回').toHaveLength(0)
+      expect(c.getView()!.state.doc.toString(), '文档须保持外部改写后的内容').toBe(`\n${DRAG_DOC}`)
+    } finally {
+      vi.useRealTimers()
+      warn.mockRestore()
+      c.dispose()
+      document.body.removeChild(parent)
+    }
+  })
+})
+
+// review-loops 第 4 轮：主指针守卫原为「isPrimary === false 即拒」——对
+// **合成 PointerEvent** 是陷阱：`new PointerEvent('pointerdown', {…})` 未显式
+// 赋 isPrimary 时引擎默认 false（pointerType 默认空串），会话静默不启动
+// （真机鼠标/笔恒 isPrimary=true，现网不受影响；但未来任何用 PointerEvent
+// 构造拖拽钩子的代码会静默失效）。判据收窄为只排除**触屏次指针**（多点触控
+// 第二指起），面板委托与 document capture 清理层同口径。
+describe('主指针判据只排除触屏次指针（合成 PointerEvent 默认值不再静默失效）', () => {
+  /** start = 该组合下会话是否应启动；pointerType/isPrimary 缺省表示属性不存在
+   *  （MouseEvent 合成路径没有这两个字段，读作 undefined） */
+  const MATRIX: Array<{ label: string; pointerType?: string; isPrimary?: boolean; start: boolean }> = [
+    { label: '合成 MouseEvent（两字段均缺省）', start: true },
+    { label: "pointerType='' × isPrimary 缺省", pointerType: '', start: true },
+    { label: "pointerType='' × isPrimary=false（PointerEvent 缺省构造）", pointerType: '', isPrimary: false, start: true },
+    { label: "pointerType='' × isPrimary=true", pointerType: '', isPrimary: true, start: true },
+    { label: "pointerType='mouse' × isPrimary 缺省", pointerType: 'mouse', start: true },
+    { label: "pointerType='mouse' × isPrimary=false", pointerType: 'mouse', isPrimary: false, start: true },
+    { label: "pointerType='mouse' × isPrimary=true", pointerType: 'mouse', isPrimary: true, start: true },
+    { label: "pointerType='touch' × isPrimary 缺省", pointerType: 'touch', start: true },
+    { label: "pointerType='touch' × isPrimary=true", pointerType: 'touch', isPrimary: true, start: true },
+    { label: "pointerType='touch' × isPrimary=false（多点触控第二指）", pointerType: 'touch', isPrimary: false, start: false },
+  ]
+
+  for (const kase of MATRIX) {
+    it(`${kase.label}：${kase.start ? '照常启动会话' : '不启动会话'}`, () => {
+      const h = makeBridge()
+      const { c, parent } = mountDrag(h)
+      stubRects(parent)
+      const el = items(parent)[1]!
+      const rect = el.getBoundingClientRect()
+      const init: { pointerType?: string; isPrimary?: boolean } = {}
+      if (kase.pointerType !== undefined) {
+        init.pointerType = kase.pointerType
+      }
+      if (kase.isPrimary !== undefined) {
+        init.isPrimary = kase.isPrimary
+      }
+      firePointer(el, 'pointerdown', rect.left + 20, rect.top + 20, 1, init)
+      firePointer(el, 'pointermove', rect.left + 20, rect.top + 30, 1, init)
+      expect(
+        viewState(c, h).outline?.draggingIndex,
+        kase.start ? '应启动拖拽会话' : '触屏次指针不得启动会话',
+      ).toBe(kase.start ? 1 : null)
+      c.dispose()
+      document.body.removeChild(parent)
+    })
+  }
+
+  it('真实 PointerEvent 缺省构造（pointerType 空串 + isPrimary 默认 false）：照常启动会话', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    stubRects(parent)
+    const el = items(parent)[1]!
+    const rect = el.getBoundingClientRect()
+    // 真实构造路径（本轮缺陷的现实形态）：不显式赋 isPrimary → 引擎默认 false
+    const down = new PointerEvent('pointerdown', {
+      bubbles: true,
+      cancelable: true,
+      clientX: rect.left + 20,
+      clientY: rect.top + 20,
+      buttons: 1,
+      button: 0,
+    })
+    expect(down.pointerType, '前置条件：合成 PointerEvent 的 pointerType 默认空串').toBe('')
+    expect(down.isPrimary, '前置条件：合成 PointerEvent 的 isPrimary 默认 false').toBe(false)
+    el.dispatchEvent(down)
+    el.dispatchEvent(new PointerEvent('pointermove', {
+      bubbles: true,
+      cancelable: true,
+      clientX: rect.left + 20,
+      clientY: rect.top + 30,
+      buttons: 1,
+      button: 0,
+    }))
+    expect(viewState(c, h).outline?.draggingIndex, '合成 PointerEvent 不得静默失效').toBe(1)
+    c.dispose()
+    document.body.removeChild(parent)
+  })
+
+  it('残留会话清理层同口径：面板外合成 PointerEvent 按下仍清残留（零写回）', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    stubRects(parent)
+    dragTo(parent, 1, 4, 'before') // 起拖并悬停到有效落点（越界释放前的残留会话）
+    expect(viewState(c, h).outline?.draggingIndex).toBe(1)
+    const editor = document.createElement('div')
+    document.body.appendChild(editor)
+    // capture 层清理判据若沿用 isPrimary===false 即拒，合成 PointerEvent
+    // （pointerType ''、isPrimary 默认 false）会让残留会话存活、随后误判 drop
+    editor.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 500,
+      clientY: 500,
+      buttons: 1,
+      button: 0,
+    }))
+    expect(viewState(c, h).outline?.draggingIndex, '残留会话应被清理').toBeNull()
+    expect(editRequests(h)).toHaveLength(0)
+    document.body.removeChild(editor)
+    c.dispose()
+    document.body.removeChild(parent)
+  })
+})
+
+// review-loops 第 4 轮：折叠滑块行的 pointerdown 入口仍带 pointerType==='mouse'
+// 前缀，与面板委托/移动/释放三处已统一的「只按按键判据」口径不一致——笔
+// barrel（button=2/buttons=2）在滑块行上会武装拖拽起点（实害有限：移动路径的
+// (buttons & 1) === 0 兜住后续推进）。此处对齐为面板入口同款判据（button !== 0
+// 不武装，不设指针类型前提）：既有左键拖拽选档不受影响。
+describe('折叠滑块行入口判据与面板同口径（只按按键，不设指针类型前提）', () => {
+  const dotCenter = (n: number): number => 100 + n * 40 + 10
+
+  /** 圆点 stub 布局：left = 100 + n*40、宽 20 → 圆心 110/150/190/230/270/310
+   *  （outlineSliderLevelAt 取最近圆心；jsdom 无指针捕获实现，补空实现） */
+  function stubSliderRects(parent: HTMLElement): HTMLElement {
+    const row = parent.querySelector<HTMLElement>('.vsidian-outline-slider')!
+    ;(row as unknown as { setPointerCapture(pointerId: number): void }).setPointerCapture = () => {}
+    row.querySelectorAll<HTMLElement>('.vsidian-outline-slider-dot').forEach((dot, n) => {
+      dot.getBoundingClientRect = () => new DOMRect(100 + n * 40, 0, 20, 8)
+    })
+    return row
+  }
+
+  it('笔 barrel 按下（button=2/buttons=2）不武装滑块拖拽：随后左键移动不改档位', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    const row = stubSliderRects(parent)
+    const before = viewState(c, h).outline?.expandLevel
+    firePointer(row, 'pointerdown', dotCenter(5), 4, 2, { button: 2, pointerType: 'pen' })
+    firePointer(row, 'pointermove', dotCenter(0), 4, 1, { button: -1, pointerType: 'pen' })
+    expect(viewState(c, h).outline?.expandLevel, '非主键按下不得武装拖拽：档位不变').toBe(before)
+    c.dispose()
+    document.body.removeChild(parent)
+  })
+
+  it('鼠标右键按下不武装；左键拖拽选档照常（既有交互不回退）', () => {
+    const h = makeBridge()
+    const { c, parent } = mountDrag(h)
+    const row = stubSliderRects(parent)
+    const before = viewState(c, h).outline?.expandLevel
+    firePointer(row, 'pointerdown', dotCenter(5), 4, 2, { button: 2, pointerType: 'mouse' })
+    firePointer(row, 'pointermove', dotCenter(0), 4, 1, { button: -1, pointerType: 'mouse' })
+    expect(viewState(c, h).outline?.expandLevel, '右键按下不得武装拖拽').toBe(before)
+    firePointer(row, 'pointerdown', dotCenter(5), 4, 1, { button: 0, pointerType: 'mouse' })
+    firePointer(row, 'pointermove', dotCenter(0), 4, 1, { button: -1, pointerType: 'mouse' })
+    expect(viewState(c, h).outline?.expandLevel, '左键拖到档 0 圆心应选档 0').toBe(0)
+    c.dispose()
+    document.body.removeChild(parent)
   })
 })
