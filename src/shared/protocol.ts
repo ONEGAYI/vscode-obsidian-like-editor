@@ -339,8 +339,9 @@ export type WebviewToHost =
    *  经宿主 env.clipboard.writeText。只读交互，暂停态同样放行 */
   | { kind: 'clipboard.write'; text: string }
   /** #69 剪贴板写（标题链接）：`[[笔记名#标题]]` 的拼接在宿主侧——
-   *  webview 只上报 docUri（宿主取笔记名 = 文件名去扩展名）与剥标记
-   *  可见文本标题（plainText） */
+   *  webview 只上报 docUri（宿主取笔记名 = 文件名去扩展名）与标题原文
+   *  （含行内标记，与宿主 findHeadingOffset 的字面匹配同源；剥标记可见
+   *  文本只用于 text 直写变体的「复制标题」纯文本场景） */
   | { kind: 'clipboard.write'; linkHeading: { docUri: string; heading: string } }
   /** 性能探针回报（#5）：快照为 DOM 计数，输入延迟含 rAF 稳定等待 */
   | {

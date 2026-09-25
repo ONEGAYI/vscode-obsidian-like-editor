@@ -63,7 +63,7 @@ export interface PanelPort {
   writeClipboard?(text: string): void
   /** #69 剪贴板写（标题链接）：`[[笔记名#标题]]` 的拼接在 vscode 层——
    *  笔记名 = docUri 文件名去扩展名（Obsidian 语义），标题为 webview
-   *  上报的剥标记可见文本 */
+   *  上报的条目原文（含行内标记，与宿主 findHeadingOffset 的字面匹配同源） */
   writeHeadingLinkClipboard?(docUri: string, heading: string): void
 }
 
