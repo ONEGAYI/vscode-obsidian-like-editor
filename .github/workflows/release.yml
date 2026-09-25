@@ -8,15 +8,25 @@
 #       Scope 选 Marketplace → Manage）
 #   2. Settings → Secrets and variables → Actions → Variables → MARKETPLACE_PUBLISH = true
 # 配置完成前，推 tag 只产出 GitHub Release，不影响市场。
+#
+# workflow_dispatch 用于补跑：Release 已存在但 marketplace job 失败时（如本次
+# v0.1.0 下载步骤缺仓库上下文的事故），填标签名手动重发，无需重推 tag——
+# release job 只在真实 tag 推送时执行，dispatch 只跑 marketplace。
 name: Release
 
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布到 Marketplace 的 Release 标签（如 v0.1.0）'
+        required: true
 
 jobs:
   release:
     name: release
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -40,18 +50,20 @@ jobs:
   marketplace:
     name: marketplace
     needs: release
+    # push 场景等 release 成功；dispatch 补跑场景 release 被跳过（skipped），
+    # 直接对指定标签的既有 Release 发布
+    if: (github.event_name == 'push' && needs.release.result == 'success') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    if: vars.MARKETPLACE_PUBLISH == 'true'
     steps:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-      # 从刚创建的 Release 下载 VSIX 再发布，确保上市场的正是 release 附带的产物
+      # 本 job 不 checkout（无 git 上下文），gh 必须以 -R 显式指定仓库
       - name: 从 Release 下载 VSIX
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download "$GITHUB_REF_NAME" --pattern '*.vsix'
+        run: gh release download "${{ inputs.tag || github.ref_name }}" --pattern '*.vsix' -R "$GITHUB_REPOSITORY"
       - name: 发布到 VSCode Marketplace
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
