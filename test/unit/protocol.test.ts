@@ -262,6 +262,24 @@ describe('isWebviewToHost', () => {
     expect(isWebviewToHost({ ...base, paint: { ...paint, table: { ...table, columnRightBorderWidth: 2 } } })).toBe(false)
   })
 
+  it('标题绘制样本校验（#55）：计数非负整数、计算值数组元素为字符串', () => {
+    const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 1 }
+    const paint = {
+      textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none',
+      darkTheme: false, caretColor: 'rgb(0, 0, 0)',
+      heading: { inviewCount: 2, boxShadowValues: ['none'], borderLeftWidthValues: ['0px'] },
+    }
+    // 合法：有挂载标题行 / 无挂载标题行（null）/ 字段缺省（旧 webview 兼容）
+    expect(isWebviewToHost({ ...base, paint })).toBe(true)
+    expect(isWebviewToHost({ ...base, paint: { ...paint, heading: null } })).toBe(true)
+    expect(isWebviewToHost({ ...base, paint: { textVisible: true, scrollerDisplay: 'flex', gutterUserSelect: 'none', darkTheme: false, caretColor: null } })).toBe(true)
+    // 非法：inviewCount 负数/非整数、计算值数组元素非字符串
+    expect(isWebviewToHost({ ...base, paint: { ...paint, heading: { ...paint.heading, inviewCount: -1 } } })).toBe(false)
+    expect(isWebviewToHost({ ...base, paint: { ...paint, heading: { ...paint.heading, inviewCount: 1.5 } } })).toBe(false)
+    expect(isWebviewToHost({ ...base, paint: { ...paint, heading: { ...paint.heading, boxShadowValues: ['none', 3] } } })).toBe(false)
+    expect(isWebviewToHost({ ...base, paint: { ...paint, heading: { ...paint.heading, borderLeftWidthValues: '0px' } } })).toBe(false)
+  })
+
   it('拒绝 null、非对象与数组', () => {
     expect(isWebviewToHost(null)).toBe(false)
     expect(isWebviewToHost(undefined)).toBe(false)

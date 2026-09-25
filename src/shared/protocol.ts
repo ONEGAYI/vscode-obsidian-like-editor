@@ -437,6 +437,15 @@ export interface PaintProbe {
     columnBottomBorderWidth: string | null
     columnBackgroundColor: string | null
   }
+  /** #55 标题行绘制观测：视口内已挂载的 .vsidian-heading-inview 行的
+   *  distinct 计算值（box-shadow 应为 'none'、border-left-width 应为
+   *  '0px'——标题行不得绘制左缘竖线）；无挂载标题行为 null。
+   *  jsdom 无 CSS 引擎，值不可作单测断言依据（同 textVisible 口径） */
+  heading?: {
+    inviewCount: number
+    boxShadowValues: string[]
+    borderLeftWidthValues: string[]
+  } | null
 }
 
 /** #32 排版一致性探针：正文基础排版四项样本（null = 元素缺失/不可读） */
@@ -628,6 +637,12 @@ function isPaintProbe(v: unknown): v is PaintProbe {
       isNullOrString(v.table.columnTopBorderWidth) &&
       isNullOrString(v.table.columnBottomBorderWidth) &&
       isNullOrString(v.table.columnBackgroundColor)
+    )) &&
+    (v.heading === undefined || v.heading === null || (
+      isObject(v.heading) &&
+      isNonNegativeInt(v.heading.inviewCount) &&
+      Array.isArray(v.heading.boxShadowValues) && v.heading.boxShadowValues.every(isString) &&
+      Array.isArray(v.heading.borderLeftWidthValues) && v.heading.borderLeftWidthValues.every(isString)
     ))
   )
 }

@@ -2508,6 +2508,31 @@ export class WebviewSyncController {
     const columnStyle = selectedColumnCell ? getComputedStyle(selectedColumnCell) : null
     const columnFirstStyle = columnFirst ? getComputedStyle(columnFirst) : null
     const columnLastStyle = columnLast ? getComputedStyle(columnLast) : null
+    // #55 标题行左缘绘制观测：视口内标题行（.vsidian-heading-inview）的
+    // computed box-shadow / border-left-width distinct 集合——标题行不得
+    // 绘制左缘竖线（真宿主应分别为 'none' / '0px'）；无挂载标题行为 null
+    let headingPaint: {
+      inviewCount: number
+      boxShadowValues: string[]
+      borderLeftWidthValues: string[]
+    } | null = null
+    const inviewHeadings = Array.from(
+      view.contentDOM.querySelectorAll<HTMLElement>('.vsidian-heading-inview'),
+    )
+    if (inviewHeadings.length > 0) {
+      const boxShadowValues = new Set<string>()
+      const borderLeftWidthValues = new Set<string>()
+      for (const el of inviewHeadings) {
+        const style = getComputedStyle(el)
+        boxShadowValues.add(style.boxShadow)
+        borderLeftWidthValues.add(style.borderLeftWidth)
+      }
+      headingPaint = {
+        inviewCount: inviewHeadings.length,
+        boxShadowValues: [...boxShadowValues].sort(),
+        borderLeftWidthValues: [...borderLeftWidthValues].sort(),
+      }
+    }
     // 光标取证：本扩展未启用 drawSelection，CM6 光标即原生 caret，颜色
     // 由 baseTheme 明暗变体决定（light=black / dark=white）。darkTheme 取
     // facet 实值（jsdom 可读），caretColor 取计算值（jsdom 无 CSS 引擎为 null）
@@ -2545,6 +2570,7 @@ export class WebviewSyncController {
         columnBottomBorderWidth: columnLastStyle?.borderBottomWidth ?? null,
         columnBackgroundColor: columnStyle?.backgroundColor ?? null,
       },
+      heading: headingPaint,
     }
   }
 

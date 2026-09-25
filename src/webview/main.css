@@ -116,12 +116,10 @@ body {
    baseTheme 内建变体接管（light: caret black / dark: caret white），
    本扩展不硬编码颜色（#34 验收决议） */
 
-/* 间接装饰（视口内纯样式，不改变高度）：标题行左缘强调与光标所在标题行的强调提示。
-   --vsidian-heading-accent 为稳定 CSS 变量入口（ADR-0004），外部片段可覆盖 */
-#app .cm-editor .cm-scroller .vsidian-heading-inview {
-  box-shadow: inset 3px 0 0 var(--vsidian-heading-accent, var(--vscode-textLink-foreground, #4fc1ff));
-}
-
+/* 间接装饰（视口内纯样式，不改变高度）：仅保留光标所在标题行的行背景强调提示。
+   #55 移除视口内标题行左缘竖线（inset box-shadow 规则及其左缘强调色公开
+   变量一并撤销，选择器映射已同步）；.vsidian-heading-inview 类保留，
+   限定 active 背景只落在视口内标题行 */
 #app .cm-editor .cm-scroller .vsidian-heading-inview.vsidian-heading-active {
   background-color: var(--vscode-editor-lineHighlightBackground, rgba(128, 128, 128, 0.12));
 }
