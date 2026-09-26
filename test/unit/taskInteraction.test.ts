@@ -153,6 +153,32 @@ describe('live：任务标记 widget 可交互并走标准出站链路', () => {
     expect(liveCheckboxes(h)).toHaveLength(2)
   })
 
+  it('真实鼠标事件序列（mousedown 先行）：widget 拦截 mousedown，光标不移入标记，click 完成切换', () => {
+    const h = makeHarness()
+    const box = liveCheckboxes(h)[0]!
+    const markerStart = DOC.indexOf('[')
+    // 真实鼠标点击 = mousedown → mouseup → click。mousedown 正是 CM6
+    // MouseSelection 同步放置光标的钩子（缺陷二：光标落入 [ ] 区间 →
+    // 装饰规则移除 widget → click 永不触发）。契约：checkbox 自身的
+    // mousedown 必须在源头终结——不冒泡到 contentDOM（CM6 看不到）、
+    // 阻止默认（input 不抢焦点）。
+    const content = h.controller.getView()!.contentDOM
+    let reachedContent = 0
+    content.addEventListener('mousedown', () => {
+      reachedContent += 1
+    })
+    const mousedown = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+    box.dispatchEvent(mousedown)
+    expect(reachedContent).toBe(0) // stopPropagation：CM6 不感知该 mousedown
+    expect(mousedown.defaultPrevented).toBe(true) // preventDefault：焦点不被 input 抢走
+    expect(h.parent.contains(box)).toBe(true) // widget 存活（未被「光标入标记显源码」移除）
+    expect(liveCheckboxes(h)).toHaveLength(3)
+    box.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }))
+    box.click()
+    expect(lastEditRequest(h)!.changes).toEqual([{ offset: markerStart, length: 3, text: '[x]' }])
+    expect(editRequests(h)).toHaveLength(1)
+  })
+
   it('外部增量应用后 widget 状态随文档更新（撤销广播回退勾选）', () => {
     const h = makeHarness()
     const markerStart = DOC.indexOf('[')

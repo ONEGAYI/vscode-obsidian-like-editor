@@ -187,6 +187,19 @@ class TaskCheckboxWidget extends WidgetType {
       event.preventDefault()
       toggle()
     })
+    box.addEventListener('mousedown', (event) => {
+      // 必须在源头终结 mousedown（#116 缺陷二）：CM6 在 contentDOM 的
+      // mousedown 冒泡钩子里同步启动 MouseSelection，把光标放进被替换的
+      // [ ]/[x] 标记区间 → 装饰规则按「光标入标记显源码」移除 widget →
+      // input 在 click 派发前被销毁，勾选永不触发。stopPropagation 让
+      // CM6 完全看不到该事件（光标与视图不动）；preventDefault 再阻止
+      // mousedown 的默认聚焦，焦点与后续键盘输入留在编辑器。click 的
+      // 派发不受影响（浏览器在 mouseup 后照常合成），切换仍走 click 监听。
+      // 该拦截只作用于 checkbox 自身：键盘导航、点击标记附近正文进入
+      // 标记区间的其他路径不受影响，「光标入标记显源码」语义保持。
+      event.preventDefault()
+      event.stopPropagation()
+    })
     box.addEventListener('keydown', (event) => {
       // Enter 在 checkbox 上无原生激活：手动触发切换；阻断冒泡避免编辑器
       // 把 Enter 解释为插入换行
