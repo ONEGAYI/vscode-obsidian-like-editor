@@ -67,6 +67,7 @@ review-loops 审查循环第 4 轮（2026-09-26，分支 `feature/65-70-outline-
 | A28 | 待验证 | #68 工具条与标题搜索尚无真实输入（含 IME）与点击操作记录 |
 | A29 | 待验证 | #69 右键菜单尚无真实鼠标右键、剪贴板粘贴核对与物理键盘操作记录 |
 | A30 | 待验证 | #70 拖拽排序尚无真实鼠标拖动手感与视觉指示复核记录 |
+| A38 | 待验证 | #105 高亮双模式渲染、显形手感与主题色观感尚无人工记录 |
 
 ## 通用准备
 
@@ -593,10 +594,25 @@ review-loops 审查循环第 4 轮（2026-09-26，分支 `feature/65-70-outline-
 
 ## #97 manifest NLS 双语补全（2026-09-26）
 
-- 自动化已证实（契约测试 `test/unit/nlsManifest.test.ts`）：两份 nls 文件键集一致、`package.json` 全部 `%key%` 引用存在、nls 键集与引用集相等（无残留键）、43 条命令 title 全部引用化（工具条 21 条 = `FORMAT_OPERATIONS.titleKey`，其余按 command id 推导）、生成幂等（`node scripts/genNls.mjs --check`，字典单一事实源，负向自证：改字典后 --check 报不一致）；`npm run release:check` 通过（VSIX 含两份 nls，包体检查机制不变）。
+- 自动化已证实（契约测试 `test/unit/nlsManifest.test.ts`）：两份 nls 文件键集一致、`package.json` 全部 `%key%` 引用存在、nls 键集与引用集相等（无残留键）、44 条命令 title 全部引用化（工具条 22 条 = `FORMAT_OPERATIONS.titleKey`，其余按 command id 推导；#105 高亮命令并入）、生成幂等（`node scripts/genNls.mjs --check`，字典单一事实源，负向自证：改字典后 --check 报不一致）；`npm run release:check` 通过（VSIX 含两份 nls，包体检查机制不变）。
 - 集成断言不可行的原因（登记人工项的依据）：命令面板标题由 VSCode workbench 按宿主显示语言解析 manifest 后渲染，扩展 API（`vscode.commands`）只暴露命令 id、无标题查询接口，QuickPick 界面文本不可编程读取——1.86.2 集成宿主无法断言该呈现面。
 - 人工待验：
-  1. **命令面板标题随宿主显示语言**：中文显示语言的 VSCode 安装 VSIX，命令面板检索「Vsidian:」——43 条命令标题应为简体中文（如「粗体」「表格：上方插入行」「展开或收起右侧栏」）；经「Configure Display Language」切 English 并重载后应为英文（如 "Bold"、"Table: insert row above"、"Expand or collapse the sidebar"）。
+  1. **命令面板标题随宿主显示语言**：中文显示语言的 VSCode 安装 VSIX，命令面板检索「Vsidian:」——44 条命令标题应为简体中文（如「粗体」「高亮」「表格：上方插入行」「展开或收起右侧栏」）；经「Configure Display Language」切 English 并重载后应为英文（如 "Bold"、"Highlight"、"Table: insert row above"、"Expand or collapse the sidebar"）。
   2. **市场字段双语**：扩展列表中 displayName 与 description 按宿主语言显示（中文环境「类 Obsidian 的 Markdown 编辑体验：实时预览 + 阅读双视图」，英文环境 "Obsidian-like Markdown editing: live preview + reading views"）——原中英混排单串已拆分双语。
   3. **打开方式入口**：`.md` 的「打开方式…」列表中 customEditors 的 displayName 显示正常（Vsidian，不透出 `%manifest.displayName%` 原文——contributes 字段按 VSCode manifest nls 机制解析，仍以真实宿主目视为准）。
 - 操作入口评估：manifest 层由 VSCode 按宿主显示语言解析，不随扩展语言设置联动（两层语言模型），无扩展侧操作入口。
+
+## 二十二、高亮 ==文字==（#105）
+
+Live 识别经 lezer 解析器扩展（`Highlight`/`HighlightMark` 节点，flanking 判定与删除线同款）；底色跟随 VSCode 主题词高亮色（`--vsidian-highlight-background`，不固定黄）。自动化已覆盖：识别形态学、装饰显隐与增量对拍、阅读 mark 规则、大纲透传结构、格式操作契约、CSS 契约与集成绘制层（`paint.highlight`：真实可见、底色非透明、定界符隐藏文本口径、零写回）；浏览器回归确认图标加载与操作条计数。以下为自动化无法替代的人工项。
+
+### A38. 高亮双模式渲染、显形手感与主题色观感
+
+1. **Live 显隐手感**：光标移入 `==高亮==`（含恰好停在定界符左右边界）——`==` 显形可编辑、底色保持；光标移开——`==` 隐藏只留底色；同一行相邻粗体/行内代码的格式化形态不受连带；连续快速移动光标无闪烁。物理键盘在显形态编辑定界符（增删一个 `=`）观感正确。
+2. **明暗主题底色**：切换 VSCode 浅色/深色/高对比主题——高亮底色随主题词高亮色变化（非固定黄）、文字对比可读；Live 与阅读模式同一段高亮观感一致（同源变量）。
+3. **阅读渲染**：阅读模式打开含 `==文字==`、嵌套 `==**粗亮**==`、行内代码内 `==字面==` 的文档——前两者渲染为高亮 mark，后者按代码字面呈现；残缺 `==` 形态按原文降级。
+4. **大纲透传**：侧栏大纲查看 `# 标题 ==高亮段==` 类条目——高亮段带底色、剥 `==` 后的可见文本正确；白名单外标记不受影响。
+5. **操作入口**：快速操作条「高亮」按钮（删除线与行内代码之间）——无选区扩词包裹、选区包裹、已应用态按钮呈按下、两态取消；「清除行内格式」可一并清除高亮；表格矩形格区逐格应用。快捷键页可见「高亮」条目（默认未绑定）——自绑一组键后在 Live 正文生效、清空与恢复默认行为正常，源码模式与设置页不接管。
+6. **跨行与边界**：段内跨行 `==首行\n次行==` 高亮连续；文档末尾未闭合 `==` 按原文呈现不丢字。
+
+预期：显隐干脆无闪烁；主题色观感达标（底色不与选区色混淆）；除显式格式操作本身外零意外写回（保存重开源文一致）。

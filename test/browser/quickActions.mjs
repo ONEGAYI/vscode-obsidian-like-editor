@@ -71,10 +71,10 @@ try {
     const editorBox = await page.locator('.vsidian-view-live').boundingBox()
     assert.ok(barBox && editorBox && barBox.height > 30 && editorBox.y >= barBox.y + barBox.height - 1,
       '窄窗口操作条应换行并把正文推到下方')
-    assert.equal(await bar.locator('[data-icon]').count(), 15)
+    assert.equal(await bar.locator('[data-icon]').count(), 16)
     await page.waitForFunction((theme) => performance.getEntriesByType('resource').filter((entry) =>
-      entry.name.includes(`/assets/${theme}-`) && entry.name.endsWith('.svg')).length === 15, theme)
-    assert.equal(iconRequests.filter((name) => name.startsWith(`${theme}-`)).length, 15,
+      entry.name.includes(`/assets/${theme}-`) && entry.name.endsWith('.svg')).length === 16, theme)
+    assert.equal(iconRequests.filter((name) => name.startsWith(`${theme}-`)).length, 16,
       '全部图标资源应真实加载')
     const boldIcon = await iconPaint(page, 'bold')
     assert.ok(boldIcon.colors > 2, '粗体图标应真实绘制')
