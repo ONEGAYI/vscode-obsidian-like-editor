@@ -289,7 +289,7 @@
     "typecheck": "tsc --noEmit",
     "test:unit": "vitest run && node --test test/integration/testHost.test.mjs test/release/release.test.mjs",
     "test:integration": "node esbuild.mjs && node ./test/integration/runTest.mjs",
-    "test:browser": "node test/browser/tableCaret.mjs && node test/browser/outlineJump.mjs && node test/browser/outlineCollapse.mjs && node test/browser/outlineSearch.mjs && node test/browser/outlineMenu.mjs && node test/browser/outlineDrag.mjs && node test/browser/outlineDragBoundary.mjs && node test/browser/settingsPage.mjs",
+    "test:browser": "node test/browser/tableCaret.mjs && node test/browser/outlineJump.mjs && node test/browser/outlineCollapse.mjs && node test/browser/outlineSearch.mjs && node test/browser/outlineMenu.mjs && node test/browser/outlineDrag.mjs && node test/browser/outlineDragBoundary.mjs && node test/browser/settingsPage.mjs && node test/browser/quickActions.mjs",
     "release:check": "node scripts/release.mjs",
     "release": "node scripts/release.mjs --upload",
     "vscode:prepublish": "node esbuild.mjs --production"

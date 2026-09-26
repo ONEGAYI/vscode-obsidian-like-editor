@@ -116,6 +116,8 @@ export type HostToWebview =
    *  处理器（纯视图状态翻转，零写回）。宿主测试无法向 webview 派发真实鼠标
    *  事件，以此通道验证真实宿主内的布局切换与绘制 */
   | { kind: 'sidebar.test.click' }
+  /** #89 测试钩子：点击真实快速操作控件，走用户同一路径。 */
+  | { kind: 'quick.test.click'; action: 'toggle' | 'heading' | 'bold' | 'heading1' | 'headingNone' }
   /** 测试钩子（#54）：点击侧栏顶栏的大纲按钮，驱动与用户点击同一处理器
    *  （纯视图状态翻转，零写回）。与 sidebar.test.click 同通道形态 */
   | { kind: 'outline.test.click' }
@@ -544,6 +546,17 @@ export interface PaintProbe {
     error: number
     /** 当前激活视图内 .vsidian-mermaid 容器总数 */
     count: number
+  }
+  /** #89 快速操作条的真实绘制、流内布局与已应用态。 */
+  quickActions?: {
+    open: boolean
+    togglePainted: boolean
+    barPainted: boolean
+    boldPainted: boolean
+    activePainted: boolean
+    menuPainted: boolean
+    barBelowToolbar: boolean
+    editorBelowBar: boolean
   }
   /** #55 标题行绘制观测：视口内已挂载的 .vsidian-heading-inview 行的
    *  distinct 计算值（box-shadow 应为 'none'、border-left-width 应为
@@ -1064,6 +1077,17 @@ function isPaintProbe(v: unknown): v is PaintProbe {
       isNonNegativeInt(v.mermaid.error) &&
       isNonNegativeInt(v.mermaid.count)
     )) &&
+    (v.quickActions === undefined || (
+      isObject(v.quickActions) &&
+      typeof v.quickActions.open === 'boolean' &&
+      typeof v.quickActions.togglePainted === 'boolean' &&
+      typeof v.quickActions.barPainted === 'boolean' &&
+      typeof v.quickActions.boldPainted === 'boolean' &&
+      typeof v.quickActions.activePainted === 'boolean' &&
+      typeof v.quickActions.menuPainted === 'boolean' &&
+      typeof v.quickActions.barBelowToolbar === 'boolean' &&
+      typeof v.quickActions.editorBelowBar === 'boolean'
+    )) &&
     (v.heading === undefined || v.heading === null || (
       isObject(v.heading) &&
       isNonNegativeInt(v.heading.inviewCount) &&
@@ -1512,6 +1536,9 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return isNonNegativeInt(v.sourceIndex) && isNonNegativeInt(v.targetSlot)
     case 'sidebar.test.click':
       return true
+    case 'quick.test.click':
+      return v.action === 'toggle' || v.action === 'heading' || v.action === 'bold' ||
+        v.action === 'heading1' || v.action === 'headingNone'
     case 'outline.test.click':
       return true
     case 'outline.test.itemClick':

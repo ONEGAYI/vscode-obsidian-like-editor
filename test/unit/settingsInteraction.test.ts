@@ -112,7 +112,8 @@ describe('工具栏设置入口（#33；#53 图标化）', () => {
     expect(parent.querySelector('.vsidian-toolbar button.vsidian-settings-toggle')).toBeTruthy()
     expect(parent.querySelector('.vsidian-toolbar button.vsidian-sidebar-toggle')).toBeTruthy()
     expect(parent.querySelector('.vsidian-toolbar button.vsidian-mode-toggle')).toBeNull()
-    expect(parent.querySelectorAll('.vsidian-toolbar button')).toHaveLength(2)
+    expect(parent.querySelector('.vsidian-toolbar button.vsidian-quick-toggle')).toBeTruthy()
+    expect(parent.querySelectorAll('.vsidian-toolbar button')).toHaveLength(3)
   })
 })
 

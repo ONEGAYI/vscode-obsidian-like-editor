@@ -301,6 +301,22 @@ describe('isWebviewToHost', () => {
     expect(isHostToWebview({ kind: 'sidebar.test.clickx' })).toBe(false)
   })
 
+  it('quick.test.click 与快速操作绘制探针只接受契约字段（#89）', () => {
+    expect(isHostToWebview({ kind: 'quick.test.click', action: 'toggle' })).toBe(true)
+    expect(isHostToWebview({ kind: 'quick.test.click', action: 'heading1' })).toBe(true)
+    expect(isHostToWebview({ kind: 'quick.test.click', action: 'missing' })).toBe(false)
+    const quickActions = {
+      open: true, togglePainted: true, barPainted: true, boldPainted: true,
+      activePainted: false, menuPainted: false, barBelowToolbar: true, editorBelowBar: true,
+    }
+    const base = { kind: 'view.state', text: 't', docLength: 1, lineCount: 1, renderedLines: 1,
+      paint: { textVisible: false, scrollerDisplay: null, gutterUserSelect: null,
+        darkTheme: false, caretColor: null, quickActions } }
+    expect(isWebviewToHost(base)).toBe(true)
+    expect(isWebviewToHost({ ...base, paint: { ...base.paint,
+      quickActions: { ...quickActions, barPainted: 'yes' } } })).toBe(false)
+  })
+
   it('view.state 的 outline 观测（#54/#65）：合法样本接受、字段非法拒绝', () => {
     const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
     // 合法：active 布尔；绘制命中布尔；图标尺寸与滚动几何 null 或非负数

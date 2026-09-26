@@ -7,7 +7,7 @@ import { EditorView, keymap } from '@codemirror/view'
 import { defaultKeymap } from '@codemirror/commands'
 import '../../src/webview/main.css'
 
-const controller = new WebviewSyncController({ postMessage() {}, getState() {}, setState() {} })
+const controller = new WebviewSyncController({ postMessage() {}, getState() { return undefined }, setState() {} })
 controller.mount(document.getElementById('app')!, [keymap.of(defaultKeymap)])
 Object.assign(window, { initTable(text: string) {
   controller.handleHostMessage({ kind: 'init', sessionId: 'native-input',
