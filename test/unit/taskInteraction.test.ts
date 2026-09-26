@@ -239,6 +239,17 @@ describe('reading：checkbox 启用、点击走锚点校验与出站链路', () 
     // 点击链路（容器委托 → 锚点校验 → 隐藏 dispatch → edit.request）不因
     // 松散结构改变；乐观重建后为勾选
     expect(readingCheckboxes(h).map((b) => b.checked)).toEqual([true, true])
+    // 撤销广播回流（对照紧凑路径写法）：宿主确认后 undo，外部增量把
+    // [x] 还原为 [ ]——文档与显示都应回退，松散结构不丢乐观态对账
+    h.controller.handleHostMessage({ kind: 'edit.ack', seq: 1, ok: true, version: 2 })
+    h.controller.handleHostMessage({
+      kind: 'doc.changed',
+      version: 3,
+      origin: 'external',
+      changes: [{ offset: markerStart, length: 3, text: '[ ]' }],
+    })
+    expect(h.controller.getView()!.state.doc.toString()).toBe(looseDoc)
+    expect(readingCheckboxes(h).map((b) => b.checked)).toEqual([false, true])
   })
 
   it('点击未勾选任务：edit.request 精确替换 + 阅读视图乐观重建为勾选', () => {
