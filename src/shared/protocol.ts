@@ -586,6 +586,24 @@ export interface PaintProbe {
     /** 当前激活视图内横线元素总数 */
     count: number
   }
+  /** #105 高亮绘制：当前激活视图内首个高亮元素的实际可见性与计数。
+   *  live 态探 .vsidian-highlight span，reading 态探 mark。backgroundColor
+   *  证明底色真实画出（'rgba(0, 0, 0, 0)' = 透明，样式注入失效的信号）；
+   *  delimitersHidden 为 live 态 == 定界符隐藏观测（激活视口文本不含 ==
+   *  且高亮 span 存在——文本口径不依赖布局，jsdom 同样成立），reading 态
+   *  该字段 null（定界符天然不进渲染产物）。无高亮时整个字段缺省。 */
+  highlight?: {
+    /** 首个高亮元素的 rect 有面积且 elementFromPoint 命中 */
+    visible: boolean
+    /** 该元素 computed display（'none' = 未绘制） */
+    display: string | null
+    /** 该元素 computed background-color */
+    backgroundColor: string | null
+    /** 当前激活视图内高亮元素数 */
+    count: number
+    /** live 态：视口内源文 == 已被隐藏装饰移除（false = 光标触及显形中） */
+    delimitersHidden: boolean | null
+  }
   /** #89 快速操作条的真实绘制、流内布局与已应用态。 */
   quickActions?: {
     open: boolean
@@ -755,8 +773,8 @@ export interface SidebarProbe {
 }
 
 /** #65 大纲条目行内标记类型（白名单 = 正文已支持的行内标记子集；
- *  高亮/公式/行内颜色待正文支持后按同一机制接入，此处不预留松散类型） */
-export type OutlineSpanKind = 'strong' | 'emphasis' | 'code' | 'strike'
+ *  #105 起高亮接入；公式/行内颜色待正文支持后按同一机制接入） */
+export type OutlineSpanKind = 'strong' | 'emphasis' | 'code' | 'strike' | 'highlight'
 
 /** #65 大纲条目行内标记区间：kind + plainText 内偏移（start 含、end 不含） */
 export interface OutlineSpanInfo {
@@ -1133,6 +1151,15 @@ function isPaintProbe(v: unknown): v is PaintProbe {
       typeof v.math.visible === 'boolean' &&
       isNullOrString(v.math.display) &&
       isNonNegativeInt(v.math.count)
+    )) &&
+    (v.highlight === undefined || (
+      isObject(v.highlight) &&
+      typeof v.highlight.visible === 'boolean' &&
+      isNullOrString(v.highlight.display) &&
+      isNullOrString(v.highlight.backgroundColor) &&
+      isNonNegativeInt(v.highlight.count) &&
+      (v.highlight.delimitersHidden === undefined || v.highlight.delimitersHidden === null ||
+        typeof v.highlight.delimitersHidden === 'boolean')
     )) &&
     (v.mermaid === undefined || (
       isObject(v.mermaid) &&

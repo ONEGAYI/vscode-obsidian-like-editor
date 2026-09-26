@@ -2286,7 +2286,7 @@ export class WebviewSyncController {
       target.appendChild(el)
     }
     const textGroup = group('format.groupText')
-    for (const op of ['bold', 'italic', 'strikethrough', 'inlineCode', 'clearInline'] as const) {
+    for (const op of ['bold', 'italic', 'strikethrough', 'highlight', 'inlineCode', 'clearInline'] as const) {
       addOperation(textGroup, op)
     }
     const paragraphGroup = group('format.groupParagraph')
@@ -5027,6 +5027,45 @@ export class WebviewSyncController {
     const mermaid = mermaidEl
       ? { visible: mermaidVisible, display: mermaidDisplay, ...mermaidCounts }
       : undefined
+    // #105 高亮绘制探针：live 态取 .vsidian-highlight span、reading 态取
+    // mark；底色 computed 证明真实画出（透明 = 样式注入失效信号）。
+    // delimitersHidden 用激活视口文本口径（不依赖布局）：唯一 == 定界符
+    // 不在文本中即隐藏成功——光标触及显形时为 false
+    const highlightSelector = this.viewMode === 'reading' ? 'mark' : '.vsidian-highlight'
+    const highlightEl = (this.viewMode === 'reading' ? this.readingContainer : view.contentDOM)
+      ?.querySelector<HTMLElement>(highlightSelector) ?? null
+    let highlightVisible = false
+    let highlightBackgroundColor: string | null = null
+    let highlightDisplay: string | null = null
+    if (highlightEl) {
+      const style = getComputedStyle(highlightEl)
+      highlightBackgroundColor = style.backgroundColor
+      highlightDisplay = style.display
+      try {
+        const rect = highlightEl.getBoundingClientRect()
+        if (rect.width > 0 && rect.height > 0) {
+          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+          if (hit && highlightEl.contains(hit)) {
+            highlightVisible = true
+          }
+        }
+      } catch {
+        // jsdom 无布局与 elementFromPoint；真宿主才能证明实际可见。
+      }
+    }
+    const highlightScopeEl = this.viewMode === 'reading' ? this.readingContainer : view.contentDOM
+    const highlight = highlightEl
+      ? {
+        visible: highlightVisible,
+        display: highlightDisplay,
+        backgroundColor: highlightBackgroundColor,
+        count: highlightScopeEl
+          ? highlightScopeEl.querySelectorAll(highlightSelector).length
+          : 0,
+        delimitersHidden: this.viewMode === 'reading' ? null
+          : !(highlightScopeEl?.textContent ?? '').includes('=='),
+      }
+      : undefined
     const quickBar = this.quickActionsEl
     const quickBold = quickBar?.querySelector<HTMLElement>('[data-op="bold"]') ?? null
     const quickActive = quickBar?.querySelector<HTMLElement>('[data-format-state="active"]') ?? null
@@ -5152,6 +5191,7 @@ export class WebviewSyncController {
       math,
       mermaid,
       hr,
+      highlight,
       quickActions,
       code,
       heading: headingPaint,

@@ -32,6 +32,7 @@
 | `.vsidian-strong` | 粗体内容 span | `.cm-strong` | 语义等价。已验证：测试片段经 `.vsidian-strong` 命中（`text-decoration-color: rgb(7, 8, 9)`，真实宿主断言） |
 | `.vsidian-emphasis` | 斜体内容 span | `.cm-emphasis` | 语义等价（类名不同，片段按 `cm-` 原名定位不命中） |
 | `.vsidian-inline-code` | 行内代码内容 span | `.cm-inline-code`（Obsidian 亦用 `.cm-hmd-inline-code`） | 语义等价。已验证：测试片段经 `.vsidian-inline-code` 命中 |
+| `.vsidian-highlight` | 高亮内容 span（#105：`==文字==` 常显主题色底；`==` 定界符触及显形，同粗体语义） | `.cm-highlight` | 语义等价（底色变量见公开变量表 `--vsidian-highlight-background`） |
 | `.vsidian-code-line` | 围栏/缩进代码**行**（含围栏标记行） | `.HyperMD-codeblock`（Obsidian 代码块行类族） | 行级语义等价。已验证：测试片段经 `.vsidian-code-line` 命中 |
 | `.vsidian-quote-line` | 引用行 | `.HyperMD-quote`（Obsidian 引用行类）/ `.cm-quote` | 语义等价（行级；本项目无 span 级引用 token 类——引用内容不额外 span 化） |
 | `.vsidian-list-line`（+ `-d{1..8}` 嵌套深度修饰） | 列表项行 | `.HyperMD-list-line`（Obsidian 列表行类族）/ `.cm-list-number` 等修饰 | 行级语义对应；深度修饰为本项目自有形态（Obsidian 按行 class 组合表达缩进，结构不同但等价定位） |
@@ -79,7 +80,7 @@
 | `.vsidian-reading-frontmatter` | frontmatter 头块（源码呈现，内部 `pre.vsidian-reading-frontmatter-text`） | `.markdown-preview-view .markdown-frontmatter` | 语义对应（类名不同）；头块内语法不解析（两视图共用边界判定） |
 | `.vsidian-reading-spacer`（`-top` / `-bottom`） | #7 视口占位：屏外块的高度占位（非内容节点，高度为块高度表前后缀和） | 无对应（Obsidian 虚拟化由内部机制承担） | 本项目自有结构，不参与兼容承诺；出现在片段中不影响内容块定位 |
 
-阅读行内格式（`em`/`strong`/`code`/`a`）为 markdown-it 渲染的语义标签，与 Obsidian 阅读视图同形态（`.markdown-preview-view strong` 等标签选择器可命中；本项目片段经 `.vsidian-reading-block strong` 定位亦命中，已验证探针 `rgb(16, 17, 18)`）。
+阅读行内格式（`em`/`strong`/`code`/`a`/`mark`）为 markdown-it 渲染的语义标签，与 Obsidian 阅读视图同形态（`.markdown-preview-view strong` 等标签选择器可命中；本项目片段经 `.vsidian-reading-block strong` 定位亦命中，已验证探针 `rgb(16, 17, 18)`）。#105 起 `==文字==` 渲染为 `mark`（`.vsidian-reading-block mark`），底色与 live 侧 `.vsidian-highlight` 同源变量。
 
 ## 链接与图片（#10）
 
@@ -157,7 +158,7 @@
 | 本项目稳定类名 | 本项目用途 | Obsidian 对应选择器 | 核对结果 |
 | --- | --- | --- | --- |
 | `.vsidian-outline-item`（+ `.vsidian-outline-level-{1..6}`） | 大纲条目（级别类兼作缩进与层级色入口） | 无（Obsidian 大纲为应用级 DOM） | 本项目自有；条目钉常规字重 400（不继承标题级别加粗） |
-| `.vsidian-outline-strong` / `.vsidian-outline-emphasis` / `.vsidian-outline-code` / `.vsidian-outline-strike` | 行内标记透传（语义元素 `strong`/`em`/`code`/`del` 上的第二类名入口） | 无（Obsidian 侧大纲插件私有 DOM） | 本项目自有；字重/斜体/等宽/删除线只由显式标记触发；双链/链接为纯文本（无 `a`，不可点） |
+| `.vsidian-outline-strong` / `.vsidian-outline-emphasis` / `.vsidian-outline-code` / `.vsidian-outline-strike` / `.vsidian-outline-highlight` | 行内标记透传（语义元素 `strong`/`em`/`code`/`del`/`mark` 上的第二类名入口） | 无（Obsidian 侧大纲插件私有 DOM） | 本项目自有；字重/斜体/等宽/删除线/高亮底只由显式标记触发；双链/链接为纯文本（无 `a`，不可点） |
 | `.vsidian-outline-located` | #66 常驻高亮横条（当前控制域条目的半透明背景；类切换是两态差异唯一来源） | 无 | 本项目自有；#67 起施加在「可见代表」上（目标被折叠遮蔽时为第一个可见祖先） |
 | `.vsidian-outline-slider`（+ `::before`） | #67 折叠滑块行（显隐唯一开关是侧栏容器的 `outline-active` 类；`::before` 画贯穿横线） | 无（Quiet Outline 类插件为私有 DOM） | 本项目自有；`role=group` 六按钮组（键盘 Tab 逐点可达） |
 | `.vsidian-outline-slider-dot`（+ `.vsidian-outline-slider-active`） | 六档圆点（结绳串珠）：空闲珠空心（透明面 + 描边圆环）、当前珠实心——两态差异唯一来源是 `active` 类规则 | 无 | 本项目自有；实心色跟随 `--vscode-button-background` |
@@ -177,7 +178,7 @@
 
 行为边界（非样式映射，随 #65 记录）：
 
-- 透传白名单 = 正文已支持的行内标记子集（粗体/斜体/行内代码/删除线）；高亮 `==…==`、公式 `$…$`、行内颜色待正文能力落地后按同一机制接入（提取处 `SPAN_KIND_BY_NODE` 加映射），大纲侧零额外设计。
+- 透传白名单 = 正文已支持的行内标记子集（粗体/斜体/行内代码/删除线/高亮 `==…==`，#105 起接入）；公式 `$…$`、行内颜色待正文能力落地后按同一机制接入（提取处 `SPAN_KIND_BY_NODE` 加映射），大纲侧零额外设计。
 - 双链 `[[…]]` 显示别名/路径（形态学与 live/阅读共用 `src/shared/wikilink.ts`），行内链接显示链接文字（URL 不透出）；引用式链接按原文呈现（与 live 不解析引用定义一致）；行内代码内不做双链替换。
 - `OutlineItem.plainText`（剥标记可见文本）与 `spans`（标记区间）经 `view.state` 的 `outline.items` 观测（协议单一事实源 `src/shared/protocol.ts`），搜索等后续能力按 plainText 口径匹配。
 
@@ -231,6 +232,7 @@
 | `--vsidian-reading-line-height` | `1.6` | 阅读正文行高 | `--line-height-normal`（语义对应，名称不同） |
 | `--vsidian-reading-code-background` | `var(--vscode-textCodeBlock-background, …)` | 代码块背景 | `--code-background`（语义对应，名称不同） |
 | `--vsidian-code-card-background` | `var(--vscode-textCodeBlock-background, …)` | 代码块卡片底色（#79 起，头部横带与代码区共用；阅读卡片同源） | `--code-background`（语义对应，名称不同） |
+| `--vsidian-highlight-background` | `var(--vscode-editorWordHighlightBackground, rgba(234, 179, 8, 0.25))` | 高亮底色（#105）：live 正文 span、阅读 mark、大纲条目三侧同引（跟随 VSCode 主题词高亮色，不固定黄） | `--text-highlight-bg`（语义对应，名称不同） |
 | `--vsidian-table-background` | `rgba(128, 128, 128, 0.05)` | live 表格行背景 / 阅读表头背景（#12） | `--table-background`（语义对应，名称不同） |
 
 变量名**不与 Obsidian 原名对齐**（加 `vsidian-` 前缀避免与宿主 VSCode 变量冲突）；二期若需要按 Obsidian 变量名片段兼容，经映射垫片（alias）实现，不在一期承诺内。
@@ -245,7 +247,7 @@
 
 以下 Obsidian 常用选择器/结构**一期不提供**，出现在用户片段中不会命中（不会报错，也不会生效）：
 
-- ~~行内格式 token：`.cm-strong` / `.cm-emphasis` / `.cm-inline-code`~~（#8 已建立 `vsidian-` 对应类，见上文 live 表；~~`.cm-link` 待 #10 链接票~~ 已建立 `.vsidian-link`；`.cm-highlight` 高亮 `==文字==` 仍不支持）
+- ~~行内格式 token：`.cm-strong` / `.cm-emphasis` / `.cm-inline-code`~~（#8 已建立 `vsidian-` 对应类，见上文 live 表；~~`.cm-link` 待 #10 链接票~~ 已建立 `.vsidian-link`；~~`.cm-highlight` 高亮 `==文字==` 仍不支持~~ #105 已建立 `.vsidian-highlight` + 阅读 `mark`）
 - ~~表格：`.markdown-preview-view table` 及其子结构~~（#12 已建立：阅读侧 `.vsidian-reading-table` + 真实 `table` 标签，live 侧 `.vsidian-table-line`/`.vsidian-table-cell` 族，见上文两节。**跨视图差异如实记录**：markdown-it 不识别行内代码内的 `|`，含该形态的表格在阅读视图错切或降级为段落，live 侧按 GFM 规范正确拆分——偏差与修复成本见 docs/perf/2026-09-table-cell-editing.md「已知限制」）
 - ~~键盘导航/增删行列的表格交互结构~~（#13 范围，一期未提供；单元格编辑语义为「光标落源区间直编」）
 - 引用块：~~`.markdown-embed` / `blockquote` 结构~~（#8 已提供 blockquote；`.markdown-embed` 嵌入结构仍属二期）

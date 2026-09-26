@@ -94,6 +94,47 @@ describe('列表项源锚点（list_item_open 自定义规则）', () => {
   })
 })
 
+describe('高亮 ==text== 行内规则（#105）', () => {
+  it('成对 == 渲染为 mark 语义元素（html:false 下输出语义标签）', () => {
+    const md = createMarkdownRenderer()
+    const host = renderToDom(md, '正文 ==高亮== 文本\n')
+    const marks = host.querySelectorAll('mark')
+    expect(marks).toHaveLength(1)
+    expect(marks[0]!.textContent).toBe('高亮')
+    expect(host.textContent).toContain('正文 高亮 文本')
+  })
+
+  it('同行多个高亮各自配对；嵌套行内标记照常渲染', () => {
+    const md = createMarkdownRenderer()
+    const host = renderToDom(md, '==甲== 与 ==**粗亮**==\n')
+    expect([...host.querySelectorAll('mark')].map((m) => m.textContent)).toEqual(['甲', '粗亮'])
+    expect(host.querySelector('mark strong')?.textContent).toBe('粗亮')
+  })
+
+  it('残缺与空格紧贴形态按普通文本降级（源文保真）', () => {
+    const md = createMarkdownRenderer()
+    for (const src of ['a == b == c\n', '==未闭合\n', '空 == 内容 == 间隔\n']) {
+      const host = renderToDom(md, src)
+      expect(host.querySelectorAll('mark')).toHaveLength(0)
+      expect(host.textContent).toContain('==')
+    }
+  })
+
+  it('行内代码内的 == 不转换（代码内容字面呈现）', () => {
+    const md = createMarkdownRenderer()
+    const host = renderToDom(md, '`==x==`\n')
+    expect(host.querySelectorAll('mark')).toHaveLength(0)
+    expect(host.querySelector('code')?.textContent).toBe('==x==')
+  })
+
+  it('段内跨行可配对（与 lezer 侧同判）', () => {
+    const md = createMarkdownRenderer()
+    const host = renderToDom(md, '==首行\n次行==\n')
+    expect(host.querySelectorAll('mark')).toHaveLength(1)
+    expect(host.querySelector('mark')?.textContent).toBe('首行\n次行')
+  })
+})
+
 describe('sanitizeReadingDom：DOM 纵深净化', () => {
   it('移除 script/iframe/style 元素、行内事件属性与 javascript: 链接', () => {
     const host = document.createElement('div')

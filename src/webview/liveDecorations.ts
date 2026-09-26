@@ -83,6 +83,8 @@ export const LIVE_CLASS_NAMES = {
   emphasis: 'vsidian-emphasis',
   /** 行内代码内容 span（`.cm-inline-code`） */
   inlineCode: 'vsidian-inline-code',
+  /** 高亮内容 span（#105，`.cm-highlight` 方向；底色变量见 main.css #app） */
+  highlight: 'vsidian-highlight',
   /** 引用行（`.HyperMD-quote` / `.cm-quote`） */
   quoteLine: 'vsidian-quote-line',
   /** 围栏/缩进代码行（`.HyperMD-codeblock`） */
@@ -147,6 +149,7 @@ const headerSpanDecos = [1, 2, 3, 4, 5, 6].map((lv) =>
 const strongDeco = Decoration.mark({ class: LIVE_CLASS_NAMES.strong })
 const emphasisDeco = Decoration.mark({ class: LIVE_CLASS_NAMES.emphasis })
 const inlineCodeDeco = Decoration.mark({ class: LIVE_CLASS_NAMES.inlineCode })
+const highlightDeco = Decoration.mark({ class: LIVE_CLASS_NAMES.highlight })
 
 /**
  * 任务 checkbox widget（#9）：input[type=checkbox] 替换任务标记 [ ]/[x]。
@@ -699,6 +702,11 @@ function emitForRange(
       case 'InlineCode':
         pushInnerSpan(out, node, 'CodeMark', inlineCodeDeco)
         return
+      case 'Highlight':
+        // #105 高亮：内容 span 常显（底色在 CSS；pushInnerSpan 的
+        // last.from > first.to 检查天然跳过空内容形态 ====）
+        pushInnerSpan(out, node, 'HighlightMark', highlightDeco)
+        return
       case 'HeaderMark': {
         const heading = [...path].reverse().find((parent) => headingLevelOf(parent.name) !== null)
         const to = markerEnd(node)
@@ -732,6 +740,20 @@ function emitForRange(
       }
       case 'EmphasisMark': {
         const scope = path[path.length - 1]
+        if (!scope || !touches(scope.from, scope.to)) {
+          out.push(hideDeco.range(node.from, node.to))
+        }
+        return
+      }
+      case 'HighlightMark': {
+        // #105：控制域 = 高亮范围（含两端边界）；空内容形态（====）无
+        // 字面高亮语义，定界符保持可见（源码降级，源文不丢）
+        const scope = path[path.length - 1]
+        const empty = scope?.firstChild && scope.lastChild &&
+          scope.firstChild.to === scope.lastChild.from
+        if (empty) {
+          return
+        }
         if (!scope || !touches(scope.from, scope.to)) {
           out.push(hideDeco.range(node.from, node.to))
         }
@@ -880,6 +902,7 @@ const SEED_NODE_NAMES = new Set([
   'SetextHeading1', 'SetextHeading2',
   'HeaderMark', 'EmphasisMark', 'QuoteMark', 'ListMark', 'TaskMarker',
   'Emphasis', 'StrongEmphasis', 'InlineCode', 'HorizontalRule', 'ListItem',
+  'Highlight', 'HighlightMark',
   'Table', 'TableHeader', 'TableRow', 'TableCell', 'TableDelimiter',
 ])
 
