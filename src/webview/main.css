@@ -273,6 +273,13 @@ body {
   outline: 1px solid var(--vscode-focusBorder, rgba(128, 128, 128, 0.6));
 }
 
+/* 收起态句柄不可聚焦：width:0 + overflow:hidden 只裁掉视觉与命中，tab 序
+   仍可达——visibility:hidden 让真实浏览器把句柄移出 tab 序（JS 侧 keydown
+   另有 sidebarOpen 语义守卫双保险） */
+#app .vsidian-body:not(.vsidian-sidebar-open) .vsidian-sidebar-resizer {
+  visibility: hidden;
+}
+
 /* 拖拽期间：禁用宽度过渡（否则 0.15s ease-out 滞后于指针，不跟手），
    侧栏全域锁定调整光标（指针捕获后可能移出热区） */
 #app .vsidian-sidebar.vsidian-sidebar-resizing {

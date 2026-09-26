@@ -943,6 +943,10 @@ export class WebviewSyncController {
     // #70：拖拽会话随卸载退出（document 监听一并摘除）
     document.removeEventListener('pointerdown', this.outlinePointerdownEntry, true)
     this.cancelOutlineDrag()
+    // 拖宽会话随卸载退出（document 常驻捕获入口与 blur/Escape 监听一并摘除）
+    document.removeEventListener('pointerdown', this.sidebarResizePointerdownEntry, true)
+    this.endSidebarResize(true)
+    this.sidebarResizerEl = undefined
     this.sidebarEl?.remove()
     this.sidebarEl = undefined
     this.mainEl?.remove()
@@ -2868,8 +2872,14 @@ export class WebviewSyncController {
     resizer.tabIndex = 0
     resizer.addEventListener('pointerdown', (event) => {
       // 启动判据与其余拖拽入口同口径：只看法定按键，不设指针类型前提
-      if (event.button !== 0 || this.sidebarResizeState) {
+      if (event.button !== 0) {
         return
+      }
+      // 残留会话先回收再武装新会话：up/cancel 在 webview 外丢失（按住移出
+      // 窗口释放、和弦菜单吞事件）时不被新手势收养陈旧起点。document
+      // capture 层已先清理，此处防御冗余
+      if (this.sidebarResizeState) {
+        this.endSidebarResize(true)
       }
       this.sidebarResizeState = {
         pointerId: event.pointerId,
@@ -2877,10 +2887,19 @@ export class WebviewSyncController {
         startWidth: this.sidebarWidth,
         moved: false,
       }
+      // 窗口失焦兜底（与大纲拖拽同口径）：武装时挂 blur，收尾时摘（同引用幂等）
+      window.addEventListener('blur', this.onSidebarResizeBlur)
     })
     resizer.addEventListener('pointermove', (event) => {
       const s = this.sidebarResizeState
-      if (!s || (event.buttons & 1) === 0) {
+      if (!s) {
+        return
+      }
+      // 和弦与已释放守卫（对齐 onOutlineDragMove 口径）：非主键位落下
+      // （buttons=3 等，第二个按键只报 move）证明手势意图已变；buttons=0
+      // 说明释放发生在 webview 之外——都立即回滚收尾，不推进会话
+      if ((event.buttons & ~1) !== 0 || event.buttons === 0) {
+        this.endSidebarResize(true)
         return
       }
       if (!s.moved) {
@@ -2888,6 +2907,13 @@ export class WebviewSyncController {
           return
         }
         s.moved = true
+        // 起点从渲染宽校准：外部片段注入 --vsidian-sidebar-width 时内部
+        // sidebarWidth 仍是缺省值，拖宽应从当前渲染宽连续开始而非跳变；
+        // jsdom 无布局（rect 宽 0）时跳过校准，保持内部值
+        const rect = this.sidebarEl?.getBoundingClientRect()
+        if (rect && Number.isFinite(rect.width) && rect.width > 0) {
+          s.startWidth = clampSidebarWidth(rect.width)
+        }
         // 真实指针捕获（移出热区后 move/up 仍回到句柄）；合成事件无
         // pointerId（undefined），跳过捕获——直派路径照样命中本监听
         if (typeof event.pointerId === 'number') {
@@ -2914,6 +2940,11 @@ export class WebviewSyncController {
       this.applySidebarWidth(SIDEBAR_WIDTH_DEFAULT, true)
     })
     resizer.addEventListener('keydown', (event) => {
+      // 收起态句柄被 CSS 裁切且不可聚焦（visibility:hidden，真实浏览器已
+      // 移出 tab 序）；语义防御：不可见元素的键盘事件不改变宽度
+      if (!this.sidebarOpen) {
+        return
+      }
       if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') {
         return
       }
@@ -2927,6 +2958,11 @@ export class WebviewSyncController {
     })
     this.sidebarResizerEl = resizer
     sidebar.appendChild(resizer)
+    // 残留会话清理挂 document 常驻 capture 层（照 outlinePointerdownEntry
+    // 先例，#70）：up/cancel 在 webview 外丢失留下的会话会被下次拖拽收养
+    // 陈旧起点并持久化错误宽度；任意新按下都证明上一手势已结束，先回收。
+    // capture 先于句柄监听兑现，清理后本次按下照常武装新会话
+    document.addEventListener('pointerdown', this.sidebarResizePointerdownEntry, true)
     return sidebar
   }
 
@@ -2987,16 +3023,39 @@ export class WebviewSyncController {
     }
   }
 
-  /** 拖宽收尾：清拖拽态类与 Escape 监听。rollback=true 时恢复拖前宽度
-   *  （Escape/pointercancel 路径，不持久化）；落定路径在收尾前已持久化 */
+  /** 拖宽收尾：清拖拽态类、Escape 与 blur 监听。rollback=true 时恢复拖前
+   *  宽度（Escape/pointercancel/残留回收路径，不持久化）；落定路径在收尾前
+   *  已持久化。幂等：无会话时纯监听摘除（同引用 removeEventListener 无害） */
   private endSidebarResize(rollback = false): void {
     const s = this.sidebarResizeState
     this.sidebarResizeState = null
     this.sidebarEl?.classList.remove('vsidian-sidebar-resizing')
     document.removeEventListener('keydown', this.onSidebarResizeEscape, true)
+    window.removeEventListener('blur', this.onSidebarResizeBlur)
     if (rollback && s) {
       this.applySidebarWidth(s.startWidth, false)
     }
+  }
+
+  /** 拖宽按下入口清理（document 常驻 capture pointerdown，仿
+   *  outlinePointerdownEntry）：任意新按下都证明上一手势已结束，残留会话
+   *  （越界释放、alt-tab 等留下的）先回收——否则下次拖拽收养陈旧起点。
+   *  触屏次指针豁免与先例同口径（review-loops 第 4 轮教训）：只排除
+   *  touch + isPrimary=false，不限指针类型前提——否则第二指落下会误杀
+   *  首指进行中的拖宽 */
+  private readonly sidebarResizePointerdownEntry = (event: PointerEvent): void => {
+    if (event.pointerType === 'touch' && event.isPrimary === false) {
+      return
+    }
+    if (this.sidebarResizeState) {
+      this.endSidebarResize(true)
+    }
+  }
+
+  /** 拖宽会话的 window blur 兜底（与大纲拖拽同口径）：焦点离开窗口
+   *  （按住拖出后 alt-tab 等）时 up/cancel 不再送达，残留会话就地回收 */
+  private readonly onSidebarResizeBlur = (): void => {
+    this.endSidebarResize(true)
   }
 
   /** 拖拽中 Escape 取消：document 捕获层监听（进入拖拽态时挂、收尾时摘），
@@ -3013,6 +3072,11 @@ export class WebviewSyncController {
    *  runOutlineDragTest 同手法）：处理器只读坐标/buttons/pointerId，
    *  jsdom 无 PointerEvent 构造器同样可派发 */
   private runSidebarResizeTest(delta: number): void {
+    // 侧栏收起态句柄被 CSS 裁切（用户不可交互），钩子同步拒绝——防用例
+    // 顺序调整写入不可见持久化
+    if (!this.sidebarOpen) {
+      return
+    }
     const resizer = this.sidebarResizerEl
     if (!resizer) {
       return

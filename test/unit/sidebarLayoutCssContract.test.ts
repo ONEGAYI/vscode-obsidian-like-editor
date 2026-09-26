@@ -89,6 +89,11 @@ describe('侧栏布局骨架 CSS 契约（#53）', () => {
     // 键盘微调可达的聚焦轮廓（focus-visible，非鼠标点击态）
     expect(rule('#app .vsidian-sidebar .vsidian-sidebar-resizer:focus-visible'))
       .toMatch(/outline:/)
+    // 收起态句柄不可聚焦：width:0 + overflow:hidden 只裁掉视觉与命中，tab 序
+    // 仍可达——visibility:hidden 让真实浏览器把句柄移出 tab 序（JS 侧 keydown
+    // 另有 sidebarOpen 语义守卫双保险）
+    expect(rule('#app .vsidian-body:not(.vsidian-sidebar-open) .vsidian-sidebar-resizer'))
+      .toMatch(/visibility:\s*hidden/)
   })
 
   it('拖拽期间禁用宽度过渡（resizing 类），侧栏全域锁定调整光标', () => {

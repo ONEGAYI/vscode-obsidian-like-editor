@@ -9,6 +9,9 @@
 // 默认宽度不写变量：保持 --vsidian-sidebar-width 的公开覆盖入口，回到
 // 默认即移除变量。宽度是纯视图状态：全程零写回（无 edit.request）。
 // sidebar.test.resize 测试钩子经真实句柄 pointer 序列驱动同一处理器。
+// 残留会话兜底照大纲拖拽先例（#70）四层防线：句柄 pointerdown 清残留再
+// 武装、document 常驻 capture 入口回收、move 和弦/已释放守卫回滚、
+// window blur 兜底——up/cancel 在 webview 外丢失时不留陈旧会话。
 import { describe, it, expect } from 'vitest'
 import {
   WebviewSyncController,
@@ -51,13 +54,19 @@ function makeBridge(saved?: Record<string, unknown>): BridgeHarness {
   return { bridge, sent, saved: () => state }
 }
 
-function mountResize(h: BridgeHarness, text = DOC): { c: WebviewSyncController; parent: HTMLElement } {
+function mountResize(
+  h: BridgeHarness,
+  text = DOC,
+  openSidebar = true,
+): { c: WebviewSyncController; parent: HTMLElement } {
   const c = new WebviewSyncController(h.bridge)
   const parent = document.createElement('div')
   document.body.appendChild(parent)
   c.mount(parent)
   c.handleHostMessage({ kind: 'init', sessionId: 's1', docUri: DOC_URI, version: 1, text })
-  c.handleHostMessage({ kind: 'sidebar.test.click' })
+  if (openSidebar) {
+    c.handleHostMessage({ kind: 'sidebar.test.click' })
+  }
   return { c, parent }
 }
 
@@ -75,16 +84,18 @@ function widthVar(parent: HTMLElement): number {
   return value === '' ? SIDEBAR_WIDTH_DEFAULT : Number.parseFloat(value)
 }
 
-/** 在句柄上派发 pointer 事件（MouseEvent 构造，同 outlineDragPanel 口径：
- *  处理器只读坐标/buttons/button；buttons 缺省按下态 1，释放事件传 0） */
-function firePointer(el: Element, type: string, x: number, buttons = 1): void {
+/** 在句柄或 document 上派发 pointer 事件（MouseEvent 构造，同
+ *  outlineDragPanel 口径：处理器只读坐标/buttons/button；buttons 缺省
+ *  按下态 1，释放事件传 0；document 用于常驻捕获入口的直派） */
+function firePointer(el: Element | Document, type: string, x: number, buttons = 1): void {
   el.dispatchEvent(new MouseEvent(type, {
     bubbles: true, cancelable: true, clientX: x, clientY: 100, buttons, button: 0,
   }))
 }
 
 /** 拖拽会话：句柄 x=800 处按下 → 左移 6px（超阈值进拖拽态）→ 左移 delta。
- *  收尾方式：默认 pointerup 落定；escape/cancel 走取消路径 */
+ *  收尾方式：默认 pointerup 落定；escape/cancel 走取消路径；hold 不收尾
+ *  （模拟 up/cancel 在 webview 外丢失的残留会话） */
 function dragBy(
   parent: HTMLElement,
   delta: number,
@@ -220,14 +231,99 @@ describe('拖拽调宽（指针路径）', () => {
     expect((h.saved() as { sidebarWidth?: number }).sidebarWidth).toBeUndefined()
   })
 
-  it('残留会话卫生：上一轮 hold 留下的拖拽态先回滚再接受新拖拽', () => {
+  it('残留会话卫生：hold 残留后的新按下先回滚再以新起点重算', () => {
+    const h = makeBridge()
+    const { parent } = mountResize(h)
+    const r = resizerEl(parent)
+    dragBy(parent, 100, 'hold')
+    expect(widthVar(parent)).toBe(380)
+    expect(sidebarEl(parent).classList.contains('vsidian-sidebar-resizing')).toBe(true)
+    // 新按下（起点 600）：残留会话先回滚（380→280）再武装新会话
+    firePointer(r, 'pointerdown', 600)
+    expect(widthVar(parent)).toBe(280)
+    firePointer(r, 'pointermove', 594)
+    firePointer(r, 'pointermove', 560)
+    expect(widthVar(parent)).toBe(320)
+    firePointer(r, 'pointerup', 560, 0)
+    // 320 = 新起点重算（280 + 40）；520 是收养陈旧 startX=800 的错误换算
+    expect(widthVar(parent)).toBe(320)
+    expect((h.saved() as { sidebarWidth?: number }).sidebarWidth).toBe(320)
+  })
+})
+
+describe('残留会话兜底（照大纲拖拽 #70 四层防线）', () => {
+  it('document 捕获层清理：hold 残留后的任意新按下先回收（回滚 + 摘 resizing 类）', () => {
     const h = makeBridge()
     const { parent } = mountResize(h)
     dragBy(parent, 100, 'hold')
-    // 未收尾的会话残留（如集成钩子连续驱动）：下一次按下先清理
-    dragBy(parent, 40)
-    expect(widthVar(parent)).toBe(320)
-    expect((h.saved() as { sidebarWidth?: number }).sidebarWidth).toBe(320)
+    expect(widthVar(parent)).toBe(380)
+    // 按住移出窗口释放后再任意按下：证明上一手势已结束，残留会话回收
+    firePointer(document, 'pointerdown', 300)
+    expect(widthVar(parent)).toBe(280)
+    expect(sidebarEl(parent).classList.contains('vsidian-sidebar-resizing')).toBe(false)
+  })
+
+  it('触屏次指针不清理进行中的拖宽会话（capture 入口豁免，对齐大纲先例）', () => {
+    const h = makeBridge()
+    const { parent } = mountResize(h)
+    const r = resizerEl(parent)
+    dragBy(parent, 100, 'hold')
+    // 触屏第二指（isPrimary=false）落在任意位置：不误杀首指进行中的拖宽
+    const secondTouch = new MouseEvent('pointerdown', {
+      bubbles: true, cancelable: true, clientX: 300, clientY: 50, buttons: 1, button: 0,
+    })
+    Object.defineProperty(secondTouch, 'pointerType', { value: 'touch' })
+    Object.defineProperty(secondTouch, 'isPrimary', { value: false })
+    document.dispatchEvent(secondTouch)
+    expect(widthVar(parent)).toBe(380)
+    // 首指针继续拖动仍有效（会话未被回收）
+    firePointer(r, 'pointermove', 640)
+    expect(widthVar(parent)).toBe(440)
+  })
+
+  it('window blur 清理：焦点离开窗口（alt-tab 等）时回收残留会话', () => {
+    const h = makeBridge()
+    const { parent } = mountResize(h)
+    dragBy(parent, 100, 'hold')
+    window.dispatchEvent(new Event('blur'))
+    expect(widthVar(parent)).toBe(280)
+    expect(sidebarEl(parent).classList.contains('vsidian-sidebar-resizing')).toBe(false)
+  })
+
+  it('和弦与已释放 move 都回滚：buttons 含非主键位或全零即取消会话', () => {
+    const h = makeBridge()
+    const { parent } = mountResize(h)
+    const r = resizerEl(parent)
+    // buttons=0：释放发生在 webview 之外，纯悬停 move 不推进会话
+    dragBy(parent, 100, 'hold')
+    firePointer(r, 'pointermove', 700, 0)
+    expect(widthVar(parent)).toBe(280)
+    expect(sidebarEl(parent).classList.contains('vsidian-sidebar-resizing')).toBe(false)
+    // buttons=3：左键按住时再按右键（和弦），第二个按键只报 move
+    dragBy(parent, 100, 'hold')
+    firePointer(r, 'pointermove', 700, 3)
+    expect(widthVar(parent)).toBe(280)
+    expect(sidebarEl(parent).classList.contains('vsidian-sidebar-resizing')).toBe(false)
+  })
+
+  it('dispose 清理：残留会话随卸载退出（resizing 类摘除）', () => {
+    const h = makeBridge()
+    const { c, parent } = mountResize(h)
+    const el = sidebarEl(parent)
+    dragBy(parent, 100, 'hold')
+    c.dispose()
+    expect(el.classList.contains('vsidian-sidebar-resizing')).toBe(false)
+  })
+
+  it('拖拽起点从渲染宽校准：外部注入变量宽度后从当前渲染宽连续拖宽', () => {
+    const h = makeBridge()
+    const { parent } = mountResize(h)
+    // jsdom 无布局：stub 侧栏渲染宽 340（模拟外部片段注入 --vsidian-sidebar-width，
+    // 内部 sidebarWidth 仍是缺省 280）——拖宽应从 340 连续开始而非跳回 280
+    sidebarEl(parent).getBoundingClientRect = () => new DOMRect(0, 0, 340, 600)
+    dragBy(parent, 100)
+    expect(widthVar(parent)).toBe(440)
+    expect((h.saved() as { sidebarWidth?: number }).sidebarWidth).toBe(440)
   })
 })
 
@@ -248,7 +344,9 @@ describe('键盘微调与双击重置', () => {
 
   it('微调到边界停住（不越界）', () => {
     const h = makeBridge({ sidebarOpen: true, sidebarWidth: 712 })
-    const { parent } = mountResize(h)
+    // saved 已恢复展开态：不再点击切换（再点一次会把侧栏收起，keydown
+    // 守卫随之拒绝微调）
+    const { parent } = mountResize(h, DOC, false)
     const r = resizerEl(parent)
     keyAt(r, 'ArrowLeft')
     keyAt(r, 'ArrowLeft')
@@ -262,6 +360,14 @@ describe('键盘微调与双击重置', () => {
     keyAt(resizerEl(parent), 'ArrowUp')
     keyAt(resizerEl(parent), 'Enter')
     expect(widthVar(parent)).toBe(280)
+  })
+
+  it('收起态句柄键盘微调拒绝：宽度不变、不持久化（句柄不可见不可聚焦）', () => {
+    const h = makeBridge()
+    const { parent } = mountResize(h, DOC, false)
+    keyAt(resizerEl(parent), 'ArrowLeft')
+    expect(widthVar(parent)).toBe(280)
+    expect((h.saved() as { sidebarWidth?: number }).sidebarWidth).toBeUndefined()
   })
 
   it('双击句柄恢复默认宽度并清除持久化', () => {
@@ -327,5 +433,25 @@ describe('sidebar.test.resize 测试钩子（宿主注入通道，真实事件�
     resizerEl(parent).getBoundingClientRect = () => new DOMRect(700, 0, 10, 400)
     c.handleHostMessage({ kind: 'sidebar.test.resize', delta: -40 })
     expect(widthVar(parent)).toBe(240)
+  })
+
+  it('连续驱动两段：各段独立起算，宽度接续持久化', () => {
+    const h = makeBridge()
+    const { c, parent } = mountResize(h)
+    resizerEl(parent).getBoundingClientRect = () => new DOMRect(700, 0, 10, 400)
+    c.handleHostMessage({ kind: 'sidebar.test.resize', delta: 100 })
+    expect(widthVar(parent)).toBe(380)
+    c.handleHostMessage({ kind: 'sidebar.test.resize', delta: 100 })
+    expect(widthVar(parent)).toBe(480)
+    expect((h.saved() as { sidebarWidth?: number }).sidebarWidth).toBe(480)
+  })
+
+  it('收起态钩子拒绝：句柄不可交互，宽度与持久化都不变', () => {
+    const h = makeBridge()
+    const { c, parent } = mountResize(h, DOC, false)
+    resizerEl(parent).getBoundingClientRect = () => new DOMRect(700, 0, 10, 400)
+    c.handleHostMessage({ kind: 'sidebar.test.resize', delta: 100 })
+    expect(widthVar(parent)).toBe(280)
+    expect((h.saved() as { sidebarWidth?: number }).sidebarWidth).toBeUndefined()
   })
 })

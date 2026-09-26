@@ -4609,9 +4609,11 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(Math.abs((reopened.sidebar!.sidebarWidthPx ?? 0) - 720) < 3,
       `收起再展开后宽度应保持 720，实际 ${reopened.sidebar!.sidebarWidthPx}`)
 
-    // 清理：拖回默认宽度，恢复后续用例的基线布局
+    // 清理：拖回默认宽度并收起侧栏，恢复后续用例的基线布局
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.resize', delta: -(720 - 280) })
     await waitViewState('lf.md', (v) => Math.abs((v.sidebar?.sidebarWidthPx ?? -1) - 280) < 3)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('lf.md', (v) => v.sidebar?.open === false)
   }],
 
   ['右侧栏与模式切换正交：两模式共用布局、零撤销记录、正文可编辑（#53）', async () => {
