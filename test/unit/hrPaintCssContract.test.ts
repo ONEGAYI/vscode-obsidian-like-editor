@@ -18,18 +18,18 @@ describe('分割线绘制 CSS 契约（#106：Live 与阅读横线同源）', ()
   it('Live 渲染态横线：widget 元素以 border-top 绘制并消费同一变量', () => {
     const body = cssRule(css, '#app .cm-editor .cm-scroller .vsidian-hr')
     expect(body).toMatch(/display:\s*block/)
-    expect(body).toMatch(/border-top:\s*1px solid var\(--vsidian-hr-color\)/)
+    expect(body).toMatch(/border-top:\s*2px solid var\(--vsidian-hr-color\)/)
   })
 
   it('阅读模式 <hr> 消费同一颜色变量（两模式观感同源）', () => {
     const body = cssRule(css, '#app .vsidian-view-reading .vsidian-reading-hr hr')
-    expect(body).toMatch(/border-top:\s*1px solid var\(--vsidian-hr-color\)/)
+    expect(body).toMatch(/border-top:\s*2px solid var\(--vsidian-hr-color\)/)
     expect(body).not.toMatch(/--vscode-panel-border/)
   })
 
-  it('纵向节奏统一：Live widget 与阅读 <hr> 上下 margin 同值', () => {
-    expect(cssRule(css, '#app .cm-editor .cm-scroller .vsidian-hr')).toMatch(/margin:\s*0\.8em 0/)
-    expect(cssRule(css, '#app .vsidian-view-reading .vsidian-reading-hr hr')).toMatch(/margin:\s*0\.8em 0/)
+  it('纵向节奏统一：Live widget 与阅读 <hr> 上下 margin 同值（占空约一行）', () => {
+    expect(cssRule(css, '#app .cm-editor .cm-scroller .vsidian-hr')).toMatch(/margin:\s*0\.45em 0/)
+    expect(cssRule(css, '#app .vsidian-view-reading .vsidian-reading-hr hr')).toMatch(/margin:\s*0\.45em 0/)
   })
 
   it('快速操作条分割线图标明暗接线齐全', () => {

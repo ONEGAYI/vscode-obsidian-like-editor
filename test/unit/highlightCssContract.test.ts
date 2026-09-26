@@ -9,15 +9,16 @@ import { cssRule, readMainCss } from './cssContract'
 const css = readMainCss()
 
 describe('高亮渲染 CSS 契约（#105）', () => {
-  it('底色变量定义于 #app：主题变量自适应（词高亮色）+ 随前景色派生的回退', () => {
+  it('底色变量定义于 #app：主题变量自适应（搜索命中高亮色）+ 明显琥珀回退', () => {
     const app = cssRule(css, '#app')
-    expect(app).toMatch(/--vsidian-highlight-background:\s*var\(--vscode-editorWordHighlightBackground/u)
-    // 回退不落固定色：宿主变量缺失时按编辑器前景色 color-mix 派生，
-    // 明暗主题各自可读（票决议「不用固定黄」）
-    expect(app).toMatch(/color-mix\(in srgb, var\(--vscode-editor-foreground, currentColor\) 18%, transparent\)/u)
+    // 用户验收：词高亮色 editorWordHighlightBackground 实测对比仅约
+    // 1.4:1 几乎不可见，改选更明显的主题变量（明显性优先于「不落黄」）
+    expect(app).toMatch(/--vsidian-highlight-background:\s*var\(--vscode-editor-findMatchHighlightBackground/u)
+    // 宿主变量缺失时回退明显琥珀半透明（0.4 浓度，可辨识的荧光笔观感）
+    expect(app).toMatch(/rgba\(234, 179, 8, 0\.4\)/u)
   })
 
-  it('live 正文 span 常显高亮底（底色引用同源变量，非固定黄）', () => {
+  it('live 正文 span 常显高亮底（底色引用同源变量）', () => {
     expect(cssRule(css, '#app .cm-editor .cm-scroller .vsidian-highlight'))
       .toMatch(/background-color:\s*var\(--vsidian-highlight-background\)/u)
   })

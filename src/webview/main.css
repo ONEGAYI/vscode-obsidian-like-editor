@@ -52,12 +52,12 @@ body {
      自适应，不写死颜色），两处规则共同消费本变量 */
   --vsidian-hr-color: var(--vscode-panel-border, rgba(128, 128, 128, 0.45));
   /* ---- #105 高亮底色变量：live 正文 span / 阅读 mark / 大纲条目共用同一
-     变量（三侧同源，选择器映射表登记）。跟随 VSCode 主题的词高亮色
-     （明暗主题由宿主各自给值，即「主题自适应、不固定黄」的实现）；宿主
-     变量缺失时回退仍随主题派生——按编辑器前景色 color-mix 半透明混出，
-     明暗底各自可读，不落固定色 */
-  --vsidian-highlight-background: var(--vscode-editorWordHighlightBackground,
-    color-mix(in srgb, var(--vscode-editor-foreground, currentColor) 18%, transparent));
+     变量（三侧同源，选择器映射表登记）。跟随 VSCode 主题的搜索命中高亮色
+     ——明暗主题下均为明显的橙黄系底（用户验收反馈：词高亮色
+     editorWordHighlightBackground 实测对比仅约 1.4:1 几乎不可见，改选
+     更明显的主题变量，明显性优先）；宿主变量缺失时回退明显琥珀半透明 */
+  --vsidian-highlight-background: var(--vscode-editor-findMatchHighlightBackground,
+    rgba(234, 179, 8, 0.4));
 }
 
 #app .cm-editor {
@@ -1080,12 +1080,14 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='horizontalRule
 
 /* #106 分割线渲染态：未触及该行时源文被 replace 隐藏，本元素呈现真横线。
    块级撑满行宽，border-top 是唯一落笔通道（颜色与阅读 <hr> 同源变量，
-   契约测试钉住）；高度由 1px 边框 + 上下 margin 构成，不改变行高约束；
-   纵向节奏与阅读 <hr> 同值（0.8em，两模式观感同源） */
+   契约测试钉住）。用户验收：1px 过细、0.8em×2 上下留白占空超一行——
+   对齐 Obsidian 紧凑观感改为 2px 边框 + 0.45em×2 留白，line-height 0
+   收矮行槽，总占空约一行；纵向节奏与阅读 <hr> 同值（两模式观感同源） */
 #app .cm-editor .cm-scroller .vsidian-hr {
   display: block;
-  border-top: 1px solid var(--vsidian-hr-color);
-  margin: 0.8em 0;
+  border-top: 2px solid var(--vsidian-hr-color);
+  line-height: 0;
+  margin: 0.45em 0;
 }
 
 #app .cm-editor .cm-scroller .vsidian-frontmatter-line {
@@ -1749,8 +1751,9 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='horizontalRule
 
 #app .vsidian-view-reading .vsidian-reading-hr hr {
   border: none;
-  border-top: 1px solid var(--vsidian-hr-color);
-  margin: 0.8em 0;
+  border-top: 2px solid var(--vsidian-hr-color);
+  line-height: 0;
+  margin: 0.45em 0;
 }
 
 /* 表格块（#12）：markdown-it 渲染的真实 table（只读呈现；GFM 列对齐保留在
