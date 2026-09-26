@@ -165,6 +165,24 @@ const OUTLINE_HIGHLIGHT_DEBOUNCE_MS = 100
  *  兜底释放（正常路径由首个滚动事件释放） */
 const OUTLINE_JUMP_GUARD_MS = 1000
 
+/** 侧栏默认宽度（px）：与 main.css 的 --vsidian-sidebar-width 回退值同源；
+ *  默认宽度不写内联变量——保持该变量的公开覆盖入口（外部片段可注入） */
+export const SIDEBAR_WIDTH_DEFAULT = 280
+/** 侧栏拖宽下限（px）：更窄时工具条/搜索框内容不可用 */
+const SIDEBAR_WIDTH_MIN = 200
+/** 侧栏拖宽上限（px）：更宽时主编辑区过窄 */
+const SIDEBAR_WIDTH_MAX = 720
+/** 句柄聚焦时键盘微调步长（px）：ArrowLeft 增宽 / ArrowRight 收窄 */
+const SIDEBAR_RESIZE_STEP = 16
+
+/** 拖宽钳制：非有限数回默认（280，走 CSS 回退）；四舍五入取整后钳到区间 */
+export function clampSidebarWidth(px: number): number {
+  if (!Number.isFinite(px)) {
+    return SIDEBAR_WIDTH_DEFAULT
+  }
+  return Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, Math.round(px)))
+}
+
 
 /** webview 与宿主的通信通道（由 acquireVsCodeApi 适配） */
 export interface VsCodeBridge {
@@ -191,6 +209,9 @@ interface PersistedState {
    *  全局记忆（跨文档共享），与 sidebarOpen 同机制；手动折叠集合是
    *  会话内内存态，不持久化（重载回到档位精确展开集） */
   outlineExpandLevel?: number
+  /** 侧栏宽度（px，钳制后整数；缺省走 CSS 280px 回退，回到默认时清键）。
+   *  全局记忆（跨文档共享），与 sidebarOpen/outlineExpandLevel 同机制 */
+  sidebarWidth?: number
   quickActionsOpen?: boolean
 }
 
@@ -431,6 +452,18 @@ export class WebviewSyncController {
   /** 侧栏是纯 webview 视图状态（与 viewMode 同类）：切换零写回、
    *  不入撤销栈、不触发出站消息；经 bridge state 持久化（重载恢复） */
   private sidebarOpen: boolean
+  /** 侧栏当前宽度（px，钳制后整数；构造期自 PersistedState 恢复）。写
+   *  --vsidian-sidebar-width 内联变量驱动 main.css 五处消费点，默认值不写 */
+  private sidebarWidth: number
+  /** 侧栏左缘的拖宽句柄（role=separator，键盘可达） */
+  private sidebarResizerEl: HTMLElement | undefined
+  /** 拖宽会话（null=无会话）：pointerdown 武装起点，超 4px 阈值进拖拽态 */
+  private sidebarResizeState: {
+    pointerId: number
+    startX: number
+    startWidth: number
+    moved: boolean
+  } | null = null
 
   // ---- 大纲面板状态（#54）----
   /** 大纲面板 active：与 sidebarOpen 同类的纯视图状态（零写回、零出站、
@@ -640,6 +673,8 @@ export class WebviewSyncController {
     this.viewMode = saved?.viewMode === 'reading' ? 'reading' : 'live'
     this.modeAnchor = typeof saved?.anchor === 'number' && saved.anchor >= 0 ? Math.floor(saved.anchor) : null
     this.sidebarOpen = saved?.sidebarOpen === true
+    // 宽度恢复：非数值（含缺失）经 clampSidebarWidth 回默认；越界值钳制
+    this.sidebarWidth = clampSidebarWidth(saved?.sidebarWidth ?? Number.NaN)
     this.outlineActive = saved?.outlineActive !== false
     this.outlineExpandLevel = normalizeOutlineExpandLevel(saved?.outlineExpandLevel)
     this.quickActionsOpen = saved?.quickActionsOpen === true
@@ -769,6 +804,8 @@ export class WebviewSyncController {
     // #53 布局骨架：#app > body(水平) > main(主编辑区：顶栏+横幅+双视图)
     // + sidebar(右侧栏)；findPanel 浮层仍直接挂 #app（以 #app 为定位包含块）
     this.sidebarEl = this.buildSidebar()
+    // 拖宽恢复：把构造期恢复的宽度落到侧栏（默认值不写变量，见 applySidebarWidth）
+    this.applySidebarWidth(this.sidebarWidth, false)
     this.mainEl = document.createElement('div')
     this.mainEl.className = 'vsidian-main'
     this.mainEl.appendChild(this.toolbar)
@@ -1102,6 +1139,12 @@ export class WebviewSyncController {
         // 测试钩子（#53）：点击真实侧栏切换按钮（与用户点击同一处理器；
         // 纯视图状态翻转，零写回）
         this.sidebarToggleBtn?.click()
+        break
+      }
+      case 'sidebar.test.resize': {
+        // 测试钩子：真实拖宽句柄 pointer 序列驱动拖宽链路（与用户拖拽
+        // 同一处理器）
+        this.runSidebarResizeTest(message.delta)
         break
       }
       case 'quick.test.click': {
@@ -2207,7 +2250,8 @@ export class WebviewSyncController {
   }
 
   /** 持久化（合并写入）：seq、viewMode、anchor、sidebarOpen、outlineActive、
-   *  outlineExpandLevel（#67 档位全局记忆）共存互不覆盖 */
+   *  outlineExpandLevel（#67 档位全局记忆）、sidebarWidth（拖宽记忆）共存
+   *  互不覆盖 */
   private persistState(): void {
     const saved = this.bridge.getState<PersistedState>() ?? {}
     this.bridge.setState({
@@ -2219,6 +2263,7 @@ export class WebviewSyncController {
       sidebarOpen: this.sidebarOpen,
       outlineActive: this.outlineActive,
       outlineExpandLevel: this.outlineExpandLevel,
+      sidebarWidth: this.sidebarWidth === SIDEBAR_WIDTH_DEFAULT ? undefined : this.sidebarWidth,
       quickActionsOpen: this.quickActionsOpen,
     })
   }
@@ -2807,6 +2852,81 @@ export class WebviewSyncController {
     sidebar.appendChild(toolbar.row)
     sidebar.appendChild(slider.row)
     sidebar.appendChild(panelHost)
+    // 拖宽句柄：左缘 6px 热区（样式见 main.css），侧栏收起时随 width:0 +
+    // overflow:hidden 裁切（不可交互）。拖拽照折叠滑块模式（#67）：主键
+    // pointerdown 武装起点 → 超 4px 进拖拽态捕获指针 → move 换算宽度 →
+    // up 落定持久化；Escape/pointercancel 回滚拖前宽度不持久化；双击重置
+    // 默认；聚焦时 ArrowLeft/Right 按步长微调（同钳制同持久化）
+    const resizer = document.createElement('div')
+    resizer.className = 'vsidian-sidebar-resizer'
+    resizer.setAttribute('role', 'separator')
+    resizer.setAttribute('aria-orientation', 'vertical')
+    resizer.setAttribute('aria-label', t('sidebar.resize'))
+    resizer.setAttribute('aria-valuemin', String(SIDEBAR_WIDTH_MIN))
+    resizer.setAttribute('aria-valuemax', String(SIDEBAR_WIDTH_MAX))
+    resizer.setAttribute('aria-valuenow', String(this.sidebarWidth))
+    resizer.tabIndex = 0
+    resizer.addEventListener('pointerdown', (event) => {
+      // 启动判据与其余拖拽入口同口径：只看法定按键，不设指针类型前提
+      if (event.button !== 0 || this.sidebarResizeState) {
+        return
+      }
+      this.sidebarResizeState = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startWidth: this.sidebarWidth,
+        moved: false,
+      }
+    })
+    resizer.addEventListener('pointermove', (event) => {
+      const s = this.sidebarResizeState
+      if (!s || (event.buttons & 1) === 0) {
+        return
+      }
+      if (!s.moved) {
+        if (Math.abs(event.clientX - s.startX) <= 4) {
+          return
+        }
+        s.moved = true
+        // 真实指针捕获（移出热区后 move/up 仍回到句柄）；合成事件无
+        // pointerId（undefined），跳过捕获——直派路径照样命中本监听
+        if (typeof event.pointerId === 'number') {
+          resizer.setPointerCapture(event.pointerId)
+        }
+        this.sidebarEl?.classList.add('vsidian-sidebar-resizing')
+        document.addEventListener('keydown', this.onSidebarResizeEscape, true)
+      }
+      // 右栏在右侧：向左拖（clientX 减小）增宽
+      this.applySidebarWidth(clampSidebarWidth(s.startWidth + (s.startX - event.clientX)), false)
+    })
+    resizer.addEventListener('pointerup', (event) => {
+      const s = this.sidebarResizeState
+      if (!s || (typeof event.pointerId === 'number' && event.pointerId !== s.pointerId)) {
+        return
+      }
+      if (s.moved) {
+        this.applySidebarWidth(this.sidebarWidth, true)
+      }
+      this.endSidebarResize()
+    })
+    resizer.addEventListener('pointercancel', () => this.endSidebarResize(true))
+    resizer.addEventListener('dblclick', () => {
+      this.applySidebarWidth(SIDEBAR_WIDTH_DEFAULT, true)
+    })
+    resizer.addEventListener('keydown', (event) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') {
+        return
+      }
+      // 拖拽会话中键盘微调不介入（move 换算以会话起点为基，混入会互相覆盖）
+      if (this.sidebarResizeState) {
+        return
+      }
+      event.preventDefault()
+      const step = event.key === 'ArrowLeft' ? SIDEBAR_RESIZE_STEP : -SIDEBAR_RESIZE_STEP
+      this.applySidebarWidth(clampSidebarWidth(this.sidebarWidth + step), true)
+    })
+    this.sidebarResizerEl = resizer
+    sidebar.appendChild(resizer)
     return sidebar
   }
 
@@ -2825,6 +2945,8 @@ export class WebviewSyncController {
       this.cancelOutlineRename()
       // #70：拖拽会话随之退出（面板不可见，落点失去意义）
       this.cancelOutlineDrag()
+      // 拖宽会话随之退出（侧栏不可见，宽度变化失去意义——回滚拖前宽度）
+      this.endSidebarResize(true)
     }
   }
 
@@ -2842,6 +2964,76 @@ export class WebviewSyncController {
       btn.setAttribute('aria-expanded', String(this.sidebarOpen))
     }
     this.persistState()
+  }
+
+  // ---- 侧栏拖宽 ----
+
+  /** 宽度落点：状态 + 内联 CSS 变量 + separator aria 值同步 + 可选持久化。
+   *  默认宽度不写变量（回到默认即移除）——保持 --vsidian-sidebar-width 的
+   *  公开覆盖入口，外部片段仍可注入自定义宽度 */
+  private applySidebarWidth(px: number, persist: boolean): void {
+    this.sidebarWidth = px
+    const el = this.sidebarEl
+    if (el) {
+      if (px === SIDEBAR_WIDTH_DEFAULT) {
+        el.style.removeProperty('--vsidian-sidebar-width')
+      } else {
+        el.style.setProperty('--vsidian-sidebar-width', `${px}px`)
+      }
+    }
+    this.sidebarResizerEl?.setAttribute('aria-valuenow', String(px))
+    if (persist) {
+      this.persistState()
+    }
+  }
+
+  /** 拖宽收尾：清拖拽态类与 Escape 监听。rollback=true 时恢复拖前宽度
+   *  （Escape/pointercancel 路径，不持久化）；落定路径在收尾前已持久化 */
+  private endSidebarResize(rollback = false): void {
+    const s = this.sidebarResizeState
+    this.sidebarResizeState = null
+    this.sidebarEl?.classList.remove('vsidian-sidebar-resizing')
+    document.removeEventListener('keydown', this.onSidebarResizeEscape, true)
+    if (rollback && s) {
+      this.applySidebarWidth(s.startWidth, false)
+    }
+  }
+
+  /** 拖拽中 Escape 取消：document 捕获层监听（进入拖拽态时挂、收尾时摘），
+   *  焦点不在句柄上也能取消（与大纲条目拖拽同口径） */
+  private readonly onSidebarResizeEscape = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape' && this.sidebarResizeState) {
+      event.preventDefault()
+      this.endSidebarResize(true)
+    }
+  }
+
+  /** 测试钩子实现：真实句柄 pointer 事件序列（down → 超阈值 move 进拖拽
+   *  态 → 左移 delta px 的 move → up 落定）。MouseEvent 构造（与
+   *  runOutlineDragTest 同手法）：处理器只读坐标/buttons/pointerId，
+   *  jsdom 无 PointerEvent 构造器同样可派发 */
+  private runSidebarResizeTest(delta: number): void {
+    const resizer = this.sidebarResizerEl
+    if (!resizer) {
+      return
+    }
+    // 会话卫生：上一轮未收尾的会话先回滚（集成用例连续驱动时必需）
+    if (this.sidebarResizeState) {
+      this.endSidebarResize(true)
+    }
+    const rect = resizer.getBoundingClientRect()
+    const x0 = rect.left + rect.width / 2
+    const y = rect.top + rect.height / 2
+    const fire = (type: string, x: number): void => {
+      resizer.dispatchEvent(new MouseEvent(type, {
+        bubbles: true, cancelable: true, clientX: x, clientY: y,
+        buttons: type === 'pointerup' ? 0 : 1,
+      }))
+    }
+    fire('pointerdown', x0)
+    fire('pointermove', x0 - 5) // 超阈值（>4px）进入拖拽态
+    fire('pointermove', x0 - delta)
+    fire('pointerup', x0 - delta)
   }
 
   // ---- 大纲面板（#54）----
@@ -5167,6 +5359,7 @@ export class WebviewSyncController {
       ),
       mainWidthPx: widthOf(this.mainEl),
       sidebarWidthPx: widthOf(this.sidebarEl),
+      resizerPainted: hitPaintedElement(this.sidebarResizerEl),
       toggleAriaLabel: this.sidebarToggleBtn?.getAttribute('aria-label') ?? null,
       settingsAriaLabel:
         this.toolbar?.querySelector<HTMLButtonElement>('button.vsidian-settings-toggle')
