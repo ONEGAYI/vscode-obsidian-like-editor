@@ -18,7 +18,7 @@ describe('快捷键契约', () => {
       const id = n ? `heading${n}` : 'headingNone'
       expect(KEYBINDING_OPERATIONS.find((op) => op.id === id)?.defaults).toEqual([`ctrl+${n}`])
     }
-    for (const id of ['inlineMath', 'blockMath', 'wikilink']) {
+    for (const id of ['inlineMath', 'blockMath', 'wikilink', 'horizontalRule']) {
       expect(getEffectiveBindings({}, id)).toEqual([])
     }
   })

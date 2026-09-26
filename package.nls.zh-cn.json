@@ -36,6 +36,7 @@
   "format.inlineMath": "插入行内公式",
   "format.blockMath": "插入块级公式",
   "format.wikilink": "插入双链",
+  "format.horizontalRule": "插入分割线",
   "command.openSettings.title": "打开设置",
   "command.ui.sidebarToggle.title": "展开或收起右侧栏",
   "command.ui.outlineToggle.title": "显示或隐藏大纲",

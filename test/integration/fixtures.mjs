@@ -506,6 +506,36 @@ const MERMAID_EDGE_DOC = [
   '',
 ].join('\n')
 
+// #106 分割线样例：frontmatter 头块的两条 --- 与 Setext 标题下划线（=== 与
+// 紧跟段落的 ---）都不判为分割线，正文真分割线三条（---/***/___ 各一）。
+// 计数断言口径：paint.hr.count = 3（frontmatter/Setext 均不计数）。
+const HR_DOC = [
+  '---',
+  'title: 分割线样例',
+  '---',
+  '',
+  '分割线前的段落文字。',
+  '',
+  '---',
+  '',
+  '星号形态段落。',
+  '',
+  '***',
+  '',
+  '下划线形态段落。',
+  '',
+  '___',
+  '',
+  'Setext 标题正文',
+  '===',
+  '',
+  '次级 Setext 标题正文',
+  '---',
+  '',
+  '结尾段落，分割线插入锚点在此行中。',
+  '',
+].join('\n')
+
 /**
  * 向目录写入全部集成测试 fixture（字节由脚本直接生成，不经 git 检出，
  * 避免 autocrlf 干扰断言）。返回 { largeDocLines } 供启动器注入环境变量。
@@ -546,6 +576,7 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   // 边界样例（普通围栏与伪围栏不误渲染）
   writeFileSync(path.join(wsDir, 'mermaid.md'), MERMAID_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'mermaid-edge.md'), MERMAID_EDGE_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'hr.md'), HR_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'code-card.md'), CODE_CARD_DOC, 'utf8')
   // #60 图表密集性能样例（generateMermaidDenseSample 可选注入；缺省跳过）
   if (generateMermaidDenseSample) {

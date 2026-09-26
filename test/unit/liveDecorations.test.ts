@@ -95,9 +95,9 @@ function coveredTexts(set: DecorationSet, cls: string, doc: string): string[] {
   })
 }
 
-function build(doc: string | Text, selection = { anchor: 0 }): DecorationSet {
+function build(doc: string | Text, selection: { anchor: number; head?: number } = { anchor: 0 }): DecorationSet {
   const text = typeof doc === 'string' ? Text.of(doc.split('\n')) : doc
-  return buildLivePreviewDecorations(text, EditorSelection.single(selection.anchor))
+  return buildLivePreviewDecorations(text, EditorSelection.single(selection.anchor, selection.head ?? selection.anchor))
 }
 
 function stateWithDoc(doc: string, selection?: { anchor: number; head?: number }) {
@@ -572,6 +572,75 @@ describe('buildViewportLiveDecorations：间接装饰（纯数据输入）', () 
   })
 })
 
+describe('分割线渲染态（#106）：源文隐藏 + 横线 widget + 触及显形', () => {
+  /** 分割线渲染 widget（replace 带 widget）的区间 */
+  function hrWidgets(set: DecorationSet): Array<{ from: number; to: number }> {
+    return collect(set)
+      .filter((i) => i.widget !== undefined && i.widget.startsWith('HorizontalRuleWidget:'))
+      .map((i) => ({ from: i.from, to: i.to }))
+  }
+
+  it('CommonMark 全形态：未触及时源文区间替换为横线 widget（含空格变体与行尾空格）', () => {
+    const doc = '前文\n\n---\n\n***\n\n___\n\n * * *\n\n- - -\n\n---   \n\n后文'
+    const set = build(doc, { anchor: 0 })
+    const widgets = hrWidgets(set)
+    expect(widgets).toHaveLength(6)
+    for (const marker of ['---', '***', '___', '* * *', '- - -', '---   ']) {
+      const at = doc.indexOf(marker)
+      expect(widgets).toContainEqual({ from: at, to: at + marker.length })
+    }
+  })
+
+  it('光标进入该行（含两端边界）源码显形：widget 不发射；相邻行不显形', () => {
+    const doc = '前文\n\n---\n\n后文'
+    const from = doc.indexOf('---')
+    for (const pos of [from, from + 1, from + 2, from + 3]) {
+      expect(hrWidgets(build(doc, { anchor: pos })), `光标在 ${pos}`).toHaveLength(0)
+      // 行级类保留（源码态着色），不因显形丢行身份
+      expect(coveredTexts(build(doc, { anchor: pos }), LIVE_CLASS_NAMES.hrLine, doc)).toEqual(['---'])
+    }
+    // 相邻空行行尾与后行行首：控制域是该行区间，未进入则保持渲染态
+    expect(hrWidgets(build(doc, { anchor: from - 1 }))).toHaveLength(1)
+    expect(hrWidgets(build(doc, { anchor: from + 4 }))).toHaveLength(1)
+    // 非空选区跨入该行：相交即显形
+    expect(hrWidgets(build(doc, { anchor: from - 2, head: from + 1 }))).toHaveLength(0)
+  })
+
+  it('光标移入移出分割线行：增量装饰与全量结果一致（零写回路径）', () => {
+    const doc = '前文\n\n---\n\n后文'
+    let state = stateWithDoc(doc, { anchor: 0 })
+    expect(hrWidgets(state.field(liveDecorationsField).decos)).toHaveLength(1)
+    for (const pos of [doc.indexOf('-'), doc.indexOf('-') + 3, 0]) {
+      state = state.update({ selection: EditorSelection.single(pos) }).state
+      expect(setsEqual(state, buildLivePreviewDecorations(state.doc, state.selection))).toBe(true)
+    }
+  })
+
+  it('解析边界回归：Setext 下划线与 frontmatter 分隔线不判为分割线', () => {
+    // 段落下一行的 ---/=== 是 Setext 下划线，不是分割线
+    expect(hrWidgets(build('主题行\n---\n正文', { anchor: 0 }))).toHaveLength(0)
+    expect(hrWidgets(build('主题行\n===\n正文', { anchor: 0 }))).toHaveLength(0)
+    expect(coveredTexts(build('主题行\n---\n正文', { anchor: 0 }), LIVE_CLASS_NAMES.hrLine, '主题行\n---\n正文'))
+      .toEqual([])
+    // frontmatter 头块的两条 --- 不产生渲染态（按源码呈现）；正文中的真分割线照常
+    const fmDoc = '---\ntitle: 元\n---\n\n正文段落\n\n---\n\n尾段'
+    const set = build(fmDoc, { anchor: 0 })
+    const real = fmDoc.indexOf('\n---', fmDoc.indexOf('正文'))
+    expect(hrWidgets(set)).toEqual([{ from: real + 1, to: real + 4 }])
+  })
+
+  it('引用与列表内的分割线只隐藏自身节点区间（容器前缀不受影响）', () => {
+    const quoteDoc = '> 引用行\n\n> ---\n\n尾段'
+    const quoteSet = build(quoteDoc, { anchor: 0 })
+    const at = quoteDoc.indexOf('---')
+    expect(hrWidgets(quoteSet)).toEqual([{ from: at, to: at + 3 }])
+    const listDoc = '- 列表项\n\n  ---\n\n尾段'
+    const listSet = build(listDoc, { anchor: 0 })
+    const listAt = listDoc.indexOf('---')
+    expect(hrWidgets(listSet)).toEqual([{ from: listAt, to: listAt + 3 }])
+  })
+})
+
 describe('稳定类名常量（#8 样式契约入口）', () => {
   it('live 侧新增类名与既有 #5 标题类名并存', () => {
     expect(HEADING_CLASS_NAMES.line).toBe('vsidian-heading-line')
@@ -585,6 +654,7 @@ describe('稳定类名常量（#8 样式契约入口）', () => {
     expect(LIVE_CLASS_NAMES.taskCheckbox).toBe('vsidian-task-checkbox')
     expect(LIVE_CLASS_NAMES.taskChecked).toBe('vsidian-task-checked')
     expect(LIVE_CLASS_NAMES.hrLine).toBe('vsidian-hr-line')
+    expect(LIVE_CLASS_NAMES.hrRule).toBe('vsidian-hr')
     expect(LIVE_CLASS_NAMES.frontmatterLine).toBe('vsidian-frontmatter-line')
   })
 })

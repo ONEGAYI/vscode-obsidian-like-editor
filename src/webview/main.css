@@ -48,6 +48,9 @@ body {
   --vsidian-heading-color-4: var(--vscode-editor-foreground);
   --vsidian-heading-color-5: var(--vscode-editor-foreground);
   --vsidian-heading-color-6: var(--vscode-editor-foreground);
+  /* ---- #106 分割线颜色：Live 渲染态横线与阅读 <hr> 同一来源（主题变量
+     自适应，不写死颜色），两处规则共同消费本变量 */
+  --vsidian-hr-color: var(--vscode-panel-border, rgba(128, 128, 128, 0.45));
 }
 
 #app .cm-editor {
@@ -330,6 +333,7 @@ body {
 #app .vsidian-quick-actions [data-icon='table'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-table.svg'); }
 #app .vsidian-quick-actions [data-icon='inlineMath'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-inlineMath.svg'); }
 #app .vsidian-quick-actions [data-icon='blockMath'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-blockMath.svg'); }
+#app .vsidian-quick-actions [data-icon='horizontalRule'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-horizontalRule.svg'); }
 
 body.vscode-dark #app .vsidian-quick-actions [data-icon='bold'],
 body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='bold'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-bold.svg'); }
@@ -361,6 +365,8 @@ body.vscode-dark #app .vsidian-quick-actions [data-icon='inlineMath'],
 body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='inlineMath'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-inlineMath.svg'); }
 body.vscode-dark #app .vsidian-quick-actions [data-icon='blockMath'],
 body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='blockMath'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-blockMath.svg'); }
+body.vscode-dark #app .vsidian-quick-actions [data-icon='horizontalRule'],
+body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='horizontalRule'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-horizontalRule.svg'); }
 
 #app .vsidian-quick-actions button:hover,
 #app .vsidian-quick-actions button:focus-visible {
@@ -1056,6 +1062,15 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='blockMath'] { 
   color: var(--vscode-inputValidation-infoBorder, rgba(128, 128, 128, 0.6));
 }
 
+/* #106 分割线渲染态：未触及该行时源文被 replace 隐藏，本元素呈现真横线。
+   块级撑满行宽，border-top 是唯一落笔通道（颜色与阅读 <hr> 同源变量，
+   契约测试钉住）；高度由 1px 边框 + 上下 margin 构成，不改变行高约束 */
+#app .cm-editor .cm-scroller .vsidian-hr {
+  display: block;
+  border-top: 1px solid var(--vsidian-hr-color);
+  margin: 0.4em 0;
+}
+
 #app .cm-editor .cm-scroller .vsidian-frontmatter-line {
   font-family: var(--vscode-editor-font-family, monospace);
   opacity: 0.75;
@@ -1701,7 +1716,7 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='blockMath'] { 
 
 #app .vsidian-view-reading .vsidian-reading-hr hr {
   border: none;
-  border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.45));
+  border-top: 1px solid var(--vsidian-hr-color);
   margin: 0.8em 0;
 }
 

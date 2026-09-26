@@ -82,7 +82,7 @@ import { MERMAID_CLASS_NAMES, MERMAID_STATE_ATTR } from '../shared/mermaid'
 import { ImageResourceManager } from './imageResource'
 import { runPerfProbe } from './perfProbe'
 import { runReadingPerfProbe } from './readingProbe'
-import { createReadingContainer, prepareReadingImages } from './readingView'
+import { createReadingContainer, prepareReadingImages, READING_CLASS_NAMES } from './readingView'
 import { READING_MARKDOWN_CLASS_NAMES } from './readingMarkdown'
 import {
   applyOutlineDomLocale,
@@ -2314,6 +2314,7 @@ export class WebviewSyncController {
     insertGroup.appendChild(createTable)
     addOperation(insertGroup, 'inlineMath')
     addOperation(insertGroup, 'blockMath')
+    addOperation(insertGroup, 'horizontalRule')
     const menu = document.createElement('div')
     menu.className = 'vsidian-quick-heading-menu'
     menu.id = 'vsidian-quick-heading-menu'
@@ -4956,6 +4957,40 @@ export class WebviewSyncController {
             : 0,
         }
       : undefined
+    // #106 分割线绘制探针：live 态取渲染 widget（光标触及该行时源码显形、
+    // widget 不在场，计数随之归零），reading 态取阅读块内原生 <hr>。可见性 =
+    // rect 有面积且 elementFromPoint 命中（jsdom 无布局恒 false，只作真宿主
+    // 集成断言依据）。无分割线时整个字段缺省
+    const hrScope = this.viewMode === 'reading' ? this.readingContainer : view.contentDOM
+    const hrSelector = `.${LIVE_CLASS_NAMES.hrRule}, .${READING_CLASS_NAMES.hr} hr`
+    const hrEl = hrScope?.querySelector<HTMLElement>(hrSelector) ?? null
+    let hrVisible = false
+    let hrDisplay: string | null = null
+    let hrBorderTopWidth: string | null = null
+    if (hrEl) {
+      const hrStyle = getComputedStyle(hrEl)
+      hrDisplay = hrStyle.display
+      hrBorderTopWidth = hrStyle.borderTopWidth
+      try {
+        const rect = hrEl.getBoundingClientRect()
+        if (rect.width > 0 && rect.height > 0) {
+          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+          if (hit && hrEl.contains(hit)) {
+            hrVisible = true
+          }
+        }
+      } catch {
+        // jsdom 无布局与 elementFromPoint；真宿主才能证明实际可见。
+      }
+    }
+    const hr = hrEl
+      ? {
+          visible: hrVisible,
+          display: hrDisplay,
+          borderTopWidth: hrBorderTopWidth,
+          count: hrScope ? hrScope.querySelectorAll(hrSelector).length : 0,
+        }
+      : undefined
     // #60 Mermaid 绘制探针：按当前激活视图取图表容器（分态计数）；
     // 可见性取视口内任一已渲染 SVG 的 rect + elementFromPoint 命中；
     // 首图可能因 view.locate 滚到文末而离开视口，不代表图表没有绘制。
@@ -5116,6 +5151,7 @@ export class WebviewSyncController {
       },
       math,
       mermaid,
+      hr,
       quickActions,
       code,
       heading: headingPaint,

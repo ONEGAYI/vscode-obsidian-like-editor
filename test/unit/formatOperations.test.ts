@@ -146,4 +146,31 @@ describe('格式操作的文本契约', () => {
     expect(apply('_one_ _two_', 'italic', 7, 10).text).toBe('_one_ two')
     expect(apply('_one_ _two_', 'clearInline', 7, 10).text).toBe('_one_ two')
   })
+
+  it('分割线插入：光标处成段插入 --- 并规整前后空行，光标落在行尾', () => {
+    // 空文档：只插入 --- 本体
+    expect(apply('', 'horizontalRule', 0)).toEqual({ text: '---', selection: { anchor: 3 } })
+    // 行内光标：左右文字各自成段，前后空行隔开
+    expect(apply('上文\n下文', 'horizontalRule', 2))
+      .toEqual({ text: '上文\n\n---\n\n下文', selection: { anchor: 7 } })
+    expect(apply('左字右字', 'horizontalRule', 2))
+      .toEqual({ text: '左字\n\n---\n\n右字', selection: { anchor: 7 } })
+    // 已有空行不叠加：前侧空行 / 后侧空行 / 空行行内三种位置
+    expect(apply('上文\n\n下文', 'horizontalRule', 2))
+      .toEqual({ text: '上文\n\n---\n\n下文', selection: { anchor: 7 } })
+    expect(apply('上文\n\n下文', 'horizontalRule', 3))
+      .toEqual({ text: '上文\n\n---\n\n下文', selection: { anchor: 7 } })
+    // 文档末尾：后无内容时不追加尾部空行
+    expect(apply('上文', 'horizontalRule', 2))
+      .toEqual({ text: '上文\n\n---', selection: { anchor: 7 } })
+    // 选区内容被替换为分割线（与建表口径一致）
+    expect(apply('前文中段后文', 'horizontalRule', 2, 4))
+      .toEqual({ text: '前文\n\n---\n\n后文', selection: { anchor: 7 } })
+  })
+
+  it('分割线插入：表格矩形选区内禁用（块级结构不入格）', () => {
+    const table = '| A | B |\n| --- | --- |\n| x | y |'
+    const region = { tableFrom: 0, rowFrom: 0, rowTo: 0, columnFrom: 0, columnTo: 0 }
+    expect(apply(table, 'horizontalRule', table.indexOf('A'), table.indexOf('A'), region).text).toBe(table)
+  })
 })

@@ -444,6 +444,13 @@ interface ViewState {
       error: number
       count: number
     }
+    /** #106 分割线绘制：当前激活视图内首个渲染态横线的可见性与计数 */
+    hr?: {
+      visible: boolean
+      display: string | null
+      borderTopWidth: string | null
+      count: number
+    }
     quickActions?: {
       open: boolean
       togglePainted: boolean
@@ -6212,5 +6219,103 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await waitViewState('code-card.md', (v) =>
       v.paint?.code?.foldedCount === 0 && v.paint.code.cardLineCount === 7, 0, 60000)
     assert(await readDisk('code-card.md') === diskBefore, '阅读卡片交互不得改写源文')
+  }],
+
+  // ---- 工单 #106：分割线渲染态与插入操作 ----
+
+  ['live 分割线渲染与绘制层：全形态隐藏源文、真横线绘制（#106）', async () => {
+    await openWithEditor('hr.md')
+    await waitSessionReady('hr.md')
+    const uri = wsUri('hr.md').toString()
+    const diskBefore = await readDisk('hr.md')
+    // 光标停在结尾段落（远离全部分割线行）：三条真分割线进入渲染态；
+    // frontmatter 两条 --- 与 Setext 下划线（=== 与段落后的 ---）不计数
+    const tailAnchor = diskBefore.indexOf('结尾段落')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: tailAnchor,
+    })
+    const state = await waitViewState('hr.md', (v) =>
+      v.selectionOffset === tailAnchor && v.paint?.hr?.count === 3)
+    // 绘制层断言（AGENTS 视觉层断言约定）：横线真的画出来（rect 有面积 +
+    // elementFromPoint 命中）且以 border-top 落笔
+    assert(state.paint?.hr?.visible === true,
+      `分割线应真实绘制（paint.hr.visible=${String(state.paint?.hr?.visible)}，` +
+        `display=${String(state.paint?.hr?.display)}）`)
+    assert(state.paint?.hr?.display !== 'none', '分割线元素不得 display:none')
+    assert(Number.parseFloat(state.paint?.hr?.borderTopWidth ?? '') > 0,
+      `分割线须以 border-top 实际落笔：${String(state.paint?.hr?.borderTopWidth)}`)
+    assert(state.text === diskBefore, '渲染不得改写源文')
+  }],
+
+  ['live 光标进出分割线行显隐零写回：进入显源码、离开恢复渲染（#106）', async () => {
+    await openWithEditor('hr.md')
+    await waitSessionReady('hr.md')
+    const uri = wsUri('hr.md').toString()
+    const diskBefore = await readDisk('hr.md')
+    const tailAnchor = diskBefore.indexOf('结尾段落')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: tailAnchor,
+    })
+    await waitViewState('hr.md', (v) => v.paint?.hr?.count === 3)
+    // 光标移入首条分割线行内 → 该线退出渲染态显源码（其余两条保持渲染）
+    const hrAt = diskBefore.indexOf('\n---', diskBefore.indexOf('分割线前的段落文字')) + 1
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: hrAt + 1,
+    })
+    const editing = await waitViewState('hr.md', (v) => v.paint?.hr?.count === 2)
+    const editOffset = editing.selectionOffset ?? -1
+    assert(editOffset >= hrAt && editOffset <= hrAt + 3,
+      `光标应落在分割线行区间（实际 ${editOffset}，期望 ${hrAt}..${hrAt + 3}）`)
+    // 离开（回到文档首，分割线外）→ 恢复渲染：3 条的完整往返
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: 0,
+    })
+    const restored = await waitViewState('hr.md', (v) => v.paint?.hr?.count === 3)
+    assert(restored.paint?.hr?.count === 3,
+      `光标离开分割线行后应恢复 3 条渲染，实际 ${restored.paint?.hr?.count}`)
+    // 纯视图交互零写回：磁盘不变（显隐切换不产生编辑事务，也不进撤销历史）
+    assert(await readDisk('hr.md') === diskBefore, '分割线显隐交互不得改写源文')
+  }],
+
+  ['分割线插入操作：光标处成段插入并规整空行，阅读模式同源（#106）', async () => {
+    await openWithEditor('hr.md')
+    await waitSessionReady('hr.md')
+    const uri = wsUri('hr.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('hr.md'))
+    const diskBefore = await readDisk('hr.md')
+    const anchor = diskBefore.indexOf('插入锚点在此行中')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: anchor,
+    })
+    await waitViewState('hr.md', (v) => v.selectionOffset === anchor)
+    // 命令面板/快速操作条同源命令：行内光标处左右文字各自成段，分割线
+    // 前后空行规整（该行原本无相邻空行 → 两侧各补一空行）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'format.command', op: 'horizontalRule' })
+    const inserted = diskBefore.replace(
+      '结尾段落，分割线插入锚点在此行中。',
+      '结尾段落，分割线\n\n---\n\n插入锚点在此行中。')
+    await poll('分割线插入写回', () => (doc.getText() === inserted ? true : undefined))
+    const edited = await waitViewState('hr.md', (v) => v.text === inserted)
+    // 光标落在新分割线行尾：该行是控制域（触及显源码），计数暂保持 3
+    assert(edited.selectionOffset === anchor + 5,
+      `插入后光标应在新分割线行尾（期望 ${anchor + 5}，实际 ${edited.selectionOffset}）`)
+    assert(edited.paint?.hr?.count === 3,
+      `光标在新分割线行上时该线显源码不渲染（期望 3，实际 ${edited.paint?.hr?.count}）`)
+    // 光标移到后段文字 → 新分割线恢复渲染
+    const after = inserted.indexOf('插入锚点在此行中')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: after,
+    })
+    const rendered = await waitViewState('hr.md', (v) =>
+      v.selectionOffset === after && v.paint?.hr?.count === 4)
+    assert(rendered.paint?.hr?.visible === true, '新分割线应真实绘制')
+    // 阅读模式：<hr> 原生渲染、数量与 Live 对齐（颜色与 Live 同源变量）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const reading = await waitViewState('hr.md', (v) =>
+      v.viewMode === 'reading' && v.paint?.hr?.count === 4)
+    assert(reading.paint?.hr?.visible === true, '阅读模式分割线应真实绘制（rect + elementFromPoint）')
+    assert(Number.parseFloat(reading.paint?.hr?.borderTopWidth ?? '') > 0,
+      `阅读分割线须以 border-top 实际落笔：${String(reading.paint?.hr?.borderTopWidth)}`)
   }],
 ]

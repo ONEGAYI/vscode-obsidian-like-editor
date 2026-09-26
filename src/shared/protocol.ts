@@ -572,6 +572,20 @@ export interface PaintProbe {
     /** 当前激活视图内 .vsidian-mermaid 容器总数 */
     count: number
   }
+  /** #106 分割线绘制：当前激活视图内首个渲染态横线的实际可见性与计数。
+   *  jsdom 无布局（rect 恒 0），visible 恒 false，只作真宿主集成断言依据；
+   *  live 态探渲染 widget .vsidian-hr（光标触及该行时源码显形、计数归零），
+   *  reading 态探阅读容器内原生 <hr>。无分割线时整个字段缺省。 */
+  hr?: {
+    /** 首个横线元素的 rect 有面积且 elementFromPoint 命中 */
+    visible: boolean
+    /** 该横线元素 computed display（'none' = 未绘制） */
+    display: string | null
+    /** computed border-top-width（'1px' 级 = 横线实际落笔） */
+    borderTopWidth: string | null
+    /** 当前激活视图内横线元素总数 */
+    count: number
+  }
   /** #89 快速操作条的真实绘制、流内布局与已应用态。 */
   quickActions?: {
     open: boolean
@@ -1127,6 +1141,13 @@ function isPaintProbe(v: unknown): v is PaintProbe {
       isNonNegativeInt(v.mermaid.rendered) &&
       isNonNegativeInt(v.mermaid.error) &&
       isNonNegativeInt(v.mermaid.count)
+    )) &&
+    (v.hr === undefined || (
+      isObject(v.hr) &&
+      typeof v.hr.visible === 'boolean' &&
+      isNullOrString(v.hr.display) &&
+      isNullOrString(v.hr.borderTopWidth) &&
+      isNonNegativeInt(v.hr.count)
     )) &&
     (v.quickActions === undefined || (
       isObject(v.quickActions) &&
