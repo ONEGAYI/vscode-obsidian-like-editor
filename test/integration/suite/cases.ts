@@ -5708,7 +5708,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(state.liveMermaidCount === 5,
       `live 围栏装饰数应为 5（4 有效 + 1 无效降级），实际 ${state.liveMermaidCount}`)
     // 绘制层断言（AGENTS 视觉层断言约定）：图真的画出来（rect 有面积 +
-    // elementFromPoint 命中），不是只有 DOM 存在
+    // elementFromPoint 命中）；首图可能滚出视口，探针须命中任一有效图
     assert(state.paint?.mermaid?.visible === true,
       `图表应真实绘制（paint.mermaid.visible=${String(state.paint?.mermaid?.visible)}，` +
         `display=${String(state.paint?.mermaid?.display)}）`)

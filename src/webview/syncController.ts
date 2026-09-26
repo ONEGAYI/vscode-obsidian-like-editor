@@ -4861,24 +4861,29 @@ export class WebviewSyncController {
         }
       : undefined
     // #60 Mermaid 绘制探针：按当前激活视图取图表容器（分态计数）；
-    // 可见性优先取已渲染 SVG 的 rect + elementFromPoint 命中（错误降级
-    // 容器同样可命中——可见 ≠ 语法有效，语义由 rendered/error 分开断言）
+    // 可见性取视口内任一已渲染 SVG 的 rect + elementFromPoint 命中；
+    // 首图可能因 view.locate 滚到文末而离开视口，不代表图表没有绘制。
     const mermaidScope = this.viewMode === 'reading' ? this.readingContainer : view.contentDOM
     const mermaidEl = mermaidScope?.querySelector<HTMLElement>(
       `.${MERMAID_CLASS_NAMES.diagram}`,
     ) ?? null
-    const mermaidSvg = mermaidEl?.querySelector('svg') ?? mermaidEl
     let mermaidVisible = false
-    let mermaidDisplay: string | null = null
-    if (mermaidEl) {
-      mermaidDisplay = getComputedStyle(mermaidEl).display
+    const mermaidDisplay = mermaidEl ? getComputedStyle(mermaidEl).display : null
+    for (const diagram of mermaidScope?.querySelectorAll<HTMLElement>(
+      `.${MERMAID_CLASS_NAMES.diagram}[${MERMAID_STATE_ATTR}="rendered"]`) ?? []) {
+      const svg = diagram.querySelector('svg')
+      if (!svg) continue
       try {
-        const rect = mermaidSvg!.getBoundingClientRect()
-        if (rect.width > 0 && rect.height > 0) {
-          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
-          if (hit && mermaidEl.contains(hit)) {
-            mermaidVisible = true
-          }
+        const rect = svg.getBoundingClientRect()
+        const left = Math.max(0, rect.left)
+        const right = Math.min(window.innerWidth, rect.right)
+        const top = Math.max(0, rect.top)
+        const bottom = Math.min(window.innerHeight, rect.bottom)
+        if (right <= left || bottom <= top) continue
+        const hit = document.elementFromPoint((left + right) / 2, (top + bottom) / 2)
+        if (hit && diagram.contains(hit)) {
+          mermaidVisible = true
+          break
         }
       } catch {
         // jsdom 无布局与 elementFromPoint；真宿主才能证明实际可见。
