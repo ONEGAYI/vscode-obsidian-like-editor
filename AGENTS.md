@@ -102,6 +102,7 @@ vsidian/
 ├── LICENSE                # MIT 许可证全文
 ├── media/                 # 随扩展打包的静态资源
 │   ├── css-contract-probe.css # 样式契约内部测试片段
+│   ├── quick-actions/         # 快速操作明暗图标与源PNG
 │   ├── vsidian-icon-256.png   # 扩展图标 256 版，VSIX 打包用
 │   └── vsidian-icon.png       # Vsidian 扩展图标
 ├── package-lock.json      # npm 依赖锁定文件
@@ -111,7 +112,8 @@ vsidian/
 ├── README.en.md           # 英文版 README，与中文版互指
 ├── README.md              # 项目门面说明
 ├── scripts/               # 仓库工具脚本目录
-│   └── release.mjs # 发布脚本：打包、包体检查与上传
+│   ├── quick-action-icons.py # 快速操作图标生成与校验
+│   └── release.mjs           # 发布脚本：打包、包体检查与上传
 ├── src/                   # 扩展源码
 │   ├── extension.ts # 扩展激活入口
 │   ├── host/        # 宿主端实现
