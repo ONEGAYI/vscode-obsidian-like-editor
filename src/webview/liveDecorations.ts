@@ -9,7 +9,8 @@
 //   · 行级类：标题（#5 类名不变）、围栏/缩进代码、引用、列表（含嵌套
 //     深度与有序/子弹区分）、水平线、frontmatter
 //   · 标记隐藏（replace）：标题标记在标题范围内显形；列表与引用前缀仅在
-//     标记及相邻空格附近显形；任务 [x] 在标记范围外显示 checkbox widget
+//     标记及相邻空格附近显形；任务 [x] 在标记范围外显示 checkbox widget；
+//     水平线整段源文隐藏并呈现真横线（#106，该行触及时显形源码）
 //   · 内容 span：vsidian-header-{n} / vsidian-strong / vsidian-emphasis / vsidian-inline-code
 // - 间接装饰（纯视口内）→ ViewPlugin 按直接装饰集合与 visibleRanges 计算
 //   光标所在标题行的活动提示（不触碰 view/DOM 测量，防布局循环）；
@@ -100,6 +101,8 @@ export const LIVE_CLASS_NAMES = {
   taskChecked: 'vsidian-task-checked',
   /** 水平线行（`.cm-hr`） */
   hrLine: 'vsidian-hr-line',
+  /** 水平线渲染 widget 元素（#106：源文隐藏后呈现的真横线 span） */
+  hrRule: 'vsidian-hr',
   /** frontmatter 行（`.cm-hmd-frontmatter` 方向） */
   frontmatterLine: 'vsidian-frontmatter-line',
   /** ---- 表格：源文本为唯一编辑面，安全表格保持可编辑网格（#42）---- */
@@ -206,6 +209,23 @@ const taskCheckboxDecos = [
   Decoration.replace({ widget: new TaskCheckboxWidget(false) }),
   Decoration.replace({ widget: new TaskCheckboxWidget(true) }),
 ]
+
+/**
+ * 分割线渲染 widget（#106）：HorizontalRule 行未触及时源文字符被 replace
+ * 隐藏，本 widget 呈现真横线（CSS border-top，颜色与阅读 <hr> 同源变量）。
+ * 控制域是该行区间：光标/选区触及（含两端边界）时不发射隐藏装饰，源码
+ * 显形可编辑（IME 同路径）——语义沿用 #29 决议，移动光标零写回。
+ * 无交互事件；点击落点由 CM6 映射到最近源位置，进入该行即显形。
+ */
+class HorizontalRuleWidget extends WidgetType {
+  eq(): boolean { return true }
+  toDOM(): HTMLElement {
+    const el = document.createElement('span')
+    el.className = LIVE_CLASS_NAMES.hrRule
+    return el
+  }
+}
+const hrRuleDeco = Decoration.replace({ widget: new HorizontalRuleWidget() })
 
 // ---- 表格装饰（#12）：单元格边界来自 tableCells 的 GFM 语义拆分 ----
 // （lezer 的 TableCell 节点不识别 \| 与行内代码内管道，不作定位依据）
@@ -583,9 +603,19 @@ function emitForRange(
       case 'Blockquote':
         eachNodeLine(doc, node, fromLine, toLine, (n) => addLineCls(n, LIVE_CLASS_NAMES.quoteLine))
         return
-      case 'HorizontalRule':
+      case 'HorizontalRule': {
         eachNodeLine(doc, node, fromLine, toLine, (n) => addLineCls(n, LIVE_CLASS_NAMES.hrLine))
+        // #106 渲染态：控制域是该行区间（含两端边界），未触及时隐藏源文、
+        // 呈现真横线；触及则不发射隐藏装饰，源码显形可编辑。隐藏区间严格
+        // 取节点范围（CommonMark 全形态含前导缩进外的字符与行尾空格），
+        // 引用/列表前缀不随吞——Setext 下划线与 frontmatter 分隔线由解析器
+        // 消解为其他节点，天然不进本分支（回归用例钉住）。
+        const line = doc.lineAt(node.from)
+        if (line.number >= fromLine && line.number <= toLine && !touches(line.from, line.to)) {
+          out.push(hrRuleDeco.range(node.from, Math.min(node.to, line.to)))
+        }
         return
+      }
       // 安全表格在光标进入单元格后仍保留网格；原文编辑由 CM6 承担。
       case 'Table': {
         eachNodeLine(doc, node, fromLine, toLine, (n) => addLineCls(n, LIVE_CLASS_NAMES.tableLine))

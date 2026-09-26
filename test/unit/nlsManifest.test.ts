@@ -5,7 +5,7 @@
 // - nls 键集与 package.json 引用集相等（无多余键——删命令后 nls 不得残留）
 // - 生成幂等：`node scripts/genNls.mjs --check` 退出码 0（生成产物与提交
 //   产物逐字节一致，字典是唯一事实源）
-// 另钉映射语义：工具条 21 条命令的 nls 引用键 = FORMAT_OPERATIONS 的
+// 另钉映射语义：工具条 22 条命令的 nls 引用键 = FORMAT_OPERATIONS 的
 // titleKey（防止 format.* / command.* 双轨）。
 import { readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
@@ -48,10 +48,10 @@ describe('manifest NLS：两份 nls 文件键集契约', () => {
 })
 
 describe('manifest NLS：package.json 引用契约', () => {
-  it('全部命令 title 为 %key% 引用（43 条全覆盖，无硬编码）', () => {
+  it('全部命令 title 为 %key% 引用（44 条全覆盖，无硬编码）', () => {
     const commands: { command: string; title: string }[] = pkg.contributes.commands
-    // 43 条命令清单基线（#97 工单口径；新增/删减命令须同步本断言）
-    expect(commands.length).toBe(43)
+    // 44 条命令清单基线（#97 工单口径 + #106 分割线；新增/删减命令须同步本断言）
+    expect(commands.length).toBe(44)
     const literal = commands.filter((c) => !/^%.+%$/.test(c.title))
     expect(
       literal.map((c) => `${c.command}: ${c.title}`),
@@ -81,11 +81,11 @@ describe('manifest NLS：package.json 引用契约', () => {
 })
 
 describe('manifest NLS：command → 字典键映射语义', () => {
-  it('工具条 21 条命令的引用键 = FORMAT_OPERATIONS 的 titleKey（单一事实源，无双轨）', () => {
+  it('工具条 22 条命令的引用键 = FORMAT_OPERATIONS 的 titleKey（单一事实源，无双轨）', () => {
     const byCommand = new Map<string, string>(
       (pkg.contributes.commands as { command: string; title: string }[]).map((c) => [c.command, c.title]),
     )
-    expect(FORMAT_OPERATIONS.length).toBe(21)
+    expect(FORMAT_OPERATIONS.length).toBe(22)
     for (const op of FORMAT_OPERATIONS) {
       expect(byCommand.get(op.command), `package.json 缺命令 ${op.command}`).toBeDefined()
       expect(byCommand.get(op.command)).toBe(`%${op.titleKey}%`)

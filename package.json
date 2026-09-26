@@ -220,6 +220,11 @@
         "category": "Vsidian"
       },
       {
+        "command": "onegayi.vsidian.insert.horizontalRule",
+        "title": "%format.horizontalRule%",
+        "category": "Vsidian"
+      },
+      {
         "command": "onegayi.vsidian.openSettings",
         "title": "%command.openSettings.title%",
         "category": "Vsidian"

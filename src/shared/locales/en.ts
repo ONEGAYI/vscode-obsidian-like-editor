@@ -145,6 +145,7 @@ export const en = {
   'format.inlineMath': 'Insert inline math',
   'format.blockMath': 'Insert block math',
   'format.wikilink': 'Insert wikilink',
+  'format.horizontalRule': 'Insert horizontal rule',
 
   /** 快捷操作工具条框架（分组、标题菜单；非命令标题，不进 #97 映射） */
   'format.toolbarAria': 'Formatting quick actions',

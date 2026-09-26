@@ -57,7 +57,7 @@ describe('快速操作条', () => {
       .map((el) => el.dataset['icon']))).toEqual([
       ['bold', 'italic', 'strikethrough', 'inlineCode', 'clearInline'],
       ['heading', 'bulletList', 'orderedList', 'taskList', 'quote', 'codeBlock'],
-      ['link', 'table', 'inlineMath', 'blockMath'],
+      ['link', 'table', 'inlineMath', 'blockMath', 'horizontalRule'],
     ])
     expect(bar.querySelector('[data-icon="strikethrough"]')?.textContent).toBe('')
     h.view.dispatch({ selection: { anchor: 0, head: 2 } })

@@ -25,6 +25,7 @@ export const FORMAT_OPERATIONS = [
   { id: 'inlineMath', command: 'onegayi.vsidian.insert.inlineMath', titleKey: 'format.inlineMath', mode: 'live', writes: true, defaultKey: null },
   { id: 'blockMath', command: 'onegayi.vsidian.insert.blockMath', titleKey: 'format.blockMath', mode: 'live', writes: true, defaultKey: null },
   { id: 'wikilink', command: 'onegayi.vsidian.insert.wikilink', titleKey: 'format.wikilink', mode: 'live', writes: true, defaultKey: null },
+  { id: 'horizontalRule', command: 'onegayi.vsidian.insert.horizontalRule', titleKey: 'format.horizontalRule', mode: 'live', writes: true, defaultKey: null },
 ] as const satisfies readonly ({ titleKey: MessageKey } & Record<string, unknown>)[]
 
 export type FormatOperationId = (typeof FORMAT_OPERATIONS)[number]['id']

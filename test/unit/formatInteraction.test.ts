@@ -64,6 +64,18 @@ describe('格式命令生产链路', () => {
     expect(sent.filter((m) => m.kind === 'edit.request')).toHaveLength(1)
   })
 
+  it('分割线插入经同一命令链路：单事务写回、光标落行尾（#106）', () => {
+    const { controller, sent, view } = setup('上文\n下文')
+    view.dispatch({ selection: { anchor: 2 } })
+    controller.handleHostMessage({ kind: 'format.command', op: 'horizontalRule' })
+    expect(view.state.doc.toString()).toBe('上文\n\n---\n\n下文')
+    expect(sent.filter((m) => m.kind === 'edit.request')).toHaveLength(1)
+    expect(sent.at(-1)).toMatchObject({ kind: 'edit.request', changes: [
+      { offset: 0, length: 2, text: '上文\n\n---\n' },
+    ] })
+    expect(view.state.selection.main.anchor).toBe(7)
+  })
+
   it('清单覆盖全部操作，写操作只在 Live，约定默认键位准确', () => {
     const manifest = JSON.parse(readFileSync('package.json', 'utf8')) as {
       contributes: { commands: Array<{ command: string }> }

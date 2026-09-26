@@ -38,7 +38,8 @@
 | `.vsidian-list-bullet` / `.vsidian-list-ordered` | 无序/有序列表行修饰（无序标记隐藏后以 `::before` 圆点呈现；有序编号保留可见） | 无直接对应（Obsidian 圆点由 `.cm-formatting-list` 隐藏 + 原生列表样式承担） | 本项目自有呈现形态 |
 | `.vsidian-list-marker-visible` | 无序列表源码标记显形时抑制 `::before` 伪圆点，避免双圆点 | 无直接对应 | 本项目自有状态修饰类 |
 | `.vsidian-task-checkbox`（+ `.vsidian-task-checked` 修饰；`input[type=checkbox]`） | 任务 checkbox（#9：替换 #8 的只读字形，可交互——点击/Enter/空格切换勾选态并写回 Markdown） | `.cm-task-*` 方向（Obsidian 任务标记由 HMR widget 承担） | 本项目自有 widget；勾选态双入口（`:checked` 伪类与 `.vsidian-task-checked` 类）。已验证：测试片段经 `.vsidian-task-checkbox` 命中（真实宿主断言） |
-| `.vsidian-hr-line` | 水平线行 | `.cm-hr`（Obsidian 水平线 token 类） | 语义等价（行级呈现，`---` 源文保留可见） |
+| `.vsidian-hr-line` | 水平线行 | `.cm-hr`（Obsidian 水平线 token 类） | 语义等价（#106 起升级渲染态：行级类保留作源码态着色） |
+| `.vsidian-hr` | 水平线渲染 widget 元素（#106：未触及该行时源文 replace 隐藏，本元素以 `border-top` 呈现真横线，颜色与阅读 `hr` 同源变量 `--vsidian-hr-color`） | `.cm-hr` 的横线绘制 | 本项目自有 widget（控制域 = 该行区间，触及显源码） |
 | `.vsidian-frontmatter-line` | frontmatter 行（头块按源码呈现、语法不解析） | `.cm-hmd-frontmatter`（Obsidian frontmatter 类） | 语义对应（类名不同）；frontmatter 边界由 `markdownDoc.frontmatterRange` 两视图共用判定 |
 
 ## 表格（#12 基础编辑，#42 网格呈现）
