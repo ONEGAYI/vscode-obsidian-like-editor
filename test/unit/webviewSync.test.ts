@@ -5,8 +5,9 @@
 // - 外部 doc.changed → 单事务应用且不再回发 edit.request（防回环）
 // - edit.ack ok 推进 baseVersion；fail 附全文时重置文档
 // - seq 经 bridge.setState 持久化，webview 重载后继续编号（宿主按 seq 去重）
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect } from 'vitest'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
+import { __resetMermaidRenderStateForTest, mermaidDarkTheme } from '../../src/webview/mermaidRender'
 import { DocumentSession, type HostDocumentPort } from '../../src/host/documentSession'
 import type { HostToWebview, SerChange, WebviewToHost } from '../../src/shared/protocol'
 
@@ -809,5 +810,44 @@ describe('标题装饰装配（#5 切片：jsdom 下验证 DOM 形态）', () =>
     expect(view.dom.querySelectorAll('.vsidian-heading-line').length).toBe(headingLinesBefore + 1)
     expect(lines[1]!.classList.contains('vsidian-heading-line-3')).toBe(true)
     expect(lines[1]!.textContent).toBe('新标题') // 非活动 → 标记隐藏
+  })
+})
+
+describe('宿主明暗主题初始装配（#110）', () => {
+  // MutationObserver 只在 class 变化时触发；暗色环境从打开即是 vscode-dark，
+  // 构造/mount 必须主动播种 mermaidRender 的明暗态，否则首渲染按浅色主题
+  // 出图（截图实测：浅色墨水叠暗底，连线/文字不可见）。
+  afterEach(() => {
+    document.body.classList.remove('vscode-dark')
+    __resetMermaidRenderStateForTest()
+  })
+
+  it('暗色环境 mount：mermaid 主题立即为暗色（不等 class 变化事件）', () => {
+    document.body.classList.add('vscode-dark')
+    const { bridge } = makeBridge()
+    mount(bridge)
+    expect(mermaidDarkTheme()).toBe(true)
+  })
+
+  it('亮色环境 mount：保持浅色', () => {
+    const { bridge } = makeBridge()
+    mount(bridge)
+    expect(mermaidDarkTheme()).toBe(false)
+  })
+
+  it('运行中 class 变化：联动照常热切换（回归保护）', async () => {
+    const { bridge } = makeBridge()
+    mount(bridge)
+    expect(mermaidDarkTheme()).toBe(false)
+    document.body.classList.add('vscode-dark')
+    for (let i = 0; i < 4; i++) {
+      await Promise.resolve()
+    }
+    expect(mermaidDarkTheme()).toBe(true)
+    document.body.classList.remove('vscode-dark')
+    for (let i = 0; i < 4; i++) {
+      await Promise.resolve()
+    }
+    expect(mermaidDarkTheme()).toBe(false)
   })
 })

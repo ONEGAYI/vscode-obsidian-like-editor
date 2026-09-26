@@ -20,6 +20,8 @@
 import { Text } from '@codemirror/state'
 import {
   isWebviewToHost,
+  type DiagramExportFailReason,
+  type DiagramExportPayload,
   type HostToWebview,
   type SerChange,
   type SettingsPayload,
@@ -55,6 +57,12 @@ export interface PanelPort {
   openWikilink?(intent: { target: string; srcStart: number; srcEnd: number }): void
   /** #10 图片资源解析（vscode 层注入：classifyImageTarget + asWebviewUri） */
   resolveImage?(src: string): Promise<ImageResolution>
+  /** #111 图表导出（vscode 层注入：载荷校验 + showSaveDialog + writeFile）；
+   *  report 回报取消/校验失败/写盘失败/成功 */
+  exportDiagram?(
+    payload: DiagramExportPayload,
+    report: (result: { ok: boolean; reason?: DiagramExportFailReason }) => void,
+  ): void
   /** #33 打开 Vsidian 设置页（vscode 层注入：createWebviewPanel；设置页
    *  不依赖文档会话，与 link.activate 同为面板级 UI 意图端口） */
   openSettings?(): void
@@ -302,6 +310,28 @@ export class DocumentSession {
           panel.port.send({ kind: 'settings.snapshot', values: panel.port.requestSettings() })
         }
         return Promise.resolve()
+      case 'diagram.export': {
+        // #111 图表导出：只读交互（不写文档、不入撤销栈），暂停态同样
+        // 放行（与 clipboard.write 同口径）；结果回来源面板。会话守卫
+        // 对齐 codeblock.copy 先例（就绪且 docUri 匹配才放行，否则静默丢弃）
+        if (!panel.ready || message.docUri !== this.docUri) {
+          return Promise.resolve()
+        }
+        const report = (result: { ok: boolean; reason?: DiagramExportFailReason }): void => {
+          panel.port.send({
+            kind: 'diagram.export.result',
+            reqId: message.reqId,
+            ok: result.ok,
+            ...(result.reason !== undefined ? { reason: result.reason } : {}),
+          })
+        }
+        if (panel.port.exportDiagram) {
+          panel.port.exportDiagram(message, report)
+        } else {
+          report({ ok: false, reason: 'invalid' })
+        }
+        return Promise.resolve()
+      }
       case 'settings.set':
         // #33 设置保存只在设置页 webview 链路（settingsPage 模块）处理，
         // 编辑器面板不会发出；到达此处无副作用

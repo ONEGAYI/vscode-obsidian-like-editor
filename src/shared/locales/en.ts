@@ -226,6 +226,21 @@ export const en = {
   'codeblock.expand': 'Expand code block',
   'codeblock.collapse': 'Collapse code block',
 
+  /** 图形化代码块按钮组与图表弹窗（#111） */
+  'graphic.editSource': 'Edit source',
+  'graphic.popup': 'Open in popup',
+  'graphic.popupZoomIn': 'Zoom in',
+  'graphic.popupZoomOut': 'Zoom out',
+  'graphic.popupReset': 'Reset zoom',
+  'graphic.popupRefresh': 'Refresh',
+  'graphic.popupExportSvg': 'Export as SVG',
+  'graphic.popupExportPng': 'Export as PNG',
+  'graphic.popupClose': 'Close',
+  'graphic.exportPngUnavailable': 'PNG export is unavailable here; use SVG export instead.',
+  'graphic.exportFailed': 'Diagram export failed',
+  'graphic.exportSvgFilter': 'SVG file',
+  'graphic.exportPngFilter': 'PNG image',
+
   /** 图片/公式/任务/Mermaid 装饰与错误占位 */
   'decor.taskCheck': 'Check task',
   'decor.taskUncheck': 'Uncheck task',
