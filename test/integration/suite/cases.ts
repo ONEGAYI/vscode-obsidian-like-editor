@@ -408,12 +408,14 @@ interface ViewState {
   }
   /** #33 设置快照缓存（宿主 snapshot/changed 下发后非空） */
   settings?: Record<string, unknown>
-  /** #34 行号栏观测（first/last 为视口内首/末行号单元格文本） */
+  /** #34 行号栏观测（first/last 为视口内首/末行号单元格文本）；
+   *  #116 alignment 为行号-正文行基线偏差采样（无布局环境为 null） */
   lineGutter?: {
     on: boolean
     count: number
     first: string | null
     last: string | null
+    alignment?: Array<{ num: string; deltaBaseline: number; deltaBottom: number }> | null
   }
   /** 绘制层探针（P0 回归）：正文可见性 / CM6 注入样式存活 / 行号禁选 / 明暗声明与光标实值 */
   paint?: {
@@ -2754,6 +2756,36 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: 0 })
     await waitViewState(name, (v) => v.selectionOffset === 0)
     await assertFirstTableNumbers()
+  }],
+
+  ['多表文档行号与所属正文行基线偏差 ≤1px（#116 绘制层几何断言）', async () => {
+    const name = 'table-gutter-align.md'
+    // 三张安全表：前两张各 1 数据行，第三张 2 数据行（钉住随行数累积的
+    // 误差面）；表间段落含降部拉丁字符（g/p/j）——基线换算被真实行使
+    //（底边口径下降部延伸会掩盖基线差）
+    const source = '首行\n\n| A | B |\n| --- | --- |\n| 甲 | 乙 |\n\n中段一\n中段二\n\n' +
+      '| C | D |\n| --- | --- |\n| 丙 | 丁 |\n\ngap type jog 降部行\n\n' +
+      '| E | F |\n| --- | --- |\n| 戊 | 己 |\n| 庚 | 辛 |\n\n尾段\n'
+    await vscode.workspace.fs.writeFile(wsUri(name), Buffer.from(source))
+    await openWithEditor(name)
+    await waitSessionReady(name)
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
+    // 几何探针在真实 webview 布局下采集：轮询直至全部可见行号达标
+    //（绘制稳定后计——measure 循环收敛后的采样值即稳态值）；主口径为
+    // 基线差 deltaBaseline（行号字号小于正文，底边重合 ≠ 基线重合）
+    const state = await waitViewState(name, (v) => {
+      const alignment = v.lineGutter?.alignment
+      if (!alignment || alignment.length < 6) return false
+      return alignment.every((item) => Math.abs(item.deltaBaseline) <= 1)
+    })
+    // 覆盖面防御：采样必须包含三表段首行号（3/10/16）与表后行号
+    //（7/14/21——14 含降部行、21 在 2 数据行表之后），防止探针退化成
+    // 只采恰好达标的行
+    const nums = state.lineGutter!.alignment!.map((item) => item.num)
+    for (const expected of ['3', '7', '10', '14', '16', '21']) {
+      assert(nums.includes(expected),
+        `对齐采样应覆盖表段首（${expected}）与表后行：${JSON.stringify(state.lineGutter!.alignment)}`)
+    }
   }],
 
   ['实时预览活动格保留网格与抓手，格内输入经 CM6 写回（#42）', async () => {

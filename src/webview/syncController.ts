@@ -31,13 +31,14 @@ import { createQuickActionStateReader } from './quickActionState'
 import { FORMAT_OPERATIONS, type FormatOperationId } from '../shared/formatOperations'
 import { getEffectiveBindings } from '../shared/keybindings'
 import { KeybindingRouter } from './keybindingRouter'
-import { liveLineNumbers, paintedLineNumbers } from './liveLineNumbers'
+import { LINE_NUMBER_GUTTER_SELECTOR, liveLineNumbers, paintedLineNumbers } from './liveLineNumbers'
 import { CODE_CARD_CLASS_NAMES, codeCardConfigFacet, codeCardCopyRequest, codeCardFoldField, liveCodeCard, type CodeCardConfig } from './liveCodeCard'
 import { decorateReadingCodeCard, isReadingCodeBlock } from './readingCodeCard'
 import {
   isHostToWebview,
   type CssProbeReport,
   type FindSessionProbe,
+  type LineGutterAlignment,
   type LineGutterProbe,
   type LiveSyntaxProbe,
   type OutlineProbe,
@@ -5033,10 +5034,10 @@ export class WebviewSyncController {
   private collectLineGutter(): LineGutterProbe {
     const view = this.view
     if (!view || !this.lineNumbersOn) {
-      return { on: this.lineNumbersOn, count: 0, first: null, last: null }
+      return { on: this.lineNumbersOn, count: 0, first: null, last: null, alignment: null }
     }
     const texts = Array.from(
-      view.dom.querySelectorAll('.cm-lineNumbers .cm-gutterElement'),
+      view.dom.querySelectorAll(LINE_NUMBER_GUTTER_SELECTOR),
     )
       .filter((el) => (el as HTMLElement).style.visibility !== 'hidden')
       .map((el) => el.textContent ?? '')
@@ -5045,7 +5046,31 @@ export class WebviewSyncController {
       count: texts.length,
       first: texts.length > 0 ? texts[0] : null,
       last: texts.length > 0 ? texts[texts.length - 1] : null,
+      alignment: this.collectGutterAlignment(),
     }
+  }
+
+  /** #116 行号几何对齐采样：每条可见行号取两个口径的偏差——
+   *  deltaBaseline（主口径）：数字基线 − 正文行首可见文本基线，由两侧
+   *  底边差按各自 computed font 的 fontBoundingBox descent 换算（行号字号
+   *  小于正文，底边重合 ≠ 基线重合，光学对齐以基线为准，|值| ≤ 1 视为
+   *  对齐）；deltaBottom（次要上报）：底边差（旧基线代理口径，诊断对照）。
+   *  依赖真实布局（getBoundingClientRect）与 canvas 2D：jsdom 未实现
+   *  Range.getBoundingClientRect（调用即抛错），条目被逐条跳过、整体自然
+   *  为空返回 null（非「rect 恒 0 被过滤」）；reading 态 live 容器隐藏或
+   *  视口内无可见文本行时无可采条目，返回 null 与空文档的空数组区分。
+   *  单条采样相互隔离（#116 flash 审查 F2）：真宿主中个别条目异常（如
+   *  单条 Range 查询失败）只跳过该条，不再静默丢弃余下全部行。 */
+  private collectGutterAlignment(): LineGutterAlignment[] | null {
+    const view = this.view
+    if (!view) return null
+    const fontMetric = createFontBoundingBoxMeasurer()
+    const out: LineGutterAlignment[] = []
+    for (const element of Array.from(view.dom.querySelectorAll<HTMLElement>(LINE_NUMBER_GUTTER_SELECTOR))) {
+      const entry = collectGutterEntryAlignment(view, element, fontMetric)
+      if (entry) out.push(entry)
+    }
+    return out.length ? out : null
   }
 
   /**
@@ -6041,6 +6066,113 @@ export class WebviewSyncController {
         },
       })),
     ]
+  }
+}
+
+/** 单条行号对齐采样（collectGutterAlignment 的条目体，#116 flash 审查
+ *  F2）：try/catch 包裹单条目——真宿主中个别条目异常（如单条 Range 查询
+ *  失败）只跳过该条返回 null，调用方继续采样余下行号；跳过条件（隐藏
+ *  格、无可解析行号、无可见正文文本、无有效字体度量）同样返回 null。 */
+function collectGutterEntryAlignment(
+  view: EditorView,
+  element: HTMLElement,
+  fontMetric: (font: string) => { ascent: number; descent: number } | null,
+): LineGutterAlignment | null {
+  try {
+    if (element.style.visibility === 'hidden') return null
+    const text = element.textContent ?? ''
+    if (!text.trim()) return null
+    const lineNo = Number.parseInt(text.trim(), 10)
+    if (!Number.isFinite(lineNo) || lineNo < 1 || lineNo > view.state.doc.lines) return null
+    const line = view.state.doc.line(lineNo)
+    const pos = view.domAtPos(line.from)
+    const anchor = (pos.node.nodeType === 1 ? pos.node : pos.node.parentElement) as HTMLElement | null
+    const lineEl = anchor?.closest('.cm-line')
+    if (!lineEl) return null
+    const walker = document.createTreeWalker(lineEl, NodeFilter.SHOW_TEXT)
+    // 首个可见文本的宿主元素（取 parentElement，避免与 CM6 Text 导入
+    // 重名的 DOM Text 类型）；rect 与宿主同点命中
+    let firstTextHost: HTMLElement | null = null
+    let firstTextRect: DOMRect | null = null
+    while (walker.nextNode()) {
+      const value = walker.currentNode.nodeValue ?? ''
+      const at = value.search(/\S/)
+      if (at < 0) continue
+      const range = document.createRange()
+      range.setStart(walker.currentNode, at)
+      range.setEnd(walker.currentNode, at + 1)
+      const rect = range.getBoundingClientRect()
+      if (rect.height > 0) {
+        firstTextHost = walker.currentNode.parentElement
+        firstTextRect = rect
+        break
+      }
+    }
+    if (!firstTextHost || !firstTextRect) return null
+    const numRange = document.createRange()
+    numRange.selectNodeContents(element)
+    const numRect = numRange.getBoundingClientRect()
+    if (numRect.height <= 0) return null
+    // 基线换算：基线 = 文本盒底边 − 该字体 fontBoundingBox descent，
+    // 两侧各自 computed font 度量（惰性建 canvas；jsdom 条目在 Range
+    // 矩形阶段即抛错跳过，不会触达）
+    const numMetric = fontMetric(getComputedStyle(element).font)
+    const textMetric = fontMetric(getComputedStyle(firstTextHost).font)
+    if (!numMetric || !textMetric) return null
+    const deltaBaseline =
+      (numRect.bottom - numMetric.descent) - (firstTextRect.bottom - textMetric.descent)
+    return {
+      num: text.trim(),
+      deltaBaseline: +deltaBaseline.toFixed(2),
+      deltaBottom: +(numRect.bottom - firstTextRect.bottom).toFixed(2),
+    }
+  } catch {
+    return null
+  }
+}
+
+/** 字体度量盒缓存工厂（#116 基线换算）：font 串 → measureText 的
+ *  fontBoundingBoxAscent/Descent。canvas 2D 惰性创建（首次真实换算才
+ *  触达——jsdom 未实现 Range.getBoundingClientRect，条目在矩形阶段即
+ *  抛错被逐条跳过，不会触达 canvas、不喷「Not implemented」噪音）；
+ *  computed font 串按结果缓存，同一采样内每种字体只量一次。空/空白
+ *  font 串直接返回 null：canvas 对无效 font 赋值会静默沿用默认
+ *  10px sans-serif，量出的是伪度量而非该元素的实际字体。环境无
+ *  canvas 2D 或无 fontBoundingBox 度量时同样返回 null（调用方放弃该
+ *  条目，不伪造基线值）。导出侢单测钉住防御行为。 */
+export function createFontBoundingBoxMeasurer(): (font: string) => { ascent: number; descent: number } | null {
+  let ctx: CanvasRenderingContext2D | null | undefined
+  const cache = new Map<string, { ascent: number; descent: number } | null>()
+  return (font: string): { ascent: number; descent: number } | null => {
+    const cached = cache.get(font)
+    if (cached !== undefined) return cached
+    let metric: { ascent: number; descent: number } | null = null
+    if (!font.trim()) {
+      // 空/无效 computed font：不触 canvas（默认字体伪度量），直接放弃
+      cache.set(font, null)
+      return null
+    }
+    if (ctx === undefined) {
+      try {
+        ctx = document.createElement('canvas').getContext('2d')
+      } catch {
+        ctx = null
+      }
+    }
+    if (ctx) {
+      try {
+        ctx.font = font
+        const measured = ctx.measureText('0')
+        if (typeof measured.fontBoundingBoxAscent === 'number' &&
+            typeof measured.fontBoundingBoxDescent === 'number') {
+          metric = { ascent: measured.fontBoundingBoxAscent, descent: measured.fontBoundingBoxDescent }
+        }
+      } catch {
+        metric = null
+      }
+    }
+    cache.set(font, metric)
+    return metric
   }
 }
 

@@ -394,14 +394,20 @@ export function convertTaskItems(root: HTMLElement, text: string): void {
   }
 }
 
-/** li 的第一个文本节点（首子节点已是元素时返回 null——非任务形态） */
+/** li 的第一个文本节点。松散列表（条目间空行）markdown-it 输出
+ *  `<li><p>[ ] …</p></li>`：首子节点是 P 元素时向内取其首个文本节点
+ *  作为复选框插入锚（复选框插到 <p> 内文本之前，marker 区间仍按 li 的
+ *  src 锚点计算，不受松紧影响）；其余元素形态（嵌套列表等）仍是
+ *  非任务形态，返回 null。 */
 function firstTextNode(li: HTMLElement): Text | null {
   for (const node of Array.from(li.childNodes)) {
     if (node.nodeType === Node.TEXT_NODE && (node.nodeValue ?? '').length > 0) {
       return node as Text
     }
     if (node.nodeType === Node.ELEMENT_NODE) {
-      return null
+      return (node as Element).tagName === 'P'
+        ? firstTextNode(node as HTMLElement)
+        : null
     }
   }
   return null

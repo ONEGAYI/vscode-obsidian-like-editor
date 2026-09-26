@@ -153,6 +153,32 @@ describe('live：任务标记 widget 可交互并走标准出站链路', () => {
     expect(liveCheckboxes(h)).toHaveLength(2)
   })
 
+  it('真实鼠标事件序列（mousedown 先行）：widget 拦截 mousedown，光标不移入标记，click 完成切换', () => {
+    const h = makeHarness()
+    const box = liveCheckboxes(h)[0]!
+    const markerStart = DOC.indexOf('[')
+    // 真实鼠标点击 = mousedown → mouseup → click。mousedown 正是 CM6
+    // MouseSelection 同步放置光标的钩子（缺陷二：光标落入 [ ] 区间 →
+    // 装饰规则移除 widget → click 永不触发）。契约：checkbox 自身的
+    // mousedown 必须在源头终结——不冒泡到 contentDOM（CM6 看不到）、
+    // 阻止默认（input 不抢焦点）。
+    const content = h.controller.getView()!.contentDOM
+    let reachedContent = 0
+    content.addEventListener('mousedown', () => {
+      reachedContent += 1
+    })
+    const mousedown = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+    box.dispatchEvent(mousedown)
+    expect(reachedContent).toBe(0) // stopPropagation：CM6 不感知该 mousedown
+    expect(mousedown.defaultPrevented).toBe(true) // preventDefault：焦点不被 input 抢走
+    expect(h.parent.contains(box)).toBe(true) // widget 存活（未被「光标入标记显源码」移除）
+    expect(liveCheckboxes(h)).toHaveLength(3)
+    box.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }))
+    box.click()
+    expect(lastEditRequest(h)!.changes).toEqual([{ offset: markerStart, length: 3, text: '[x]' }])
+    expect(editRequests(h)).toHaveLength(1)
+  })
+
   it('外部增量应用后 widget 状态随文档更新（撤销广播回退勾选）', () => {
     const h = makeHarness()
     const markerStart = DOC.indexOf('[')
@@ -183,6 +209,47 @@ describe('reading：checkbox 启用、点击走锚点校验与出站链路', () 
     expect(boxes).toHaveLength(3)
     expect(boxes.every((b) => !b.disabled)).toBe(true)
     expect(boxes.map((b) => b.checked)).toEqual([false, false, true])
+  })
+
+  it('松散任务列表（条目间空行）同样渲染 checkbox 并可点击写回', () => {
+    // 松散列表 markdown-it 输出 <li><p>[ ] …</p></li>：首子节点是 <p>
+    // 元素而非文本节点。缺陷三：convertTaskItems 只认首子文本节点，
+    // 松散列表不渲染复选框、正文显示原文 [ ]。
+    const looseDoc = [
+      '# 松散清单标题',
+      '',
+      '- [ ] 松散任务甲',
+      '',
+      '- [x] 松散任务乙',
+      '',
+      '结尾段落。',
+      '',
+    ].join('\n')
+    const h = makeHarness(looseDoc)
+    readingMode(h)
+    const boxes = readingCheckboxes(h)
+    expect(boxes).toHaveLength(2)
+    expect(boxes.map((b) => b.checked)).toEqual([false, true])
+    expect(boxes.every((b) => !b.disabled)).toBe(true)
+    // 复选框插在 <p> 内文本之前；正文不再显示 [ ] 原文
+    expect(h.parent.querySelector('.vsidian-reading-task')!.textContent).not.toContain('[ ]')
+    const markerStart = looseDoc.indexOf('[')
+    boxes[0]!.click()
+    expect(lastEditRequest(h)!.changes).toEqual([{ offset: markerStart, length: 3, text: '[x]' }])
+    // 点击链路（容器委托 → 锚点校验 → 隐藏 dispatch → edit.request）不因
+    // 松散结构改变；乐观重建后为勾选
+    expect(readingCheckboxes(h).map((b) => b.checked)).toEqual([true, true])
+    // 撤销广播回流（对照紧凑路径写法）：宿主确认后 undo，外部增量把
+    // [x] 还原为 [ ]——文档与显示都应回退，松散结构不丢乐观态对账
+    h.controller.handleHostMessage({ kind: 'edit.ack', seq: 1, ok: true, version: 2 })
+    h.controller.handleHostMessage({
+      kind: 'doc.changed',
+      version: 3,
+      origin: 'external',
+      changes: [{ offset: markerStart, length: 3, text: '[ ]' }],
+    })
+    expect(h.controller.getView()!.state.doc.toString()).toBe(looseDoc)
+    expect(readingCheckboxes(h).map((b) => b.checked)).toEqual([false, true])
   })
 
   it('点击未勾选任务：edit.request 精确替换 + 阅读视图乐观重建为勾选', () => {

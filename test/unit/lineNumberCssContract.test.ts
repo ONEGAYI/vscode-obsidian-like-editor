@@ -52,20 +52,28 @@ describe('行号列布局与 main.css 的一致（#34 流内列改造后）', ()
     expect(Number.parseFloat(formula[3]!)).toBe(12)
   })
 
-  it('行号垂直锚定首个视觉行：禁用折行块居中，顶部补偿公式完整在场', () => {
+  it('行号垂直锚定首个视觉行：禁用折行块居中，top 基线偏移公式完整在场', () => {
     const rule = css.match(/\.cm-gutterElement\s*\{[^}]*\}/g)
     expect(rule, '.cm-gutterElement 规则应存在').toBeTruthy()
     const block = rule![0]!
     expect(block, '行号单元格不得垂直居中于整块（应锚定首个视觉行）').not.toMatch(
       /align-items:\s*center/,
     )
-    // 钉完整公式（两侧同为 1.5 行高比）：被减项 = 1.5 × 行号行高（与字号
-    // 公式同源的 0.75/12 上限），整体半差补偿——只改其中一侧会漏检错位
+    // 钉完整机制（#116 基线对齐）：offset 用 position:relative + top 纯视觉
+    // 偏移（top 不参与盒高——CM6 行号测量 dummy 与表格隐藏行格是
+    // height:0 内联的 border-box，任何垂直 padding 都会把 0 高格撑开、
+    // 逐格下推整列）；系数 1.1 × (正文 − 行号字号) 为 Arial/Segoe UI
+    // 双环境实测中值（top=0 时数字基线高于正文 4.0/3.67px @14px 基准），
+    // 集成几何断言按基线差 ≤1px 钉住——只改一侧会漏检错位
     expect(
       block,
-      '行号单元格应有完整的首视觉行 padding-top 半差补偿公式',
+      '行号单元格应有 position:relative + top 基线偏移公式',
     ).toMatch(
-      /padding-top:\s*calc\(\s*\(1\.5 \* var\(--vsidian-content-font-size[^)]*\)\s*-\s*1\.5 \* min\(0\.75 \* var\(--vsidian-content-font-size[^)]*\),\s*12px\)\)\s*\/\s*2/,
+      /position:\s*relative;[\s\S]*?top:\s*calc\(\s*1\.1 \* \(var\(--vsidian-content-font-size[^)]*\)\s*-\s*min\(0\.75 \* var\(--vsidian-content-font-size[^)]*\),\s*12px\)\)/,
+    )
+    // padding 防线：通用规则不得出现非零垂直 padding（0 高格撑开回潮）
+    expect(block, '行号单元格垂直 padding 必须为零（防 0 高格撑开）').toMatch(
+      /padding-top:\s*0/,
     )
   })
 
@@ -74,5 +82,46 @@ describe('行号列布局与 main.css 的一致（#34 流内列改造后）', ()
       /scaleX\(var\(--vsidian-ln-scale/,
     )
     expect(css).not.toContain('--vsidian-ln-scale:')
+  })
+})
+
+describe('表格行号格补偿（#116：表后错位与表段首行对齐）', () => {
+  it('分隔行行号格清零 padding-top：0 高记账格不得被任何垂直 padding 撑开', () => {
+    const rule = extractOne(
+      '分隔行行号格规则',
+      /\.cm-gutterElement\.vsidian-ln-table-delimiter\s*\{[^}]*\}/g,
+    )
+    expect(rule[0], '分隔行格应清零 padding-top（height:0 的 border-box 盒不得小于 padding）')
+      .toMatch(/padding-top:\s*0/)
+  })
+
+  it('表头行行号格偏移 = 通用基线偏移 + 单元格下移量变量', () => {
+    const rule = extractOne(
+      '表头行行号格规则',
+      /\.cm-gutterElement\.vsidian-ln-table-header\s*\{[^}]*\}/g,
+    )
+    expect(
+      rule[0],
+      '表头行格应在通用 top 基线偏移基础上叠加单元格下移量',
+    ).toMatch(
+      /top:\s*calc\(\s*1\.1 \* \(var\(--vsidian-content-font-size[^)]*\)\s*-\s*min\(0\.75 \* var\(--vsidian-content-font-size[^)]*\),\s*12px\)\)\s*\+\s*var\(--vsidian-table-cell-shift\)/,
+    )
+  })
+
+  it('单元格下移量变量与单元格 padding/border 字面值同源（改一处不改另一处即红）', () => {
+    const shift = extractOne(
+      '单元格下移量变量',
+      /--vsidian-table-cell-shift:\s*calc\((\d+)px \+ (\d+)px\)/g,
+    )
+    const cellRule = extractOne(
+      '表格单元格规则',
+      /\.vsidian-table-grid-row > \.vsidian-table-grid-cell(?:\s*,[^{]*)?\s*\{[^}]*\}/g,
+    )
+    const pad = cellRule[0].match(/padding:\s*(\d+)px\s+(\d+)px/)
+    expect(pad, `单元格规则应含字面 padding：${cellRule[0]}`).toBeTruthy()
+    expect(shift[1], 'shift 第一分量应等于单元格 padding 块轴值').toBe(pad![1])
+    const border = cellRule[0].match(/border:\s*(\d+)px solid/)
+    expect(border, '单元格规则应含字面 border').toBeTruthy()
+    expect(shift[2], 'shift 第二分量应等于单元格 border 宽度').toBe(border![1])
   })
 })

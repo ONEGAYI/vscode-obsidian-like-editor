@@ -29,6 +29,7 @@ import {
   RangeSet,
   StateField,
   Text,
+  type ChangeSet,
   type EditorState,
   type Extension,
   type Range,
@@ -192,6 +193,19 @@ export class TaskCheckboxWidget extends WidgetType {
       // 取消原生翻转：勾选态始终由文档驱动重绘（校验失败时不改显示）
       event.preventDefault()
       toggle()
+    })
+    box.addEventListener('mousedown', (event) => {
+      // 必须在源头终结 mousedown（#116 缺陷二）：CM6 在 contentDOM 的
+      // mousedown 冒泡钩子里同步启动 MouseSelection，把光标放进被替换的
+      // [ ]/[x] 标记区间 → 装饰规则按「光标入标记显源码」移除 widget →
+      // input 在 click 派发前被销毁，勾选永不触发。stopPropagation 让
+      // CM6 完全看不到该事件（光标与视图不动）；preventDefault 再阻止
+      // mousedown 的默认聚焦，焦点与后续键盘输入留在编辑器。click 的
+      // 派发不受影响（浏览器在 mouseup 后照常合成），切换仍走 click 监听。
+      // 该拦截只作用于 checkbox 自身：键盘导航、点击标记附近正文进入
+      // 标记区间的其他路径不受影响，「光标入标记显源码」语义保持。
+      event.preventDefault()
+      event.stopPropagation()
     })
     box.addEventListener('keydown', (event) => {
       // Enter 在 checkbox 上无原生激活：手动触发切换；阻断冒泡避免编辑器
@@ -837,12 +851,119 @@ export function getHeadingStats(): HeadingStats {
 
 // ---- 解析与装饰状态 ----
 
+/** 网格表格扫描段：行装饰带网格类（tableGridRow / tableGridDelimiter）的
+ *  连续行区间（文档位置，升序互不重叠）。行格分类（liveLineNumbers 的
+ *  gutterLineClass compute）据此把 decos.between 收窄到表格行段——行装饰
+ *  仍是分类的唯一事实源，段只是扫描索引。刻意不用 gridPlans 当索引：它
+ *  只是本次局部重建的缓存（doc 变更路径整表换新 Map），未受编辑影响的
+ *  表格不在其中（同 formatLiveLineNumber 的口径）。 */
+export interface GridTableSegment {
+  from: number
+  to: number
+}
+
+function isGridLineClass(specClass: string | undefined): boolean {
+  const classes: string[] = specClass?.split(' ') ?? []
+  return classes.includes(LIVE_CLASS_NAMES.tableGridRow) ||
+    classes.includes(LIVE_CLASS_NAMES.tableGridDelimiter)
+}
+
+/** 从行装饰提取区间内的网格行段：行首点装饰带网格类的行号聚合成连续段
+ *  （段端为该行 Line.to，不含行尾换行；行号连续的行在同一次提取内
+ *  已并段）。光标停分隔行时该行
+ *  装饰被撤下，段会暂时少这一行——该行本就无类可分类，不影响分类结果；
+ *  光标离开后重建区间重提取，段自然并回。 */
+function deriveGridSegments(
+  decos: DecorationSet,
+  ranges: ReadonlyArray<{ from: number; to: number }>,
+  doc: Text,
+): GridTableSegment[] {
+  const lines = new Set<number>()
+  for (const range of ranges) {
+    decos.between(range.from, range.to, (from, to, deco) => {
+      if (to !== from) return // 行装饰为行首点区间
+      if (!isGridLineClass(deco.spec.class)) return
+      lines.add(doc.lineAt(from).number)
+    })
+  }
+  if (!lines.size) return []
+  const sorted = [...lines].sort((a, b) => a - b)
+  const out: GridTableSegment[] = []
+  let start = sorted[0]!
+  let prev = sorted[0]!
+  for (let i = 1; i <= sorted.length; i++) {
+    const n = sorted[i]
+    if (n === prev + 1) {
+      prev = n
+      continue
+    }
+    out.push({ from: doc.line(start).from, to: doc.line(prev).to })
+    start = prev = n!
+  }
+  return out
+}
+
+/** 随文本变更映射旧段（无变更或无段时沿用旧引用；整段被删则丢弃） */
+function mapGridSegments(segments: readonly GridTableSegment[], changes: ChangeSet): GridTableSegment[] {
+  if (changes.empty || segments.length === 0) return segments as GridTableSegment[]
+  const out: GridTableSegment[] = []
+  for (const seg of segments) {
+    const from = changes.mapPos(seg.from, -1)
+    const to = changes.mapPos(seg.to, 1)
+    if (to > from) out.push({ from, to })
+  }
+  return out
+}
+
+/** 排序归并：仅位置重叠（或零隙相接）的段合并；段端不含行尾换行，
+ *  行号相邻而来自不同提取的段各自保留——各多一次 between 扫描，
+ *  后续任一段被触及重建即重新归并，无正确性影响 */
+function mergeGridSegments(list: readonly GridTableSegment[]): GridTableSegment[] {
+  const sorted = [...list].sort((a, b) => a.from - b.from || a.to - b.to)
+  const out: GridTableSegment[] = []
+  for (const seg of sorted) {
+    const last = out[out.length - 1]
+    if (last && seg.from <= last.to) {
+      last.to = Math.max(last.to, seg.to)
+    } else {
+      out.push({ ...seg })
+    }
+  }
+  return out
+}
+
+/** 更新扫描段：旧段随变更映射后保留，重建区间（新坐标）内从**更新后的
+ *  装饰集**重提取，两者取并集归并。触及判定用闭端（decos.update 的
+ *  filter 对恰在 filterTo 上的点装饰同样生效，边界保守即正确）。
+ *  关键不变量：任何可能改动段内装饰的更新路径都返回**新数组引用**
+ *  （触及或新增网格行必然归并出新数组；纯映射路径文档引用同步变化兜
+ *  底）——liveLineNumbers 的行格分类 memo 以 (doc 引用, 段数组引用) 为
+ *  键，据此保证命中时结果必然未变。反之，无触及且无新增时沿用旧引用，
+ *  memo 才能命中（表外纯选区移动零重算）。 */
+function updateGridSegments(
+  oldSegments: readonly GridTableSegment[],
+  changes: ChangeSet,
+  rebuiltRanges: ReadonlyArray<{ from: number; to: number }>,
+  decos: DecorationSet,
+  doc: Text,
+): GridTableSegment[] {
+  const mapped = mapGridSegments(oldSegments, changes)
+  const touched = rebuiltRanges.some((range) =>
+    mapped.some((seg) => range.from <= seg.to && range.to >= seg.from))
+  const found = deriveGridSegments(decos, rebuiltRanges, doc)
+  if (!touched && found.length === 0 && mapped === oldSegments) {
+    return mapped
+  }
+  return mergeGridSegments([...mapped, ...found])
+}
+
 interface LiveDecoState {
   decos: DecorationSet
   tree: Tree
   fragments: readonly TreeFragment[]
   fm: SourceRange | null
   gridPlans: Map<number, TableGridPlan | null>
+  gridSegments: GridTableSegment[]
   compositionPreview: boolean
 }
 
@@ -1094,12 +1215,15 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
     const fm = frontmatterOf(state.doc)
     stats.fullBuildLines = state.doc.lines
     const gridPlans = new Map<number, TableGridPlan | null>()
+    const decos = RangeSet.of(
+      emitForRange(tree, state.doc, state.selection, fm, 1, state.doc.lines, gridPlans), true)
     return {
-      decos: RangeSet.of(emitForRange(tree, state.doc, state.selection, fm, 1, state.doc.lines, gridPlans), true),
+      decos,
       tree,
       fragments: TreeFragment.addTree(tree),
       fm,
       gridPlans,
+      gridSegments: deriveGridSegments(decos, [{ from: 0, to: state.doc.length }], state.doc),
       compositionPreview: false,
     }
   },
@@ -1130,7 +1254,13 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
               add: emitForRange(value.tree, doc, tr.state.selection, value.fm, lineNo, lineNo, value.gridPlans),
               sort: true,
             })
-            return { ...value, decos, compositionPreview: false }
+            return {
+              ...value,
+              decos,
+              gridSegments: updateGridSegments(value.gridSegments, tr.changes,
+                [{ from: currentLine.from, to: currentLine.to }], decos, doc),
+              compositionPreview: false,
+            }
           }
           let first = oldPlan.delimiterLine
           let last = oldPlan.delimiterLine
@@ -1147,7 +1277,14 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
             add: emitForRange(value.tree, doc, tr.state.selection, value.fm, first, last, gridPlans),
             sort: true,
           })
-          return { ...value, decos, gridPlans, compositionPreview: false }
+          return {
+            ...value,
+            decos,
+            gridPlans,
+            gridSegments: updateGridSegments(value.gridSegments, tr.changes,
+              [{ from: doc.line(first).from, to: doc.line(last).to }], decos, doc),
+            compositionPreview: false,
+          }
         }
       }
       if (value.compositionPreview && !tr.annotation(tableCompositionSettled)) return value
@@ -1155,9 +1292,11 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
       const doc = tr.state.doc
       let decos = value.decos
       let scanned = 0
+      const rebuilt: Array<{ from: number; to: number }> = []
       for (const span of selectionSpans(tr)) {
         const from = doc.line(span.fromLine).from
         const to = doc.line(span.toLine).to
+        rebuilt.push({ from, to })
         decos = decos.update({
           filterFrom: from,
           filterTo: to,
@@ -1170,7 +1309,12 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
       stats.totalUpdates += 1
       stats.lastUpdateScannedLines = scanned
       stats.totalScannedLines += scanned
-      return { ...value, decos, compositionPreview: false }
+      return {
+        ...value,
+        decos,
+        gridSegments: updateGridSegments(value.gridSegments, tr.changes, rebuilt, decos, doc),
+        compositionPreview: false,
+      }
     }
 
     const doc = tr.state.doc
@@ -1191,6 +1335,7 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
         tree,
         fragments: TreeFragment.addTree(tree),
         fm,
+        gridSegments: mapGridSegments(value.gridSegments, tr.changes),
         compositionPreview: true,
       }
     }
@@ -1198,9 +1343,11 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
     const gridPlans = new Map<number, TableGridPlan | null>()
     let decos = value.decos.map(tr.changes)
     let scanned = 0
+    const rebuilt: Array<{ from: number; to: number }> = []
     for (const span of spans) {
       const from = doc.line(span.fromLine).from
       const to = doc.line(span.toLine).to
+      rebuilt.push({ from, to })
       decos = decos.update({
         filterFrom: from,
         filterTo: to,
@@ -1216,7 +1363,15 @@ export const liveDecorationsField = StateField.define<LiveDecoState>({
     if (scanned >= doc.lines) {
       stats.fullBuildLines = doc.lines
     }
-    return { decos, tree, fragments: TreeFragment.addTree(tree), fm, gridPlans, compositionPreview: false }
+    return {
+      decos,
+      tree,
+      fragments: TreeFragment.addTree(tree),
+      fm,
+      gridPlans,
+      gridSegments: updateGridSegments(value.gridSegments, tr.changes, rebuilt, decos, doc),
+      compositionPreview: false,
+    }
   },
   provide: (f) => [
     EditorView.decorations.from(f, (s) => s.decos),
