@@ -45,7 +45,8 @@ describe('设置页异步回信与面板生命周期', () => {
       getSnapshot: () => ({ 'test.flag': true }),
       apply: () => new Promise<{ ok: true; values: Record<string, boolean> }>((resolve) => { finish = resolve }),
     }
-    const page = createSettingsPage({ extensionUri: 'extension' } as never, service as never)
+    const page = createSettingsPage({ extensionUri: 'extension' } as never, service as never,
+      { getSnapshot: () => ({}) } as never)
     page.open()
     page.injectMessage({ kind: 'settings.set', values: { 'test.flag': true } })
     page.close()

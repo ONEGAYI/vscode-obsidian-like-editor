@@ -91,6 +91,7 @@ vsidian/
 │   │   ├── obsidian-live-preview-editor.md # Obsidian 技术栈与选型调研
 │   │   └── obsidian-viewport-rendering.md  # 视口渲染性能补充调研
 │   └── specs/    # 产品规格
+│       ├── keybindings.md              # 快捷键清单与默认值
 │       ├── manual-verification.md      # 人工验证清单
 │       ├── mvp-issues.md               # MVP GitHub Issue 索引
 │       ├── mvp.md                      # MVP 规格主文档
@@ -113,6 +114,7 @@ vsidian/
 │   ├── extension.ts # 扩展激活入口
 │   ├── host/        # 宿主端实现
 │   │   ├── documentSession.ts    # 文档会话与写回同步
+│   │   ├── keybindingService.ts  # 快捷键全局存储服务
 │   │   ├── linkTarget.ts         # 宿主侧链接目标分类纯逻辑（#10）
 │   │   ├── settingsPage.ts       # 独立设置页面板装配
 │   │   ├── settingsService.ts    # 宿主设置服务
@@ -122,6 +124,7 @@ vsidian/
 │   ├── shared/      # 两端共享纯逻辑
 │   │   ├── changeMapping.ts    # 变更重定位纯函数
 │   │   ├── formatOperations.ts # 格式操作注册清单
+│   │   ├── keybindings.ts      # 快捷键操作与冲突模型
 │   │   ├── math.ts             # 公式形态学纯函数（#59）
 │   │   ├── mermaid.ts          # Mermaid 围栏形态学（#60）
 │   │   ├── newline.ts          # CRLF/LF 换行协调器
@@ -133,6 +136,8 @@ vsidian/
 │       ├── findSession.ts          # 查找匹配纯函数（#14）
 │       ├── formatOperations.ts     # 格式文本变换规划
 │       ├── imageResource.ts        # 图片资源状态机（#10）
+│       ├── keybindingRouter.ts     # 编辑器按键分发器
+│       ├── keybindingSettings.ts   # 快捷键设置分页
 │       ├── liveDecorations.ts      # 语法树驱动 Live 装饰（#8）
 │       ├── liveLineNumbers.ts      # 表格段首行号与绘制探针
 │       ├── liveLinks.ts            # live 链接装饰与跳转（#10）

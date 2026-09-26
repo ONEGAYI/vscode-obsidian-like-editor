@@ -296,6 +296,13 @@ export class DocumentSession {
         // #33 设置保存只在设置页 webview 链路（settingsPage 模块）处理，
         // 编辑器面板不会发出；到达此处无副作用
         return Promise.resolve()
+      case 'keybindings.get':
+      case 'keybindings.set':
+      case 'keybindings.reset':
+      case 'keybindings.resetAll':
+      case 'keybindings.execute':
+        // 快捷键端口在 provider / 设置页消费；此处仅保持协议穷尽。
+        return Promise.resolve()
       case 'clipboard.write':
         // #69 剪贴板写：与 link.activate 同口径的只读交互（不受写回暂停
         // 影响）；两变体（text 直写 / linkHeading 宿主拼标题链接）分别

@@ -109,7 +109,7 @@ describe('本地编辑 → edit.request', () => {
     // ready + init 主动回报 view.state（模式缓存数据源）+ init 后拉取设置
     // 快照的 settings.get（#33）+ 一条 edit.request
     expect(sent.filter((m) => m.kind === 'edit.request')).toHaveLength(1)
-    expect(sent.filter((m) => m.kind !== 'view.state')).toHaveLength(3)
+    expect(sent.filter((m) => m.kind !== 'view.state')).toHaveLength(4)
     const req = sent.find((m): m is Extract<WebviewToHost, { kind: 'edit.request' }> => m.kind === 'edit.request')!
     expect(req.changes).toEqual([
       { offset: 0, length: 1, text: '甲' },
