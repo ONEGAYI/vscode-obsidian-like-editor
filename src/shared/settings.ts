@@ -5,8 +5,8 @@
 // - 存储与 schema 完全归 Vsidian 自有链路：不使用 workspace.getConfiguration，
 //   不声明 contributes.configuration——设置项不出现在 VSCode 统一设置中心，
 //   界面入口只有扩展自己的设置页。
-// - 定义含键、类型、默认值；校验内建于类型（当前仅 boolean，#34「显示源
-//   文件行号」同型；number/string 为后续扩展预留）。
+// - 定义含键、类型、默认值；校验内建于类型（boolean 开关与 string 枚举
+//   （#93 i18n 语言设置型）；number 为后续扩展预留）。
 // - 生产注册表初始为空：设置页据此渲染空状态，不展示不能生效的占位开关；
 //   后续工单接入实际设置项时在 PRODUCTION_SETTING_DEFINITIONS 追加。
 // - 值域语义：无效存量（类型不符）恢复默认值；未知键（历史遗留）忽略；
@@ -19,19 +19,39 @@ export type SettingsPayloadValue = boolean | number | string
 /** 设置快照：键 → 当前生效值 */
 export type SettingsPayload = Record<string, SettingsPayloadValue>
 
-/** 单个设置项定义 */
-export interface SettingDefinition {
+/** 单个设置项定义的公共字段 */
+interface SettingDefinitionBase {
   /** 稳定标识（点分层级，如 'editor.lineNumbers'；不得为空串） */
   key: string
-  /** 值类型：校验规则的来源。当前仅 boolean */
-  type: 'boolean'
-  /** 默认值：缺省与无效存量的回退目标 */
-  default: boolean
-  /** 设置页展示名（非空语义由渲染层保证） */
+  /** 设置页展示名（非空语义由渲染层保证；#95 起更名为 titleKey 走 t() 取词） */
   title: string
   /** 可选说明（设置页副文案） */
   description?: string
 }
+
+/** 布尔设置项（开关；#34「显示源文件行号」同型） */
+export interface BooleanSettingDefinition extends SettingDefinitionBase {
+  type: 'boolean'
+  /** 默认值：缺省与无效存量的回退目标 */
+  default: boolean
+}
+
+/**
+ * 字符串枚举设置项（#93 i18n 设置 schema 扩展）：值域必填（枚举非空、
+ * 无重复），默认值必须在值域内；设置页渲染为下拉控件，enum 顺序即选项
+ * 顺序。optionLabels 提供枚举值 → 显示名（缺省显示原值；语言设置项的
+ * 「语言自名」约定见规格「语言设置项」）。
+ */
+export interface StringEnumSettingDefinition extends SettingDefinitionBase {
+  type: 'string'
+  default: string
+  /** 值域（非空、无重复） */
+  enum: readonly string[]
+  /** 可选：枚举值 → 选项显示名 */
+  optionLabels?: Readonly<Record<string, string>>
+}
+
+export type SettingDefinition = BooleanSettingDefinition | StringEnumSettingDefinition
 
 /**
  * #34「显示行号」：实时预览侧 CM6 行号栏开关。键与消费方常量成对导出——
@@ -71,6 +91,14 @@ export const CODEBLOCK_COPY_BUTTON_DEFAULT = true
  */
 export const CODEBLOCK_HIGHLIGHT_KEY = 'codeblock.highlight'
 export const CODEBLOCK_HIGHLIGHT_DEFAULT = true
+
+/**
+ * 语言设置键（#93 预留，#4 注册定义与「常规」分区）：值域 auto | zh-cn |
+ * en（StringEnumSettingDefinition），解析与语言包装配见 shared/locales。
+ * 键常量先行导出——宿主 HTML 生成点读取快照中的该键决定注入语言（缺省
+ * 走 auto 语义），设置项注册后无需再改取键方。
+ */
+export const LANGUAGE_KEY = 'general.language'
 
 /**
  * 生产设置定义注册表：#33 交付空状态页面与完整数据链路，#34 加入首个
@@ -121,23 +149,47 @@ function isObject(v: unknown): v is Record<string, unknown> {
 
 /** 定义自校验（注册入口防线：非法定义整体拒绝） */
 export function isSettingDefinition(v: unknown): v is SettingDefinition {
-  return (
-    isObject(v) &&
-    typeof v.key === 'string' &&
-    v.key.length > 0 &&
-    v.type === 'boolean' &&
-    typeof v.default === 'boolean' &&
-    typeof v.title === 'string' &&
-    (v.description === undefined || typeof v.description === 'string')
-  )
+  if (
+    !isObject(v) ||
+    typeof v.key !== 'string' ||
+    v.key.length === 0 ||
+    typeof v.title !== 'string' ||
+    (v.description !== undefined && typeof v.description !== 'string')
+  ) {
+    return false
+  }
+  if (v.type === 'boolean') {
+    return typeof v.default === 'boolean'
+  }
+  if (v.type === 'string') {
+    // #93 string 枚举：值域非空、全字符串、无重复，默认值在值域内
+    if (
+      typeof v.default !== 'string' ||
+      !Array.isArray(v.enum) ||
+      v.enum.length === 0 ||
+      !v.enum.every((item) => typeof item === 'string') ||
+      new Set(v.enum).size !== v.enum.length ||
+      !v.enum.includes(v.default)
+    ) {
+      return false
+    }
+    if (
+      v.optionLabels !== undefined &&
+      (!isObject(v.optionLabels) || !Object.values(v.optionLabels).every((label) => typeof label === 'string'))
+    ) {
+      return false
+    }
+    return true
+  }
+  return false
 }
 
-/** 值是否符合定义的类型（当前：boolean） */
+/** 值是否符合定义的类型（boolean 布尔；string 枚举值域内字符串） */
 function valueMatchesType(def: SettingDefinition, value: unknown): boolean {
   if (def.type === 'boolean') {
     return typeof value === 'boolean'
   }
-  return false
+  return typeof value === 'string' && def.enum.includes(value)
 }
 
 /** 按定义表产出默认值快照 */

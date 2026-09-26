@@ -11,6 +11,7 @@ VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 - **操作与快捷键注册**：快捷键管理覆盖项目全部面向用户的可绑定操作。每次新增或修改操作，都必须评估并记录是否提供快捷键入口、默认绑定（允许默认未绑定）及生效模式；不能仅因操作不常驻工具栏就省略快捷键入口。写操作快捷键仅在 Live 编辑正文时覆盖宿主绑定，不接管源码模式或设置页输入；注册模型须支持未来其他操作按需覆盖 Live、阅读或双模式。绑定支持显式清空、单项恢复默认与全部恢复默认；清空不能因重启或升级自动恢复。插件内部冲突按键位及生效范围是否重叠判定。
 - **视觉层断言（评审必查）**：webview/样式/渲染类变更，评审必须核对断言对象是"用户看到的东西"（可见性、对齐、颜色）而非 DOM 存在性或几何坐标——样式注入失效时后者照样通过（PR #37 P0 实证：CSP 拦截 CM6 注入样式后 74 集成用例仍全绿，正文实际不可见）。涉及呈现的新特性至少一条集成断言落在绘制层（现有 `view.state.paint` 探针），CSS 关键规则由契约测试钉住。
 - **大纲样式设计哲学（#65 落档）**：大纲条目的呈现遵循三条原则，后续大纲呈现类变更不得违背。其一，**结构装饰与正文主题同源**——层级颜色等主题性装饰不复制读值，而是与正文标题引用同一 CSS 变量族（`--vsidian-heading-color-1..6`，定义于 `#app`，live 标题行级、阅读标题块级、大纲条目级三侧同引），主题分级着色一处定义多处生效。其二，**强调语义只认显式标记**——条目一律常规字重（400），不继承标题级别的结构性加粗；仅显式 `**粗体**` 段加重，斜体/行内代码/删除线同理只由标记触发。其三，**透传集合 = 正文已支持的行内标记子集**——当前白名单为粗体/斜体/行内代码/删除线（`OutlineSpanKind`，提取与校验同源），高亮/公式/行内颜色待正文支持后按同一白名单机制接入（提取处 `SPAN_KIND_BY_NODE` 加映射即可），大纲侧零额外设计；双链/链接显示别名/链接文字的纯文本，不可点。
+- **用户可见文字一律 i18n**：所有面向用户的文字（webview 界面、设置页、宿主通知/确认框、package.json command title 与 displayName/description）必须经 `src/shared/locales/` 语言包与 `t()` 字典映射添加，禁止新增硬编码中/英文字面量；两语言包键集由编译期 parity 把关，回潮由 CI 防回潮扫描（源码 CJK 字面量契约测试）拦截。manifest 侧 `package.nls.*.json` 由构建脚本从字典生成，不在 JSON 里手写。
 
 ## 技术栈与构建（工单 #2 确立）
 
@@ -93,6 +94,7 @@ vsidian/
 │   │   └── obsidian-viewport-rendering.md  # 视口渲染性能补充调研
 │   └── specs/    # 产品规格
 │       ├── code-block-card.md          # 代码块卡片功能规格
+│       ├── i18n.md                     # 全局 i18n 适配规格
 │       ├── keybindings.md              # 快捷键清单与默认值
 │       ├── manual-verification.md      # 人工验证清单
 │       ├── mvp-issues.md               # MVP GitHub Issue 索引
@@ -129,7 +131,13 @@ vsidian/
 │   │   ├── changeMapping.ts    # 变更重定位纯函数
 │   │   ├── codeLangs.ts        # 代码块语言注册表与别名路由
 │   │   ├── formatOperations.ts # 格式操作注册清单
+│   │   ├── i18n.ts             # t() 取词与语言包装配状态模块
 │   │   ├── keybindings.ts      # 快捷键操作与冲突模型
+│   │   ├── locales/            # 语言包字典单一事实源
+│   │   │   ├── en.ts     # 英文语言包（类型基准）
+│   │   │   ├── index.ts  # 语言注册表与解析（仅宿主可引）
+│   │   │   ├── island.ts # 语言数据岛构建与解析
+│   │   │   └── zh-cn.ts  # 简体中文语言包（编译期 parity）
 │   │   ├── math.ts             # 公式形态学纯函数（#59）
 │   │   ├── mermaid.ts          # Mermaid 围栏形态学（#60）
 │   │   ├── newline.ts          # CRLF/LF 换行协调器
@@ -151,6 +159,7 @@ vsidian/
 │       ├── liveLinks.ts            # live 链接装饰与跳转（#10）
 │       ├── liveMath.ts             # 行内与块级公式 live 装饰（#59）
 │       ├── liveMermaid.ts          # Mermaid live 装饰（#60）
+│       ├── localeBoot.ts           # webview 语言装配入口
 │       ├── main.css                # webview 全局布局样式
 │       ├── main.ts                 # webview 启动入口
 │       ├── markdownDoc.ts          # Markdown 文档工具与树查询

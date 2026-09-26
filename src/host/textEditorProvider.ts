@@ -49,6 +49,9 @@ import {
 import type { SettingsService } from './settingsService'
 import type { KeybindingService } from './keybindingService'
 import type { SettingsPageHandle } from './settingsPage'
+import { LANGUAGE_KEY } from '../shared/settings'
+import { LOCALE_MESSAGES, resolveLocale, type LocaleCode } from '../shared/locales'
+import { buildLocaleIslandHtml } from '../shared/locales/island'
 
 export const VIEW_TYPE = 'onegayi.vsidian.editor'
 
@@ -808,7 +811,13 @@ export function createTextEditorProvider(
           imageResourceRoot(document),
         ],
       }
-      webviewPanel.webview.html = buildWebviewHtml(webviewPanel.webview, context.extensionUri)
+      webviewPanel.webview.html = buildWebviewHtml(
+        webviewPanel.webview,
+        context.extensionUri,
+        // #93 生效语言：读语言设置（#4 注册 general.language 前缺省 auto）
+        // 按宿主显示语言解析；数据岛注入当前语言包（webview 零字典字节）
+        resolveLocale(settings?.service.getSnapshot()[LANGUAGE_KEY], vscode.env.language),
+      )
     },
   }
 
@@ -1571,7 +1580,11 @@ async function resolveWorkspaceImage(
   return { ok: true, src: webview.asWebviewUri(uri).toString() }
 }
 
-function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
+function buildWebviewHtml(
+  webview: vscode.Webview,
+  extensionUri: vscode.Uri,
+  locale: LocaleCode,
+): string {
   const nonce = randomUUID()
   const scriptUri = webview.asWebviewUri(
     vscode.Uri.joinPath(extensionUri, 'out', 'webview', 'main.js'),
@@ -1606,7 +1619,7 @@ function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): st
     `font-src ${webview.cspSource}`,
   ].join('; ')
   return `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="${locale}">
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
@@ -1617,6 +1630,7 @@ function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): st
 </head>
 <body>
 <div id="app"></div>
+${buildLocaleIslandHtml(locale, LOCALE_MESSAGES[locale])}
 <script nonce="${nonce}">window.__vsidianMermaidUri = "${mermaidUri}";</script>
 <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>

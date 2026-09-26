@@ -2,12 +2,18 @@
 // 设置页 UI 契约（#33）：页面归属 Vsidian（标题）、空状态（无占位开关）、
 // fixture 定义渲染、快照回显、变更上送（settings.set）与权威值恢复
 // （宿主拒绝后以 settings.snapshot 回滚显示）。
+// #93 起：框架标题经 t() 取词——本文件装配生产 zh-cn 语言包（装配三径之
+// 单测注入），断言与字典同源（不再复制字面量）。
 import { describe, it, expect } from 'vitest'
 import {
   SettingsPageView,
   SETTINGS_PAGE_CLASS_NAMES,
 } from '../../src/webview/settingsPageView'
 import { PRODUCTION_SETTING_DEFINITIONS, type SettingDefinition } from '../../src/shared/settings'
+import { installLocale } from '../../src/shared/i18n'
+import { zhCn } from '../../src/shared/locales/zh-cn'
+
+installLocale('zh-cn', zhCn)
 
 const FIXTURE_DEFS: readonly SettingDefinition[] = [
   {
@@ -33,9 +39,10 @@ function makeView(defs: readonly SettingDefinition[]): {
 }
 
 describe('页面结构（#33 归属与空状态）', () => {
-  it('标题明确归属 Vsidian 设置', () => {
+  it('标题经 t() 取词：与字典 settings.pageTitle 同源（#93）', () => {
     const { parent } = makeView(FIXTURE_DEFS)
     const title = parent.querySelector(`.${SETTINGS_PAGE_CLASS_NAMES.title}`)
+    expect(title?.textContent).toBe(zhCn['settings.pageTitle'])
     expect(title?.textContent).toContain('Vsidian')
     expect(title?.textContent).toContain('设置')
   })

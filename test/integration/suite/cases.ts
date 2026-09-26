@@ -2,6 +2,7 @@
 // fixture 工作区由 runTest.mjs 在临时目录动态生成（避免 git 换行转换干扰
 // 字节级断言），路径经环境变量 WORKSPACE_DIR 传入。
 import * as vscode from 'vscode'
+import { LOCALE_MESSAGES, resolveLocale } from '../../../src/shared/locales'
 
 const VIEW_TYPE = 'onegayi.vsidian.editor'
 const EXT_ID = 'onegayi.vsidian'
@@ -3894,8 +3895,13 @@ export const cases: Array<[string, () => Promise<void>]> = [
         | undefined
       return i?.open ? i : undefined
     })
-    // 标题与界面归属 Vsidian（面板标题即命令面板/页头呈现）
-    assert(info.title === 'Vsidian 设置', `设置页标题应归属 Vsidian，实际 ${info.title}`)
+    // 标题与界面归属 Vsidian（面板标题即命令面板/页头呈现）。#93 起标题经
+    // t() 取词，随生效语言（auto 按宿主显示语言解析）——期望值与扩展装配
+    // 同源计算，不再复制字面量
+    const expectedTitle = LOCALE_MESSAGES[
+      resolveLocale(undefined, vscode.env.language)
+    ]['settings.pageTitle']
+    assert(info.title === expectedTitle, `设置页标题应归属 Vsidian（${expectedTitle}），实际 ${info.title}`)
     await poll('设置页 webview 就绪', async () => {
       const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
         | { ready: boolean }

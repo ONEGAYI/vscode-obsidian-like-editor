@@ -9,17 +9,25 @@
 //
 // 持久化权威在宿主（SettingsService + globalState）：页面只回显与上送，
 // 保存成功回 settings.changed、被拒回 settings.snapshot 恢复显示。
+// #93 i18n：面板标题经 t() 取词（激活时已按生效语言装配宿主语言包）；
+// HTML 生成点同步注入语言数据岛与 <html lang>（首帧文案即就绪）。
 import * as vscode from 'vscode'
 import { randomUUID } from 'node:crypto'
 import { isWebviewToHost } from '../shared/protocol'
+import { t } from '../shared/i18n'
+import { LANGUAGE_KEY } from '../shared/settings'
+import { LOCALE_MESSAGES, resolveLocale, type LocaleCode } from '../shared/locales'
+import { buildLocaleIslandHtml } from '../shared/locales/island'
 import type { SettingsService } from './settingsService'
 import type { KeybindingService } from './keybindingService'
 
 /** 设置页面板 viewType（createWebviewPanel 无需清单声明，customEditors 才要求） */
 export const SETTINGS_VIEW_TYPE = 'onegayi.vsidian.settings'
 
-/** 面板标题：界面与标题栏明确归属 Vsidian */
-export const SETTINGS_PAGE_TITLE = 'Vsidian 设置'
+/** 面板标题：界面与标题栏明确归属 Vsidian（#93 起经语言包取词，随装配语言） */
+export function settingsPageTitle(): string {
+  return t('settings.pageTitle')
+}
 
 /** 设置页观测信息（测试钩子与集成断言用） */
 export interface SettingsPageInfo {
@@ -115,7 +123,7 @@ export function createSettingsPage(
     }
     const created = vscode.window.createWebviewPanel(
       SETTINGS_VIEW_TYPE,
-      SETTINGS_PAGE_TITLE,
+      settingsPageTitle(),
       vscode.ViewColumn.Active,
       {
         enableScripts: true,
@@ -124,7 +132,11 @@ export function createSettingsPage(
       },
     )
     panel = created
-    created.webview.html = buildSettingsPageHtml(created.webview, context.extensionUri)
+    created.webview.html = buildSettingsPageHtml(
+      created.webview,
+      context.extensionUri,
+      resolveLocale(service.getSnapshot()[LANGUAGE_KEY], vscode.env.language),
+    )
     const messageSub = created.webview.onDidReceiveMessage(handleMessage)
     created.onDidDispose(() => {
       messageSub.dispose()
@@ -138,13 +150,19 @@ export function createSettingsPage(
       panel?.dispose()
     },
     isOpen: () => panel !== undefined,
-    getInfo: () => ({ open: panel !== undefined, ready, title: SETTINGS_PAGE_TITLE }),
+    getInfo: () => ({ open: panel !== undefined, ready, title: settingsPageTitle() }),
     injectMessage: handleMessage,
   }
 }
 
-/** 设置页 HTML：CSP 四段与产物地址装配（照抄 buildWebviewHtml 模式） */
-function buildSettingsPageHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
+/** 设置页 HTML：CSP 四段与产物地址装配（照抄 buildWebviewHtml 模式）；
+ *  #93 同步注入 <html lang> 与语言数据岛（首帧文案即就绪，零字典字节进
+ *  settings.js——语言包只经数据岛进入 webview） */
+function buildSettingsPageHtml(
+  webview: vscode.Webview,
+  extensionUri: vscode.Uri,
+  locale: LocaleCode,
+): string {
   const nonce = randomUUID()
   const scriptUri = webview.asWebviewUri(
     vscode.Uri.joinPath(extensionUri, 'out', 'webview', 'settings.js'),
@@ -160,16 +178,17 @@ function buildSettingsPageHtml(webview: vscode.Webview, extensionUri: vscode.Uri
     `style-src ${webview.cspSource}`,
   ].join('; ')
   return `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="${locale}">
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link href="${styleUri}" rel="stylesheet">
-<title>${SETTINGS_PAGE_TITLE}</title>
+<title>${settingsPageTitle()}</title>
 </head>
 <body>
 <div id="app"></div>
+${buildLocaleIslandHtml(locale, LOCALE_MESSAGES[locale])}
 <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`

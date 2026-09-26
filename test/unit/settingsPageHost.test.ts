@@ -1,12 +1,14 @@
 // 宿主设置页生命周期契约：异步保存完成时，已关闭的 webview 不可再访问。
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const vscodeMock = vi.hoisted(() => ({ createWebviewPanel: vi.fn() }))
+const vscodeMock = vi.hoisted(() => ({ createWebviewPanel: vi.fn(), envLanguage: 'en' }))
 
 vi.mock('vscode', () => ({
   window: { createWebviewPanel: vscodeMock.createWebviewPanel },
   ViewColumn: { Active: 1 },
   Uri: { joinPath: (...parts: unknown[]) => parts.join('/') },
+  // #93：HTML 生成点经 vscode.env.language 解析生效语言（auto 语义）
+  env: { language: vscodeMock.envLanguage },
 }))
 
 import { createSettingsPage } from '../../src/host/settingsPage'
@@ -53,5 +55,21 @@ describe('设置页异步回信与面板生命周期', () => {
     finish({ ok: true, values: { 'test.flag': true } })
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(sent).toEqual([])
+  })
+
+  it('open() 注入语言数据岛并同步 <html lang>（#93 首帧管线）', () => {
+    const { panel } = makePanel()
+    vscodeMock.createWebviewPanel.mockReturnValue(panel)
+    const service = {
+      getSnapshot: () => ({}),
+      apply: () => Promise.resolve({ ok: true as const, values: {} }),
+    }
+    const page = createSettingsPage({ extensionUri: 'extension' } as never, service as never,
+      { getSnapshot: () => ({}) } as never)
+    page.open()
+    // mock env.language 为 en：auto 解析为 en，数据岛与 html lang 同步该语言
+    expect(panel.webview.html).toContain('<html lang="en">')
+    expect(panel.webview.html).toContain('<script type="application/json" id="vsidian-locale">')
+    expect(panel.webview.html).toContain('"lang":"en"')
   })
 })

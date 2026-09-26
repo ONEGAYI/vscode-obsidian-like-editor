@@ -1,6 +1,10 @@
 // 设置页分页容器：宿主快照为权威，全局搜索只负责设置入口定位。
+// #93 i18n 起：页面框架标题经 t() 取词（语言包由 localeBoot 首帧从数据岛
+// 装配、locale.changed 换包，本视图订阅换包事件重渲染常驻文本）；string
+// 枚举定义渲染为下拉控件（boolean 仍为开关）。
+import { t, onLocaleChanged } from '../shared/i18n'
 import { isHostToWebview } from '../shared/protocol'
-import type { SettingDefinition, SettingsPayload } from '../shared/settings'
+import type { SettingDefinition, SettingsPayload, SettingsPayloadValue } from '../shared/settings'
 
 export interface SettingsPageBridge { postMessage(message: unknown): void }
 
@@ -20,6 +24,7 @@ export const SETTINGS_PAGE_CLASS_NAMES = {
   subtitle: 'vsidian-settings-subtitle', list: 'vsidian-settings-list',
   item: 'vsidian-settings-item', itemTitle: 'vsidian-settings-item-title',
   itemDescription: 'vsidian-settings-item-description', checkbox: 'vsidian-settings-checkbox',
+  select: 'vsidian-settings-select',
   empty: 'vsidian-settings-empty',
 } as const
 
@@ -45,10 +50,12 @@ export class SettingsPageView {
   private search: HTMLInputElement | undefined
   private nav: HTMLElement | undefined
   private status: HTMLElement | undefined
+  private titleEl: HTMLElement | undefined
   private active = 'editor'
   private pending = 0
   private saveFailed = false
   private disposeSection: (() => void) | undefined
+  private offLocale: (() => void) | undefined
 
   constructor(private readonly bridge: SettingsPageBridge,
     private readonly defs: readonly SettingDefinition[],
@@ -57,7 +64,8 @@ export class SettingsPageView {
   mount(parent: HTMLElement): void {
     const root = element('div', SETTINGS_PAGE_CLASS_NAMES.root)
     const sidebar = element('aside', 'vsidian-settings-sidebar')
-    sidebar.append(element('h1', SETTINGS_PAGE_CLASS_NAMES.title, 'Vsidian 设置'))
+    this.titleEl = element('h1', SETTINGS_PAGE_CLASS_NAMES.title, t('settings.pageTitle'))
+    sidebar.append(this.titleEl)
     if (this.defs.length || this.sections.length) {
       const searchWrap = element('div', 'vsidian-settings-search-wrap')
       this.search = element('input', 'vsidian-settings-search')
@@ -81,7 +89,28 @@ export class SettingsPageView {
     main.append(this.status, this.listEl)
     root.append(sidebar, main)
     parent.append(root)
+    // 语言切换重渲染（#93）：常驻文本节点（框架标题与列表内容）随换包更新；
+    // 按需创建的控件自然取新词。搜索输入框为持久元素，重渲染不重建不夺焦。
+    this.offLocale = onLocaleChanged(() => this.applyLocale())
     this.render()
+  }
+
+  /** 语言换包后的常驻文本重渲染：框架标题就地更新 + 列表整体重建 */
+  private applyLocale(): void {
+    if (this.titleEl) {
+      this.titleEl.textContent = t('settings.pageTitle')
+    }
+    this.render()
+  }
+
+  /**
+   * 释放视图资源（取消语言换包订阅）。生产路径的视图寿命 = 页面寿命
+   * （页面卸载即整体销毁），无需调用；同一模块状态反复挂载视图的场景
+   * （单测）用它防监听器累积。
+   */
+  dispose(): void {
+    this.offLocale?.()
+    this.offLocale = undefined
   }
 
   handleHostMessage(message: unknown): void {
@@ -96,14 +125,23 @@ export class SettingsPageView {
       // 同步值不重建分页，也不夺走搜索框和开关的键盘焦点。
       for (const box of this.listEl?.querySelectorAll<HTMLInputElement>('input[data-setting-key]') ?? []) {
         const def = this.defs.find((d) => d.key === box.dataset.settingKey)!
-        box.checked = this.value(def)
+        box.checked = this.value(def) === true
+      }
+      for (const select of this.listEl?.querySelectorAll<HTMLSelectElement>('select[data-setting-key]') ?? []) {
+        const def = this.defs.find((d) => d.key === select.dataset.settingKey)
+        if (def) {
+          select.value = String(this.value(def))
+        }
       }
     }
   }
   getValues(): SettingsPayload | undefined { return this.values }
-  private value(def: SettingDefinition): boolean {
+  private value(def: SettingDefinition): SettingsPayloadValue {
     const raw = this.values?.[def.key]
-    return typeof raw === 'boolean' ? raw : def.default
+    if (def.type === 'boolean') {
+      return typeof raw === 'boolean' ? raw : def.default
+    }
+    return typeof raw === 'string' && def.enum.includes(raw) ? raw : def.default
   }
   private categories() {
     return [{ id: 'editor', title: '编辑器', icon: 'editor' as const }, ...this.sections]
@@ -171,31 +209,65 @@ export class SettingsPageView {
       const label = element('label', 'vsidian-settings-item-label')
       const text = element('span', 'vsidian-settings-item-copy')
       text.append(element('span', SETTINGS_PAGE_CLASS_NAMES.itemTitle, def.title))
-      const box = element('input', SETTINGS_PAGE_CLASS_NAMES.checkbox)
-      box.type = 'checkbox'
-      box.dataset.settingKey = def.key
-      box.checked = this.value(def)
-      box.setAttribute('aria-label', def.title)
+      // #93 控件分流：boolean → 复选开关；string 枚举 → 下拉（enum 顺序即
+      // 选项顺序，optionLabels 缺省显示原值）
+      const control: HTMLInputElement | HTMLSelectElement = def.type === 'string'
+        ? this.buildSelect(def)
+        : this.buildCheckbox(def)
       if (def.description) {
         const desc = element('span', SETTINGS_PAGE_CLASS_NAMES.itemDescription, def.description)
         desc.id = `description-${def.key}`
         text.append(desc)
-        box.setAttribute('aria-describedby', desc.id)
+        control.setAttribute('aria-describedby', desc.id)
       }
-      box.addEventListener('change', () => {
-        if (!this.pending) this.saveFailed = false
-        this.pending++
-        if (this.status) this.status.textContent = '正在保存…'
-        this.bridge.postMessage({ kind: 'settings.set', values: { [def.key]: box.checked } })
-      })
-      label.append(text, box)
+      control.dataset.settingKey = def.key
+      control.setAttribute('aria-label', def.title)
+      label.append(text, control)
       item.append(label)
       list.append(item)
       if (focusEntry === def.key) {
         item.classList.add('vsidian-settings-item-located')
-        box.focus()
+        control.focus()
         item.scrollIntoView?.({ block: 'nearest' })
       }
     }
   }
+
+  private buildCheckbox(def: BooleanSettingDefinitionLike): HTMLInputElement {
+    const box = element('input', SETTINGS_PAGE_CLASS_NAMES.checkbox)
+    box.type = 'checkbox'
+    box.checked = this.value(def) === true
+    box.addEventListener('change', () => {
+      if (!this.pending) this.saveFailed = false
+      this.pending++
+      if (this.status) this.status.textContent = '正在保存…'
+      this.bridge.postMessage({ kind: 'settings.set', values: { [def.key]: box.checked } })
+    })
+    return box
+  }
+
+  private buildSelect(def: StringEnumSettingDefinitionLike): HTMLSelectElement {
+    const select = element('select', SETTINGS_PAGE_CLASS_NAMES.select)
+    const current = String(this.value(def))
+    for (const value of def.enum) {
+      const option = element('option', '', def.optionLabels?.[value] ?? value)
+      option.value = value
+      if (value === current) {
+        option.selected = true
+      }
+      select.append(option)
+    }
+    select.value = current
+    select.addEventListener('change', () => {
+      if (!this.pending) this.saveFailed = false
+      this.pending++
+      if (this.status) this.status.textContent = '正在保存…'
+      this.bridge.postMessage({ kind: 'settings.set', values: { [def.key]: select.value } })
+    })
+    return select
+  }
 }
+
+/** 渲染层对两类定义的结构收窄（避免在分流点反复判 type） */
+type BooleanSettingDefinitionLike = Extract<SettingDefinition, { type: 'boolean' }>
+type StringEnumSettingDefinitionLike = Extract<SettingDefinition, { type: 'string' }>
