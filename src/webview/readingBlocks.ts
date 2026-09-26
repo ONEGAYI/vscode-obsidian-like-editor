@@ -19,7 +19,7 @@
 //   渲染——保留原文的局部源码降级，不触发整篇改写
 import { frontmatterRange } from './markdownDoc'
 import { maskCodeSpanPipes } from './tableCells'
-import { isMermaidInfo } from '../shared/mermaid'
+import { isRenderedFenceInfo } from '../shared/mermaid'
 import { codeInfoFirstWord } from '../shared/codeLangs'
 import {
   buildLineBounds,
@@ -243,7 +243,7 @@ function pushBlock(
   if (opener.type === 'fence') {
     // #60：mermaid 围栏整块成块（html 为挂载后渲染的容器，见 fence 渲染
     // 规则）——豁免 60 行切片（大图不得拆碎）与代码块语义
-    if (isMermaidInfo(opener.info ?? '')) {
+    if (isRenderedFenceInfo(opener.info ?? '')) {
       blocks.push({ kind: 'mermaid', start, end, html: renderTokenHtml(md, group, env) })
       return
     }

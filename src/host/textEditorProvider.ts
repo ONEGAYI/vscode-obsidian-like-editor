@@ -27,6 +27,7 @@ import { FORMAT_OPERATIONS } from '../shared/formatOperations'
 import { KEYBINDING_OPERATIONS, UI_OPERATIONS } from '../shared/keybindings'
 import {
   isWebviewToHost,
+  type DiagramExportPayload,
   type HostToWebview,
   type SerChange,
   type TableEditOp,
@@ -49,6 +50,7 @@ import {
 import type { SettingsService } from './settingsService'
 import type { KeybindingService } from './keybindingService'
 import type { SettingsPageHandle } from './settingsPage'
+import { runDiagramExport } from './diagramExportHost'
 import { installHostLocale, LOCALE_MESSAGES, type LocaleCode } from '../shared/locales'
 import { buildLocaleIslandHtml } from '../shared/locales/island'
 import { hostLocale } from './hostLocale'
@@ -109,6 +111,10 @@ export function isActiveTabCustomEditorOf(
     input.uri.toString() === uriStr
   )
 }
+
+/** 图表导出消息日志（#111 测试钩子观测：钩子模式下集成测试断言
+ *  webview→宿主导出链路的消息形态；按文档 URI 分桶，查询即取走） */
+const diagramExportTestLog = new Map<string, DiagramExportPayload[]>()
 
 /** 链接跳转执行日志（#10 测试钩子观测：VSIDIAN_TEST_HOOKS 下集成测试断言
  *  宿主收到的跳转意图与处置结果） */
@@ -757,6 +763,21 @@ export function createTextEditorProvider(
           void vscode.env.clipboard.writeText(
             `[[${outlineNoteNameOf(docUri)}#${outlineLinkHeading(heading)}]]`,
           )
+        },
+        // #111 图表导出端口：弹窗工具条 → 载荷校验 + showSaveDialog +
+        // writeFile，结果经 diagram.export.result 回来源面板。测试钩子
+        // 模式（VSIDIAN_TEST_HOOKS）短路真实对话框：记录消息形态供集成
+        // 断言，回报 cancelled（与用户取消同回报形态）
+        exportDiagram: (payload, report) => {
+          if (process.env.VSIDIAN_TEST_HOOKS === '1') {
+            const key = document.uri.toString()
+            const log = diagramExportTestLog.get(key) ?? []
+            log.push(payload)
+            diagramExportTestLog.set(key, log)
+            report({ ok: false, reason: 'cancelled' })
+            return
+          }
+          void runDiagramExport(payload, document.uri.toString(), report)
         },
       })
       entry.panels.set(sessionId, webviewPanel)
@@ -1442,6 +1463,17 @@ export function createTextEditorProvider(
       },
     ),
     vscode.commands.registerCommand(
+      // #111 图表导出消息日志（取走即清空）：钩子模式下 exportDiagram 端口
+      // 不弹真实另存为对话框，集成测试经 graphic.test.popup 的 action 驱动
+      // 导出按钮后，以此断言 webview→宿主链路的消息形态
+      'onegayi.vsidian._test.takeDiagramExportLog',
+      (uriStr: string) => {
+        const log = diagramExportTestLog.get(uriStr) ?? []
+        diagramExportTestLog.set(uriStr, [])
+        return [...log]
+      },
+    ),
+    vscode.commands.registerCommand(
       // #38 全局模式记忆读取（非法值容错同正式链路）：集成测试断言
       // 切换后记忆写入 / 弹回不写记忆等契约
       'onegayi.vsidian._test.getLastMode',
@@ -1633,7 +1665,9 @@ function buildWebviewHtml(
   )
   const csp = [
     `default-src 'none'`,
-    `img-src ${webview.cspSource} https:`,
+    // data: 供 #111 图表弹窗 PNG 光栅化（自有 mermaid SVG 经 data URL
+    // 装载到 canvas；位图不可执行，风险面限于解码）
+    `img-src ${webview.cspSource} https: data:`,
     `script-src ${webview.cspSource} 'nonce-${nonce}'`,
     // 'unsafe-inline' 仅放行样式：CodeMirror 6（style-mod）在运行时向
     // document 注入 <style> 元素承载 baseTheme 与扩展样式，属 CSP 的

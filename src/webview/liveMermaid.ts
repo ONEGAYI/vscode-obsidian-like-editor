@@ -23,7 +23,9 @@ import { RangeSet, StateField, type Extension, type Range, type Text, type Trans
 import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view'
 import { liveDecorationsField, selectionTouchesRange } from './liveDecorations'
 import { codeCardFoldField } from './codeCardState'
-import { renderMermaidInto } from './mermaidRender'
+import { graphicRendererFor } from './graphicRenderers'
+import { buildGraphicChrome, GRAPHIC_CHROME_CLASS_NAMES } from './graphicBlockChrome'
+import { openGraphicPopup } from './diagramPopup'
 import {
   MERMAID_CLASS_NAMES,
   MERMAID_CODE_ATTR,
@@ -54,17 +56,23 @@ export const MERMAID_DECO_CACHE_LIMIT = 64
 // ---- widget 与装饰实例缓存 ----
 
 /**
- * live Mermaid widget：光标在围栏外时把整个 mermaid 围栏替换为渲染容器
- * （异步渲染，先占位后填充——照 LiveImageWidget 两段式先例）。lineBreaks
- * 声明 1 个视觉行（块级折叠的行高估算依据，照表格/公式块先例）。
+ * live Mermaid widget（#111 起为图形化代码块通用形态）：光标在围栏外时
+ * 把整个围栏替换为「frame（定位宿主）+ 内层渲染容器 + 右上角按钮组」。
+ * lineBreaks 声明 1 个视觉行（块级折叠的行高估算依据，照表格/公式块先例）。
+ * 禁点击进编辑（规格契约 2）：widget 吞掉指向图形的鼠标事件，编辑入口
+ * 收敛到 edit 按钮（派发选区进围栏，触发既有源码显形管线）；键盘移入
+ * 围栏不受影响（装饰按选区重建，与鼠标事件无关）。
  */
 export class LiveMermaidWidget extends WidgetType {
-  constructor(readonly code: string) {
+  constructor(
+    readonly code: string,
+    readonly language: string = 'mermaid',
+  ) {
     super()
   }
 
   eq(other: LiveMermaidWidget): boolean {
-    return other.code === this.code
+    return other.code === this.code && other.language === this.language
   }
 
   get lineBreaks(): number {
@@ -72,29 +80,55 @@ export class LiveMermaidWidget extends WidgetType {
   }
 
   toDOM(): HTMLElement {
-    const div = document.createElement('div')
-    div.className = MERMAID_CLASS_NAMES.diagram
-    div.setAttribute(MERMAID_CODE_ATTR, this.code)
-    div.setAttribute(MERMAID_STATE_ATTR, 'pending')
-    renderMermaidInto(div, this.code)
-    return div
+    const inner = document.createElement('div')
+    inner.className = MERMAID_CLASS_NAMES.diagram
+    inner.setAttribute(MERMAID_CODE_ATTR, this.code)
+    inner.setAttribute(MERMAID_STATE_ATTR, 'pending')
+    const frame = document.createElement('div')
+    frame.className = GRAPHIC_CHROME_CLASS_NAMES.frame
+    frame.appendChild(inner)
+    frame.appendChild(
+      buildGraphicChrome({
+        // 编辑源码：findFromDOM 只认携带 cmTile 的节点（本版本 CM6 的
+        // Tile.get 语义），从 frame 根查找；posAtDOM 即挂点位置 = 围栏
+        // 起始 offset，光标落在 from 即触及围栏区间 → 源码显形（卡片接管）
+        onEdit: () => {
+          const view = EditorView.findFromDOM(frame)
+          if (view) {
+            view.dispatch({ selection: { anchor: view.posAtDOM(frame) } })
+          }
+        },
+        onPopup: () => {
+          openGraphicPopup(this.language, this.code)
+        },
+      }),
+    )
+    graphicRendererFor(this.language)?.renderInto(inner, this.code)
+    return frame
   }
 
   ignoreEvent(): boolean {
-    return false // 交给 CM6：光标定位与编辑入口
+    return true // #111：吞掉点击——图形本体不再触发光标落位/源码显形
   }
 }
 
 const decoCache = new Map<string, ReturnType<typeof Decoration.replace>>()
 
-/** replace widget 装饰实例缓存（同源码复用，RangeSet.eq 成立） */
-export function mermaidWidgetDeco(code: string): ReturnType<typeof Decoration.replace> {
-  const hit = decoCache.get(code)
+/** replace widget 装饰实例缓存（同源码+语言复用，RangeSet.eq 成立） */
+export function mermaidWidgetDeco(
+  code: string,
+  language: string = 'mermaid',
+): ReturnType<typeof Decoration.replace> {
+  const key = `${language}\u0000${code}`
+  const hit = decoCache.get(key)
   if (hit) {
+    // LRU：命中重排到 Map 尾部（FIFO 会把热条目淘汰，与渲染缓存口径一致）
+    decoCache.delete(key)
+    decoCache.set(key, hit)
     return hit
   }
-  const deco = Decoration.replace({ widget: new LiveMermaidWidget(code) })
-  decoCache.set(code, deco)
+  const deco = Decoration.replace({ widget: new LiveMermaidWidget(code, language) })
+  decoCache.set(key, deco)
   while (decoCache.size > MERMAID_DECO_CACHE_LIMIT) {
     const oldest = decoCache.keys().next().value
     if (oldest === undefined) {
@@ -227,7 +261,7 @@ function rebuildFences(prev: MermaidFenceTable, tr: Transaction): MermaidFenceTa
         to: m.to,
         char: m.span.char,
         run: m.span.run,
-        mermaid: m.span.mermaid,
+        rendered: m.span.rendered,
         info: m.span.info,
         code: m.span.code,
       })
@@ -269,7 +303,9 @@ export function buildMermaidDecorationRanges(
 ): Array<Range<Decoration>> {
   const out: Array<Range<Decoration>> = []
   for (const fence of fences) {
-    if (!fence.mermaid) {
+    // #111 注册表：仅发射 webview 侧有渲染管线的渲染型围栏（共享侧
+    // RENDERED_FENCE_LABELS 登记但管线缺失的语言稳定降级为源码+卡片）
+    if (!fence.rendered || !graphicRendererFor(fence.info.trim())) {
       continue
     }
     if (fm && fence.from < fm.end) {
@@ -281,7 +317,7 @@ export function buildMermaidDecorationRanges(
     if (folded.has(fence.from)) {
       continue
     }
-    out.push(mermaidWidgetDeco(fence.code).range(fence.from, fence.to))
+    out.push(mermaidWidgetDeco(fence.code, fence.info.trim()).range(fence.from, fence.to))
   }
   return out
 }

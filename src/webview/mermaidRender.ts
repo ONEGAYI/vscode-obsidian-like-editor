@@ -26,9 +26,12 @@
 // 并重渲染当前在文档中的全部容器（live widget 与阅读容器共用同一 data 属性
 // 形态，统一扫描）。缓存条目携带主题代次戳（themeGen）：在途渲染完成时若
 // 代次已过（渲染期间切换了主题），结果应用到容器但不写缓存——否则后续
-// 渲染会命中旧主题缓存条目，容器永久滞留旧主题（主题竞态修复）。
+// 渲染会命中旧主题缓存条目，容器永久滞留旧主题（主题竞态修复）。暗色取值
+// 经 mermaidTheme 以 --vscode-* 色板对齐正文（#110）；初始明暗态由
+// syncController mount 时播种（observer 只覆盖运行中的变化）。
 import { MERMAID_CLASS_NAMES, MERMAID_CODE_ATTR, MERMAID_STATE_ATTR } from '../shared/mermaid'
 import { t } from '../shared/i18n'
+import { buildDarkMermaidThemeVariables, resolveVscodeMermaidPalette } from './mermaidTheme'
 
 /** mermaid API 面（仅本模块消费的能力；真实实现来自懒加载的全局） */
 export interface MermaidApi {
@@ -86,11 +89,18 @@ export function mermaidUri(): string | null {
 }
 
 function initializeMermaid(): void {
-  api?.initialize({
+  const config: Record<string, unknown> = {
     securityLevel: 'strict',
     startOnLoad: false,
     theme: dark ? 'dark' : 'default',
-  })
+  }
+  if (dark) {
+    // #110：暗色分支注入对齐正文的 themeVariables（--vscode-* 色板，缺失走
+    // 兜底）；亮色分支维持现状不注入。每次 initialize 重新解析——切换主题
+    // 时 --vscode-* 计算值已随宿主更新
+    config['themeVariables'] = buildDarkMermaidThemeVariables(resolveVscodeMermaidPalette())
+  }
+  api?.initialize(config)
   initialized = true
 }
 
@@ -324,6 +334,19 @@ export function renderMermaidIn(root: ParentNode): void {
       renderMermaidInto(el, el.getAttribute(MERMAID_CODE_ATTR)!)
     }
   }
+}
+
+/** 取渲染 SVG 字符串（#111 图表弹窗与导出共用）：缓存优先（同源码不
+ *  重渲染）、走同一串行队列与主题代次防护；失败返回错误消息。 */
+export type MermaidSvgResult = { ok: true; svg: string } | { ok: false; message: string }
+
+export async function renderMermaidSvg(code: string): Promise<MermaidSvgResult> {
+  const api = await ensureMermaidApi()
+  if (!api) {
+    return { ok: false, message: t('decor.mermaidUnavailable') }
+  }
+  const entry = await renderCached(api, code)
+  return entry.kind === 'ok' ? { ok: true, svg: entry.svg } : { ok: false, message: entry.message }
 }
 
 /** 主题联动：切换明暗时递增主题代次、以新主题重新 initialize、清空缓存

@@ -13,7 +13,7 @@
 import MarkdownIt, { type Env, type StateInline, type Token } from 'markdown-it'
 import katexPlugin from '@vscode/markdown-it-katex'
 import { MATH_CLASS_NAMES, stripInlineTexTicks } from '../shared/math'
-import { MERMAID_CLASS_NAMES, MERMAID_CODE_ATTR, MERMAID_STATE_ATTR, isMermaidInfo } from '../shared/mermaid'
+import { GRAPHIC_LANG_ATTR, MERMAID_CLASS_NAMES, MERMAID_CODE_ATTR, MERMAID_STATE_ATTR, isRenderedFenceInfo } from '../shared/mermaid'
 import { WIKILINK_CLASS_NAMES, parseWikilinkInner } from '../shared/wikilink'
 import { renderMathHtml } from './mathRenderCache'
 import { tableCellBreakLength } from './tableCells'
@@ -66,14 +66,14 @@ function installMermaidFenceRenderer(md: InstanceType<typeof MarkdownIt>): void 
   const defaultFence = md.renderer.rules.fence
   md.renderer.rules.fence = (tokens, idx, options, env, self) => {
     const token = tokens[idx]!
-    if (!isMermaidInfo(token.info ?? '')) {
+    if (!isRenderedFenceInfo(token.info ?? '')) {
       return defaultFence!(tokens, idx, options, env, self)
     }
     // 去掉尾部换行与 live 侧围栏内容口径对齐（缓存键一致）；属性内换行
     // 转义为 &#10;（innerHTML 解析回 \n，html 字符串本身保持单行可读）
     const code = token.content.replace(/\n$/, '')
     const attr = escapeHtmlText(code).replaceAll('\n', '&#10;')
-    return `<div class="${MERMAID_CLASS_NAMES.diagram}" ${MERMAID_CODE_ATTR}="${attr}" ${MERMAID_STATE_ATTR}="pending"></div>\n`
+    return `<div class="${MERMAID_CLASS_NAMES.diagram}" ${GRAPHIC_LANG_ATTR}="${escapeHtmlText(token.info.trim())}" ${MERMAID_CODE_ATTR}="${attr}" ${MERMAID_STATE_ATTR}="pending"></div>\n`
   }
 }
 

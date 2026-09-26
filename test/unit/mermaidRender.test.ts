@@ -80,7 +80,7 @@ describe('renderMermaidInto：成功渲染与容器状态', () => {
     expect(el.querySelector('svg')).not.toBeNull()
   })
 
-  it('初始化配置：securityLevel=strict、startOnLoad=false、主题随明暗', async () => {
+  it('初始化配置：securityLevel=strict、startOnLoad=false、主题随明暗；暗色注入对齐正文的 themeVariables（#110）', async () => {
     const api = makeApi(SAMPLE_SVG)
     __setMermaidApiForTest(api)
     renderMermaidInto(makeContainer(), 'A-->B')
@@ -90,9 +90,19 @@ describe('renderMermaidInto：成功渲染与容器状态', () => {
     expect(cfg['securityLevel']).toBe('strict')
     expect(cfg['startOnLoad']).toBe(false)
     expect(cfg['theme']).toBe('default')
+    // 亮色分支维持现状：不注入 themeVariables
+    expect(cfg['themeVariables']).toBeUndefined()
     setMermaidDarkTheme(true)
     const darkCfg = api.configs[api.configs.length - 1]! as Record<string, unknown>
     expect(darkCfg['theme']).toBe('dark')
+    // 暗色分支：墨水色组（连线/信号线/信号文字）与节点组（填充/文字/描边）
+    // 都有取值——jsdom 无 --vscode-* 计算值，走兜底色板
+    const tv = darkCfg['themeVariables'] as Record<string, string> | undefined
+    expect(tv, '暗色应注入 themeVariables').toBeDefined()
+    for (const key of ['primaryColor', 'primaryTextColor', 'primaryBorderColor', 'mainBkg', 'lineColor', 'signalColor', 'signalTextColor', 'edgeLabelBackground']) {
+      expect(typeof tv![key], `${key} 应为字符串`).toBe('string')
+      expect(tv![key]!.length, `${key} 不为空`).toBeGreaterThan(0)
+    }
   })
 })
 
