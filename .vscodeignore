@@ -28,3 +28,6 @@ package-lock.json
 *.vsix
 # 原图仅存仓库溯源（1254×1254），VSIX 用 media/vsidian-icon-256.png
 media/vsidian-icon.png
+
+# 快速操作图标的 SVG/PNG 制作源仅存仓库；CSS 引用的 SVG 经 esbuild 进入 out/webview/assets。
+media/quick-actions/**

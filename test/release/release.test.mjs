@@ -16,6 +16,19 @@ function katexFontEntries() {
   }))
 }
 
+// 快速操作条的两套图标：测试基线独立列出预期键，防止发布清单漏项。
+const QUICK_ICON_KEYS = [
+  'bold', 'italic', 'strikethrough', 'inlineCode', 'heading',
+  'bulletList', 'orderedList', 'taskList', 'quote', 'codeBlock',
+  'link', 'clearInline', 'table', 'inlineMath', 'blockMath',
+]
+function quickActionIconEntries() {
+  return ['light', 'dark'].flatMap((theme) => QUICK_ICON_KEYS.map((key) => ({
+    size: 2600,
+    name: `extension/out/webview/assets/${theme}-${key}.svg`,
+  })))
+}
+
 // 与真实 VSIX 内容对应的合法基线（体积取包体检查阈值内的代表值）。
 function makeEntries() {
   return [
@@ -38,6 +51,7 @@ function makeEntries() {
     { size: 3898, name: 'extension/media/css-contract-probe.css' },
     { size: 35761, name: 'extension/media/vsidian-icon-256.png' },
     ...katexFontEntries(),
+    ...quickActionIconEntries(),
   ]
 }
 
@@ -104,6 +118,27 @@ test('VSIX 检查：缺少任一 KaTeX 字体报错（公式回落系统字体�
   const result = inspectVsixEntries(missing, { iconPath: 'media/vsidian-icon-256.png' })
   assert.equal(result.ok, false)
   assert.ok(result.errors.some((e) => e.includes('KaTeX_Size1-Regular.woff2')))
+})
+
+test('VSIX 检查：缺少任一快速操作 SVG 报错', () => {
+  const missing = makeEntries().filter(
+    (e) => e.name !== 'extension/out/webview/assets/dark-blockMath.svg',
+  )
+  const result = inspectVsixEntries(missing, { iconPath: 'media/vsidian-icon-256.png' })
+  assert.equal(result.ok, false)
+  assert.ok(result.errors.some((e) => e.includes('dark-blockMath.svg')))
+})
+
+test('VSIX 检查：快速操作制作源不得混入 VSIX', () => {
+  for (const name of [
+    'extension/media/quick-actions/contact-sheet.png',
+    'extension/media/quick-actions/light/light-bold.png',
+    'extension/media/quick-actions/light/light-bold.svg',
+  ]) {
+    const result = inspectVsixEntries([...makeEntries(), { size: 100, name }])
+    assert.equal(result.ok, false, `${name} 应被拒绝`)
+    assert.ok(result.errors.some((e) => e.includes('制作源')), `${name} 应指出制作源`)
+  }
 })
 
 test('VSIX 检查：缺少必需运行时资产报错（大小写不敏感匹配）', () => {
