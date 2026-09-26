@@ -20,6 +20,19 @@ describe('格式操作的文本契约', () => {
     expect(apply('中文 English', 'bold', 10).text).toBe('中文 **English**')
   })
 
+  it('无选区包裹单词后光标落在开围栏内侧，再次切换取消而非叠加', () => {
+    expect(apply('word', 'bold', 0)).toEqual({ text: '**word**', selection: { anchor: 2 } })
+    expect(apply('word', 'italic', 0)).toEqual({ text: '*word*', selection: { anchor: 1 } })
+    expect(apply('word', 'strikethrough', 0)).toEqual({ text: '~~word~~', selection: { anchor: 2 } })
+    expect(apply('word', 'inlineCode', 0)).toEqual({ text: '`word`', selection: { anchor: 1 } })
+    expect(apply('中文 English', 'bold', 0)).toEqual({ text: '**中文** English', selection: { anchor: 2 } })
+    expect(apply('中文 English', 'bold', 10)).toEqual({ text: '中文 **English**', selection: { anchor: 5 } })
+    expect(apply('word', 'bold', 2)).toEqual({ text: '**word**', selection: { anchor: 2 } })
+    expect(apply('- word', 'bold', 2)).toEqual({ text: '- **word**', selection: { anchor: 4 } })
+    const wrapped = apply('word', 'bold', 0)
+    expect(apply(wrapped.text, 'bold', wrapped.selection!.anchor).text).toBe('word')
+  })
+
   it('无选区在格式内取消整个段，有选区仅取消片段', () => {
     expect(apply('**编辑文字**', 'bold', 4).text).toBe('编辑文字')
     expect(apply('**编辑文字**', 'bold', 3, 5).text).toBe('**编**辑文**字**')

@@ -262,10 +262,13 @@ function inlinePlan(text: string, op: FormatOperationId, range: FormatSelection,
     return { changes: [{ from: active.from, to: active.to,
       insert: text.slice(first.to, last.from) }] }
   }
+  // 无选区扩词包裹时光标须落进开围栏内侧，下一次切换才能命中上方取消分支。
+  let wordWrapped = false
+  let selection: { anchor: number } | undefined
   if (isCursor) {
     if (action === 'remove') return null
     const word = wordRange(text, from)
-    if (word) { from = word.from; to = word.to }
+    if (word) { from = word.from; to = word.to; wordWrapped = true }
   }
   const mark = op === 'inlineCode' ? codeDelimiter(text.slice(from, to)) : config.mark
   if (from === to) {
@@ -295,6 +298,7 @@ function inlinePlan(text: string, op: FormatOperationId, range: FormatSelection,
             : { open: mark, close: mark }
           change = { from: start, to: partTo,
             insert: markers.open + content + markers.close }
+          if (wordWrapped) selection = { anchor: start + markers.open.length }
         }
         if (change) changes.push(change)
       }
@@ -302,7 +306,7 @@ function inlinePlan(text: string, op: FormatOperationId, range: FormatSelection,
     if (lineBreak < 0 || lineBreak >= to) break
     lineFrom = lineBreak + 1
   }
-  return changes.length ? { changes } : null
+  return changes.length ? { changes, ...(selection ? { selection } : {}) } : null
 }
 
 function linePlan(text: string, op: FormatOperationId, range: FormatSelection): FormatPlan | null {
