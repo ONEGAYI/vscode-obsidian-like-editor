@@ -555,7 +555,7 @@ export interface PaintProbe {
    *  jsdom 无布局（rect 恒 0），visible 恒 false，只作真宿主集成断言依据；
    *  live 态探 live 侧 .vsidian-mermaid，reading 态探阅读容器。无图时缺省。 */
   mermaid?: {
-    /** 视口与裁切祖先交集内，至少一张有效可见的 SVG 本身或子节点被命中 */
+    /** 视口与裁切祖先交集内，至少一张 SVG 的可见图形子节点被命中 */
     visible: boolean
     /** 首个图表容器 computed display（'none' = 未绘制） */
     display: string | null

@@ -5503,7 +5503,7 @@ export class WebviewSyncController {
   }
 }
 
-/** Mermaid 图的真实可见区域：视口和各层裁切交集内，命中 SVG 本身或其子节点。 */
+/** Mermaid 图的真实可见区域：视口和各层裁切交集内，命中有效图形子节点。 */
 function isSvgPainted(svg: SVGSVGElement): boolean {
   const rect = svg.getBoundingClientRect()
   let left = Math.max(0, rect.left)
@@ -5532,13 +5532,41 @@ function isSvgPainted(svg: SVGSVGElement): boolean {
     }
   }
   if (right <= left || bottom <= top) return false
-  const xs = [left + (right - left) * 0.2, (left + right) / 2,
-    right - (right - left) * 0.2]
-  const ys = [top + (bottom - top) * 0.2, (top + bottom) / 2,
-    bottom - (bottom - top) * 0.2]
-  for (const y of ys) for (const x of xs) {
-    const hit = document.elementFromPoint(x, y)
-    if (hit === svg || (hit && svg.contains(hit))) return true
+  const selector = 'path,rect,circle,ellipse,line,polyline,polygon,text,tspan,textPath,image,use,foreignObject'
+  for (const graphic of svg.querySelectorAll(selector)) {
+    const style = getComputedStyle(graphic)
+    if (style.visibility !== 'visible') continue
+    let hidden = false
+    for (let node: Element | null = graphic; node && node !== svg; node = node.parentElement) {
+      const nodeStyle = getComputedStyle(node)
+      if (nodeStyle.display === 'none' || nodeStyle.contentVisibility === 'hidden' ||
+          Number(nodeStyle.opacity) === 0) {
+        hidden = true
+        break
+      }
+    }
+    if (hidden) continue
+    const tag = graphic.localName.toLowerCase()
+    const fill = style.fill !== 'none' && Number(style.fillOpacity) > 0
+    const strokeWidth = Number.parseFloat(style.strokeWidth)
+    const stroke = style.stroke !== 'none' && Number(style.strokeOpacity) > 0 && strokeWidth > 0
+    if (tag === 'foreignobject' ? !graphic.firstElementChild
+      : tag !== 'image' && !fill && !stroke) continue
+    const bounds = graphic.getBoundingClientRect()
+    const pad = stroke ? strokeWidth / 2 : 0
+    const drawLeft = Math.max(left, bounds.left - pad)
+    const drawRight = Math.min(right, bounds.right + pad)
+    const drawTop = Math.max(top, bounds.top - pad)
+    const drawBottom = Math.min(bottom, bounds.bottom + pad)
+    if (drawRight <= drawLeft || drawBottom <= drawTop) continue
+    const xs = [drawLeft + (drawRight - drawLeft) * 0.2, (drawLeft + drawRight) / 2,
+      drawRight - (drawRight - drawLeft) * 0.2]
+    const ys = [drawTop + (drawBottom - drawTop) * 0.2, (drawTop + drawBottom) / 2,
+      drawBottom - (drawBottom - drawTop) * 0.2]
+    for (const y of ys) for (const x of xs) {
+      const hit = document.elementFromPoint(x, y)
+      if (hit === graphic || (hit && graphic.contains(hit))) return true
+    }
   }
   return false
 }

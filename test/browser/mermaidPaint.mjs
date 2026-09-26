@@ -97,8 +97,66 @@ try {
   assert.equal(partlyCovered.centerCovered, true, '预置条件：图形中心被浮层挡住')
   assert.equal(partlyCovered.edgeSvg, true, '预置条件：图形边缘仍可见')
   assert.equal(partlyCovered.visible, true, '中心受遮挡时仍应识别其他可见 SVG 区域')
+
+  const transparentGraphic = await page.evaluate(() => {
+    document.querySelectorAll('.vsidian-mermaid').forEach((el) => el.remove())
+    document.querySelectorAll('body > div').forEach((el) => {
+      if (el.style.zIndex === '1001') el.remove()
+    })
+    const diagram = document.createElement('div')
+    diagram.className = 'vsidian-mermaid'
+    diagram.setAttribute('data-vsidian-mermaid-state', 'rendered')
+    diagram.style.cssText = 'position:fixed;left:100px;top:250px;width:100px;height:100px;z-index:1000'
+    diagram.innerHTML = '<svg width="100" height="100"><rect width="100" height="100" style="opacity:0"/></svg>'
+    window.controller.getView().contentDOM.appendChild(diagram)
+    const graphic = diagram.querySelector('rect')
+    const hit = document.elementFromPoint(150, 300)
+    window.controller.handleHostMessage({ kind: 'view.state.request' })
+    return { hitGraphic: hit === graphic,
+      visible: window.quickSent().at(-1).paint?.mermaid?.visible }
+  })
+  assert.equal(transparentGraphic.hitGraphic, true,
+    '预置条件：opacity:0 的 rect 仍被 elementFromPoint 命中')
+  assert.equal(transparentGraphic.visible, false, '透明图形子节点不能报告 SVG 已绘制')
+
+  const emptySvg = await page.evaluate(() => {
+    document.querySelectorAll('.vsidian-mermaid').forEach((el) => el.remove())
+    document.querySelectorAll('body > div').forEach((el) => {
+      if (el.style.zIndex === '1001') el.remove()
+    })
+    const diagram = document.createElement('div')
+    diagram.className = 'vsidian-mermaid'
+    diagram.setAttribute('data-vsidian-mermaid-state', 'rendered')
+    diagram.style.cssText = 'position:fixed;left:250px;top:250px;width:100px;height:100px;z-index:1000'
+    diagram.innerHTML = '<svg width="100" height="100"></svg>'
+    window.controller.getView().contentDOM.appendChild(diagram)
+    const svg = diagram.querySelector('svg')
+    const hit = document.elementFromPoint(300, 300)
+    window.controller.handleHostMessage({ kind: 'view.state.request' })
+    return { hitSvg: hit === svg, visible: window.quickSent().at(-1).paint?.mermaid?.visible }
+  })
+  assert.equal(emptySvg.hitSvg, true, '预置条件：空 SVG 本体会被 elementFromPoint 命中')
+  assert.equal(emptySvg.visible, false, '只有空 SVG 视口框时不能报告图形已绘制')
+
+  const strokedLine = await page.evaluate(() => {
+    document.querySelectorAll('.vsidian-mermaid').forEach((el) => el.remove())
+    const diagram = document.createElement('div')
+    diagram.className = 'vsidian-mermaid'
+    diagram.setAttribute('data-vsidian-mermaid-state', 'rendered')
+    diagram.style.cssText = 'position:fixed;left:100px;top:250px;width:100px;height:100px;z-index:1000'
+    diagram.innerHTML = '<svg width="100" height="100"><path d="M10 50 H90" fill="none" stroke="blue" stroke-width="4"/></svg>'
+    window.controller.getView().contentDOM.appendChild(diagram)
+    const line = diagram.querySelector('path')
+    const lineRect = line.getBoundingClientRect()
+    const hit = document.elementFromPoint(lineRect.left + lineRect.width / 2, lineRect.top)
+    window.controller.handleHostMessage({ kind: 'view.state.request' })
+    return { hitLine: hit === line, visible: window.quickSent().at(-1).paint?.mermaid?.visible,
+      hitTag: hit?.tagName, lineRect: lineRect.toJSON() }
+  })
+  assert.equal(strokedLine.hitLine, true, `预置条件：仅描边的线条真实绘制 ${JSON.stringify(strokedLine)}`)
+  assert.equal(strokedLine.visible, true, 'Mermaid 描边线条应保持可见判定')
   await page.close()
-  console.log('[Mermaid 绘制探针] 隐藏、裁切、透明与局部遮挡通过')
+  console.log('[Mermaid 绘制探针] 隐藏、裁切、透明、遮挡、空 SVG 与描边线条通过')
 } finally {
   await browser.close()
 }
