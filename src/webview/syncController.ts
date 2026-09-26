@@ -38,6 +38,7 @@ import {
   isHostToWebview,
   type CssProbeReport,
   type FindSessionProbe,
+  type LineGutterAlignment,
   type LineGutterProbe,
   type LiveSyntaxProbe,
   type OutlineProbe,
@@ -4966,7 +4967,7 @@ export class WebviewSyncController {
   private collectLineGutter(): LineGutterProbe {
     const view = this.view
     if (!view || !this.lineNumbersOn) {
-      return { on: this.lineNumbersOn, count: 0, first: null, last: null }
+      return { on: this.lineNumbersOn, count: 0, first: null, last: null, alignment: null }
     }
     const texts = Array.from(
       view.dom.querySelectorAll('.cm-lineNumbers .cm-gutterElement'),
@@ -4978,7 +4979,58 @@ export class WebviewSyncController {
       count: texts.length,
       first: texts.length > 0 ? texts[0] : null,
       last: texts.length > 0 ? texts[texts.length - 1] : null,
+      alignment: this.collectGutterAlignment(),
     }
+  }
+
+  /** #116 行号几何对齐采样：每条可见行号取「数字文本底边 − 所属正文行
+   *  首个可见文本底边」的像素差（基线代理，|值| ≤ 1 视为对齐）。
+   *  依赖真实布局（getBoundingClientRect）：jsdom 无布局（rect 恒 0）、
+   *  reading 态 live 容器隐藏或视口内无可见文本行时无可采条目，返回
+   *  null 与空文档的空数组区分。 */
+  private collectGutterAlignment(): LineGutterAlignment[] | null {
+    const view = this.view
+    if (!view) return null
+    const out: LineGutterAlignment[] = []
+    try {
+      const elements = view.dom.querySelectorAll<HTMLElement>('.cm-lineNumbers .cm-gutterElement')
+      for (const element of Array.from(elements)) {
+        if (element.style.visibility === 'hidden') continue
+        const text = element.textContent ?? ''
+        if (!text.trim()) continue
+        const lineNo = Number.parseInt(text.trim(), 10)
+        if (!Number.isFinite(lineNo) || lineNo < 1 || lineNo > view.state.doc.lines) continue
+        const line = view.state.doc.line(lineNo)
+        const pos = view.domAtPos(line.from)
+        const anchor = (pos.node.nodeType === 1 ? pos.node : pos.node.parentElement) as HTMLElement | null
+        const lineEl = anchor?.closest('.cm-line')
+        if (!lineEl) continue
+        const walker = document.createTreeWalker(lineEl, NodeFilter.SHOW_TEXT)
+        let firstTextRect: DOMRect | null = null
+        while (walker.nextNode()) {
+          const value = walker.currentNode.nodeValue ?? ''
+          const at = value.search(/\S/)
+          if (at < 0) continue
+          const range = document.createRange()
+          range.setStart(walker.currentNode, at)
+          range.setEnd(walker.currentNode, at + 1)
+          const rect = range.getBoundingClientRect()
+          if (rect.height > 0) {
+            firstTextRect = rect
+            break
+          }
+        }
+        if (!firstTextRect) continue
+        const numRange = document.createRange()
+        numRange.selectNodeContents(element)
+        const numRect = numRange.getBoundingClientRect()
+        if (numRect.height <= 0) continue
+        out.push({ num: text.trim(), deltaBottom: +(numRect.bottom - firstTextRect.bottom).toFixed(2) })
+      }
+    } catch {
+      return out.length ? out : null
+    }
+    return out.length ? out : null
   }
 
   /**

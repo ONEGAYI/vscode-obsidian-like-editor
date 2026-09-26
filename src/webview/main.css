@@ -35,6 +35,10 @@ body {
   --vsidian-content-padding-inline: 24px;
   /* 行号列与正文的固定间距：响应 VSCode UI 字号（界面元素大小） */
   --vsidian-ln-gap: calc(var(--vscode-font-size, 13px) * 2);
+  /* 表格单元格文字下移量（块轴 padding + 边框宽，#116）：表格 cell 规则
+     与行号表头格补偿同源引用；改单元格字面值须同步（契约联动断言：
+     lineNumberCssContract） */
+  --vsidian-table-cell-shift: calc(4px + 1px);
   /* 代码块卡片底色（#79 起公开变量，选择器映射表登记；头部与代码区共用，
      阅读卡片同源） */
   --vsidian-code-card-background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.12));
@@ -107,6 +111,25 @@ body {
   text-align: right;
   white-space: nowrap;
   font-size: min(calc(var(--vsidian-content-font-size, 14px) * 0.75), 12px);
+}
+
+/* 表格行号格特化补偿（#116）：行号格高度/位置按 CM6 heightmap 记账内联
+   写入，与表格行的 CSS 实际高度一致——错位源在补偿规则本身。
+   其一，分隔行源行 display:none，其行号格记账高 0：border-box 下盒高
+   不得小于 padding，通用半差补偿会把 0 高格撑到 2.625px，表后行号逐表
+   下移（实测每表 +2.625px 线性叠加）——分隔行格清零补偿恢复 0 高占位。
+   其二，表头行文字因单元格 padding+border 自行顶下移
+   （--vsidian-table-cell-shift），行号锚定首个视觉行须同步补同量；
+   不改变单元格自身视觉。类由 liveLineNumbers 按表格行装饰挂接。 */
+#app .cm-editor .cm-scroller .cm-lineNumbers .cm-gutterElement.vsidian-ln-table-delimiter {
+  padding-top: 0;
+}
+
+#app .cm-editor .cm-scroller .cm-lineNumbers .cm-gutterElement.vsidian-ln-table-header {
+  padding-top: calc(
+    (1.5 * var(--vsidian-content-font-size) - 1.5 * min(0.75 * var(--vsidian-content-font-size), 12px)) / 2 +
+    var(--vsidian-table-cell-shift)
+  );
 }
 
 /* 标题实时预览（#5 切片）：类名为稳定样式入口（ADR-0004），字号/字重

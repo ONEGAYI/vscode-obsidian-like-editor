@@ -76,3 +76,44 @@ describe('行号列布局与 main.css 的一致（#34 流内列改造后）', ()
     expect(css).not.toContain('--vsidian-ln-scale:')
   })
 })
+
+describe('表格行号格补偿（#116：表后错位与表段首行对齐）', () => {
+  it('分隔行行号格清零 padding-top：0 高记账格不得被通用半差补偿撑开', () => {
+    const rule = extractOne(
+      '分隔行行号格规则',
+      /\.cm-gutterElement\.vsidian-ln-table-delimiter\s*\{[^}]*\}/g,
+    )
+    expect(rule[0], '分隔行格应清零 padding-top（height:0 的 border-box 盒不得小于 padding）')
+      .toMatch(/padding-top:\s*0/)
+  })
+
+  it('表头行行号格补偿 = 通用半差公式 + 单元格下移量变量', () => {
+    const rule = extractOne(
+      '表头行行号格规则',
+      /\.cm-gutterElement\.vsidian-ln-table-header\s*\{[^}]*\}/g,
+    )
+    expect(
+      rule[0],
+      '表头行格应在通用半差补偿基础上叠加单元格下移量',
+    ).toMatch(
+      /padding-top:\s*calc\(\s*\(1\.5 \* var\(--vsidian-content-font-size[^)]*\)\s*-\s*1\.5 \* min\(0\.75 \* var\(--vsidian-content-font-size[^)]*\),\s*12px\)\)\s*\/\s*2\s*\+\s*var\(--vsidian-table-cell-shift\)/,
+    )
+  })
+
+  it('单元格下移量变量与单元格 padding/border 字面值同源（改一处不改另一处即红）', () => {
+    const shift = extractOne(
+      '单元格下移量变量',
+      /--vsidian-table-cell-shift:\s*calc\((\d+)px \+ (\d+)px\)/g,
+    )
+    const cellRule = extractOne(
+      '表格单元格规则',
+      /\.vsidian-table-grid-row > \.vsidian-table-grid-cell(?:\s*,[^{]*)?\s*\{[^}]*\}/g,
+    )
+    const pad = cellRule[0].match(/padding:\s*(\d+)px\s+(\d+)px/)
+    expect(pad, `单元格规则应含字面 padding：${cellRule[0]}`).toBeTruthy()
+    expect(shift[1], 'shift 第一分量应等于单元格 padding 块轴值').toBe(pad![1])
+    const border = cellRule[0].match(/border:\s*(\d+)px solid/)
+    expect(border, '单元格规则应含字面 border').toBeTruthy()
+    expect(shift[2], 'shift 第二分量应等于单元格 border 宽度').toBe(border![1])
+  })
+})

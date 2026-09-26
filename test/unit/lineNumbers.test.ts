@@ -48,6 +48,14 @@ function gutterTexts(c: WebviewSyncController): string[] {
     .map((el) => el.textContent ?? '')
 }
 
+/** 视口内行号单元格（文本 + 类名），供 #116 表格行格分类断言 */
+function gutterElements(c: WebviewSyncController): Array<{ text: string; className: string }> {
+  const els = c.getView()?.dom.querySelectorAll('.cm-lineNumbers .cm-gutterElement') ?? []
+  return Array.from(els)
+    .filter((el) => (el as HTMLElement).style.visibility !== 'hidden')
+    .map((el) => ({ text: el.textContent ?? '', className: el.className }))
+}
+
 describe('默认装配与源行编号', () => {
   it('表外普通段落和另一张表编辑后，旧网格表格仍只显示段首行号', () => {
     const { bridge } = makeBridge()
@@ -193,6 +201,53 @@ describe('设置开关热重配（Compartment）', () => {
 
   it('默认值常量与快照缺省语义一致（SHOW_LINE_NUMBERS_DEFAULT）', () => {
     expect(SHOW_LINE_NUMBERS_DEFAULT).toBe(true)
+  })
+})
+
+describe('表格行号格分类（#116 错位修复）', () => {
+  // 分隔行 gutter element 记账高度 0（行 display:none），通用 padding-top
+  // 半差补偿会把 0 高盒撑开 2.625px、把表后行号逐表推下；表头行文字因
+  // 单元格 padding+border 下移，行号需同步补 cell 下移量。两类行格靠
+  // gutterLineClass 挂稳定类，由 main.css 契约（lineNumberCssContract）
+  // 钉住对应补偿规则——本组只钉「类挂到了正确的行格上」。
+  it('安全表格：分隔行格挂 delimiter 类、表头行格挂 header 类，数据行与普通行不带', () => {
+    const { bridge } = makeBridge()
+    const c = mount(bridge)
+    init(c, '前文\n\n| A | B |\n| --- | --- |\n| 甲 | 乙 |\n\n后文')
+    const byText = new Map(gutterElements(c).map((el) => [el.text, el]))
+    expect(byText.get('3')?.className).toContain('vsidian-ln-table-header')
+    // 分隔行（源行 4）与数据行（源行 5）行号为空字符串，按 DOM 序取
+    const empties = gutterElements(c).filter((el) => el.text === '')
+    expect(empties.length).toBe(2)
+    expect(empties[0]!.className).toContain('vsidian-ln-table-delimiter')
+    expect(empties[1]!.className).not.toContain('vsidian-ln-table-delimiter')
+    expect(byText.get('1')?.className).not.toContain('vsidian-ln-table-header')
+    expect(byText.get('7')?.className).not.toContain('vsidian-ln-table-delimiter')
+    c.dispose()
+  })
+
+  it('光标停分隔行（编辑态显露）时该行格撤下 delimiter 类，与行号显隐数据源一致', () => {
+    const { bridge } = makeBridge()
+    const c = mount(bridge)
+    init(c, '前文\n\n| A | B |\n| --- | --- |\n| 甲 | 乙 |\n\n后文')
+    const view = c.getView()!
+    view.dispatch({ selection: { anchor: view.state.doc.line(4).from + 2 } })
+    const elements = gutterElements(c)
+    const line4 = elements.find((el) => el.text === '4')
+    expect(line4, '光标进入后分隔行行号应显示').toBeTruthy()
+    expect(line4!.className).not.toContain('vsidian-ln-table-delimiter')
+    c.dispose()
+  })
+
+  it('普通文档行号格不带任何表格类', () => {
+    const { bridge } = makeBridge()
+    const c = mount(bridge)
+    init(c, '甲\n\n乙\n')
+    for (const el of gutterElements(c)) {
+      expect(el.className).not.toContain('vsidian-ln-table-header')
+      expect(el.className).not.toContain('vsidian-ln-table-delimiter')
+    }
+    c.dispose()
   })
 })
 

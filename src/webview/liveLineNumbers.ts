@@ -1,5 +1,5 @@
-import type { EditorState } from '@codemirror/state'
-import { lineNumbers, type EditorView } from '@codemirror/view'
+import { RangeSet, type EditorState } from '@codemirror/state'
+import { lineNumbers, gutterLineClass, GutterMarker, type EditorView } from '@codemirror/view'
 import { liveDecorationsField, LIVE_CLASS_NAMES } from './liveDecorations'
 
 /** 安全网格表格只标段首源行号；源码回退表格仍逐行编号。
@@ -24,8 +24,63 @@ function formatLiveLineNumber(lineNumber: number, state: EditorState): string {
   return hidden ? '' : String(lineNumber)
 }
 
+/** 表格行号格稳定类（#116）：行号格的内联记账高度/位置由 CM6 heightmap
+ * 驱动，通用 padding-top 半差补偿在 border-box 下有两个表格特例——
+ * 分隔行格记账高 0，padding 会把 0 高盒撑开（表后行号逐表下移）；表头行
+ * 文字因单元格 padding+border 下移，行号需补同量。两条特化补偿规则在
+ * main.css 按这些类命中（契约：lineNumberCssContract）。 */
+export const LINE_NUMBER_GUTTER_CLASS_NAMES = {
+  tableDelimiter: 'vsidian-ln-table-delimiter',
+  tableHeader: 'vsidian-ln-table-header',
+} as const
+
+const delimiterGutterMarker = new class extends GutterMarker {
+  elementClass = LINE_NUMBER_GUTTER_CLASS_NAMES.tableDelimiter
+}()
+const headerGutterMarker = new class extends GutterMarker {
+  elementClass = LINE_NUMBER_GUTTER_CLASS_NAMES.tableHeader
+}()
+
+/** 表格行号格分类与行号显隐同源（liveDecorationsField 行首装饰，判定式
+ *  与 formatLiveLineNumber 的隐藏判定一致）：光标进入分隔行时装饰撤下，
+ *  分类与行号显隐同步变化。 */
+const tableLineNumberGutterClasses = gutterLineClass.compute([liveDecorationsField], (state) => {
+  const live = state.field(liveDecorationsField, false)
+  if (!live) return RangeSet.empty as RangeSet<GutterMarker>
+  const ranges: ReturnType<GutterMarker['range']>[] = []
+  let pendingFrom = -1
+  let pendingDelimiter = false
+  let pendingHeader = false
+  const flush = (): void => {
+    if (pendingFrom < 0) return
+    const marker = pendingDelimiter
+      ? delimiterGutterMarker
+      : pendingHeader ? headerGutterMarker : null
+    if (marker) ranges.push(marker.range(pendingFrom))
+    pendingFrom = -1
+    pendingDelimiter = false
+    pendingHeader = false
+  }
+  live.decos.between(0, state.doc.length, (from, to, deco) => {
+    if (to !== from) return // 行装饰为行首点区间，与行号显隐判定同口径
+    if (from !== pendingFrom) {
+      flush()
+      pendingFrom = from
+    }
+    const classes: string[] = deco.spec.class?.split(' ') ?? []
+    if (classes.includes(LIVE_CLASS_NAMES.tableGridDelimiter)) pendingDelimiter = true
+    if (classes.includes(LIVE_CLASS_NAMES.tableGridRow) &&
+        classes.includes(LIVE_CLASS_NAMES.tableHeaderLine)) pendingHeader = true
+  })
+  flush()
+  return ranges.length ? RangeSet.of(ranges) : (RangeSet.empty as RangeSet<GutterMarker>)
+})
+
 export function liveLineNumbers() {
-  return lineNumbers({ formatNumber: formatLiveLineNumber })
+  return [
+    lineNumbers({ formatNumber: formatLiveLineNumber }),
+    tableLineNumberGutterClasses,
+  ]
 }
 
 /** 真宿主绘制探针：只记录文字有面积、可见且命中本元素的行号。 */
