@@ -26,6 +26,7 @@
 //   关闭导致的状态重建）后继续编号，宿主按 seq 幂等去重
 import { Annotation, ChangeSet, Compartment, EditorSelection, EditorState, Prec, type Extension, type Text } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
+import { planFormatOperation } from './formatOperations'
 import { liveLineNumbers, paintedLineNumbers } from './liveLineNumbers'
 import {
   isHostToWebview,
@@ -974,6 +975,22 @@ export class WebviewSyncController {
         }
         break
       }
+      case 'format.command': {
+        const view = this.view
+        if (!view || this.viewMode !== 'live' || this.suspended ||
+            view.state.readOnly || !view.state.facet(EditorView.editable)) break
+        const range = view.state.selection.main
+        const plan = planFormatOperation(view.state.doc.toString(), message.op,
+          { from: range.from, to: range.to }, view.state.field(tableRegionField, false))
+        if (plan?.changes.length) {
+          view.dispatch({
+            changes: plan.changes,
+            ...(plan.selection ? { selection: plan.selection } : {}),
+          })
+          view.focus()
+        }
+        break
+      }
       case 'sidebar.test.click': {
         // 测试钩子（#53）：点击真实侧栏切换按钮（与用户点击同一处理器；
         // 纯视图状态翻转，零写回）
@@ -1408,6 +1425,7 @@ export class WebviewSyncController {
       headingFontPx,
       viewMode: this.viewMode,
       selectionOffset: this.view?.state.selection.main.from ?? 0,
+      wordSegmenter: typeof Intl.Segmenter === 'function',
       selectionHead: this.view?.state.selection.main.head ?? 0,
       selectionAssoc: this.view?.state.selection.main.assoc ?? 0,
       readingBlockCount: rStats?.mountedBlocks ?? 0,

@@ -6,6 +6,7 @@
 // 设计依据：探索笔记 02 §5（协议设计建议）、§6（陷阱清单）。
 
 import type { SettingsPayload } from './settings'
+import { isFormatOperationId, type FormatOperationId } from './formatOperations'
 
 /** 设置快照类型随协议消息透出（载荷单一事实源仍在 shared/settings） */
 export type { SettingsPayload }
@@ -96,6 +97,8 @@ export type HostToWebview =
   | { kind: 'table.command'; op: TableEditOp }
   /** 在当前光标/选区建立两列两内容行的空表格，仍走 CM6 文本事务。 */
   | { kind: 'table.create' }
+  /** 格式命令在 Live 光标/选区处执行，单个 CM6 事务经宿主写回。 */
+  | { kind: 'format.command'; op: FormatOperationId }
   /** 测试钩子（#13）：向真实编辑器派发 Tab/Shift+Tab keydown（与用户按键
    *  同一 keymap 链路；纯选区导航，零写回）。宿主测试无法向 webview 派发
    *  真实键盘事件，以此通道验证导航装配 */
@@ -226,6 +229,8 @@ export type WebviewToHost =
       selectionOffset?: number
       selectionHead?: number
       selectionAssoc?: number
+      /** webview 实际运行时能否使用词级分段器（#88）。 */
+      wordSegmenter?: boolean
       /** 阅读容器内块元素数（#6；#7 起为挂载块数，屏外块不创建） */
       readingBlockCount?: number
       /** 当前阅读锚点块的源 start（源码位置锚点，非滚动百分比） */
@@ -1303,6 +1308,7 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.selectionHead === undefined || isNonNegativeInt(v.selectionHead)) &&
         (v.selectionAssoc === undefined || (typeof v.selectionAssoc === 'number' &&
           Number.isInteger(v.selectionAssoc) && v.selectionAssoc >= -1 && v.selectionAssoc <= 1)) &&
+        (v.wordSegmenter === undefined || typeof v.wordSegmenter === 'boolean') &&
         (v.readingBlockCount === undefined || isNonNegativeInt(v.readingBlockCount)) &&
         (v.readingAnchorStart === undefined || isNonNegativeInt(v.readingAnchorStart)) &&
         (v.readingTotalBlocks === undefined || isNonNegativeInt(v.readingTotalBlocks)) &&
@@ -1487,6 +1493,8 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return isTableEditOp(v.op)
     case 'table.create':
       return true
+    case 'format.command':
+      return isFormatOperationId(v.op)
     case 'table.test.key':
       return v.key === 'tab' || v.key === 'shift-tab' || v.key === 'select-all' || v.key === 'enter' ||
         v.key === 'backspace' || v.key === 'delete'

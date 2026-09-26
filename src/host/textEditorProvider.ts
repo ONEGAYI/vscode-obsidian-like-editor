@@ -23,6 +23,7 @@ import {
 } from './wikilinkTarget'
 import { parseWikilinkInner } from '../shared/wikilink'
 import { NewlineCoordinator } from '../shared/newline'
+import { FORMAT_OPERATIONS } from '../shared/formatOperations'
 import {
   isWebviewToHost,
   type HostToWebview,
@@ -1143,6 +1144,24 @@ export function createTextEditorProvider(
         return false
       }),
     )
+  }
+
+  // ---- 格式命令（#88）：命令面板与后续操作条/快捷键共用 id，活动 Live 面板
+  // 在自身选区执行。webview 单事务经 edit.request 写回宿主权威文档。 ----
+  for (const operation of FORMAT_OPERATIONS) {
+    context.subscriptions.push(vscode.commands.registerCommand(operation.command, async (): Promise<boolean> => {
+      for (const entry of sessions.values()) {
+        for (const [sessionId, panel] of entry.panels) {
+          if (!panel.active || !entry.session.getInfo().panels.some((p) =>
+            p.sessionId === sessionId && p.ready)) continue
+          if (entry.session.getViewState(sessionId)?.viewMode === 'reading') return false
+          if (vscode.workspace.fs.isWritableFileSystem(entry.doc.uri.scheme) === false) return false
+          entry.session.postToPanel(sessionId, { kind: 'format.command', op: operation.id })
+          return true
+        }
+      }
+      return false
+    }))
   }
 
   // ---- 测试钩子命令：仅集成测试经 runTest.mjs 注入 VSIDIAN_TEST_HOOKS=1 时

@@ -1,0 +1,128 @@
+import { describe, expect, it } from 'vitest'
+import { planFormatOperation } from '../../src/webview/formatOperations'
+
+function apply(text: string, op: Parameters<typeof planFormatOperation>[1], from: number, to = from,
+  region?: Parameters<typeof planFormatOperation>[3], action?: Parameters<typeof planFormatOperation>[4]) {
+  const plan = planFormatOperation(text, op, { from, to }, region, action)
+  if (!plan) return { text, selection: null }
+  let next = text
+  for (const change of [...plan.changes].reverse()) {
+    next = next.slice(0, change.from) + change.insert + next.slice(change.to)
+  }
+  return { text: next, selection: plan.selection }
+}
+
+describe('格式操作的文本契约', () => {
+  it('中文、中英混排及词边界：光标优先右词，行末取左词', () => {
+    expect(apply('中文 English', 'bold', 0).text).toBe('**中文** English')
+    expect(apply('中文 English', 'bold', 3).text).toBe('中文 **English**')
+    expect(apply('中文 English', 'bold', 10).text).toBe('中文 **English**')
+  })
+
+  it('无选区在格式内取消整个段，有选区仅取消片段', () => {
+    expect(apply('**编辑文字**', 'bold', 4).text).toBe('编辑文字')
+    expect(apply('**编辑文字**', 'bold', 3, 5).text).toBe('**编**辑文**字**')
+  })
+
+  it('混合格式统一应用且不叠加标记；重复切换可还原', () => {
+    expect(apply('**前**后', 'bold', 0, 6).text).toBe('**前后**')
+    expect(apply('前**中**后', 'bold', 0, 7).text).toBe('**前中后**')
+    expect(apply('**前后**', 'bold', 2, 4).text).toBe('前后')
+    expect(apply('**前后**', 'bold', 0, 6).text).toBe('前后')
+    expect(apply('**前中**后', 'bold', 3, 7).text).toBe('**前中后**')
+  })
+
+  it('底层添加与清除各自幂等', () => {
+    expect(apply('**字**', 'bold', 2, 3, undefined, 'add').text).toBe('**字**')
+    expect(apply('字', 'bold', 0, 1, undefined, 'remove').text).toBe('字')
+    expect(apply('**字**', 'bold', 2, 3, undefined, 'remove').text).toBe('字')
+    expect(apply('字', 'bold', 0, 1, undefined, 'add').text).toBe('**字**')
+  })
+
+  it('显式选区严格按选区，不吞相邻文字，跨段保留结构', () => {
+    expect(apply('甲乙丙', 'italic', 1, 2).text).toBe('甲*乙*丙')
+    expect(apply('# 标题\n\n- 列表', 'bold', 2, 9).text).toBe('# **标题**\n\n- **列**表')
+  })
+
+  it('空白插入成对标记并把光标置于中间；公式双链无选区也插入空结构', () => {
+    expect(apply('甲 乙', 'inlineCode', 1)).toEqual({ text: '甲`` 乙', selection: { anchor: 2 } })
+    expect(apply('', 'inlineMath', 0)).toEqual({ text: '$$', selection: { anchor: 1 } })
+    expect(apply('', 'wikilink', 0)).toEqual({ text: '[[]]', selection: { anchor: 2 } })
+  })
+
+  it('代码块与行内代码中不写 Markdown 行内样式', () => {
+    expect(apply('```\n正文\n```', 'bold', 5).text).toBe('```\n正文\n```')
+    expect(apply('`正文`', 'bold', 2).text).toBe('`正文`')
+  })
+
+  it('标题同级不变，取消标题保留行内样式；列表与引用转换', () => {
+    expect(apply('## **标题**', 'heading2', 5).text).toBe('## **标题**')
+    expect(apply('## **标题**', 'headingNone', 5).text).toBe('**标题**')
+    expect(apply('正文', 'bulletList', 1).text).toBe('- 正文')
+    expect(apply('- 正文', 'taskList', 3).text).toBe('- [ ] 正文')
+    expect(apply('正文', 'quote', 1).text).toBe('> 正文')
+    expect(apply('- 正文', 'bulletList', 3).text).toBe('正文')
+    expect(apply('- [x] 完成', 'taskList', 6).text).toBe('完成')
+    expect(apply('> 正文', 'quote', 3).text).toBe('正文')
+    expect(apply('标题\n====', 'headingNone', 1).text).toBe('标题')
+    expect(apply('标题\n----', 'heading2', 1).text).toBe('标题\n----')
+    expect(apply('标题\n----', 'heading3', 1).text).toBe('### 标题')
+  })
+
+  it('显式选区围栏精确包裹，前后文独立成段且文首尾无多余空行', () => {
+    expect(apply('前中文后', 'codeBlock', 1, 3).text).toBe('前\n\n```\n中文\n```\n\n后')
+    expect(apply('文字', 'codeBlock', 0, 2).text).toBe('```\n文字\n```')
+    expect(apply('文字', 'blockMath', 0, 0).text).toBe('$$\n文字\n$$')
+  })
+
+  it('无选区按段落围栏，取消保留间隔；含反引号内容使用更长围栏', () => {
+    expect(apply('前段\n\n后段', 'codeBlock', 1).text).toBe('```\n前段\n```\n\n后段')
+    expect(apply('```\n前段\n```\n\n后段', 'codeBlock', 5).text).toBe('前段\n\n后段')
+    expect(apply('a`b', 'codeBlock', 0, 3).text).toBe('```\na`b\n```')
+    expect(apply('````\na```b\n````', 'codeBlock', 5).text).toBe('a```b')
+    expect(apply('```\n前段\n```', 'codeBlock', 0, 10).text).toBe('前段')
+  })
+
+  it('列表和引用内围栏保留容器；表格单元格禁用块级围栏', () => {
+    expect(apply('- 第一段', 'codeBlock', 4).text).toBe('- ```\n  第一段\n  ```')
+    expect(apply('> 引用', 'blockMath', 3).text).toBe('> $$\n> 引用\n> $$')
+    expect(apply('- ```\n  第一段\n  ```', 'codeBlock', 9).text).toBe('- 第一段')
+    expect(apply('> $$\n> 引用\n> $$', 'blockMath', 7).text).toBe('> 引用')
+    expect(apply('- $$\n  公式\n  $$', 'blockMath', 8).text).toBe('- 公式')
+    const table = '| A | B |\n| --- | --- |\n| x | y |'
+    expect(apply(table, 'codeBlock', table.indexOf('x')).text).toBe(table)
+  })
+
+  it('容器内显式选区仍只包裹文字，前后文留在同一容器', () => {
+    expect(apply('- 前中文后', 'codeBlock', 3, 5).text)
+      .toBe('- 前\n\n  ```\n  中文\n  ```\n\n  后')
+    expect(apply('> 前中文后', 'blockMath', 3, 5).text)
+      .toBe('> 前\n>\n> $$\n> 中文\n> $$\n>\n> 后')
+  })
+
+  it('空段插入空结构并定位光标；块级公式再次操作可取消', () => {
+    expect(apply('', 'codeBlock', 0)).toEqual({ text: '```\n\n```', selection: { anchor: 4 } })
+    expect(apply('$$\n公式\n$$', 'blockMath', 4).text).toBe('公式')
+  })
+
+  it('表格矩形选区逐格应用，不改分隔符和其他列', () => {
+    const table = '| A | B |\n| --- | --- |\n| x | y |'
+    const region = { tableFrom: 0, rowFrom: 0, rowTo: 1, columnFrom: 0, columnTo: 0 }
+    expect(apply(table, 'bold', table.indexOf('A'), table.indexOf('A'), region).text)
+      .toBe('| **A** | B |\n| --- | --- |\n| **x** | y |')
+  })
+
+  it('清除行内格式保留段落，链接仅包裹选中文字', () => {
+    expect(apply('# **粗体**与*斜体*', 'clearInline', 2, 13).text).toBe('# 粗体与斜体')
+    expect(apply('**前中后**', 'clearInline', 3, 4).text).toBe('**前**中**后**')
+    expect(apply('# **标题**\n\n- *列表*', 'clearInline', 2, 16).text)
+      .toBe('# 标题\n\n- 列表')
+    expect(apply('甲乙', 'link', 0, 2).text).toBe('[甲乙]()')
+    expect(apply('[甲乙](目标)', 'link', 2).text).toBe('甲乙')
+    expect(apply('a`b', 'inlineCode', 0, 3).text).toBe('``a`b``')
+    expect(apply('``a`b`` and **bold**', 'clearInline', 14, 18).text)
+      .toBe('``a`b`` and bold')
+    expect(apply('``a`b`` and word', 'inlineCode', 12, 16).text)
+      .toBe('``a`b`` and `word`')
+  })
+})

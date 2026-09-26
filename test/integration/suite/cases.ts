@@ -278,6 +278,7 @@ interface ViewState {
   selectionOffset?: number
   selectionHead?: number
   selectionAssoc?: number
+  wordSegmenter?: boolean
   readingBlockCount?: number
   readingAnchorStart?: number
   /** #7 按需挂载观测 */
@@ -5799,5 +5800,50 @@ export const cases: Array<[string, () => Promise<void>]> = [
       kind: 'view.mode.set', mode: 'reading' })
     await waitViewState('mermaid.md', (v) =>
       v.viewMode === 'reading' && (v.readingMermaidCount ?? -1) === 6)
+  }],
+  ['格式命令：真实 Live 选区写回、绘制、一次撤销与运行时中文分词（#88）', async () => {
+    await openWithEditor('lf.md')
+    await waitSessionReady('lf.md')
+    const uri = wsUri('lf.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('lf.md'))
+    const before = doc.getText()
+    const probe = await waitViewState('lf.md', (v) => v.wordSegmenter !== undefined)
+    assert(probe.wordSegmenter === true, 'VSCode 1.86 webview 应提供 Intl.Segmenter 中文分词')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.crossSelect', anchor: 0, head: 2 })
+    await waitViewState('lf.md', (v) => v.selectionOffset === 0 && v.selectionHead === 2)
+    assert(await vscode.commands.executeCommand('onegayi.vsidian.format.bold') === true,
+      '格式命令应命中活动 Live 面板')
+    await poll('格式写回权威文档', () => doc.getText() === '**中文**' + before.slice(2) ? true : undefined)
+    const rendered = await waitViewState('lf.md', (v) => v.liveSyntax?.strongSpans === 1)
+    assert(rendered.paint?.textVisible === true, '格式化后的正文应在绘制层可见')
+    const session = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(session.appliedEdits === 1, `格式命令应仅提交一笔写回，实际 ${session.appliedEdits}`)
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('格式一次撤销', () => doc.getText() === before ? true : undefined)
+    const after = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(after.appliedEdits === 1, '宿主撤销回流不应产生新的写回')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.crossSelect', anchor: 0, head: 0 })
+    await waitViewState('lf.md', (v) => v.selectionOffset === 0 && v.selectionHead === 0)
+    assert(await vscode.commands.executeCommand('onegayi.vsidian.format.bold') === true,
+      '无选区格式命令应命中当前词')
+    await poll('真实 webview 中文分词写回', () =>
+      doc.getText() === '**中文**' + before.slice(2) ? true : undefined)
+
+    await openWithEditor('crlf.md')
+    await waitSessionReady('crlf.md')
+    const crlfUri = wsUri('crlf.md').toString()
+    const crlf = await vscode.workspace.openTextDocument(wsUri('crlf.md'))
+    const crlfBefore = crlf.getText()
+    await vscode.commands.executeCommand(CMD.postToPanel, crlfUri,
+      { kind: 'table.test.crossSelect', anchor: 4, head: 6 })
+    await waitViewState('crlf.md', (v) => v.selectionOffset === 4 && v.selectionHead === 6)
+    assert(await vscode.commands.executeCommand('onegayi.vsidian.format.bold') === true,
+      'CRLF 文档的活动 Live 面板应接受格式命令')
+    await poll('CRLF 格式写回', () =>
+      crlf.getText() === '标题一\r\n**正文** A 行\r\n正文 B 行\r\n' ? true : undefined)
+    await vscode.commands.executeCommand(CMD.injectMessage, crlfUri, { kind: 'history.request', op: 'undo' })
+    await poll('CRLF 格式撤销', () => crlf.getText() === crlfBefore ? true : undefined)
   }],
 ]
