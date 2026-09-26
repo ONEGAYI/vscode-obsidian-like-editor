@@ -151,6 +151,52 @@ function listZipEntries(vsixPath) {
 }
 
 /**
+ * 合并段内软换行：CHANGELOG 源文件的条目折行原样进入 GitHub Release
+ * 说明后，渲染时断成锯齿短行并在中文行间并入空格——发布说明的消费方
+ * 是网页。空行、列表项、标题、引用与编号列表等结构边界保留换行；其余
+ * 行拼接到上一行，拼接双方都是 ASCII 字母/数字时补一个空格，CJK 相接
+ * 直接拼接。HTML 注释块（CHANGELOG 尾部的变更链接区）整体原样保留。
+ */
+export function mergeSoftWraps(body) {
+  const out = []
+  let inComment = false
+  for (const raw of body.split('\n')) {
+    const line = raw.trim()
+    if (inComment) {
+      out.push(line)
+      if (line.includes('-->')) inComment = false
+      continue
+    }
+    if (line.includes('<!--') && !line.includes('-->')) {
+      inComment = true
+      out.push(line)
+      continue
+    }
+    if (line === '' || /^([-*+]|\d+[.)])\s/.test(line) || /^#{1,6}\s/.test(line) || /^>/.test(line)) {
+      out.push(line)
+      continue
+    }
+    const prev = out[out.length - 1]
+    if (prev === undefined || prev === '') {
+      out.push(line)
+    } else {
+      // 拼接点补空格的判据：ASCII 词界与中英混排边界（两个方向）都留
+      // 一个空格；CJK 相接与任一侧标点直接拼接。
+      const ascii = /[A-Za-z0-9]/
+      const cjk = /[\u3400-\u4dbf\u4e00-\u9fff]/
+      const prevEnd = prev[prev.length - 1]
+      const firstChar = line[0]
+      const needSpace =
+        (ascii.test(prevEnd) && ascii.test(firstChar)) ||
+        (cjk.test(prevEnd) && ascii.test(firstChar)) ||
+        (ascii.test(prevEnd) && cjk.test(firstChar))
+      out[out.length - 1] = needSpace ? `${prev} ${line}` : prev + line
+    }
+  }
+  return out.join('\n')
+}
+
+/**
  * 提取 CHANGELOG.md 最新版本段落。
  * @throws 最新段落版本与 expectedVersion 不符、或找不到版本段落时抛错。
  */
@@ -174,7 +220,7 @@ export function extractLatestChangelog(content, expectedVersion) {
   }
   const bodyEnd = lines.findIndex((l, i) => i > start && /^## /.test(l))
   const body = lines.slice(start + 1, bodyEnd < 0 ? lines.length : bodyEnd).join('\n').trim()
-  return { version, date, body }
+  return { version, date, body: mergeSoftWraps(body) }
 }
 
 /**
