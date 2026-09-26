@@ -105,4 +105,29 @@ describe('设置页异步回信与面板生命周期', () => {
     page.notifyLocaleChanged('zh-cn')
     expect(sent).toHaveLength(1)
   })
+
+  it('settings.get 应答链附带当前语言包（#96 R1：重载装回旧语言被拉正）', () => {
+    const fresh = makePanel()
+    vscodeMock.createWebviewPanel.mockReturnValue(fresh.panel)
+    // 开面板时语言为 en（数据岛随 HTML 固化为 en——重载后装回的即它）
+    let snapshot: Record<string, unknown> = { 'general.language': 'en' }
+    const service = {
+      getSnapshot: () => snapshot,
+      apply: () => Promise.resolve({ ok: true as const, values: {} }),
+    }
+    const page = createSettingsPage({ extensionUri: 'extension' } as never, service as never,
+      { getSnapshot: () => ({}) } as never)
+    page.open()
+    expect(fresh.panel.webview.html).toContain('"lang":"en"')
+    // 开面板后语言切到 zh-cn：重载页面装回 en 数据岛、经 settings.get 回线
+    snapshot = { 'general.language': 'zh-cn' }
+    page.injectMessage({ kind: 'settings.get' })
+    const out = fresh.sent
+    const snapshotIdx = out.findIndex((m) => (m as { kind?: string }).kind === 'settings.snapshot')
+    const localeIdx = out.findIndex((m) => (m as { kind?: string }).kind === 'locale.changed')
+    expect(snapshotIdx).toBeGreaterThanOrEqual(0)
+    // 校准消息在快照应答之后（页面先回显值再对齐语言，顺序可观测）
+    expect(localeIdx).toBeGreaterThan(snapshotIdx)
+    expect(out[localeIdx]).toEqual({ kind: 'locale.changed', lang: 'zh-cn', messages: zhCn })
+  })
 })

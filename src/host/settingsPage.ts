@@ -96,6 +96,18 @@ export function createSettingsPage(
           kind: 'settings.snapshot',
           values: service.getSnapshot(),
         })
+        // #96 R1 ready 即校准（设置页路径）：settings.get 是设置页的 ready
+        // 握手——应答链附带当前语言包（幂等补发，复用 locale.changed 消息，
+        // 协议零新增）。面板隐藏重载后 HTML 数据岛装回 open() 时的旧语言，
+        // 以此对齐当前生效语言；与编辑器面板 ready 补发同一模式
+        {
+          const locale = hostLocale(service.getSnapshot())
+          void current?.webview.postMessage({
+            kind: 'locale.changed',
+            lang: locale,
+            messages: LOCALE_MESSAGES[locale],
+          })
+        }
         return
       case 'settings.set': {
         void service.apply(message.values).then((result) => {

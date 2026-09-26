@@ -471,6 +471,13 @@ export function createTextEditorProvider(
       docUri: key,
       onNotice: (notice) => handleNotice(key, notice),
       onViewState: (sessionId, state) => handlePanelViewState(key, sessionId, state),
+      // #96 R1 ready 即校准：每次 ready 按当前生效语言幂等补发 locale.changed。
+      // 供应式注入（会话保持纯逻辑）：与 HTML 数据岛注入同一解析
+      // （hostLocale(getSnapshot())），未接线 settings 时按宿主显示语言解析
+      requestLocale: () => {
+        const locale = hostLocale(settings?.service.getSnapshot())
+        return { lang: locale, messages: LOCALE_MESSAGES[locale] }
+      },
     })
     sessions.set(key, fresh)
     return fresh

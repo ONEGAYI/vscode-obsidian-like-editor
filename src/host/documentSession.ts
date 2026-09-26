@@ -95,6 +95,12 @@ export interface DocumentSessionOptions {
     sessionId: string,
     state: Extract<WebviewToHost, { kind: 'view.state' }>,
   ) => void
+  /** #96 R1 ready 即校准的语言供应者：每次 ready（含 webview 重载的重复
+   *  ready）按返回值幂等补发一条 locale.changed。数据岛携带的是面板
+   *  【创建时】的语言，重载后装回旧语言、未 ready 面板错过切换广播——
+   *  都以此对齐当前生效语言（与 init 重发全文同模式）。会话保持纯逻辑：
+   *  hostLocale + LOCALE_MESSAGES 的装配由 vscode 层注入；未注入不发 */
+  requestLocale?: () => { lang: string; messages: Readonly<Record<string, string>> } | undefined
 }
 
 interface PendingEdit {
@@ -324,6 +330,17 @@ export class DocumentSession {
           // 重复 ready = webview 重载（B-2）：init 已重发权威全文，此后暂停
           // 面板的 view.state 不再代表冲突前的未确认输入
           panel.reloaded = true
+        }
+        // #96 R1 ready 即校准：语言变化只广播给切换瞬间 ready 的面板，
+        // 重载（数据岛装回创建时语言）与未 ready 面板都会错过——每次
+        // ready 按供应者现值幂等补发（webview 收到后原子换包并重渲染）
+        const locale = this.options.requestLocale?.()
+        if (locale) {
+          panel.port.send({
+            kind: 'locale.changed',
+            lang: locale.lang,
+            messages: locale.messages,
+          })
         }
         if (panel.suspended) {
           // webview 重载（retainContextWhenHidden 关闭）后恢复暂停提示：
