@@ -92,6 +92,20 @@ const MODE_DOC_TEXT = [
   '',
 ].join('\n')
 
+/** #105 高亮 fixture（与 fixtures.mjs 的 HIGHLIGHT_DOC 一致）：== 只出现在
+ *  成对高亮定界符中（live delimitersHidden 探针的文本口径依据） */
+const HIGHLIGHT_DOC_TEXT = [
+  '# 高亮样例',
+  '',
+  '正文 ==高亮文字== 与 **粗体** 同行。',
+  '',
+  '## 嵌套 ==**粗亮**== 标题',
+  '',
+  '- 列表项 ==列表高亮==',
+  '',
+  '普通段落。',
+].join('\n')
+
 function wsUri(name: string): vscode.Uri {
   return vscode.Uri.file(`${wsDir}/${name}`)
 }
@@ -443,6 +457,14 @@ interface ViewState {
       rendered: number
       error: number
       count: number
+    }
+    /** #105 高亮绘制：当前激活视图内首个高亮的实际可见性、底色与定界符隐藏 */
+    highlight?: {
+      visible: boolean
+      display: string | null
+      backgroundColor: string | null
+      count: number
+      delimitersHidden: boolean | null
     }
     quickActions?: {
       open: boolean
@@ -6212,5 +6234,95 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await waitViewState('code-card.md', (v) =>
       v.paint?.code?.foldedCount === 0 && v.paint.code.cardLineCount === 7, 0, 60000)
     assert(await readDisk('code-card.md') === diskBefore, '阅读卡片交互不得改写源文')
+  }],
+
+  // ---- 工单 #105：高亮 ==text== 双模式渲染、显隐与大纲透传 ----
+
+  ['live 高亮渲染与绘制层：底色真实画出、定界符显隐随光标、零写回（#105）', async () => {
+    await resetLastMode()
+    await openWithEditor('highlight.md')
+    await waitSessionReady('highlight.md')
+    const uri = wsUri('highlight.md').toString()
+    const diskBefore = await readDisk('highlight.md')
+    // 光标在文档头（不触及任何高亮）：三处高亮常显底色（正文/标题/列表），
+    // 绘制层断言（AGENTS 视觉层约定）：rect 有面积 + elementFromPoint 命中 +
+    // computed 底色非透明——样式注入失效时 DOM 存在性照样通过，此三层不可
+    const idle = await waitViewState('highlight.md', (v) =>
+      v.paint?.highlight?.count === 3 && v.paint.highlight.delimitersHidden === true)
+    assert(idle.paint!.highlight!.visible === true,
+      `高亮应真实绘制（paint.highlight.visible=${String(idle.paint?.highlight?.visible)}，` +
+        `display=${String(idle.paint?.highlight?.display)}）`)
+    assert((idle.paint!.highlight!.backgroundColor ?? '') !== 'rgba(0, 0, 0, 0)' &&
+      (idle.paint!.highlight!.backgroundColor ?? '') !== '',
+      `高亮底色应真实画出（非透明），实际 ${idle.paint?.highlight?.backgroundColor}`)
+    assert(idle.paint!.highlight!.display !== 'none', '高亮 span 不得 display:none')
+    // 大纲透传：嵌套标题的 spans 含 highlight（含内层 strong，同区间双类型）
+    const nested = idle.outline?.items.find((item) => item.text.includes('嵌套'))
+    const kinds = (nested?.spans ?? []).filter((span) => span.end - span.start === 2)
+      .map((span) => span.kind).sort()
+    assert(JSON.stringify(kinds) === JSON.stringify(['highlight', 'strong']),
+      `嵌套标题透传应含 highlight+strong 同区间双类型，实际 ${JSON.stringify(nested?.spans)}`)
+    assert(nested?.plainText.includes('粗亮') === true, '大纲剥标记可见文本应含高亮内容')
+    // 光标进入正文高亮内：== 显形可编辑（文本口径：定界符回到视口文本）
+    const inHighlight = HIGHLIGHT_DOC_TEXT.indexOf('高亮文字') + 2
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.crossSelect', anchor: inHighlight, head: inHighlight })
+    await waitViewState('highlight.md', (v) => v.paint?.highlight?.delimitersHidden === false)
+    // 光标移开：定界符回到隐藏（内容底色常显不受影响）
+    const away = HIGHLIGHT_DOC_TEXT.indexOf('普通段落')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.crossSelect', anchor: away, head: away })
+    const restored = await waitViewState('highlight.md', (v) =>
+      v.paint?.highlight?.delimitersHidden === true && v.paint.highlight.count === 3)
+    assert(restored.paint!.highlight!.backgroundColor === idle.paint!.highlight!.backgroundColor,
+      '光标离开后高亮底色应保持（内容 span 常显）')
+    // 阅读模式：== 渲染为 mark 语义元素，底色与 live 同源；无定界符概念
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toReading', wsUri('highlight.md'))
+    const reading = await waitViewState('highlight.md', (v) =>
+      v.viewMode === 'reading' && v.paint?.highlight?.count === 3)
+    assert(reading.paint!.highlight!.visible === true, '阅读 mark 应真实绘制')
+    assert((reading.paint!.highlight!.backgroundColor ?? '') !== 'rgba(0, 0, 0, 0)' &&
+      (reading.paint!.highlight!.backgroundColor ?? '') !== '',
+      `阅读 mark 底色应真实画出（非透明），实际 ${reading.paint?.highlight?.backgroundColor}`)
+    assert(reading.paint!.highlight!.delimitersHidden === null, '阅读态定界符探针应为 null')
+    // 光标移动与模式切换全程零写回
+    assert(await readDisk('highlight.md') === diskBefore, '高亮显隐与模式切换不得写磁盘')
+  }],
+
+  ['高亮格式命令真实链路：命令面板包裹与两态取消（#105）', async () => {
+    await resetLastMode()
+    await openWithEditor('highlight.md')
+    await waitSessionReady('highlight.md')
+    // 上一用例把同文件面板留在阅读态（openWith 对同 uri 单例 reveal）：
+    // 显式切回 live 再继续（格式命令只作用于活动 Live 面板）
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toLive', wsUri('highlight.md'))
+    await waitViewState('highlight.md', (v) => v.viewMode === 'live')
+    const uri = wsUri('highlight.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('highlight.md'))
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    const plain = HIGHLIGHT_DOC_TEXT.indexOf('普通段落') + 1
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.crossSelect', anchor: plain, head: plain })
+    await waitViewState('highlight.md', (v) => v.selectionOffset === plain && v.selectionHead === plain)
+    // 光标在词中：扩词包裹 ==普通段落==（宿主命令入口与用户命令面板同链路）
+    assert(await vscode.commands.executeCommand('onegayi.vsidian.format.highlight') === true,
+      '高亮命令应命中活动 Live 面板')
+    await poll('高亮扩词写回权威文档', () =>
+      doc.getText() === HIGHLIGHT_DOC_TEXT.replace('普通段落。', '==普通段落==。') ? true : undefined)
+    // 光标进围栏内再触发：取消整段
+    const wrapped = HIGHLIGHT_DOC_TEXT.replace('普通段落。', '==普通段落==。')
+    const inside = wrapped.indexOf('普通段落') + 1
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.crossSelect', anchor: inside, head: inside })
+    await waitViewState('highlight.md', (v) => v.selectionOffset === inside && v.selectionHead === inside)
+    assert(await vscode.commands.executeCommand('onegayi.vsidian.format.highlight') === true,
+      '围栏内再触发应命中活动 Live 面板')
+    await poll('高亮两态取消写回', () => doc.getText() === HIGHLIGHT_DOC_TEXT ? true : undefined)
+    const after = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(after.appliedEdits - before.appliedEdits === 2,
+      `包裹与取消各一笔写回，实际 ${after.appliedEdits - before.appliedEdits}`)
+    if (doc.isDirty) {
+      await doc.save()
+    }
   }],
 ]
