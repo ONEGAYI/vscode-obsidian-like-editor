@@ -49,17 +49,37 @@ try {
   // 等待 250ms 去抖刷新链路完成（首场经 ensureFresh 即时渲染，等待兜底）
   await page.waitForTimeout(120)
 
-  // ---- 场景 A：默认档 5 全展开 + 串珠绘制（active 实心 vs 空闲透明）----
+  // ---- 场景 A：默认档 5 全展开 + 串珠绘制（#99 能量条满格：全珠实心）----
   let state = await page.evaluate(() => window.readOutline())
   assert.equal(state.expandLevel, 5, `默认档应为 5（实际 ${state.expandLevel}）`)
   assert.deepEqual(state.hidden, HEADING_TEXTS.map(() => false), '默认档 5 全部条目可见')
   assert.equal(state.chevronCount, 6, `父节点箭头数应为 6（每章 H1+H2一；实际 ${state.chevronCount}）`)
-  const activeBg = await page.evaluate(() => window.readOutline().dotBg(5))
-  const idleBg = await page.evaluate(() => window.readOutline().dotBg(0))
-  assert.match(activeBg, /^rgb\(/, `active 圆点应为实心 rgb（实际 ${activeBg}）`)
-  assert.equal(idleBg, 'rgba(0, 0, 0, 0)', `空闲圆点应为透明空心（实际 ${idleBg}）`)
+  // #99 能量条：档 5 满格——沿途珠（0..4）与当前珠（5）全部实心
+  const dotBgOf = (n) => window.readOutline().dotBg(n)
+  for (const n of [0, 1, 2, 3, 4, 5]) {
+    const bg = await page.evaluate(dotBgOf, n)
+    assert.match(bg, /^rgb\(/, `档 5 圆点 ${n} 应为实心（实际 ${bg}）`)
+  }
+  const track = await page.evaluate(() => window.readOutline().trackPx())
+  assert(track > 0, `轨道应有布局宽度（实际 ${track}）`)
+  const fill5 = await page.evaluate(() => window.readOutline().fillPx())
+  assert(Math.abs(fill5 - track) < 2, `档 5 填充条应占满轨道（实际 ${fill5}/${track}）`)
+  // #99 层级对齐引导线：「甲一一」（条目 2，H3）有两条线（祖先 甲 H1 的
+  // 9px 与 甲一 H2 的 19px），1px 宽、computed 背景非全透明（样式失效时
+  // 透明可捕获）；顶层「甲」（条目 0）无线
+  const guide0 = await page.evaluate(() => window.readOutline().guideOf(2, 0))
+  const guide1 = await page.evaluate(() => window.readOutline().guideOf(2, 1))
+  assert(guide0 && guide0.left === '9px' && guide0.width === '1px',
+    `条目 2 第 1 条引导线应为 1px 宽、left 9px（实际 ${JSON.stringify(guide0)}）`)
+  assert(guide1 && guide1.left === '19px' && guide1.width === '1px',
+    `条目 2 第 2 条引导线应为 1px 宽、left 19px（实际 ${JSON.stringify(guide1)}）`)
+  assert(/^rgba\(/.test(guide0.bg) && !/rgba\(0, 0, 0, 0\)/.test(guide0.bg),
+    `引导线 computed 背景应非全透明（实际 ${guide0.bg}）`)
+  const guideTop = await page.evaluate(() => window.readOutline().guideOf(0, 0))
+  assert(guideTop === null, `顶层条目不应有引导线（实际 ${JSON.stringify(guideTop)}）`)
   passed++
-  console.log('[折叠回归][PASS] 默认档 5 全展开 + 串珠两态绘制（实心/空心）')
+  console.log('[折叠回归][PASS] 默认档 5 全展开 + 串珠满格绘制（全珠实心 + 填充满轨）')
+  console.log('[折叠回归][PASS] 层级引导线绘制：深层条目双线对齐祖先 chevron、顶层无线')
 
   // ---- 场景 B：真实点击圆点选档 1——H2 可见、H3 折叠隐藏 ----
   await page.locator('.vsidian-outline-slider-dot').nth(1).click()
@@ -68,10 +88,23 @@ try {
   // 档 1 = 展开 H1 父节点：H2 直接子级可见，H3（*一一）折叠隐藏
   assert.deepEqual(state.hidden, [false, false, true, false, false, false, true, false, false, false, true, false],
     `档 1 下 H3 应折叠隐藏（实际 ${JSON.stringify(state.hidden)}）`)
-  const activeBg1 = await page.evaluate(() => window.readOutline().dotBg(1))
-  assert.match(activeBg1, /^rgb\(/, '档 1 圆点应为实心（active 类切换生效）')
+  // #99 能量条：沿途珠 0/当前珠 1 实心、未充段珠 3 空心、填充条约 20% 轨道
+  assert.match(await page.evaluate(dotBgOf, 1), /^rgb\(/, '档 1 圆点应为实心（active 类切换生效）')
+  assert.match(await page.evaluate(dotBgOf, 0), /^rgb\(/, '档 1 沿途珠 0 应实心（filled 类）')
+  assert.equal(await page.evaluate(dotBgOf, 3), 'rgba(0, 0, 0, 0)',
+    `档 1 未充段圆点应为透明空心（实际 ${await page.evaluate(dotBgOf, 3)}）`)
+  const fill1 = await page.evaluate(() => window.readOutline().fillPx())
+  assert(Math.abs(fill1 - track * 0.2) < 2, `档 1 填充条应约 20% 轨道（实际 ${fill1}/${track}）`)
+  // #99 热区放大：点在视觉圆外 1px 的盒角（(11,11) 距中心 7.07px > 圆半径
+  // 6px、< 热区半径 11px）也应选档——热区伪元素失效时此处 click 落 row
+  // 空白（closest 不命中珠），且原地点击无位移不走拖拽换算，选档不发生
+  await page.locator('.vsidian-outline-slider-dot').nth(3)
+    .click({ position: { x: 11, y: 11 } })
+  state = await page.evaluate(() => window.readOutline())
+  assert.equal(state.expandLevel, 3, `热区外缘点击应选中档 3（实际 ${state.expandLevel}）`)
   passed++
-  console.log('[折叠回归][PASS] 点击圆点选档 1：H3 折叠隐藏、active 类切换')
+  console.log('[折叠回归][PASS] 点击圆点选档 1：H3 折叠隐藏 + 能量条两态（实心/空心/20% 填充）')
+  console.log('[折叠回归][PASS] 热区放大：视觉圆外的盒角点击仍选档（22px 命中区生效）')
 
   // ---- 场景 C：真实点击箭头折叠「甲一」（单条生效）与点文字跳转共存 ----
   // 档 5 下折叠「甲一」（index 1，有子「甲一一」）：甲一一（index 2）隐藏
@@ -80,6 +113,11 @@ try {
   state = await page.evaluate(() => window.readOutline())
   assert.equal(state.hidden[2], true, '折叠「甲一」后「甲一一」应隐藏')
   assert.equal(state.hidden.filter(Boolean).length, 1, '手动折叠只影响单条子树（其余可见）')
+  // #99 引导线随行断线：「甲一一」隐藏后其行内 guide 不参与布局（display
+  // 不继承，故以 offsetParent 判定可见性而非 computed display）
+  const guideHidden = await page.evaluate(() => window.readOutline().guideOf(2, 0))
+  assert(guideHidden && guideHidden.visible === false,
+    `折叠子树的引导线应随行隐藏（实际 ${JSON.stringify(guideHidden)}）`)
   // 点文字仍跳转（#66 路径不受箭头影响）：点击「乙一」文字 → 高亮即时落位
   await page.locator('.vsidian-outline-item').nth(5).click({ position: { x: 60, y: 8 } })
   state = await page.evaluate(() => window.readOutline())
