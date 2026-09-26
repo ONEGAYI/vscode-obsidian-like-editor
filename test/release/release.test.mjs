@@ -2,7 +2,7 @@
 // 先例：mjs 工具用 node --test 钉契约，不进 vitest 扫描范围）。
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { extractLatestChangelog, inspectVsixEntries, parseUnzipListing, SIZE_LIMITS } from '../../scripts/release.mjs'
+import { extractLatestChangelog, inspectVsixEntries, mergeSoftWraps, parseUnzipListing, SIZE_LIMITS } from '../../scripts/release.mjs'
 
 // KaTeX 字体条目（#59）：体积取 woff2 实际产物的代表值（最大 28KB）
 function katexFontEntries() {
@@ -84,6 +84,91 @@ test('CHANGELOG 提取：最新版本与 package.json 不一致时报错', () =>
 
 test('CHANGELOG 提取：没有任何版本段落时报错', () => {
   assert.throws(() => extractLatestChangelog('# Changelog\n\n只有开头'), /未找到/)
+})
+
+test('折行合并：中文行间直接拼接不留空格，结构换行保留', () => {
+  const body = [
+    '本版本围绕编辑效率：新增功能条与快捷键管理，',
+    '并优化大纲视效。',
+    '',
+    '### 新增',
+    '',
+    '- **快速操作条**：顶栏按钮展开格式工具条，按组呈现常用',
+    '  格式与标题菜单；展开状态',
+    '  会记住。（PR #92）',
+  ].join('\n')
+  assert.equal(
+    mergeSoftWraps(body),
+    [
+      '本版本围绕编辑效率：新增功能条与快捷键管理，并优化大纲视效。',
+      '',
+      '### 新增',
+      '',
+      '- **快速操作条**：顶栏按钮展开格式工具条，按组呈现常用格式与标题菜单；展开状态会记住。（PR #92）',
+    ].join('\n'),
+  )
+})
+
+test('折行合并：ASCII 词界补一个空格，HTML 注释块原样保留', () => {
+  const body = [
+    '- English text wrapping',
+    '  across word',
+    '  boundaries keeps one space.',
+    '',
+    '<!-- 变更链接',
+    '0.1.0: https://example.com/commits/v0.1.0',
+    '-->',
+  ].join('\n')
+  assert.equal(
+    mergeSoftWraps(body),
+    [
+      '- English text wrapping across word boundaries keeps one space.',
+      '',
+      '<!-- 变更链接',
+      '0.1.0: https://example.com/commits/v0.1.0',
+      '-->',
+    ].join('\n'),
+  )
+})
+
+test('折行合并：中英混排的拼接点补盘古之白（0.1.0 段落实测盲区）', () => {
+  const body = [
+    '- **双视图编辑器**：基于源文本的「实时预览 + 阅读」双视图；实时预览由',
+    '  CodeMirror 6 全文承载（视口外不建 DOM），阅读模式由 markdown-it 分块渲染',
+    '  并按需挂载。',
+    '- **独立设置页**：「Vsidian: 打开设置」进入扩展自带设置页，不占用 VSCode',
+    '  统一设置中心。',
+    '- 未支持 Obsidian 的',
+    '  Canvas、白板。',
+  ].join('\n')
+  assert.equal(
+    mergeSoftWraps(body),
+    [
+      '- **双视图编辑器**：基于源文本的「实时预览 + 阅读」双视图；实时预览由 CodeMirror 6 全文承载（视口外不建 DOM），阅读模式由 markdown-it 分块渲染并按需挂载。',
+      '- **独立设置页**：「Vsidian: 打开设置」进入扩展自带设置页，不占用 VSCode 统一设置中心。',
+      '- 未支持 Obsidian 的 Canvas、白板。',
+    ].join('\n'),
+  )
+})
+
+test('CHANGELOG 提取：返回的发布说明正文已合并段内折行', () => {
+  const content = [
+    '# Changelog',
+    '',
+    '## 0.2.0 - 2026-10-01',
+    '',
+    '### 新增',
+    '',
+    '- B 功能',
+    '',
+    '## 0.1.0 - 2026-09-25',
+    '',
+    '- 首个版本',
+  ].join('\n')
+  const notes = extractLatestChangelog(content, '0.2.0')
+  assert.match(notes.body, /### 新增/)
+  assert.match(notes.body, /- B 功能/)
+  assert.doesNotMatch(notes.body, /0\.1\.0/)
 })
 
 test('unzip -l 解析：只提取"长度 日期 时间 路径"形态的文件行', () => {
