@@ -88,16 +88,21 @@ function readBundle(bundle: string): string {
   }
 }
 
-/** 还原 esbuild 的 \uXXXX 转义（R5）：esbuild 默认 charset=ascii，非 ASCII
- *  字节以 \uXXXX 形态进产物（含大小写两种十六进制写法）——zh 词条的
+/** 还原 esbuild 的 \uXXXX 与 \xNN 转义（R5；R2 复核补 \xNN 形态）：esbuild
+ *  默认 charset=ascii，非 ASCII 字节以两种形态进产物——U+0100 及以上用
+ *  \uXXXX（含大小写两种十六进制写法，astral 字符拆代理对逐半编码），拉丁-1
+ *  区 U+0080–U+00FF 用更短的 \xNN（产物实证存在 \xB7）。zh 词条的
  *  includes 检查必须先还原，否则永不命中（辅检空转）。字符串里的字面
- *  反斜杠编码为 \\，使 \u 前的反斜杠总数成偶——此时 u… 是普通文本，
- *  按奇偶判定不还原（捕获组长度 +1 即总数，组为偶 = 总数为奇 = 真转义） */
+ *  反斜杠编码为 \\，使 \u/\x 前的反斜杠总数成偶——此时 u…/x… 是普通
+ *  文本，按奇偶判定不还原（捕获组长度 +1 即总数，组为偶 = 总数为奇 =
+ *  真转义） */
 function decodeUnicodeEscapes(source: string): string {
-  return source.replace(/(\\*)\\u([0-9a-fA-F]{4})/g, (match, slashes: string, hex: string) =>
-    slashes.length % 2 === 0
-      ? `${slashes}${String.fromCharCode(parseInt(hex, 16))}`
-      : match,
+  return source.replace(
+    /(\\*)\\(?:u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2}))/g,
+    (match, slashes: string, uHex: string | undefined, xHex: string | undefined) =>
+      slashes.length % 2 === 1
+        ? match
+        : `${slashes}${String.fromCharCode(parseInt(uHex ?? xHex ?? '', 16))}`,
   )
 }
 
@@ -114,8 +119,9 @@ describe('webview 构建产物不含字典字节', () => {
   })
 
   it.for(WEBVIEW_BUNDLES)('%s 不含各命名空间最长词条（防键形态之外的搬运）', (bundle) => {
-    // R5：比较在转义还原后的产物文本上进行（zh 词条以 \uXXXX 形态进产物，
-    // 直接 includes 永不命中）；主检（键属性形态）键为 ASCII，无须还原
+    // R5：比较在转义还原后的产物文本上进行（zh 词条以 \uXXXX 形态、
+    // 拉丁-1 区词条以 \xNN 形态进产物，直接 includes 永不命中）；
+    // 主检（键属性形态）键为 ASCII，无须还原
     const source = decodeUnicodeEscapes(readBundle(bundle))
     const leaked = LONGEST_MARKERS.filter((value) => source.includes(value))
     expect(
@@ -133,5 +139,67 @@ describe('webview 构建产物不含字典字节', () => {
       .filter(([key]) => key.startsWith('settings.'))
       .reduce((a, b) => (b[1].length > a[1].length ? b : a))[1]
     expect(LONGEST_MARKERS).toContain(longestSettings)
+  })
+})
+
+// 负向自证（\xNN 形态补齐的回归防线）：decodeUnicodeEscapes 是辅检的
+// 前置能力，直接钉住还原语义与覆盖面——不依赖构建产物，纯函数测试。
+describe('decodeUnicodeEscapes 转义还原（辅检前置能力）', () => {
+  it('还原 \\xNN（拉丁-1 区）与 \\uXXXX（BMP 区）的单形态、十六进制大小写与混排', () => {
+    expect(decodeUnicodeEscapes('\\xB7')).toBe('·') // 产物实证形态（U+00B7）
+    expect(decodeUnicodeEscapes('\\xb7')).toBe('·') // 小写十六进制
+    expect(decodeUnicodeEscapes('\\xE9\\x41')).toBe('éA') // ASCII 区 \xNN 同语义
+    expect(decodeUnicodeEscapes('\\u4e2d\\u6587')).toBe('中文')
+    expect(decodeUnicodeEscapes('a\\xB7b\\u4e2dc')).toBe('a·b中c') // 两形态混排
+    expect(decodeUnicodeEscapes('\\uD83D\\uDE00')).toBe('😀') // 代理对逐半还原
+  })
+
+  it('字面反斜杠（前导斜杠成偶）后的 \\xNN / \\uXXXX 不还原', () => {
+    // 产物中的 '\\xB7' 是字面反斜杠 + 普通 xB7 文本，须原样保留
+    expect(decodeUnicodeEscapes('\\\\xB7')).toBe('\\\\xB7')
+    expect(decodeUnicodeEscapes('\\\\u4e2d')).toBe('\\\\u4e2d')
+    // 三个反斜杠 = 字面 '\' + 真转义：字面部分保留，转义部分还原
+    expect(decodeUnicodeEscapes('\\\\\\xB7')).toBe('\\\\·')
+    expect(decodeUnicodeEscapes('\\\\\\u4e2d')).toBe('\\\\中')
+  })
+
+  it('防线：拉丁-1 区（U+0080–U+00FF）词条在 \\xNN 还原能力覆盖内，不静默漏检', () => {
+    // 模拟 esbuild charset=ascii 的编码形态：拉丁-1 区用 \xNN（更短），
+    // 其余非 ASCII 用 \uXXXX（astral 字符拆代理对逐半编码）
+    const esbuildEscape = (text: string): string =>
+      Array.from(text)
+        .map((ch) => {
+          const code = ch.codePointAt(0)!
+          if (code >= 0x80 && code <= 0xff) {
+            return `\\x${code.toString(16).padStart(2, '0')}`
+          }
+          if (code >= 0x80) {
+            // astral 字符按 UTF-16 code unit 逐半编码（Array.from 按
+            // code point 迭代会丢低代理半，不能用于此处）
+            let encoded = ''
+            for (let i = 0; i < ch.length; i += 1) {
+              const u = ch.charCodeAt(i)
+              encoded += u >= 0x80 ? `\\u${u.toString(16).padStart(4, '0')}` : ch[i]!
+            }
+            return encoded
+          }
+          return ch
+        })
+        .join('')
+    // 现状钉住：当前最长标记集不含拉丁-1 区字符（字典唯一拉丁-1 字符 ·
+    // 属 keybindingSettings.modeLiveReading，非其命名空间最长词条）。此
+    // 断言失败 = 未来出现拉丁-1 最长标记——此时辅检命中与否由下面的
+    // 能力断言保证，并应同步更新本注释中的字典现状描述
+    expect(LONGEST_MARKERS.filter((v) => /[\u0080-\u00FF]/.test(v))).toEqual([])
+    // 能力钉住：全部最长标记、字典中真实含拉丁-1 的词条与混排样本，经
+    // esbuild 形态编码后必须被完整还原——含拉丁-1 的词条未来成为最长
+    // 标记时，辅检的 includes 才不会静默空转
+    const latin1DictValues = [...new Set([...Object.values(en), ...Object.values(zhCn)])].filter(
+      (v) => /[\u0080-\u00FF]/.test(v),
+    )
+    expect(latin1DictValues.length).toBeGreaterThan(0) // 字典现状：· 在册
+    for (const sample of [...LONGEST_MARKERS, ...latin1DictValues, 'café·中文😀']) {
+      expect(decodeUnicodeEscapes(esbuildEscape(sample)), `roundtrip 失败：${sample}`).toBe(sample)
+    }
   })
 })
