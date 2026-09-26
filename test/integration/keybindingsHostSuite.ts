@@ -10,6 +10,20 @@ export async function run(): Promise<void> {
   const extension = vscode.extensions.getExtension('onegayi.vsidian')
   if (extension && !extension.isActive) await extension.activate()
   const doc = await vscode.workspace.openTextDocument(uri)
+  // openWith 返回早于 webview 内 CM6 挂载；CDP 探针以面板 ready 为起点，
+  // 避免单次目标枚举撞上尚未创建 .cm-content 的启动窗口。
+  let panelReady = false
+  for (let i = 0; i < 100; i++) {
+    const state = await vscode.commands.executeCommand<{ panels?: { ready: boolean }[] }>(
+      'onegayi.vsidian._test.getSessionState', uri.toString(),
+    )
+    if (state?.panels?.some((panel) => panel.ready)) {
+      panelReady = true
+      break
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  if (!panelReady) throw new Error('Vsidian webview 未就绪')
   writeFileSync(path.join(directory, 'ready'), '')
   const done = path.join(directory, 'done')
   const request = path.join(directory, 'request.json')
