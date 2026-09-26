@@ -4969,7 +4969,9 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.expandClick', level: 1 })
     await waitViewState('outline-long.md', (v) => v.outline?.expandLevel === 1)
     await vscode.commands.executeCommand('workbench.action.webview.reloadWebviewAction')
-    const reopened = await waitViewState('outline-long.md', (v) => v.outline?.expandLevel === 1)
+    // 档位先从持久化状态恢复；等待宿主全文同步后的条目重建，避免读到空大纲。
+    const reopened = await waitViewState('outline-long.md',
+      (v) => v.outline?.expandLevel === 1 && v.outline.visibleIndices.length >= 51)
     assert(reopened.outline!.visibleIndices.length >= 51 && reopened.outline!.visibleIndices.length <= 53,
       `重载后档 1 基础可见集应恢复（51–53 条，实际 ${reopened.outline!.visibleIndices.length}）`)
 
