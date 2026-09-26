@@ -141,6 +141,7 @@ vsidian/
 │   │   ├── formatOperations.ts # 格式操作注册清单
 │   │   ├── i18n.ts             # t() 取词与语言包装配状态模块
 │   │   ├── keybindings.ts      # 快捷键操作与冲突模型
+│   │   ├── listPrefix.ts       # 列表引用前缀形态学（#119）
 │   │   ├── locales/            # 语言包字典单一事实源
 │   │   │   ├── en.ts     # 英文语言包（类型基准）
 │   │   │   ├── index.ts  # 语言注册表与解析（仅宿主可引）
@@ -166,6 +167,7 @@ vsidian/
 │       ├── imageResource.ts        # 图片资源状态机（#10）
 │       ├── keybindingRouter.ts     # 编辑器按键分发器
 │       ├── keybindingSettings.ts   # 快捷键设置分页
+│       ├── listEditing.ts          # Enter 延续与退格清层（#119）
 │       ├── liveCodeCard.ts         # Live 代码块卡片装饰
 │       ├── liveDecorations.ts      # 语法树驱动 Live 装饰（#8）
 │       ├── liveLineNumbers.ts      # 表格段首行号与绘制探针
