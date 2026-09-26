@@ -18,7 +18,8 @@ import { chromium } from 'playwright'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const bundleBase = path.join(root, 'out/test/browser/outlineDragBoundary')
 await build({ entryPoints: [path.join(root, 'test/browser/outlineDragFixture.ts')],
-  bundle: true, outfile: `${bundleBase}.js` })
+  bundle: true, outfile: `${bundleBase}.js`,
+  loader: { '.svg': 'file' }, assetNames: 'assets/[name]' })
 
 const js = fs.readFileSync(`${bundleBase}.js`, 'utf8')
 const css = fs.readFileSync(`${bundleBase}.css`, 'utf8')

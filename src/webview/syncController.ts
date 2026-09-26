@@ -411,6 +411,7 @@ export class WebviewSyncController {
   private quickToggleBtn: HTMLButtonElement | undefined
   private quickHeadingBtn: HTMLButtonElement | undefined
   private quickHeadingMenu: HTMLElement | undefined
+  private quickActionResizeObserver: ResizeObserver | undefined
   private quickActionsOpen: boolean
   private quickBindingHints: (op: FormatOperationId) => readonly string[] = () => []
 
@@ -846,6 +847,8 @@ export class WebviewSyncController {
     this.outlineJumpGuarded = false
     this.hostThemeObserver?.disconnect()
     this.hostThemeObserver = undefined
+    this.quickActionResizeObserver?.disconnect()
+    this.quickActionResizeObserver = undefined
     if (this.docKeydown) {
       document.removeEventListener('keydown', this.docKeydown, true)
       this.docKeydown = undefined
@@ -2230,43 +2233,56 @@ export class WebviewSyncController {
     bar.id = 'vsidian-quick-actions'
     bar.setAttribute('role', 'toolbar')
     bar.setAttribute('aria-label', '格式快速操作')
-    const button = (label: string, icon: string, className: string): HTMLButtonElement => {
+    const button = (label: string, icon: string, className: string,
+      textIcon = false): HTMLButtonElement => {
       const el = document.createElement('button')
       el.type = 'button'
       el.className = className
       el.setAttribute('aria-label', label)
       el.title = label
       const glyph = document.createElement('span')
+      glyph.className = textIcon ? 'vsidian-quick-text-icon' : 'vsidian-quick-icon'
       glyph.setAttribute('aria-hidden', 'true')
-      glyph.textContent = icon
+      if (textIcon) glyph.textContent = icon
+      else glyph.dataset['icon'] = icon
       el.appendChild(glyph)
       // 鼠标按下不抢 CM6 焦点；包括标题 popup 与表格矩形选区。
       el.addEventListener('mousedown', (event) => event.preventDefault())
       return el
     }
-    const addOperation = (op: FormatOperationId, icon: string): void => {
+    const group = (label: string): HTMLElement => {
+      const el = document.createElement('div')
+      el.className = 'vsidian-quick-action-group'
+      el.setAttribute('role', 'group')
+      el.setAttribute('aria-label', label)
+      bar.appendChild(el)
+      return el
+    }
+    const addOperation = (target: HTMLElement, op: FormatOperationId): void => {
       const item = FORMAT_OPERATIONS.find((entry) => entry.id === op)!
-      const el = button(item.title, icon, 'vsidian-quick-action')
+      const el = button(item.title, op, 'vsidian-quick-action')
       el.dataset['op'] = op
       el.addEventListener('click', () => this.runFormatOperation(op))
-      bar.appendChild(el)
+      target.appendChild(el)
     }
-    addOperation('bold', 'B')
-    addOperation('italic', 'I')
-    addOperation('strikethrough', 'S̶')
-    addOperation('inlineCode', '</>')
-    const heading = button('标题', 'H⌄', 'vsidian-quick-heading')
+    const textGroup = group('文字')
+    for (const op of ['bold', 'italic', 'strikethrough', 'inlineCode', 'clearInline'] as const) {
+      addOperation(textGroup, op)
+    }
+    const paragraphGroup = group('段落')
+    const heading = button('标题', 'heading', 'vsidian-quick-heading')
     heading.setAttribute('aria-haspopup', 'menu')
     heading.setAttribute('aria-expanded', 'false')
     heading.setAttribute('aria-controls', 'vsidian-quick-heading-menu')
     heading.addEventListener('click', () => this.toggleQuickHeadingMenu())
-    bar.appendChild(heading)
+    paragraphGroup.appendChild(heading)
     this.quickHeadingBtn = heading
-    for (const [op, icon] of [
-      ['bulletList', '•'], ['orderedList', '1.'], ['taskList', '☑'], ['quote', '❞'],
-      ['codeBlock', '{}'], ['link', '🔗'], ['clearInline', 'Tx'],
-    ] as const) addOperation(op, icon)
-    const createTable = button('插入表格', '▦', 'vsidian-quick-table')
+    for (const op of ['bulletList', 'orderedList', 'taskList', 'quote', 'codeBlock'] as const) {
+      addOperation(paragraphGroup, op)
+    }
+    const insertGroup = group('插入')
+    addOperation(insertGroup, 'link')
+    const createTable = button('插入表格', 'table', 'vsidian-quick-table')
     createTable.addEventListener('click', () => {
       const view = this.view
       if (view && this.viewMode === 'live' && !this.suspended &&
@@ -2275,7 +2291,9 @@ export class WebviewSyncController {
         view.focus()
       }
     })
-    bar.appendChild(createTable)
+    insertGroup.appendChild(createTable)
+    addOperation(insertGroup, 'inlineMath')
+    addOperation(insertGroup, 'blockMath')
     const menu = document.createElement('div')
     menu.className = 'vsidian-quick-heading-menu'
     menu.id = 'vsidian-quick-heading-menu'
@@ -2287,7 +2305,7 @@ export class WebviewSyncController {
     ] as const) {
       const item = FORMAT_OPERATIONS.find((entry) => entry.id === op)!
       const el = button(item.title, op === 'headingNone' ? '正文' : op.replace('heading', 'H'),
-        'vsidian-quick-heading-item')
+        'vsidian-quick-heading-item', true)
       el.dataset['headingOp'] = op
       el.setAttribute('role', 'menuitemradio')
       el.setAttribute('aria-checked', 'false')
@@ -2313,7 +2331,41 @@ export class WebviewSyncController {
     })
     bar.appendChild(menu)
     this.quickHeadingMenu = menu
+    const actions = [...bar.querySelectorAll<HTMLButtonElement>('.vsidian-quick-action-group button')]
+    actions.forEach((action, index) => { action.tabIndex = index === 0 ? 0 : -1 })
+    bar.addEventListener('focusin', (event) => {
+      const focused = event.target as HTMLButtonElement
+      if (!actions.includes(focused)) return
+      actions.forEach((action) => { action.tabIndex = action === focused ? 0 : -1 })
+    })
+    bar.addEventListener('keydown', (event) => {
+      if (!actions.includes(event.target as HTMLButtonElement) ||
+          !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+      const enabled = actions.filter((action) => !action.disabled)
+      if (!enabled.length) return
+      event.preventDefault()
+      const current = enabled.indexOf(event.target as HTMLButtonElement)
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? enabled.length - 1
+        : event.key === 'ArrowRight' ? (current + 1) % enabled.length
+          : (current + enabled.length - 1) % enabled.length
+      enabled[next]?.focus()
+    })
+    if (typeof ResizeObserver !== 'undefined') {
+      this.quickActionResizeObserver = new ResizeObserver(() => this.updateQuickActionSeparators())
+      this.quickActionResizeObserver.observe(bar)
+    }
     return bar
+  }
+
+  /** 分组整体换行时隐藏行首竖线，避免分隔线独占新行。 */
+  private updateQuickActionSeparators(): void {
+    const bar = this.quickActionsEl
+    if (!bar || bar.hidden) return
+    const groups = [...bar.querySelectorAll<HTMLElement>('.vsidian-quick-action-group')]
+    groups.forEach((group, index) => {
+      group.dataset['separated'] = String(index > 0 &&
+        Math.abs(group.getBoundingClientRect().top - groups[index - 1]!.getBoundingClientRect().top) < 1)
+    })
   }
 
   private toggleQuickHeadingMenu(): void {
@@ -2340,7 +2392,10 @@ export class WebviewSyncController {
     if (this.quickActionsEl) this.quickActionsEl.hidden = !open
     this.quickToggleBtn?.setAttribute('aria-expanded', String(open))
     if (!open) this.closeQuickHeadingMenu(false)
-    if (open) this.refreshQuickActions()
+    if (open) {
+      this.refreshQuickActions()
+      requestAnimationFrame(() => this.updateQuickActionSeparators())
+    }
   }
 
   private refreshQuickActions(): void {

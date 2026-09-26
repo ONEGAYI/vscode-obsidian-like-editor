@@ -17,7 +17,8 @@ import { chromium } from 'playwright'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const bundle = path.join(root, 'out/test/browser/outlineDrag.js')
 await build({ entryPoints: [path.join(root, 'test/browser/outlineDragFixture.ts')],
-  bundle: true, outfile: bundle, format: 'iife' })
+  bundle: true, outfile: bundle, format: 'iife',
+  loader: { '.svg': 'file' }, assetNames: 'assets/[name]' })
 
 // 条目索引：0 甲(H1) 1 乙(H2) 2 丁(H4,跨级挂乙) 3 丙(H2) 4 戊(H1)
 const DOC = [

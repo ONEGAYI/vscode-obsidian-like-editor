@@ -11,7 +11,8 @@ import { chromium } from 'playwright'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const bundle = path.join(root, 'out/test/browser/outlineCollapse.js')
 await build({ entryPoints: [path.join(root, 'test/browser/outlineCollapseFixture.ts')],
-  bundle: true, outfile: bundle, format: 'iife' })
+  bundle: true, outfile: bundle, format: 'iife',
+  loader: { '.svg': 'file' }, assetNames: 'assets/[name]' })
 
 // 三章同构：H1 + 两节 H2（各带一个 H3 子节），中间正文行撑出滚动空间。
 // 条目序列（0 基）：甲0 甲一1 甲一一2 甲二3 乙4 乙一5 乙一一6 乙二7 丙8 丙一9 丙一一10 丙二11

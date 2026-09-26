@@ -8,7 +8,8 @@ import { chromium } from 'playwright'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const output = path.join(root, 'out/test/browser/keybindingEditor.js')
 await build({ entryPoints: [path.join(root, 'test/browser/keybindingEditorFixture.ts')],
-  bundle: true, outfile: output, format: 'iife' })
+  bundle: true, outfile: output, format: 'iife',
+  loader: { '.svg': 'file' }, assetNames: 'assets/[name]' })
 const browser = await chromium.launch({ headless: true,
   channel: process.env.VSIDIAN_TEST_BROWSER_CHANNEL || undefined })
 try {

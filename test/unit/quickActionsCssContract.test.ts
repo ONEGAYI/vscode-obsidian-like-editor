@@ -26,4 +26,16 @@ describe('快速操作条样式契约', () => {
       .toMatch(/border-color:\s*var\(--vscode-focusBorder/u)
     expect(css).toMatch(/#app \.vsidian-quick-actions button:focus-visible\s*\{\s*outline:\s*1px solid var\(--vscode-focusBorder/u)
   })
+
+  it('图标同画布居中，分组竖线仅在同行显示，明暗与禁用态有绘制规则', () => {
+    expect(rule('#app .vsidian-quick-actions .vsidian-quick-action-group[data-separated="true"]::before'))
+      .toMatch(/border-left:\s*2px solid/u)
+    expect(rule('#app .vsidian-quick-actions .vsidian-quick-icon')).toMatch(/mask-size:\s*contain/u)
+    expect(rule('#app .vsidian-quick-actions .vsidian-quick-icon')).toMatch(/width:\s*18px/u)
+    expect(rule('#app .vsidian-quick-actions button:disabled'))
+      .toMatch(/opacity:\s*0\.45/u)
+    expect(rule('#app .vsidian-quick-actions .vsidian-quick-icon'))
+      .toMatch(/background-color:\s*currentColor/u)
+    expect(css).toMatch(/vscode-dark[^{}]*\[data-icon='strikethrough'\]/u)
+  })
 })

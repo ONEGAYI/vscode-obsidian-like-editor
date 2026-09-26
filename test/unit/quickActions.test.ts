@@ -46,10 +46,15 @@ describe('快速操作条', () => {
     const h = setup('中文 English')
     h.parent.querySelector<HTMLButtonElement>('.vsidian-quick-toggle')!.click()
     const bar = h.parent.querySelector<HTMLElement>('.vsidian-quick-actions')!
-    expect([...bar.querySelectorAll<HTMLElement>('[data-op]')].map((el) => el.dataset['op'])).toEqual([
-      'bold', 'italic', 'strikethrough', 'inlineCode', 'bulletList', 'orderedList',
-      'taskList', 'quote', 'codeBlock', 'link', 'clearInline',
+    const groups = [...bar.querySelectorAll<HTMLElement>('[role="group"]')]
+    expect(groups.map((group) => group.getAttribute('aria-label'))).toEqual(['文字', '段落', '插入'])
+    expect(groups.map((group) => [...group.querySelectorAll<HTMLElement>('[data-icon]')]
+      .map((el) => el.dataset['icon']))).toEqual([
+      ['bold', 'italic', 'strikethrough', 'inlineCode', 'clearInline'],
+      ['heading', 'bulletList', 'orderedList', 'taskList', 'quote', 'codeBlock'],
+      ['link', 'table', 'inlineMath', 'blockMath'],
     ])
+    expect(bar.querySelector('[data-icon="strikethrough"]')?.textContent).toBe('')
     h.view.dispatch({ selection: { anchor: 0, head: 2 } })
     const bold = bar.querySelector<HTMLButtonElement>('[data-op="bold"]')!
     bold.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
@@ -59,6 +64,29 @@ describe('快速操作条', () => {
     expect(bold.getAttribute('aria-pressed')).toBe('true')
     h.controller.dispose()
     h.parent.remove()
+  })
+
+  it('公式按钮复用格式入口；块级公式在表格内禁用', () => {
+    const h = setup('公式文字')
+    h.parent.querySelector<HTMLButtonElement>('.vsidian-quick-toggle')!.click()
+    const bar = h.parent.querySelector<HTMLElement>('.vsidian-quick-actions')!
+    const inlineMath = bar.querySelector<HTMLButtonElement>('[data-op="inlineMath"]')!
+    const blockMath = bar.querySelector<HTMLButtonElement>('[data-op="blockMath"]')!
+    expect(inlineMath.getAttribute('aria-label')).toBe('插入行内公式')
+    expect(blockMath.getAttribute('aria-label')).toBe('插入块级公式')
+    h.view.dispatch({ selection: { anchor: 0, head: 2 } })
+    inlineMath.click()
+    expect(h.view.state.doc.toString()).toBe('$公式$文字')
+    expect(h.messages.filter((message) => (message as { kind?: string }).kind === 'edit.request')).toHaveLength(1)
+    h.controller.dispose()
+    h.parent.remove()
+
+    const table = setup('| A | B |\n| --- | --- |\n| x | y |')
+    table.parent.querySelector<HTMLButtonElement>('.vsidian-quick-toggle')!.click()
+    table.view.dispatch({ selection: { anchor: table.view.state.doc.toString().indexOf('x') } })
+    expect(table.parent.querySelector<HTMLButtonElement>('[data-op="blockMath"]')!.disabled).toBe(true)
+    table.controller.dispose()
+    table.parent.remove()
   })
 
   it('标题弹出菜单支持键盘选择与 Escape；格区操作走同一格式入口', () => {

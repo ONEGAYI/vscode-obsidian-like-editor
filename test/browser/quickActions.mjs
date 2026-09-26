@@ -8,9 +8,36 @@ import { chromium } from 'playwright'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const output = path.join(root, 'out/test/browser/quickActions.js')
 await build({ entryPoints: [path.join(root, 'test/browser/quickActionsFixture.ts')],
-  bundle: true, outfile: output, format: 'iife' })
+  bundle: true, outfile: output, format: 'iife',
+  loader: { '.svg': 'file' }, assetNames: 'assets/[name]' })
 const artifacts = path.join(root, 'out/task89')
 await mkdir(artifacts, { recursive: true })
+const iconPaint = async (page, key) => {
+  const png = await page.locator(`[data-icon="${key}"]`).screenshot()
+  return page.evaluate(async (base64) => {
+    const bitmap = await createImageBitmap(await (await fetch(`data:image/png;base64,${base64}`)).blob())
+    const canvas = document.createElement('canvas')
+    canvas.width = bitmap.width
+    canvas.height = bitmap.height
+    const context = canvas.getContext('2d')
+    context.drawImage(bitmap, 0, 0)
+    const data = context.getImageData(0, 0, bitmap.width, bitmap.height).data
+    const rgb = new Set()
+    let left = bitmap.width, right = -1, top = bitmap.height, bottom = -1
+    const base = [...data.slice(0, 3)]
+    for (let y = 0; y < bitmap.height; y++) for (let x = 0; x < bitmap.width; x++) {
+      const at = (y * bitmap.width + x) * 4
+      const color = [...data.slice(at, at + 3)]
+      rgb.add(color.join(','))
+      if (color.some((channel, index) => Math.abs(channel - base[index]) > 30)) {
+        left = Math.min(left, x); right = Math.max(right, x)
+        top = Math.min(top, y); bottom = Math.max(bottom, y)
+      }
+    }
+    return { colors: rgb.size, centerX: (left + right) / 2, centerY: (top + bottom) / 2,
+      width: bitmap.width, height: bitmap.height }
+  }, png.toString('base64'))
+}
 const browser = await chromium.launch({ headless: true,
   channel: process.env.VSIDIAN_TEST_BROWSER_CHANNEL || undefined })
 try {
@@ -18,17 +45,47 @@ try {
     const page = await browser.newPage({ viewport: { width: 300, height: 640 } })
     const errors = []
     page.on('pageerror', (error) => errors.push(error.message))
-    await page.setContent(`<html><body class="vscode-${theme}"><div id="app"></div></body></html>`)
+    const iconRequests = []
+    await page.route('http://quick.test/assets/*.svg', async (route) => {
+      const name = path.basename(new URL(route.request().url()).pathname)
+      iconRequests.push(name)
+      await route.fulfill({ path: path.join(root, 'out/test/browser/assets', name),
+        contentType: 'image/svg+xml' })
+    })
+    await page.setContent(`<html><head><base href="http://quick.test/"></head><body class="vscode-${theme}"><div id="app"></div></body></html>`)
     await page.addStyleTag({ content: `:root { --vscode-font-family: sans-serif; --vscode-editor-background: ${theme === 'light' ? '#fff' : '#1e1e1e'}; --vscode-editor-foreground: ${theme === 'light' ? '#222' : '#ddd'}; --vscode-button-background: ${theme === 'light' ? '#075fae' : '#1476bd'}; --vscode-button-foreground: #fff; --vscode-focusBorder: #4fc1ff; }` })
     await page.addStyleTag({ path: output.replace(/\.js$/, '.css') })
     await page.addScriptTag({ path: output })
     await page.evaluate(() => window.initQuick('中文 English\n第二段'))
     await page.locator('.vsidian-quick-toggle').click()
     const bar = page.locator('.vsidian-quick-actions')
+    assert.deepEqual(await bar.locator('[role="group"]').evaluateAll((nodes) =>
+      nodes.map((node) => node.getAttribute('aria-label'))), ['文字', '段落', '插入'])
+    await page.waitForFunction(() => [...document.querySelectorAll('.vsidian-quick-action-group')]
+      .every((node) => node.dataset.separated === 'false'))
     const barBox = await bar.boundingBox()
     const editorBox = await page.locator('.vsidian-view-live').boundingBox()
     assert.ok(barBox && editorBox && barBox.height > 30 && editorBox.y >= barBox.y + barBox.height - 1,
       '窄窗口操作条应换行并把正文推到下方')
+    assert.equal(await bar.locator('[data-icon]').count(), 15)
+    await page.waitForFunction((theme) => performance.getEntriesByType('resource').filter((entry) =>
+      entry.name.includes(`/assets/${theme}-`) && entry.name.endsWith('.svg')).length === 15, theme)
+    assert.equal(iconRequests.filter((name) => name.startsWith(`${theme}-`)).length, 15,
+      '全部图标资源应真实加载')
+    const boldIcon = await iconPaint(page, 'bold')
+    assert.ok(boldIcon.colors > 2, '粗体图标应真实绘制')
+    const strike = await iconPaint(page, 'strikethrough')
+    assert.ok(strike.colors > 2 && Math.abs(strike.centerX - strike.width / 2) < 3 &&
+      Math.abs(strike.centerY - strike.height / 2) < 3, '删除线图标应可见且在画布中心')
+    await page.setViewportSize({ width: 720, height: 640 })
+    await page.waitForFunction(() => [...document.querySelectorAll('.vsidian-quick-action-group')]
+      .slice(1).every((node) => node.dataset.separated === 'true'))
+    assert.equal(await bar.locator('[role="group"]').nth(1).evaluate((node) =>
+      getComputedStyle(node, '::before').borderLeftWidth), '2px', '同行组间应绘制竖线')
+    await page.screenshot({ path: path.join(artifacts, `quick-wide-${theme}.png`) })
+    await page.setViewportSize({ width: 300, height: 640 })
+    await page.waitForFunction(() => [...document.querySelectorAll('.vsidian-quick-action-group')]
+      .every((node) => node.dataset.separated === 'false'))
     await page.evaluate(() => window.controller.getView().dispatch({ selection: { anchor: 0, head: 2 } }))
     await page.locator('[data-op="bold"]').click()
     assert.equal(await page.evaluate(() => window.quickText()), '**中文** English\n第二段')
@@ -46,6 +103,12 @@ try {
     assert.equal(await page.locator('.vsidian-quick-heading-menu').evaluate((el) =>
       getComputedStyle(el).display), 'none')
     assert.equal(await page.locator('.vsidian-quick-heading').evaluate((el) => document.activeElement === el), true)
+    await page.keyboard.press('ArrowRight')
+    assert.equal(await page.locator('[data-op="bulletList"]').evaluate((el) =>
+      document.activeElement === el), true, '方向键应跨组移动焦点')
+    await page.keyboard.press('End')
+    assert.equal(await page.locator('[data-op="blockMath"]').evaluate((el) =>
+      document.activeElement === el), true)
     await page.screenshot({ path: path.join(artifacts, `quick-${theme}.png`) })
     await page.locator('.vsidian-quick-heading').click()
     await page.keyboard.press('ArrowDown')
@@ -55,6 +118,29 @@ try {
     assert.deepEqual(errors, [], '页面不能有未捕获异常')
     await page.close()
   }
+  const formulaPage = await browser.newPage({ viewport: { width: 720, height: 480 } })
+  await formulaPage.setContent('<html><body><div id="app"></div></body></html>')
+  await formulaPage.addStyleTag({ path: output.replace(/\.js$/, '.css') })
+  await formulaPage.addScriptTag({ path: output })
+  await formulaPage.evaluate(() => window.initQuick('公式文字'))
+  await formulaPage.locator('.vsidian-quick-toggle').click()
+  await formulaPage.evaluate(() => window.controller.getView().dispatch({ selection: { anchor: 0, head: 2 } }))
+  await formulaPage.locator('[data-op="inlineMath"]').click()
+  assert.equal(await formulaPage.evaluate(() => window.quickText()), '$公式$文字')
+  assert.equal(await formulaPage.evaluate(() => window.quickSent().filter((m) => m.kind === 'edit.request').length), 1)
+  await formulaPage.close()
+  const blockPage = await browser.newPage({ viewport: { width: 720, height: 480 } })
+  await blockPage.setContent('<html><body><div id="app"></div></body></html>')
+  await blockPage.addStyleTag({ path: output.replace(/\.js$/, '.css') })
+  await blockPage.addScriptTag({ path: output })
+  await blockPage.evaluate(() => window.initQuick(''))
+  await blockPage.locator('.vsidian-quick-toggle').click()
+  await blockPage.locator('[data-op="blockMath"]').click()
+  assert.equal(await blockPage.evaluate(() => window.quickText()), '$$\n\n$$',
+    '无选区块级公式应沿 #88 契约插入围栏')
+  assert.equal(await blockPage.evaluate(() => window.quickSent().filter((m) => m.kind === 'edit.request').length), 1,
+    '块级公式应一笔写回')
+  await blockPage.close()
   // 原生鼠标路径：先拖出表格矩形格区，再点击顶栏展开与粗体按钮。
   const page = await browser.newPage({ viewport: { width: 620, height: 480 } })
   await page.setContent('<html><body><div id="app"></div></body></html>')
@@ -80,6 +166,8 @@ try {
     '| H | Q |\n| --- | --- |\n| **A** | B |\n| **x** | y |', '粗体应逐格作用于保留的矩形选区')
   assert.equal(await page.evaluate(() => window.quickSent().filter((m) => m.kind === 'edit.request').length), 1,
     '矩形格区格式化应是一笔写回')
+  assert.equal(await page.locator('[data-op="blockMath"]').isDisabled(), true,
+    '表格矩形格区禁用块级公式')
   await page.locator('.vsidian-quick-toggle').focus()
   await page.keyboard.press('Space')
   assert.equal(await page.locator('.vsidian-quick-toggle').getAttribute('aria-expanded'), 'false',

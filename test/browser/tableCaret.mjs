@@ -35,7 +35,7 @@ const katexMinJs = {
 }
 await build({ entryPoints: [path.join(root, 'test/browser/tableCaretFixture.ts')],
   bundle: true, outfile: bundle, format: 'iife',
-  loader: { '.woff2': 'file' }, assetNames: 'assets/[name]', plugins: [katexFontStrip, katexMinJs] })
+  loader: { '.woff2': 'file', '.svg': 'file' }, assetNames: 'assets/[name]', plugins: [katexFontStrip, katexMinJs] })
 const browser = await chromium.launch({ headless: true,
   channel: process.env.VSIDIAN_TEST_BROWSER_CHANNEL || undefined })
 let passed = 0

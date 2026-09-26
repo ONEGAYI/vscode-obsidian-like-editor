@@ -12,7 +12,7 @@ const INLINE_NODES: Partial<Record<FormatOperationId, string>> = {
 }
 const INLINE_NODE_NAMES = new Set(Object.values(INLINE_NODES))
 const INLINE_OPS = new Set<FormatOperationId>([
-  'bold', 'italic', 'strikethrough', 'inlineCode', 'link', 'clearInline',
+  'bold', 'italic', 'strikethrough', 'inlineCode', 'link', 'clearInline', 'inlineMath',
 ])
 
 function ancestors(tree: Tree, pos: number): SyntaxNode[] {
@@ -113,13 +113,13 @@ export function createQuickActionStateReader(doc: Text, tree: Tree, range: Forma
     }
     if (blocked && op !== 'codeBlock') return 'disabled'
     if (op !== 'inlineCode' && inInlineCode) return 'disabled'
-    if (op === 'codeBlock') {
+    if (op === 'codeBlock' || op === 'blockMath') {
       if (inTable || crossContainer) return 'disabled'
       if (blocked && range.from !== range.to) {
         const fence = atStart.find((node) => node.name === 'FencedCode')
         if (!fence || range.from !== fence.from || range.to !== fence.to) return 'disabled'
       }
-      return blocked ? 'active' : 'inactive'
+      return op === 'codeBlock' && blocked ? 'active' : 'inactive'
     }
     const inlineNode = INLINE_NODES[op]
     if (inlineNode) {

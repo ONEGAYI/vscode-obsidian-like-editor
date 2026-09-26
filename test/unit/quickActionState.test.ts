@@ -41,5 +41,14 @@ describe('快速操作可用状态', () => {
     expect(quickActionState(doc, tree, 'italic', { from: 0, to: 0 }, firstColumn, true)).toBe('inactive')
     expect(quickActionState(doc, tree, 'clearInline', { from: 0, to: 0 }, firstColumn, true)).toBe('inactive')
     expect(quickActionState(doc, tree, 'codeBlock', { from: 0, to: 0 }, firstColumn, true)).toBe('disabled')
+    expect(quickActionState(doc, tree, 'inlineMath', { from: 0, to: 0 }, firstColumn, true)).toBe('inactive')
+    expect(quickActionState(doc, tree, 'blockMath', { from: 0, to: 0 }, firstColumn, true)).toBe('disabled')
+  })
+
+  it('表格单元格禁用块级公式，普通段落允许公式', () => {
+    const table = '| A | B |\n| --- | --- |\n| x | y |'
+    expect(state(table, 'blockMath', table.indexOf('x'))).toBe('disabled')
+    expect(state('公式', 'blockMath', 1)).toBe('inactive')
+    expect(state('公式', 'inlineMath', 1)).toBe('inactive')
   })
 })
