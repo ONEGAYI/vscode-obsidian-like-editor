@@ -121,6 +121,7 @@ vsidian/
 │   ├── extension.ts # 扩展激活入口
 │   ├── host/        # 宿主端实现
 │   │   ├── documentSession.ts    # 文档会话与写回同步
+│   │   ├── hostLocale.ts         # 生效语言宿主装配解析帮手
 │   │   ├── keybindingService.ts  # 快捷键全局存储服务
 │   │   ├── linkTarget.ts         # 宿主侧链接目标分类纯逻辑（#10）
 │   │   ├── settingsPage.ts       # 独立设置页面板装配

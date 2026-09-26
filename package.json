@@ -283,7 +283,7 @@
   "scripts": {
     "gen:nls": "node scripts/genNls.mjs",
     "compile": "node scripts/genNls.mjs && node esbuild.mjs && tsc --noEmit",
-    "watch": "node esbuild.mjs --watch",
+    "watch": "node scripts/genNls.mjs && node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
     "test:unit": "vitest run && node --test test/integration/testHost.test.mjs test/release/release.test.mjs",
     "test:integration": "node esbuild.mjs && node ./test/integration/runTest.mjs",

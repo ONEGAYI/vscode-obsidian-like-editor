@@ -15,9 +15,9 @@ import * as vscode from 'vscode'
 import { randomUUID } from 'node:crypto'
 import { isWebviewToHost } from '../shared/protocol'
 import { t } from '../shared/i18n'
-import { LANGUAGE_KEY } from '../shared/settings'
-import { LOCALE_MESSAGES, resolveLocale, type LocaleCode } from '../shared/locales'
+import { LOCALE_MESSAGES, type LocaleCode } from '../shared/locales'
 import { buildLocaleIslandHtml } from '../shared/locales/island'
+import { hostLocale } from './hostLocale'
 import type { SettingsService } from './settingsService'
 import type { KeybindingService } from './keybindingService'
 
@@ -141,7 +141,7 @@ export function createSettingsPage(
     created.webview.html = buildSettingsPageHtml(
       created.webview,
       context.extensionUri,
-      resolveLocale(service.getSnapshot()[LANGUAGE_KEY], vscode.env.language),
+      hostLocale(service.getSnapshot()),
     )
     const messageSub = created.webview.onDidReceiveMessage(handleMessage)
     created.onDidDispose(() => {

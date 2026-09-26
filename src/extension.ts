@@ -12,8 +12,9 @@ import * as vscode from 'vscode'
 import { createTextEditorProvider, VIEW_TYPE } from './host/textEditorProvider'
 import { SettingsService } from './host/settingsService'
 import { createSettingsPage } from './host/settingsPage'
-import { PRODUCTION_SETTING_DEFINITIONS, LANGUAGE_KEY } from './shared/settings'
-import { installHostLocale, resolveLocale } from './shared/locales'
+import { PRODUCTION_SETTING_DEFINITIONS } from './shared/settings'
+import { installHostLocale } from './shared/locales'
+import { hostLocale } from './host/hostLocale'
 import { KeybindingService } from './host/keybindingService'
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -22,10 +23,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // configuration，与 VSCode 统一设置中心完全解耦（AGENTS.md「插件设置入口」）
   const settingsService = new SettingsService(context.globalState, PRODUCTION_SETTING_DEFINITIONS)
   // #93 语言装配（宿主路径）：en 包同时登记为运行时回退
-  installHostLocale(resolveLocale(
-    settingsService.getSnapshot()[LANGUAGE_KEY],
-    vscode.env.language,
-  ))
+  installHostLocale(hostLocale(settingsService.getSnapshot()))
   const keybindingService = new KeybindingService(context.globalState)
   const settingsPage = createSettingsPage(context, settingsService, keybindingService)
   const provider = createTextEditorProvider(context, {
