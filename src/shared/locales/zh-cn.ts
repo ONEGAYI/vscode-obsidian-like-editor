@@ -1,7 +1,7 @@
 // 简体中文语言包（#93 i18n 基础设施）。以 `Record<MessageKey, string>` 约束
 // 到英文包的类型基准：缺键、多键均编译失败（编译期 parity）；运行时键集
 // 一致性另由 test/unit/i18nLocales.test.ts 钉住（防构建旁路）。
-// #95 起存量中文文案迁入本包（值即原硬编码字面量，保证呈现不变）。
+// #94/#95 起存量中文文案迁入本包（值即原硬编码字面量，保证呈现不变）。
 import type { MessageKey } from './en'
 
 export const zhCn: Record<MessageKey, string> = {
@@ -104,4 +104,109 @@ export const zhCn: Record<MessageKey, string> = {
   'host.linkNotFound': '链接目标不存在：{href}（已按相对当前文档目录解析）',
   'host.invalidSettingDefinition': '非法定义：{definition}',
   'host.duplicateSettingKey': '设置键已存在：{key}',
+
+  // ---- #94 编辑器 webview 呈现面 ----
+
+  'common.keybindingHint': '快捷键：{keys}',
+  'common.keySeparator': '、',
+
+  'format.bold': '粗体',
+  'format.italic': '斜体',
+  'format.strikethrough': '删除线',
+  'format.inlineCode': '行内代码',
+  'format.heading1': '一级标题',
+  'format.heading2': '二级标题',
+  'format.heading3': '三级标题',
+  'format.heading4': '四级标题',
+  'format.heading5': '五级标题',
+  'format.heading6': '六级标题',
+  'format.headingNone': '取消标题',
+  'format.bulletList': '无序列表',
+  'format.orderedList': '有序列表',
+  'format.taskList': '任务列表',
+  'format.quote': '引用',
+  'format.codeBlock': '代码块',
+  'format.link': '链接',
+  'format.clearInline': '清除行内格式',
+  'format.inlineMath': '插入行内公式',
+  'format.blockMath': '插入块级公式',
+  'format.wikilink': '插入双链',
+
+  'format.toolbarAria': '格式快速操作',
+  'format.groupText': '文字',
+  'format.groupParagraph': '段落',
+  'format.groupInsert': '插入',
+  'format.heading': '标题',
+  'format.headingMenu': '标题层级',
+  'format.bodyText': '正文',
+  'format.insertTable': '插入表格',
+
+  'sidebar.settings': '打开 Vsidian 设置',
+  'sidebar.quickActions': '快速操作条',
+  'sidebar.collapse': '收起右侧栏',
+  'sidebar.expand': '展开右侧栏',
+
+  'find.placeholder': '查找',
+  'find.label': '在文档中查找',
+  'find.caseToggle': '忽略大小写',
+  'find.prev': '上一个匹配',
+  'find.next': '下一个匹配',
+  'find.close': '关闭查找',
+
+  'conflict.bannerText': '检测到无法安全同步的外部修改：写回已暂停，本地输入已保留，不会被覆盖。',
+  'conflict.copyUnconfirmed': '复制未确认输入',
+  'conflict.resume': '放弃本地修改并重新同步',
+
+  'outline.label': '大纲',
+  'outline.empty': '无标题',
+  'outline.chevron': '折叠或展开',
+  'outline.searchPlaceholder': '输入以搜索',
+  'outline.searchLabel': '搜索大纲标题',
+  'outline.jumpBottom': '跳转到笔记末尾',
+  'outline.reset': '重置',
+  'outline.noMatch': '无匹配',
+  'outline.expandLevels': '大纲展开层级',
+  'outline.collapseAll': '全部折叠',
+  'outline.expandLevel1': '展开到一级标题',
+  'outline.expandLevel2': '展开到二级标题',
+  'outline.expandLevel3': '展开到三级标题',
+  'outline.expandLevel4': '展开到四级标题',
+  'outline.expandLevel5': '展开到五级标题',
+  'outline.renameHeading': '重命名标题',
+
+  'outlineMenu.expandRecursively': '递归展开',
+  'outlineMenu.collapseSiblings': '折叠同级',
+  'outlineMenu.expandSiblings': '展开同级',
+  'outlineMenu.copy': '复制',
+  'outlineMenu.copyHeading': '标题',
+  'outlineMenu.copySiblings': '标题和兄弟标题',
+  'outlineMenu.copyChildren': '标题和子标题',
+  'outlineMenu.copyLink': '标题链接',
+  'outlineMenu.copySection': '该段内容',
+  'outlineMenu.adjustLevel': '调整层级',
+  'outlineMenu.levelUp': '增加一级',
+  'outlineMenu.levelUpRecursive': '递归增加一级',
+  'outlineMenu.levelDown': '减少一级',
+  'outlineMenu.levelDownRecursive': '递归减少一级',
+  'outlineMenu.rename': '重命名',
+  'outlineMenu.delete': '删除',
+
+  'table.controls': '表格操作控件',
+  'table.insertColumnRight': '在右侧新增列',
+  'table.insertRowBelow': '在表格底部新增行',
+  'table.selectRow': '选择或拖动第 {n} 行',
+  'table.selectColumn': '选择或拖动第 {n} 列',
+
+  'codeblock.copy': '复制代码',
+  'codeblock.expand': '展开代码块',
+  'codeblock.collapse': '折叠代码块',
+
+  'decor.taskCheck': '勾选任务',
+  'decor.taskUncheck': '取消任务勾选',
+  'decor.emptyCell': '空单元格',
+  'decor.mathError': '公式解析失败：显示原文，移动光标进入可编辑',
+  'decor.imageError': '图片加载失败（{reason}），点击重试',
+  'decor.unknownReason': '未知原因',
+  'decor.mermaidUnavailable': '图表渲染器不可用（mermaid.js 未能加载）',
+  'decor.mermaidError': '图表渲染失败：{message}',
 }

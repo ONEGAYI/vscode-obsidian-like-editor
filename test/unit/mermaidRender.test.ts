@@ -3,6 +3,11 @@
 // mermaid 本体在单测中 mock（真实渲染交由浏览器/集成层）。
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest'
+import { installLocale } from '../../src/shared/i18n'
+import { zhCn } from '../../src/shared/locales/zh-cn'
+
+// #94 起错误占位文案经 t() 取词：装配生产中文包，断言与字典同源
+installLocale('zh-cn', zhCn)
 import {
   MERMAID_CLASS_NAMES,
   MERMAID_CODE_ATTR,

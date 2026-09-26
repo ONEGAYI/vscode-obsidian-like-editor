@@ -2,30 +2,11 @@
 // 文件（仓库相对路径）→ 允许在案的 CJK 字面量（集合语义）。
 // 迁移工单（#94–#97）迁移一处删一条；条目失效时契约测试报错，须同步清除。
 // 再生：VSIDIAN_I18N_DUMP_WHITELIST=1 npx vitest run test/unit/i18nNoHardcodedCjk.test.ts
+// 在案说明：keybindings.ts 的 22 条为 extra/UI 源操作名存量（format 源已随
+// #94 键化）；settings.ts「简体中文」为语言自名直显（#96，规格「语言设置项」）；
+// perfProbe「探」与 tableEditing 3 条（console 诊断 reason）为开发面残留，
+// 票面未列、待后续处理。
 export const CJK_LITERALS_WHITELIST: Readonly<Record<string, readonly string[]>> = {
-  'src/shared/formatOperations.ts': [
-    "一级标题",
-    "三级标题",
-    "二级标题",
-    "五级标题",
-    "代码块",
-    "任务列表",
-    "六级标题",
-    "删除线",
-    "取消标题",
-    "四级标题",
-    "引用",
-    "插入双链",
-    "插入块级公式",
-    "插入行内公式",
-    "斜体",
-    "无序列表",
-    "有序列表",
-    "清除行内格式",
-    "粗体",
-    "行内代码",
-    "链接",
-  ],
   'src/shared/keybindings.ts': [
     "上一个查找结果",
     "下一个查找结果",
@@ -56,93 +37,8 @@ export const CJK_LITERALS_WHITELIST: Readonly<Record<string, readonly string[]>>
   'src/shared/settings.ts': [
     "简体中文",
   ],
-  'src/webview/imageResource.ts': [
-    "未知原因",
-  ],
-  'src/webview/liveCodeCard.ts': [
-    "复制代码",
-    "展开代码块",
-    "折叠代码块",
-  ],
-  'src/webview/liveDecorations.ts': [
-    "勾选任务",
-    "取消任务勾选",
-    "空单元格",
-  ],
-  'src/webview/liveMath.ts': [
-    "公式解析失败：显示原文，移动光标进入可编辑",
-  ],
-  'src/webview/mermaidRender.ts': [
-    "图表渲染器不可用（mermaid.js 未能加载）",
-  ],
-  'src/webview/outline.ts': [
-    "大纲",
-    "大纲展开层级",
-    "折叠或展开",
-    "搜索大纲标题",
-    "无标题",
-    "跳转到笔记末尾",
-    "输入以搜索",
-    "重置",
-  ],
-  'src/webview/outlineCollapse.ts': [
-    "一",
-    "三",
-    "二",
-    "五",
-    "全部折叠",
-    "四",
-  ],
-  'src/webview/outlineMenu.ts': [
-    "减少一级",
-    "删除",
-    "增加一级",
-    "复制",
-    "展开同级",
-    "折叠同级",
-    "标题",
-    "标题和兄弟标题",
-    "标题和子标题",
-    "标题链接",
-    "该段内容",
-    "调整层级",
-    "递归减少一级",
-    "递归增加一级",
-    "递归展开",
-    "重命名",
-  ],
   'src/webview/perfProbe.ts': [
     "探",
-  ],
-  'src/webview/syncController.ts': [
-    "上一个匹配",
-    "下一个匹配",
-    "关闭查找",
-    "在文档中查找",
-    "复制未确认输入",
-    "展开右侧栏",
-    "快速操作条",
-    "忽略大小写",
-    "打开 Vsidian 设置",
-    "插入",
-    "插入表格",
-    "收起右侧栏",
-    "放弃本地修改并重新同步",
-    "文字",
-    "无匹配",
-    "查找",
-    "标题",
-    "标题层级",
-    "格式快速操作",
-    "检测到无法安全同步的外部修改：写回已暂停，本地输入已保留，不会被覆盖。",
-    "正文",
-    "段落",
-    "重命名标题",
-  ],
-  'src/webview/tableControls.ts': [
-    "在右侧新增列",
-    "在表格底部新增行",
-    "表格操作控件",
   ],
   'src/webview/tableEditing.ts': [
     "多段变更",
@@ -150,4 +46,3 @@ export const CJK_LITERALS_WHITELIST: Readonly<Record<string, readonly string[]>>
     "选区无可见表格内容交集",
   ],
 }
-

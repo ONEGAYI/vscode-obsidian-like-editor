@@ -6,6 +6,7 @@ import { KeybindingSettingsSection } from '../../src/webview/keybindingSettings'
 import { installLocale } from '../../src/shared/i18n'
 import { zhCn } from '../../src/shared/locales/zh-cn'
 
+// #94 起文案经 t() 取词：装配生产中文包，断言与字典同源
 installLocale('zh-cn', zhCn)
 
 describe('快捷键设置页', () => {
@@ -36,7 +37,7 @@ describe('快捷键设置页', () => {
     const input = row.querySelector<HTMLInputElement>('.vsidian-keybindings-editor input')!
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', ctrlKey: true, bubbles: true }))
     row.querySelector<HTMLButtonElement>('.vsidian-keybindings-editor button')!.click()
-    expect(root.querySelector('.vsidian-keybindings-conflict')?.textContent).toContain('粗体')
+    expect(root.querySelector('.vsidian-keybindings-conflict')?.textContent).toContain(zhCn['format.bold'])
     expect(sent).toEqual([])
     root.querySelector<HTMLButtonElement>('.vsidian-keybindings-conflict button')!.click()
     expect(sent).toMatchObject([{ kind: 'keybindings.set', id: 'italic', bindings: ['ctrl+i', 'ctrl+b'], replaceConflicts: true }])

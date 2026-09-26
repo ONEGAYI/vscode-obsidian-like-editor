@@ -63,6 +63,7 @@ import {
   SHOW_LINE_NUMBERS_KEY,
   type SettingsPayload,
 } from '../shared/settings'
+import { onLocaleChanged, t } from '../shared/i18n'
 import {
   FIND_CLASS_NAMES,
   computeFindMatches,
@@ -84,6 +85,7 @@ import { runReadingPerfProbe } from './readingProbe'
 import { createReadingContainer, prepareReadingImages } from './readingView'
 import { READING_MARKDOWN_CLASS_NAMES } from './readingMarkdown'
 import {
+  applyOutlineDomLocale,
   applyOutlineSliderState,
   buildOutlineDom,
   buildOutlineSlider,
@@ -407,6 +409,8 @@ export class WebviewSyncController {
   /** 图片资源管理器（#10：双视图共用；经宿主通道解析工作区图源） */
   private images: ImageResourceManager | undefined
   private toolbar: HTMLElement | undefined
+  /** 语言切换重渲染订阅的退订句柄（#94；dispose 释放） */
+  private unsubscribeLocale: (() => void) | undefined
   private quickActionsEl: HTMLElement | undefined
   private quickToggleBtn: HTMLButtonElement | undefined
   private quickHeadingBtn: HTMLButtonElement | undefined
@@ -835,6 +839,8 @@ export class WebviewSyncController {
     this.view.scrollDOM.addEventListener('scroll', () => this.onOutlineScrollSignal())
     this.hostDarkApplied = isVscodeDarkBody()
     this.applyModeDom(this.viewMode)
+    // #94 语言切换：常驻文本就地换词（首帧装配不触发，installLocale 才通知）
+    this.unsubscribeLocale = onLocaleChanged(() => this.applyEditorLocale())
     this.refreshQuickActions()
     this.bridge.postMessage({ kind: 'ready' })
   }
@@ -844,6 +850,8 @@ export class WebviewSyncController {
   }
 
   dispose(): void {
+    this.unsubscribeLocale?.()
+    this.unsubscribeLocale = undefined
     if (this.flushTimer !== undefined) {
       clearTimeout(this.flushTimer)
       this.flushTimer = undefined
@@ -2242,7 +2250,7 @@ export class WebviewSyncController {
     bar.className = 'vsidian-quick-actions'
     bar.id = 'vsidian-quick-actions'
     bar.setAttribute('role', 'toolbar')
-    bar.setAttribute('aria-label', '格式快速操作')
+    bar.setAttribute('aria-label', t('format.toolbarAria'))
     const button = (label: string, icon: string, className: string,
       textIcon = false): HTMLButtonElement => {
       const el = document.createElement('button')
@@ -2260,27 +2268,29 @@ export class WebviewSyncController {
       el.addEventListener('mousedown', (event) => event.preventDefault())
       return el
     }
-    const group = (label: string): HTMLElement => {
+    const group = (labelKey: 'format.groupText' | 'format.groupParagraph' | 'format.groupInsert'): HTMLElement => {
       const el = document.createElement('div')
       el.className = 'vsidian-quick-action-group'
       el.setAttribute('role', 'group')
-      el.setAttribute('aria-label', label)
+      el.setAttribute('aria-label', t(labelKey))
+      // 语言切换就地换词的锚点（applyEditorLocale 按 data-group 回查）
+      el.dataset['group'] = labelKey
       bar.appendChild(el)
       return el
     }
     const addOperation = (target: HTMLElement, op: FormatOperationId): void => {
       const item = FORMAT_OPERATIONS.find((entry) => entry.id === op)!
-      const el = button(item.title, op, 'vsidian-quick-action')
+      const el = button(t(item.titleKey), op, 'vsidian-quick-action')
       el.dataset['op'] = op
       el.addEventListener('click', () => this.runFormatOperation(op))
       target.appendChild(el)
     }
-    const textGroup = group('文字')
+    const textGroup = group('format.groupText')
     for (const op of ['bold', 'italic', 'strikethrough', 'inlineCode', 'clearInline'] as const) {
       addOperation(textGroup, op)
     }
-    const paragraphGroup = group('段落')
-    const heading = button('标题', 'heading', 'vsidian-quick-heading')
+    const paragraphGroup = group('format.groupParagraph')
+    const heading = button(t('format.heading'), 'heading', 'vsidian-quick-heading')
     heading.setAttribute('aria-haspopup', 'menu')
     heading.setAttribute('aria-expanded', 'false')
     heading.setAttribute('aria-controls', 'vsidian-quick-heading-menu')
@@ -2290,9 +2300,9 @@ export class WebviewSyncController {
     for (const op of ['bulletList', 'orderedList', 'taskList', 'quote', 'codeBlock'] as const) {
       addOperation(paragraphGroup, op)
     }
-    const insertGroup = group('插入')
+    const insertGroup = group('format.groupInsert')
     addOperation(insertGroup, 'link')
-    const createTable = button('插入表格', 'table', 'vsidian-quick-table')
+    const createTable = button(t('format.insertTable'), 'table', 'vsidian-quick-table')
     createTable.addEventListener('click', () => {
       const view = this.view
       if (view && this.viewMode === 'live' && !this.suspended &&
@@ -2308,13 +2318,13 @@ export class WebviewSyncController {
     menu.className = 'vsidian-quick-heading-menu'
     menu.id = 'vsidian-quick-heading-menu'
     menu.setAttribute('role', 'menu')
-    menu.setAttribute('aria-label', '标题层级')
+    menu.setAttribute('aria-label', t('format.headingMenu'))
     menu.hidden = true
     for (const op of [
       'heading1', 'heading2', 'heading3', 'heading4', 'heading5', 'heading6', 'headingNone',
     ] as const) {
       const item = FORMAT_OPERATIONS.find((entry) => entry.id === op)!
-      const el = button(item.title, op === 'headingNone' ? '正文' : op.replace('heading', 'H'),
+      const el = button(t(item.titleKey), op === 'headingNone' ? t('format.bodyText') : op.replace('heading', 'H'),
         'vsidian-quick-heading-item', true)
       el.dataset['headingOp'] = op
       el.setAttribute('role', 'menuitemradio')
@@ -2443,12 +2453,13 @@ export class WebviewSyncController {
       el.dataset['formatState'] = status
       if (el.hasAttribute('role')) el.setAttribute('aria-checked', String(status === 'active'))
       else el.setAttribute('aria-pressed', status === 'mixed' ? 'mixed' : String(status === 'active'))
-      const base = FORMAT_OPERATIONS.find((item) => item.id === op)!.title
+      const base = t(FORMAT_OPERATIONS.find((item) => item.id === op)!.titleKey)
       const bindings = this.quickBindingHints(op)
       const keys = bindings.map((key) => key.split('+').map((part) =>
         part.length === 1 ? part.toUpperCase() : part[0]!.toUpperCase() + part.slice(1)).join('+'))
-      el.title = keys.length ? `${base} (${keys.join('、')})` : base
-      if (keys.length) el.setAttribute('aria-description', `快捷键：${keys.join('、')}`)
+      const joined = keys.join(t('common.keySeparator'))
+      el.title = keys.length ? `${base} (${joined})` : base
+      if (keys.length) el.setAttribute('aria-description', t('common.keybindingHint', { keys: joined }))
       else el.removeAttribute('aria-description')
     }
     const headingOptions = [...bar.querySelectorAll<HTMLElement>('[data-heading-op]')]
@@ -2463,6 +2474,91 @@ export class WebviewSyncController {
     actions.forEach((action) => { action.tabIndex = action === tabStop ? 0 : -1 })
   }
 
+  /** 语言切换（locale.changed → installLocale 通知）就地刷新常驻文本
+   *  （#94）：顶栏按钮、操作条框架与按钮可访问名称、查找控件、冲突横幅、
+   *  大纲骨架直接换词，工具提示经 refreshQuickActions 重算；按需创建的
+   *  控件（右键菜单、表格控件按钮、装饰 widget）随下次渲染自然取新词 */
+  private applyEditorLocale(): void {
+    const settingsBtn = this.toolbar?.querySelector<HTMLButtonElement>('.vsidian-settings-toggle')
+    settingsBtn?.setAttribute('aria-label', t('sidebar.settings'))
+    settingsBtn?.setAttribute('title', t('sidebar.settings'))
+    this.quickToggleBtn?.setAttribute('aria-label', t('sidebar.quickActions'))
+    this.quickToggleBtn?.setAttribute('title', t('sidebar.quickActions'))
+    this.applySidebarDom()
+    const bar = this.quickActionsEl
+    if (bar) {
+      bar.setAttribute('aria-label', t('format.toolbarAria'))
+      for (const group of bar.querySelectorAll<HTMLElement>('.vsidian-quick-action-group')) {
+        const key = group.dataset['group']
+        if (key === 'format.groupText' || key === 'format.groupParagraph' || key === 'format.groupInsert') {
+          group.setAttribute('aria-label', t(key))
+        }
+      }
+      for (const el of bar.querySelectorAll<HTMLButtonElement>('[data-op], [data-heading-op]')) {
+        const op = (el.dataset['op'] ?? el.dataset['headingOp']) as FormatOperationId
+        const item = FORMAT_OPERATIONS.find((entry) => entry.id === op)
+        if (!item) {
+          continue
+        }
+        el.setAttribute('aria-label', t(item.titleKey))
+        if (op === 'headingNone') {
+          const glyph = el.querySelector<HTMLElement>('.vsidian-quick-text-icon')
+          if (glyph) {
+            glyph.textContent = t('format.bodyText')
+          }
+        }
+      }
+      this.quickHeadingBtn?.setAttribute('aria-label', t('format.heading'))
+      this.quickHeadingBtn?.setAttribute('title', t('format.heading'))
+      this.quickHeadingMenu?.setAttribute('aria-label', t('format.headingMenu'))
+      const tableBtn = bar.querySelector<HTMLButtonElement>('.vsidian-quick-table')
+      tableBtn?.setAttribute('aria-label', t('format.insertTable'))
+      if (tableBtn) {
+        tableBtn.title = t('format.insertTable')
+      }
+    }
+    this.refreshQuickActions()
+    const banner = this.banner
+    if (banner) {
+      const text = banner.querySelector<HTMLElement>('.vsidian-suspend-banner-text')
+      if (text) {
+        text.textContent = t('conflict.bannerText')
+      }
+      const copy = banner.querySelector<HTMLButtonElement>('button[data-action="copy"]')
+      if (copy) {
+        copy.textContent = t('conflict.copyUnconfirmed')
+      }
+      const resume = banner.querySelector<HTMLButtonElement>('button[data-action="resume"]')
+      if (resume) {
+        resume.textContent = t('conflict.resume')
+      }
+    }
+    const find = this.findPanel
+    if (find) {
+      this.findInputEl?.setAttribute('placeholder', t('find.placeholder'))
+      this.findInputEl?.setAttribute('aria-label', t('find.label'))
+      const setFindBtn = (cls: string, key: 'find.caseToggle' | 'find.prev' | 'find.next' | 'find.close'): void => {
+        const btn = find.querySelector<HTMLButtonElement>(`.${cls}`)
+        if (btn) {
+          btn.textContent = t(key)
+          btn.setAttribute('aria-label', t(key))
+        }
+      }
+      setFindBtn(FIND_CLASS_NAMES.caseToggle, 'find.caseToggle')
+      setFindBtn(FIND_CLASS_NAMES.prev, 'find.prev')
+      setFindBtn(FIND_CLASS_NAMES.next, 'find.next')
+      setFindBtn(FIND_CLASS_NAMES.close, 'find.close')
+    }
+    applyOutlineDomLocale({
+      toggle: this.outlineToggleBtn,
+      panel: this.outlinePanelEl,
+      slider: this.outlineSlider,
+      toolbar: this.outlineToolbar,
+    })
+    this.liveWrapper?.querySelector('.vsidian-table-controls')
+      ?.setAttribute('aria-label', t('table.controls'))
+  }
+
   /** 主编辑区顶栏（#53 图标化）：左端齿轮设置按钮（打开宿主级 Vsidian
    *  设置页面板——webview 无权自建面板，必须经 settings.open 出站），
    *  右端右侧栏切换按钮（margin-left:auto 推靠）。#6 的模式切换按钮已按
@@ -2473,15 +2569,15 @@ export class WebviewSyncController {
     const settingsBtn = document.createElement('button')
     settingsBtn.type = 'button'
     settingsBtn.className = 'vsidian-settings-toggle'
-    settingsBtn.setAttribute('aria-label', '打开 Vsidian 设置')
-    settingsBtn.setAttribute('title', '打开 Vsidian 设置')
+    settingsBtn.setAttribute('aria-label', t('sidebar.settings'))
+    settingsBtn.setAttribute('title', t('sidebar.settings'))
     settingsBtn.appendChild(createSettingsGearIcon())
     settingsBtn.addEventListener('click', () => this.bridge.postMessage({ kind: 'settings.open' }))
     const quickBtn = document.createElement('button')
     quickBtn.type = 'button'
     quickBtn.className = 'vsidian-quick-toggle'
-    quickBtn.setAttribute('aria-label', '快速操作条')
-    quickBtn.setAttribute('title', '快速操作条')
+    quickBtn.setAttribute('aria-label', t('sidebar.quickActions'))
+    quickBtn.setAttribute('title', t('sidebar.quickActions'))
     quickBtn.setAttribute('aria-controls', 'vsidian-quick-actions')
     quickBtn.setAttribute('aria-expanded', 'false')
     quickBtn.textContent = '✎'
@@ -2740,7 +2836,7 @@ export class WebviewSyncController {
     }
     const btn = this.sidebarToggleBtn
     if (btn) {
-      const label = this.sidebarOpen ? '收起右侧栏' : '展开右侧栏'
+      const label = t(this.sidebarOpen ? 'sidebar.collapse' : 'sidebar.expand')
       btn.setAttribute('aria-label', label)
       btn.setAttribute('title', label)
       btn.setAttribute('aria-expanded', String(this.sidebarOpen))
@@ -2975,7 +3071,7 @@ export class WebviewSyncController {
     if (nomatch && !placeholder) {
       placeholder = document.createElement('div')
       placeholder.className = OUTLINE_CLASS_NAMES.nomatch
-      placeholder.textContent = '无匹配'
+      placeholder.textContent = t('outline.noMatch')
       panel.appendChild(placeholder)
     } else if (!nomatch && placeholder) {
       placeholder.remove()
@@ -3180,7 +3276,7 @@ export class WebviewSyncController {
     input.type = 'text'
     input.className = OUTLINE_MENU_CLASS_NAMES.renameInput
     input.value = item.text
-    input.setAttribute('aria-label', '重命名标题')
+    input.setAttribute('aria-label', t('outline.renameHeading'))
     input.addEventListener('keydown', (event) => {
       event.stopPropagation()
       if (event.key === 'Enter') {
@@ -3810,8 +3906,8 @@ export class WebviewSyncController {
     const input = document.createElement('input')
     input.type = 'text'
     input.className = FIND_CLASS_NAMES.input
-    input.setAttribute('placeholder', '查找')
-    input.setAttribute('aria-label', '在文档中查找')
+    input.setAttribute('placeholder', t('find.placeholder'))
+    input.setAttribute('aria-label', t('find.label'))
     input.addEventListener('input', () => {
       this.findQuery = input.value
       this.findDoc = null // 查询变化：以当前位置为参考重算
@@ -3839,7 +3935,7 @@ export class WebviewSyncController {
     }
     // 大小写切换按钮：语义为「忽略大小写」开关——active 类与 aria-pressed
     // 同步表示「忽略生效」，默认区分大小写（未激活、未按下）
-    const caseBtn = mkBtn(FIND_CLASS_NAMES.caseToggle, '忽略大小写', () => {
+    const caseBtn = mkBtn(FIND_CLASS_NAMES.caseToggle, t('find.caseToggle'), () => {
       this.findCaseSensitive = !this.findCaseSensitive
       caseBtn.classList.toggle(FIND_CLASS_NAMES.caseActive, !this.findCaseSensitive)
       caseBtn.setAttribute('aria-pressed', String(!this.findCaseSensitive))
@@ -3854,9 +3950,9 @@ export class WebviewSyncController {
     panel.appendChild(input)
     panel.appendChild(count)
     panel.appendChild(caseBtn)
-    panel.appendChild(mkBtn(FIND_CLASS_NAMES.prev, '上一个匹配', () => this.findStep('prev')))
-    panel.appendChild(mkBtn(FIND_CLASS_NAMES.next, '下一个匹配', () => this.findStep('next')))
-    panel.appendChild(mkBtn(FIND_CLASS_NAMES.close, '关闭查找', () => this.closeFind()))
+    panel.appendChild(mkBtn(FIND_CLASS_NAMES.prev, t('find.prev'), () => this.findStep('prev')))
+    panel.appendChild(mkBtn(FIND_CLASS_NAMES.next, t('find.next'), () => this.findStep('next')))
+    panel.appendChild(mkBtn(FIND_CLASS_NAMES.close, t('find.close'), () => this.closeFind()))
     return panel
   }
 
@@ -5320,16 +5416,16 @@ export class WebviewSyncController {
     banner.style.display = 'none'
     const label = document.createElement('span')
     label.className = 'vsidian-suspend-banner-text'
-    label.textContent = '检测到无法安全同步的外部修改：写回已暂停，本地输入已保留，不会被覆盖。'
+    label.textContent = t('conflict.bannerText')
     banner.appendChild(label)
     const copy = document.createElement('button')
     copy.type = 'button'
     copy.dataset['action'] = 'copy'
-    copy.textContent = '复制未确认输入'
+    copy.textContent = t('conflict.copyUnconfirmed')
     const resume = document.createElement('button')
     resume.type = 'button'
     resume.dataset['action'] = 'resume'
-    resume.textContent = '放弃本地修改并重新同步'
+    resume.textContent = t('conflict.resume')
     banner.appendChild(copy)
     banner.appendChild(resume)
     banner.addEventListener('click', (event) => {

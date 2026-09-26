@@ -46,7 +46,9 @@ export function isUiOperationId(value: unknown): value is UiOperationId {
 
 export const KEYBINDING_OPERATIONS: readonly KeybindingOperation[] = [
   ...FORMAT_OPERATIONS.map((op) => ({
-    id: op.id, command: op.command, title: op.title,
+    // #94 迁移期：format 源条目的 title 持字典消息键（消费方经 t() 取词，
+    // 缺键回退原串）；extra/UI 源的存量字面量仍在白名单在案，待后续键化
+    id: op.id, command: op.command, title: op.titleKey,
     mode: op.mode, writes: op.writes,
     defaults: op.defaultKey ? [op.defaultKey] : op.id === 'italic' ? ['ctrl+i'] : [],
   })),

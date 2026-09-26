@@ -28,6 +28,7 @@
 // 代次已过（渲染期间切换了主题），结果应用到容器但不写缓存——否则后续
 // 渲染会命中旧主题缓存条目，容器永久滞留旧主题（主题竞态修复）。
 import { MERMAID_CLASS_NAMES, MERMAID_CODE_ATTR, MERMAID_STATE_ATTR } from '../shared/mermaid'
+import { t } from '../shared/i18n'
 
 /** mermaid API 面（仅本模块消费的能力；真实实现来自懒加载的全局） */
 export interface MermaidApi {
@@ -210,7 +211,7 @@ function applyEntry(container: HTMLElement, code: string, entry: CacheEntry): vo
     const message = document.createElement('div')
     message.className = 'vsidian-mermaid-error-message'
     message.setAttribute('role', 'note')
-    message.textContent = `图表渲染失败：${entry.message}`
+    message.textContent = t('decor.mermaidError', { message: entry.message })
     const source = document.createElement('pre')
     source.className = 'vsidian-mermaid-error-source'
     const codeEl = document.createElement('code')
@@ -231,7 +232,7 @@ function applyEntry(container: HTMLElement, code: string, entry: CacheEntry): vo
 }
 
 function applyUnavailable(container: HTMLElement, code: string): void {
-  applyEntry(container, code, { kind: 'error', message: '图表渲染器不可用（mermaid.js 未能加载）', gen: themeGen })
+  applyEntry(container, code, { kind: 'error', message: t('decor.mermaidUnavailable'), gen: themeGen })
 }
 
 /** 串行渲染一个源码（缓存优先；未命中入队 render 并写缓存）。

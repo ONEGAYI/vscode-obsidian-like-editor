@@ -26,6 +26,8 @@
 //    条目内时垂直让位到条目下方（条目保持可见——菜单不遮挡目标）；
 //    下方放不下翻到条目上方，再放不下 clamp 到侧栏内。
 import type { OutlineMenuCommand } from '../shared/protocol'
+import type { MessageKey } from '../shared/locales/en'
+import { t } from '../shared/i18n'
 import { outlineSiblingIndices, outlineSubtreeIndices } from './outlineSection'
 
 export type { OutlineMenuCommand }
@@ -48,10 +50,11 @@ export const OUTLINE_MENU_CLASS_NAMES = {
   renameInput: 'vsidian-outline-rename-input',
 } as const
 
-/** 菜单项描述（一级与子菜单共用；children 存在即级联） */
+/** 菜单项描述（一级与子菜单共用；children 存在即级联）。#94 起 labelKey
+ *  为字典消息键（outlineMenu.*），渲染层经 t() 取词 */
 export interface OutlineMenuItemDef {
   id: OutlineMenuCommand | 'copy' | 'level'
-  label: string
+  labelKey: MessageKey
   children?: OutlineMenuItemDef[]
   /** 渲染为 disabled（键盘跳过、点击无回调） */
   disabled?: boolean
@@ -60,32 +63,32 @@ export interface OutlineMenuItemDef {
 /** 菜单结构（hasChildren：目标条目是否父节点——决定递归展开可用性） */
 export function outlineMenuSpec(hasChildren: boolean): OutlineMenuItemDef[] {
   return [
-    { id: 'expandRecursively', label: '递归展开', disabled: !hasChildren },
-    { id: 'collapseSiblings', label: '折叠同级' },
-    { id: 'expandSiblings', label: '展开同级' },
+    { id: 'expandRecursively', labelKey: 'outlineMenu.expandRecursively', disabled: !hasChildren },
+    { id: 'collapseSiblings', labelKey: 'outlineMenu.collapseSiblings' },
+    { id: 'expandSiblings', labelKey: 'outlineMenu.expandSiblings' },
     {
       id: 'copy',
-      label: '复制',
+      labelKey: 'outlineMenu.copy',
       children: [
-        { id: 'copyHeading', label: '标题' },
-        { id: 'copySiblings', label: '标题和兄弟标题' },
-        { id: 'copyChildren', label: '标题和子标题' },
-        { id: 'copyLink', label: '标题链接' },
-        { id: 'copySection', label: '该段内容' },
+        { id: 'copyHeading', labelKey: 'outlineMenu.copyHeading' },
+        { id: 'copySiblings', labelKey: 'outlineMenu.copySiblings' },
+        { id: 'copyChildren', labelKey: 'outlineMenu.copyChildren' },
+        { id: 'copyLink', labelKey: 'outlineMenu.copyLink' },
+        { id: 'copySection', labelKey: 'outlineMenu.copySection' },
       ],
     },
     {
       id: 'level',
-      label: '调整层级',
+      labelKey: 'outlineMenu.adjustLevel',
       children: [
-        { id: 'levelUp', label: '增加一级' },
-        { id: 'levelUpRecursive', label: '递归增加一级' },
-        { id: 'levelDown', label: '减少一级' },
-        { id: 'levelDownRecursive', label: '递归减少一级' },
+        { id: 'levelUp', labelKey: 'outlineMenu.levelUp' },
+        { id: 'levelUpRecursive', labelKey: 'outlineMenu.levelUpRecursive' },
+        { id: 'levelDown', labelKey: 'outlineMenu.levelDown' },
+        { id: 'levelDownRecursive', labelKey: 'outlineMenu.levelDownRecursive' },
       ],
     },
-    { id: 'rename', label: '重命名' },
-    { id: 'delete', label: '删除' },
+    { id: 'rename', labelKey: 'outlineMenu.rename' },
+    { id: 'delete', labelKey: 'outlineMenu.delete' },
   ]
 }
 
@@ -165,7 +168,7 @@ export function buildOutlineMenu(
       if (def.id === 'delete') {
         btn.classList.add(OUTLINE_MENU_CLASS_NAMES.danger)
       }
-      btn.textContent = def.label
+      btn.textContent = t(def.labelKey)
       btn.addEventListener('click', () => {
         if (btn.disabled) {
           return

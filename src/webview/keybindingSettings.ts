@@ -1,7 +1,7 @@
 // 快捷键设置分页（#91）。#95 i18n：本页文案经 t() 取词（settings./
 // keybindingSettings. 前缀）；分页标题/描述与 entries 为 getter——语言
-// 换包后由宿主容器重建分页时重新求值。操作名（op.title）暂为注册表
-// 存量文案，随编辑器 webview 迁移工单入字典。
+// 换包后由宿主容器重建分页时重新求值。操作名取词见下方 opTitle（#94）：
+// format 源条目的 title 持字典键，extra/UI 源暂为白名单在案的存量字面量。
 import {
   KEYBINDING_OPERATIONS, applyBindingChange,
   formatBindingLabel, getEffectiveBindings, type KeybindingOverrides,
@@ -10,6 +10,14 @@ import { t } from '../shared/i18n'
 import type { SettingsPageBridge, SettingsPageSection } from './settingsPageView'
 import { keyStep } from './keybindingRouter'
 import { isHostToWebview } from '../shared/protocol'
+
+/** 操作显示名：format 源 title 持字典消息键（t() 取词），extra/UI 源为
+ *  存量字面量（t() 缺键回退原串，照常显示）——两种来源统一经此取词 */
+const opTitle = (op: { title: string }): string => t(op.title)
+const titleOfId = (id: string): string => {
+  const op = KEYBINDING_OPERATIONS.find((item) => item.id === id)
+  return op ? opTitle(op) : id
+}
 
 function el(tag: string, cls: string, text = ''): HTMLElement {
   const node = document.createElement(tag)
@@ -20,9 +28,7 @@ function el(tag: string, cls: string, text = ''): HTMLElement {
 
 /** 冲突文案的操作名串接（分隔符随语言：zh 顿号 / en 逗号） */
 function joinOpNames(ids: readonly string[]): string {
-  return ids
-    .map((id) => KEYBINDING_OPERATIONS.find((op) => op.id === id)?.title ?? id)
-    .join(t('keybindingSettings.nameSeparator'))
+  return ids.map(titleOfId).join(t('keybindingSettings.nameSeparator'))
 }
 
 export class KeybindingSettingsSection implements SettingsPageSection {
@@ -33,7 +39,7 @@ export class KeybindingSettingsSection implements SettingsPageSection {
   get entries() {
     return KEYBINDING_OPERATIONS.map((op) => ({
       id: op.id,
-      title: op.title,
+      title: opTitle(op),
       description: `${t(op.mode === 'both' ? 'keybindingSettings.modeBoth'
         : op.mode === 'live' ? 'keybindingSettings.modeLive' : 'keybindingSettings.modeReading')} · ${op.command}`,
     }))
@@ -197,7 +203,7 @@ export class KeybindingSettingsSection implements SettingsPageSection {
     if (!parent) return
     parent.replaceChildren()
     let locatedRow: HTMLElement | undefined
-    const filtered = KEYBINDING_OPERATIONS.filter((op) => op.title.toLocaleLowerCase().includes(this.query.toLocaleLowerCase()) &&
+    const filtered = KEYBINDING_OPERATIONS.filter((op) => opTitle(op).toLocaleLowerCase().includes(this.query.toLocaleLowerCase()) &&
       (!this.keyQuery || getEffectiveBindings(this.overrides, op.id).some((binding) =>
         binding === this.keyQuery || binding.startsWith(`${this.keyQuery} `))))
     if (!filtered.length) parent.append(el('p', 'vsidian-settings-empty', t('keybindingSettings.noMatch')))
@@ -209,7 +215,7 @@ export class KeybindingSettingsSection implements SettingsPageSection {
         locatedRow = row
       }
       const heading = el('div', 'vsidian-keybindings-row-heading')
-      heading.append(el('strong', '', op.title),
+      heading.append(el('strong', '', opTitle(op)),
         el('span', 'vsidian-keybindings-mode', t(op.mode === 'both' ? 'keybindingSettings.modeLiveReading'
           : op.mode === 'live' ? 'keybindingSettings.modeLive' : 'keybindingSettings.modeReading')))
       row.append(heading)
