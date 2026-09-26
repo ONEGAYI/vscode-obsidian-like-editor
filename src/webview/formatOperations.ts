@@ -349,7 +349,12 @@ function fencePlan(text: string, op: 'codeBlock' | 'blockMath', range: FormatSel
     const paragraph = [...initialNodes].reverse().find((node) => node.name === 'Paragraph')
     if (paragraph) { from = paragraph.from; to = paragraph.to }
   }
-  if (selected && (inList || inQuote) && !text.slice(from, to).includes('\n')) {
+  if (selected && (inList || inQuote)) {
+    const kind = inList ? 'ListItem' : 'Blockquote'
+    const startContainer = initialNodes.find((node) => node.name === kind)
+    const endContainer = nodesAt(root, Math.max(from, to - 1)).find((node) => node.name === kind)
+    if (!startContainer || !endContainer || startContainer.from !== endContainer.from ||
+        startContainer.to !== endContainer.to) return null
     const sourceFrom = text.lastIndexOf('\n', from - 1) + 1
     const eol = text.indexOf('\n', to)
     const sourceTo = eol < 0 ? text.length : eol

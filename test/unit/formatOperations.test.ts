@@ -98,6 +98,10 @@ describe('格式操作的文本契约', () => {
       .toBe('- 前\n\n  ```\n  中文\n  ```\n\n  后')
     expect(apply('> 前中文后', 'blockMath', 3, 5).text)
       .toBe('> 前\n>\n> $$\n> 中文\n> $$\n>\n> 后')
+    expect(apply('- 前甲\n  乙后', 'codeBlock', 3, 8).text)
+      .toBe('- 前\n\n  ```\n  甲\n  乙\n  ```\n\n  后')
+    expect(apply('> 前甲\n> 乙后', 'blockMath', 3, 8).text)
+      .toBe('> 前\n>\n> $$\n> 甲\n> 乙\n> $$\n>\n> 后')
   })
 
   it('空段插入空结构并定位光标；块级公式再次操作可取消', () => {
