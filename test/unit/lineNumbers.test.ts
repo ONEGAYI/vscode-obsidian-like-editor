@@ -11,7 +11,7 @@
 //   test/unit/newline.test.ts）
 import { describe, it, expect } from 'vitest'
 import { gutterLineClass } from '@codemirror/view'
-import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
+import { WebviewSyncController, createFontBoundingBoxMeasurer, type VsCodeBridge } from '../../src/webview/syncController'
 import { getLineNumberGutterStats } from '../../src/webview/liveLineNumbers'
 import { SHOW_LINE_NUMBERS_DEFAULT, SHOW_LINE_NUMBERS_KEY } from '../../src/shared/settings'
 import type { WebviewToHost } from '../../src/shared/protocol'
@@ -329,5 +329,72 @@ describe('行格分类扫描收窄（#116 性能）', () => {
     expect(delta).toBeGreaterThan(0)
     expect(delta).toBeLessThan(view.state.doc.length)
     c.dispose()
+  })
+})
+
+describe('行号对齐探针健壮性（#116）', () => {
+  /** 假 canvas 2D：jsdom 本机无 canvas 包（getContext 返回 null），桩出
+   *  measureText 的 fontBoundingBox 度量，专测 measurer 对 font 串的防御 */
+  function stubCanvasContext(): () => void {
+    const realCreate = document.createElement.bind(document)
+    const measureText = (): { fontBoundingBoxAscent: number; fontBoundingBoxDescent: number } =>
+      ({ fontBoundingBoxAscent: 8, fontBoundingBoxDescent: 2 })
+    document.createElement = ((tag: string) =>
+      (tag === 'canvas'
+        ? { getContext: () => ({ measureText }) }
+        : realCreate(tag))) as typeof document.createElement
+    return () => {
+      document.createElement = realCreate
+    }
+  }
+
+  it('fontMetric：空/空白 computed font 返回 null，不落 canvas 默认字体伪度量', () => {
+    const restore = stubCanvasContext()
+    try {
+      const fontMetric = createFontBoundingBoxMeasurer()
+      // canvas 规范：无效 font 赋值被静默忽略、沿用默认 10px sans-serif——
+      // 空 computed font 串若照走 canvas 会量出默认字体伪度量
+      expect(fontMetric('')).toBeNull()
+      expect(fontMetric('   ')).toBeNull()
+      expect(fontMetric('400 16px mono')).toEqual({ ascent: 8, descent: 2 })
+    } finally {
+      restore()
+    }
+  })
+
+  it('对齐采样：单条目异常只跳过该行，余下行号仍被采样', () => {
+    const { bridge, sent } = makeBridge()
+    const c = mount(bridge)
+    init(c, '好甲\n坏乙\n好丙')
+    // jsdom 未实现 Range.getBoundingClientRect（调用即抛错）：补桩模拟
+    // 真宿主布局——正文行含「坏」的采样抛错（单条异常注入），行号格与
+    // 其余正文行返回有面积的矩形
+    const proto = document.defaultView!.Range.prototype as
+      (Range & { getBoundingClientRect?: () => DOMRect }) | undefined
+    const hadOwn = Object.prototype.hasOwnProperty.call(proto, 'getBoundingClientRect')
+    const original = proto!.getBoundingClientRect
+    proto!.getBoundingClientRect = function (this: Range): DOMRect {
+      const node = this.startContainer
+      const host = (node.nodeType === 1 ? node : node.parentElement) as HTMLElement | null
+      const line = host?.closest('.cm-line') ?? null
+      if (line?.textContent?.includes('坏')) throw new Error('probe boom')
+      if (host?.closest('.cm-lineNumbers')) return { height: 12, bottom: 110 } as DOMRect
+      return { height: 12, bottom: 100 } as DOMRect
+    }
+    const restoreCanvas = stubCanvasContext()
+    try {
+      c.handleHostMessage({ kind: 'view.state.request' } as never)
+      const last = sent[sent.length - 1] as (WebviewToHost & {
+        lineGutter?: { alignment?: Array<{ num: string }> | null }
+      })
+      expect(last.kind).toBe('view.state')
+      const alignment = last.lineGutter?.alignment ?? null
+      expect(alignment?.map((entry) => entry.num)).toEqual(['1', '3'])
+    } finally {
+      restoreCanvas()
+      if (hadOwn) proto!.getBoundingClientRect = original!
+      else delete (proto as { getBoundingClientRect?: unknown }).getBoundingClientRect
+      c.dispose()
+    }
   })
 })
