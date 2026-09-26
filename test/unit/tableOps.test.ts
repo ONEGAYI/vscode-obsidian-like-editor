@@ -4,7 +4,9 @@
 // 核心断言（用户可观察行为，非实现复述）：
 // - Tab/Shift+Tab：表格行内移动单元格光标（keydown 直驱 keymap 链路）；
 //   纯选区事务——零写回、零编辑历史、文本逐字节不变
-// - 非表格上下文 Tab 不吞输入：处理器返回 false，交默认行为
+// - 非表格上下文表格处理器返回 false、自身不改文本：Live 正文内的 Tab
+//   由 #120 通用行缩进（indentEditing，装配在本扩展之后）接手消费；
+//   表格边界放行同样不缩进表格行（见 indentEditing.test.ts）
 // - IME 组合进行中不劫持 Tab（组合态键导航拒绝）
 // - 增删行列：视图命令 → CM6 事务 → edit.request（一笔）→ 宿主权威文档
 //   → 保存回读（getText）逐字一致；撤销一次回原
@@ -173,7 +175,7 @@ describe('表格 Tab/Shift+Tab 导航', () => {
     view.destroy()
   })
 
-  it('表头首格 Shift+Tab 与末行末格 Tab：返回 false 交默认（不吞输入）', () => {
+  it('表头首格 Shift+Tab 与末行末格 Tab：表格处理器返回 false 放行（本视图未装通用缩进，文本不变）', () => {
     const first = makeEditView(TABLE_DOC, TABLE_DOC.indexOf('名字') + 1)
     expect(tableTabBackward(first)).toBe(false)
     tabKeydown(first, true)
@@ -185,7 +187,7 @@ describe('表格 Tab/Shift+Tab 导航', () => {
     last.destroy()
   })
 
-  it('非表格上下文：Tab 处理器返回 false，无文本与选区强改', () => {
+  it('非表格上下文：表格处理器返回 false 且自身零改（接手方为 #120 通用行缩进，见 indentEditing.test.ts）', () => {
     const view = makeEditView(TABLE_DOC, TABLE_DOC.indexOf('前导段落') + 2)
     expect(tableTabForward(view)).toBe(false)
     expect(tableTabBackward(view)).toBe(false)

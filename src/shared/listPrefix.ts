@@ -1,8 +1,8 @@
-// 列表/引用行前缀形态学单一事实源（工单 #119）：live 正文行「结构前缀」
-// 的解析与重建。前缀 = 容器前缀（引用层）+ 列表缩进 + 列表标记（含任务
-// 标记）；Enter 前缀延续与退格清层两族键位变换共用本模块——两处对
-// 「什么算前缀、延续成什么、剥哪一层」的判定必须逐字节一致，否则延续
-// 与清层会互相打架。
+// 列表/引用行前缀形态学单一事实源（工单 #119/#120）：live 正文行「结构
+// 前缀」的解析与重建。前缀 = 容器前缀（引用层）+ 列表缩进 + 列表标记
+// （含任务标记）；Enter 前缀延续、退格清层与 Tab/Shift+Tab 行缩进三族
+// 键位变换共用本模块——三处对「什么算前缀、延续成什么、剥哪一层、
+// 缩进单位多宽」的判定必须逐字节一致，否则延续与清层会互相打架。
 //
 // 形态学规则（与 Lezer GFM 解析对齐，但不依赖树——结构合法性由调用方
 // 用语法树验证，本模块只管文本形态）：
@@ -171,4 +171,41 @@ export function blankExitCut(prefix: LinePrefix): { from: number; to: number; cu
   }
   const layer = firstQuoteLayerLength(prefix.quote)
   return { from: 0, to: layer + prefix.indent.length, cursor: prefix.quote.length - layer }
+}
+
+/** 行缩进单位（工单 #120）：Tab 一级缩进的落点与宽度 */
+export interface LineIndentUnit {
+  /** 相对行首的插入/删除起点：列表行为引用前缀右端，普通行为行首 */
+  offset: number
+  /** 一级缩进宽度（空格数） */
+  width: number
+}
+
+/** 普通行与纯引用行的固定缩进宽度（对齐 CM6 indentUnit 默认） */
+const PLAIN_INDENT_WIDTH = 2
+
+/**
+ * 行的缩进单位（#120）。列表行（含引用内列表）一级缩进智能对齐父项
+ * 内容起点——宽度取自身标记总宽（同级标记同宽即父项标记列的右移量；
+ * 有序编号跨宽度段如 `9.`→`10.` 以行自身为准，不做跨行补齐）；普通
+ * 行与纯引用行固定 2 空格。prefix 传 null 表示不按前缀解析（普通行或
+ * 代码块内）。
+ */
+export function indentUnitOf(prefix: LinePrefix | null): LineIndentUnit {
+  if (prefix && prefix.mark) {
+    return { offset: prefix.quote.length, width: prefix.mark.length }
+  }
+  return { offset: 0, width: PLAIN_INDENT_WIDTH }
+}
+
+/**
+ * Shift+Tab 的删除区间（相对行首）：从缩进单位起点删除至多一级宽度的
+ * 连续空白（不足全删，对齐 CM6 indentLess 的「至多删单位」口径）。
+ * 无可删空白返回 null（该行不变）。
+ */
+export function dedentCutOf(line: string, unit: LineIndentUnit): { from: number; to: number } | null {
+  let i = unit.offset
+  const end = Math.min(line.length, unit.offset + unit.width)
+  while (i < end && /\s/u.test(line[i]!)) i++
+  return i > unit.offset ? { from: unit.offset, to: i } : null
 }

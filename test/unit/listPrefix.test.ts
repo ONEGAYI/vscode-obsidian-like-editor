@@ -1,12 +1,15 @@
-// 列表/引用行前缀形态学契约（工单 #119）：Enter 延续与退格清层共用的
-// 纯函数单一事实源。断言口径为「前缀如何解析、延续成什么、剥哪一层」——
-// 两族键位变换对同一形态必须得到同一判定，否则延续与清层会互相打架。
+// 列表/引用行前缀形态学契约（工单 #119/#120）：Enter 延续与退格清层、
+// Tab/Shift+Tab 行缩进共用的纯函数单一事实源。断言口径为「前缀如何
+// 解析、延续成什么、剥哪一层、缩进单位多宽」——三族键位变换对同一
+// 形态必须得到同一判定，否则延续与清层会互相打架。
 import { describe, it, expect } from 'vitest'
 import {
   parseLinePrefix,
   continuePrefix,
   stripLayer,
   blankExitCut,
+  indentUnitOf,
+  dedentCutOf,
 } from '../../src/shared/listPrefix'
 
 describe('parseLinePrefix 行前缀解析', () => {
@@ -164,5 +167,67 @@ describe('blankExitCut 空项退出的删除区间（相对行首）', () => {
     expect(blankExitCut(parseLinePrefix('> > ')!)).toEqual({ from: 0, to: 2, cursor: 2 })
     expect(blankExitCut(parseLinePrefix('>   ')!)).toEqual({ from: 0, to: 4, cursor: 0 })
     expect(blankExitCut(parseLinePrefix('>')!)).toEqual({ from: 0, to: 1, cursor: 0 })
+  })
+})
+
+describe('indentUnitOf 行缩进单位（#120 Tab 一级缩进的落点与宽度）', () => {
+  it('列表行：宽度取标记总宽（对齐父项内容起点），落点在引用前缀右端', () => {
+    expect(indentUnitOf(parseLinePrefix('- a'))).toEqual({ offset: 0, width: 2 })
+    expect(indentUnitOf(parseLinePrefix('* a'))).toEqual({ offset: 0, width: 2 })
+    expect(indentUnitOf(parseLinePrefix('1. a'))).toEqual({ offset: 0, width: 3 })
+    expect(indentUnitOf(parseLinePrefix('10. a'))).toEqual({ offset: 0, width: 4 })
+    expect(indentUnitOf(parseLinePrefix('01. a'))).toEqual({ offset: 0, width: 4 })
+    expect(indentUnitOf(parseLinePrefix('1) a'))).toEqual({ offset: 0, width: 3 })
+    expect(indentUnitOf(parseLinePrefix('- [ ] a'))).toEqual({ offset: 0, width: 6 })
+    expect(indentUnitOf(parseLinePrefix('- [x] a'))).toEqual({ offset: 0, width: 6 })
+    expect(indentUnitOf(parseLinePrefix('-  a'))).toEqual({ offset: 0, width: 3 })
+  })
+
+  it('引用内列表：落点在引用前缀之后（缩进作用于列表层级）', () => {
+    expect(indentUnitOf(parseLinePrefix('> - a'))).toEqual({ offset: 2, width: 2 })
+    expect(indentUnitOf(parseLinePrefix('> > 1. a'))).toEqual({ offset: 4, width: 3 })
+    expect(indentUnitOf(parseLinePrefix('>   - a'))).toEqual({ offset: 2, width: 2 })
+  })
+
+  it('普通行与纯引用行：行首固定 2 空格（对齐 CM6 indentUnit 默认）', () => {
+    expect(indentUnitOf(parseLinePrefix('plain'))).toEqual({ offset: 0, width: 2 })
+    expect(indentUnitOf(parseLinePrefix(''))).toEqual({ offset: 0, width: 2 })
+    expect(indentUnitOf(parseLinePrefix('-item'))).toEqual({ offset: 0, width: 2 })
+    expect(indentUnitOf(parseLinePrefix('> a'))).toEqual({ offset: 0, width: 2 })
+    expect(indentUnitOf(parseLinePrefix('> > a'))).toEqual({ offset: 0, width: 2 })
+    expect(indentUnitOf(parseLinePrefix('>>a'))).toEqual({ offset: 0, width: 2 })
+    expect(indentUnitOf(null)).toEqual({ offset: 0, width: 2 })
+  })
+})
+
+describe('dedentCutOf Shift+Tab 删除区间（相对行首，至多一级宽度）', () => {
+  it('列表行删引用前缀右端的缩进', () => {
+    const listUnit = (line: string) => indentUnitOf(parseLinePrefix(line))!
+    expect(dedentCutOf('  - a', listUnit('  - a'))).toEqual({ from: 0, to: 2 })
+    expect(dedentCutOf('    1. a', listUnit('    1. a'))).toEqual({ from: 0, to: 3 })
+    expect(dedentCutOf('>   - a', listUnit('>   - a'))).toEqual({ from: 2, to: 4 })
+    expect(dedentCutOf('>     10. a', listUnit('>     10. a'))).toEqual({ from: 2, to: 6 })
+  })
+
+  it('缩进不足一级宽度时全删（对齐 CM6 indentLess 至多删单位）', () => {
+    const listUnit = (line: string) => indentUnitOf(parseLinePrefix(line))!
+    expect(dedentCutOf(' - a', listUnit(' - a'))).toEqual({ from: 0, to: 1 })
+    expect(dedentCutOf('  plain', indentUnitOf(null))).toEqual({ from: 0, to: 2 })
+    expect(dedentCutOf(' plain', indentUnitOf(null))).toEqual({ from: 0, to: 1 })
+    expect(dedentCutOf('    plain', indentUnitOf(null))).toEqual({ from: 0, to: 2 })
+  })
+
+  it('无缩进可删返回 null（该行不变）', () => {
+    const listUnit = (line: string) => indentUnitOf(parseLinePrefix(line))!
+    expect(dedentCutOf('- a', listUnit('- a'))).toBeNull()
+    expect(dedentCutOf('> - a', listUnit('> - a'))).toBeNull()
+    expect(dedentCutOf('plain', indentUnitOf(null))).toBeNull()
+    expect(dedentCutOf('> a', indentUnitOf(parseLinePrefix('> a')))).toBeNull()
+  })
+
+  it('删除只吃空白字符，不越过正文首字符', () => {
+    expect(dedentCutOf('  plain', indentUnitOf(null))).toEqual({ from: 0, to: 2 })
+    expect(dedentCutOf('\tplain', indentUnitOf(null))).toEqual({ from: 0, to: 1 })
+    expect(dedentCutOf(' \t- a', indentUnitOf(parseLinePrefix(' \t- a'))!)).toEqual({ from: 0, to: 2 })
   })
 })

@@ -155,6 +155,7 @@ import { resolveStaleTaskToggle } from './taskToggle'
 import { VirtualReadingView } from './readingVirtualView'
 import { blankRowInputPlan, runCreateTable, runTableEdit, tableEditing, tableRowsAt } from './tableEditing'
 import { listEditing } from './listEditing'
+import { indentEditing } from './indentEditing'
 import { selectTableRegion, tableRegionField } from './tableRegionSelection'
 import { planTableRegionReplace, type TableRegion } from './tableRegion'
 import { splitTableRowCells } from './tableCells'
@@ -5903,6 +5904,9 @@ export class WebviewSyncController {
       // 之后（表格上下文优先，格内 Enter 仍为 <br>）、extraExtensions 的
       // defaultKeymap 之前（先于通用键位拦截）
       listEditing,
+      // #120 Tab/Shift+Tab 通用行缩进：排在 tableEditing 之后（表格
+      // 单元格导航优先，表格行不缩进）、defaultKeymap 之前
+      indentEditing,
       // 查找装饰（#14）：当前匹配（直接）+ 全部匹配（视口内间接）
       findDecorations,
       ...this.extraExtensions,
