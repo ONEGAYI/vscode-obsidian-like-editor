@@ -2286,7 +2286,7 @@ export class WebviewSyncController {
       target.appendChild(el)
     }
     const textGroup = group('format.groupText')
-    for (const op of ['bold', 'italic', 'strikethrough', 'inlineCode', 'clearInline'] as const) {
+    for (const op of ['bold', 'italic', 'strikethrough', 'highlight', 'inlineCode', 'clearInline'] as const) {
       addOperation(textGroup, op)
     }
     const paragraphGroup = group('format.groupParagraph')

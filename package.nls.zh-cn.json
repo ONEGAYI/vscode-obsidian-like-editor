@@ -19,6 +19,7 @@
   "format.italic": "斜体",
   "format.strikethrough": "删除线",
   "format.inlineCode": "行内代码",
+  "format.highlight": "高亮",
   "format.heading1": "一级标题",
   "format.heading2": "二级标题",
   "format.heading3": "三级标题",

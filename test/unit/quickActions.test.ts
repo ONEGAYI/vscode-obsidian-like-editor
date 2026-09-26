@@ -55,7 +55,7 @@ describe('快速操作条', () => {
     expect(groups.map((group) => group.getAttribute('aria-label'))).toEqual(['文字', '段落', '插入'])
     expect(groups.map((group) => [...group.querySelectorAll<HTMLElement>('[data-icon]')]
       .map((el) => el.dataset['icon']))).toEqual([
-      ['bold', 'italic', 'strikethrough', 'inlineCode', 'clearInline'],
+      ['bold', 'italic', 'strikethrough', 'highlight', 'inlineCode', 'clearInline'],
       ['heading', 'bulletList', 'orderedList', 'taskList', 'quote', 'codeBlock'],
       ['link', 'table', 'inlineMath', 'blockMath'],
     ])

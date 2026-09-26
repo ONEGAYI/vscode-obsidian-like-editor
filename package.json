@@ -135,6 +135,11 @@
         "category": "Vsidian"
       },
       {
+        "command": "onegayi.vsidian.format.highlight",
+        "title": "%format.highlight%",
+        "category": "Vsidian"
+      },
+      {
         "command": "onegayi.vsidian.format.heading1",
         "title": "%format.heading1%",
         "category": "Vsidian"

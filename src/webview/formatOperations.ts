@@ -1,6 +1,6 @@
-import { markdownLanguage } from '@codemirror/lang-markdown'
 import type { SyntaxNode } from '@lezer/common'
 import type { FormatOperationId } from '../shared/formatOperations'
+import { markdownTreeParser } from './markdownDoc'
 import { parseTableDelimiter, tableRowCellsForColumns } from './tableCells'
 import type { TableRegion } from './tableRegion'
 
@@ -17,6 +17,7 @@ const INLINE: Partial<Record<FormatOperationId, { mark: string; node: string }>>
   italic: { mark: '*', node: 'Emphasis' },
   strikethrough: { mark: '~~', node: 'Strikethrough' },
   inlineCode: { mark: '`', node: 'InlineCode' },
+  highlight: { mark: '==', node: 'Highlight' },
 }
 
 function nodesAt(root: SyntaxNode, pos: number): SyntaxNode[] {
@@ -446,7 +447,9 @@ export function planFormatOperation(
   action: FormatAction = 'toggle',
 ): FormatPlan | null {
   if (range.from < 0 || range.to < range.from || range.to > text.length) return null
-  const root = markdownLanguage.parser.parse(text).topNode
+  // 与 liveDecorations/outline 同一解析器（markdownTreeParser 含 #105
+  // Highlight 扩展）：两态切换按节点命中依赖同一语义源
+  const root = markdownTreeParser.parse(text).topNode
   if (region) {
     if (!INLINE[op] && op !== 'clearInline' && op !== 'link' && op !== 'inlineMath' && op !== 'wikilink') return null
     const offsets: number[] = []

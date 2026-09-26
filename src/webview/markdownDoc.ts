@@ -16,6 +16,7 @@
 //   体量线性增长（装饰增量维护的性能前提，见 ADR-0005）
 import type { Text } from '@codemirror/state'
 import { markdownLanguage } from '@codemirror/lang-markdown'
+import type { InlineContext, MarkdownParser } from '@lezer/markdown'
 import type { Input, SyntaxNode, Tree } from '@lezer/common'
 
 /** 源文本区间（UTF-16 offset，end 不含）——与协议 SerChange 坐标同构 */
@@ -49,15 +50,16 @@ const PUNCTUATION = (() => {
  * 装饰、大纲透传与 webview/formatOperations 的两态切换共用本语义来源
  * （AGENTS.md「行内围栏扩展约定」的 node 登记）。
  */
-export const markdownTreeParser = markdownLanguage.parser.configure({
+export const markdownTreeParser: MarkdownParser =
+  (markdownLanguage.parser as MarkdownParser).configure({
   defineNodes: [
     { name: 'Highlight' },
-    { name: 'HighlightMark', noInline: true },
+    { name: 'HighlightMark' },
   ],
   parseInline: [
     {
       name: 'Highlight',
-      parse(cx, next, pos) {
+      parse(cx: InlineContext, next: number, pos: number) {
         if (next !== 61 /* '=' */ || cx.char(pos + 1) !== 61) {
           return -1
         }

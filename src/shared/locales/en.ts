@@ -123,10 +123,11 @@ export const en = {
   'common.keybindingHint': 'Keybinding: {keys}',
   'common.keySeparator': ', ',
 
-  /** 快捷操作工具条 21 条操作标题（兼作命令 title 的 NLS 生成源，#97 映射） */
+  /** 快捷操作工具条 22 条操作标题（兼作命令 title 的 NLS 生成源，#97 映射） */
   'format.bold': 'Bold',
   'format.italic': 'Italic',
   'format.strikethrough': 'Strikethrough',
+  'format.highlight': 'Highlight',
   'format.inlineCode': 'Inline code',
   'format.heading1': 'Heading 1',
   'format.heading2': 'Heading 2',
@@ -236,7 +237,7 @@ export const en = {
   'decor.mermaidError': 'Diagram failed to render: {message}',
 
   // ---- #97 manifest NLS（命令 title 与 displayName/description 生成源）----
-  // 工具条 21 条命令直接复用上方 format.* 既有键（FORMAT_OPERATIONS 的
+  // 工具条 22 条命令直接复用上方 format.* 既有键（FORMAT_OPERATIONS 的
   // titleKey，见 scripts/genNls.mjs 映射）；其余命令的键按 id 推导：
   // onegayi.vsidian.<suffix> → command.<suffix>.title（既有唯一键
   // command.table.create.title 天然吻合该规则，单轨收编，不留双轨）。

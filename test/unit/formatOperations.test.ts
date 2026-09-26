@@ -146,4 +146,22 @@ describe('格式操作的文本契约', () => {
     expect(apply('_one_ _two_', 'italic', 7, 10).text).toBe('_one_ two')
     expect(apply('_one_ _two_', 'clearInline', 7, 10).text).toBe('_one_ two')
   })
+
+  it('高亮（#105）：扩词包裹、选区包裹、两态取消与清除均正确', () => {
+    expect(apply('中文 English', 'highlight', 0).text).toBe('==中文== English')
+    expect(apply('甲乙丙', 'highlight', 1, 2).text).toBe('甲==乙==丙')
+    expect(apply('==编辑文字==', 'highlight', 4).text).toBe('编辑文字')
+    expect(apply('前==中==后', 'highlight', 0, 7).text).toBe('==前中后==')
+    expect(apply('# ==亮== 与 **粗**', 'clearInline', 2, 13).text).toBe('# 亮 与 粗')
+  })
+
+  it('高亮（#105）：空白插入成对标记并把光标置于开围栏内侧（按 == 长度）', () => {
+    expect(apply('', 'highlight', 0)).toEqual({ text: '====', selection: { anchor: 2 } })
+    expect(apply('甲 乙', 'highlight', 1)).toEqual({ text: '甲==== 乙', selection: { anchor: 3 } })
+  })
+
+  it('高亮（#105）：行内代码内不写高亮，代码块内不写行内样式', () => {
+    expect(apply('`==码==`', 'highlight', 4).text).toBe('`==码==`')
+    expect(apply('```\n==文==\n```', 'highlight', 6).text).toBe('```\n==文==\n```')
+  })
 })

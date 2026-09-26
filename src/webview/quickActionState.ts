@@ -9,10 +9,11 @@ export type QuickActionState = 'inactive' | 'active' | 'mixed' | 'disabled'
 
 const INLINE_NODES: Partial<Record<FormatOperationId, string>> = {
   bold: 'StrongEmphasis', italic: 'Emphasis', strikethrough: 'Strikethrough', inlineCode: 'InlineCode',
+  highlight: 'Highlight',
 }
 const INLINE_NODE_NAMES = new Set(Object.values(INLINE_NODES))
 const INLINE_OPS = new Set<FormatOperationId>([
-  'bold', 'italic', 'strikethrough', 'inlineCode', 'link', 'clearInline', 'inlineMath',
+  'bold', 'italic', 'strikethrough', 'inlineCode', 'highlight', 'link', 'clearInline', 'inlineMath',
 ])
 
 function ancestors(tree: Tree, pos: number): SyntaxNode[] {
@@ -85,7 +86,7 @@ export function createQuickActionStateReader(doc: Text, tree: Tree, range: Forma
     } })
   }
   const contentLength = range.from === range.to ? 0
-    : doc.sliceString(range.from, range.to).replace(/[\s*~`]/gu, '').length
+    : doc.sliceString(range.from, range.to).replace(/[\s*~`=]/gu, '').length
   const cells = region ? regionCells(doc, region) : null
   let lines: string[] | undefined
   return (op) => {
@@ -93,7 +94,8 @@ export function createQuickActionStateReader(doc: Text, tree: Tree, range: Forma
     if (region && !INLINE_OPS.has(op)) return 'disabled'
     if (region && cells === null) return 'disabled'
     if (cells && INLINE_NODES[op]) {
-      const mark = op === 'bold' ? '**' : op === 'italic' ? '*' : op === 'strikethrough' ? '~~' : '`'
+      const mark = op === 'bold' ? '**' : op === 'italic' ? '*' : op === 'strikethrough' ? '~~'
+        : op === 'highlight' ? '==' : '`'
       const hasMark = (cell: string): boolean => op === 'italic'
         ? /(?<!\*)\*(?!\*)[^*]+(?<!\*)\*(?!\*)/u.test(cell)
         : cell.includes(mark)
@@ -104,7 +106,7 @@ export function createQuickActionStateReader(doc: Text, tree: Tree, range: Forma
       return wrapped === cells.length ? 'active' : wrapped || partial ? 'mixed' : 'inactive'
     }
     if (cells && op === 'clearInline') {
-      return cells.some((cell) => /\*\*|(?<!\*)\*(?!\*)|~~|`/u.test(cell))
+      return cells.some((cell) => /\*\*|(?<!\*)\*(?!\*)|~~|==|`/u.test(cell))
         ? 'inactive' : 'disabled'
     }
     if (cells && op === 'link') {
