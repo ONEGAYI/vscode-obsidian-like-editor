@@ -211,6 +211,36 @@ describe('reading：checkbox 启用、点击走锚点校验与出站链路', () 
     expect(boxes.map((b) => b.checked)).toEqual([false, false, true])
   })
 
+  it('松散任务列表（条目间空行）同样渲染 checkbox 并可点击写回', () => {
+    // 松散列表 markdown-it 输出 <li><p>[ ] …</p></li>：首子节点是 <p>
+    // 元素而非文本节点。缺陷三：convertTaskItems 只认首子文本节点，
+    // 松散列表不渲染复选框、正文显示原文 [ ]。
+    const looseDoc = [
+      '# 松散清单标题',
+      '',
+      '- [ ] 松散任务甲',
+      '',
+      '- [x] 松散任务乙',
+      '',
+      '结尾段落。',
+      '',
+    ].join('\n')
+    const h = makeHarness(looseDoc)
+    readingMode(h)
+    const boxes = readingCheckboxes(h)
+    expect(boxes).toHaveLength(2)
+    expect(boxes.map((b) => b.checked)).toEqual([false, true])
+    expect(boxes.every((b) => !b.disabled)).toBe(true)
+    // 复选框插在 <p> 内文本之前；正文不再显示 [ ] 原文
+    expect(h.parent.querySelector('.vsidian-reading-task')!.textContent).not.toContain('[ ]')
+    const markerStart = looseDoc.indexOf('[')
+    boxes[0]!.click()
+    expect(lastEditRequest(h)!.changes).toEqual([{ offset: markerStart, length: 3, text: '[x]' }])
+    // 点击链路（容器委托 → 锚点校验 → 隐藏 dispatch → edit.request）不因
+    // 松散结构改变；乐观重建后为勾选
+    expect(readingCheckboxes(h).map((b) => b.checked)).toEqual([true, true])
+  })
+
   it('点击未勾选任务：edit.request 精确替换 + 阅读视图乐观重建为勾选', () => {
     const h = makeHarness()
     readingMode(h)

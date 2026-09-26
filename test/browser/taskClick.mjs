@@ -100,7 +100,30 @@ try {
     assert.deepEqual(errors, [], '页面不能有未捕获异常')
     await page.close()
   }
+
+  // ---- reading：松散任务列表（条目间空行）同样渲染并真实点击（#116 之三） ----
+  {
+    const { page, errors } = await openPage()
+    const text = '- [ ] 松散甲\n\n- [x] 松散乙\n'
+    await page.evaluate((t) => window.initTaskDoc(t, 'reading'), text)
+    const boxes = page.locator('input.vsidian-reading-task-checkbox')
+    assert.equal(await boxes.count(), 2,
+      '松散任务列表（<li><p>…</p></li> 形态）也应渲染 2 个 checkbox')
+    // 正文不得残留 [ ] 原文（复选框替换标记后才算渲染成功）
+    assert.equal(await page.locator('.vsidian-reading-task').evaluateAll((nodes) =>
+      nodes.some((n) => n.textContent.includes('[ ]'))), false,
+    '任务条目正文不得显示未替换的 [ ] 原文')
+    await boxes.nth(0).click()
+    assert.deepEqual(await editRequests(page),
+      [{ seq: 1, baseVersion: 1,
+        changes: [{ offset: text.indexOf('['), length: 3, text: '[x]' }] }],
+    '松散列表真实点击同样经事件委托走出站链路')
+    assert.deepEqual(await boxes.evaluateAll((nodes) => nodes.map((n) => n.checked)),
+      [true, true], '松散列表点击后应乐观重建为勾选')
+    assert.deepEqual(errors, [], '页面不能有未捕获异常')
+    await page.close()
+  }
 } finally {
   await browser.close()
 }
-console.log('[任务 checkbox 真实鼠标回归] live 光标不移入标记、reading 紧凑列表真实点击通过')
+console.log('[任务 checkbox 真实鼠标回归] live 光标不移入标记、reading 紧凑与松散列表真实点击通过')
