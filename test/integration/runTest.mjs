@@ -43,6 +43,7 @@ try {
       // C-11：开启 _test.* 测试钩子命令（生产/常规开发不注册）
       VSIDIAN_TEST_HOOKS: '1',
     },
+    reportPath: path.join(root, '.vscode-test', 'integration-dev.log'),
   })
   if (code !== 0) throw new Error(`开发态集成回归退出码 ${code}`)
 } catch (err) {

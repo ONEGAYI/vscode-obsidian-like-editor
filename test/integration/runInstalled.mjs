@@ -110,6 +110,7 @@ try {
       LARGE_DOC_LINES: String(LARGE_DOC_LINES),
       VSIDIAN_TEST_HOOKS: '1',
     },
+    reportPath: path.join(root, '.vscode-test', 'integration-installed.log'),
   })
   if (code !== 0) {
     throw new Error(`安装态集成回归退出码 ${code}`)
