@@ -112,9 +112,87 @@ try {
     await page.screenshot({ path: path.join(artifacts, `quick-${theme}.png`) })
     await page.locator('.vsidian-quick-heading').click()
     await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('ArrowDown')
     await page.keyboard.press('Enter')
     assert.ok((await page.evaluate(() => window.quickText())).startsWith('## '),
       '标题菜单应支持方向键选择并由 Enter 写回')
+    await page.evaluate(() => {
+      window.initQuick('## 标题\n正文')
+      window.controller.getView().dispatch({ selection: { anchor: 4 } })
+    })
+    for (const width of [720, 390, 300]) {
+      await page.setViewportSize({ width, height: 640 })
+      await page.locator('.vsidian-quick-heading').click()
+      const popup = await page.evaluate(() => {
+        const heading = document.querySelector('.vsidian-quick-heading')
+        const menu = document.querySelector('.vsidian-quick-heading-menu')
+        const first = menu.querySelector('[data-heading-op="heading1"]')
+        const selected = menu.querySelector('[data-heading-op="heading2"]')
+        const anchor = heading.getBoundingClientRect()
+        const box = menu.getBoundingClientRect()
+        const firstBox = first.getBoundingClientRect()
+        const selectedBox = selected.getBoundingClientRect()
+        return {
+          anchor: { left: anchor.left, bottom: anchor.bottom },
+          box: { left: box.left, right: box.right, top: box.top, width: box.width },
+          firstBackground: getComputedStyle(first).backgroundColor,
+          selectedBackground: getComputedStyle(selected).backgroundColor,
+          selectedChecked: selected.getAttribute('aria-checked'),
+          firstFocused: document.activeElement === first,
+          firstPainted: first.contains(document.elementFromPoint(firstBox.left + 12,
+            firstBox.top + firstBox.height / 2)),
+          selectedPainted: selected.contains(document.elementFromPoint(selectedBox.left + 12,
+            selectedBox.top + selectedBox.height / 2)),
+        }
+      })
+      assert.ok(Math.abs(popup.box.left - Math.min(popup.anchor.left, width - popup.box.width)) <= 3,
+        `${theme} ${width}px：菜单左边应靠标题按钮，触右缘时回退到视口内：${JSON.stringify(popup)}`)
+      assert.ok(Math.abs(popup.box.top - popup.anchor.bottom) <= 3,
+        `${theme} ${width}px：换行后菜单应从标题按钮下方展开：${JSON.stringify(popup)}`)
+      assert.ok(popup.box.left >= -1 && popup.box.right <= width + 1 &&
+        popup.firstPainted && popup.selectedPainted,
+      `${theme} ${width}px：菜单选项应在视口内真实绘制：${JSON.stringify(popup)}`)
+      assert.equal(popup.selectedChecked, 'true', '当前 H2 层级须由 aria-checked 单独表达')
+      assert.equal(popup.firstFocused, false, '指针打开菜单不应把焦点移至 H1')
+      assert.equal(popup.firstBackground, 'rgba(0, 0, 0, 0)',
+        '指针打开时 H1 不应出现灰色焦点或悬停背景')
+      assert.notEqual(popup.selectedBackground, popup.firstBackground, '当前 H2 应有独立选中底色')
+      await page.keyboard.press('Escape')
+    }
+    await page.locator('.vsidian-quick-heading').evaluate((el) => {
+      el.style.transform = 'translateX(210px)'
+    })
+    await page.locator('.vsidian-quick-heading').click()
+    const edge = async () => page.evaluate(() => {
+      const anchor = document.querySelector('.vsidian-quick-heading').getBoundingClientRect()
+      const menu = document.querySelector('.vsidian-quick-heading-menu').getBoundingClientRect()
+      return { anchorLeft: anchor.left, left: menu.left, right: menu.right,
+        width: menu.width, viewportWidth: window.innerWidth }
+    })
+    let edgeBox = await edge()
+    assert.ok(edgeBox.anchorLeft > edgeBox.viewportWidth - edgeBox.width &&
+      Math.abs(edgeBox.right - edgeBox.viewportWidth) <= 3,
+    `靠视口右边的标题按钮应把菜单收进视口：${JSON.stringify(edgeBox)}`)
+    await page.setViewportSize({ width: 270, height: 640 })
+    await page.waitForFunction(() => {
+      const menu = document.querySelector('.vsidian-quick-heading-menu').getBoundingClientRect()
+      return Math.abs(menu.right - innerWidth) <= 3
+    })
+    edgeBox = await edge()
+    assert.ok(edgeBox.left >= 0 && edgeBox.right <= 271,
+      `菜单打开时缩窄视口仍须重新定位：${JSON.stringify(edgeBox)}`)
+    await page.keyboard.press('Escape')
+    await page.locator('.vsidian-quick-heading').evaluate((el) => { el.style.transform = '' })
+    await page.locator('.vsidian-quick-heading').focus()
+    await page.keyboard.press('Enter')
+    assert.equal(await page.locator('.vsidian-quick-heading-menu').isVisible(), true,
+      '键盘 Enter 应打开菜单')
+    await page.keyboard.press('ArrowDown')
+    assert.equal(await page.locator('[data-heading-op="heading2"]').evaluate((el) =>
+      document.activeElement === el), true, '键盘打开后方向键仍可移动菜单焦点')
+    await page.keyboard.press('Escape')
+    assert.equal(await page.locator('.vsidian-quick-heading').evaluate((el) =>
+      document.activeElement === el), true, 'Escape 应把焦点还给标题按钮')
     assert.deepEqual(errors, [], '页面不能有未捕获异常')
     await page.close()
   }

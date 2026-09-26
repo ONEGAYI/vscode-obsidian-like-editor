@@ -792,6 +792,16 @@ export class WebviewSyncController {
         this.closeQuickHeadingMenu(true)
         return
       }
+      if (this.quickHeadingMenu && !this.quickHeadingMenu.hidden &&
+          !this.quickHeadingMenu.contains(e.target as Node) &&
+          ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) {
+        e.preventDefault()
+        e.stopPropagation()
+        const options = [...this.quickHeadingMenu.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
+        const target = e.key === 'ArrowDown' || e.key === 'Home' ? options[0] : options.at(-1)
+        target?.focus()
+        return
+      }
       const target = e.target instanceof Node ? e.target : null
       const liveFocused = this.viewMode === 'live' && !!target &&
         !!this.view?.contentDOM.contains(target) &&
@@ -2274,7 +2284,7 @@ export class WebviewSyncController {
     heading.setAttribute('aria-haspopup', 'menu')
     heading.setAttribute('aria-expanded', 'false')
     heading.setAttribute('aria-controls', 'vsidian-quick-heading-menu')
-    heading.addEventListener('click', () => this.toggleQuickHeadingMenu())
+    heading.addEventListener('click', (event) => this.toggleQuickHeadingMenu(event.detail === 0))
     paragraphGroup.appendChild(heading)
     this.quickHeadingBtn = heading
     for (const op of ['bulletList', 'orderedList', 'taskList', 'quote', 'codeBlock'] as const) {
@@ -2366,19 +2376,35 @@ export class WebviewSyncController {
       group.dataset['separated'] = String(index > 0 &&
         Math.abs(group.getBoundingClientRect().top - groups[index - 1]!.getBoundingClientRect().top) < 1)
     })
+    if (this.quickHeadingMenu && !this.quickHeadingMenu.hidden) this.positionQuickHeadingMenu()
   }
 
-  private toggleQuickHeadingMenu(): void {
+  private positionQuickHeadingMenu(): void {
+    const bar = this.quickActionsEl
+    const heading = this.quickHeadingBtn
+    const menu = this.quickHeadingMenu
+    if (!bar || !heading || !menu || menu.hidden) return
+    const barRect = bar.getBoundingClientRect()
+    const headingRect = heading.getBoundingClientRect()
+    const menuWidth = menu.getBoundingClientRect().width
+    const visibleLeft = Math.max(0, barRect.left)
+    const visibleRight = Math.min(window.innerWidth, barRect.right)
+    const menuLeft = Math.max(visibleLeft, Math.min(headingRect.left, visibleRight - menuWidth))
+    menu.style.left = `${menuLeft - barRect.left}px`
+    menu.style.top = `${headingRect.bottom - barRect.top - 1}px`
+  }
+
+  private toggleQuickHeadingMenu(focusFirst: boolean): void {
     const menu = this.quickHeadingMenu
     if (!menu || !this.quickHeadingBtn || this.viewMode !== 'live') return
     if (!menu.hidden) {
       this.closeQuickHeadingMenu(true)
       return
     }
-    menu.style.left = `${this.quickHeadingBtn.offsetLeft}px`
     menu.hidden = false
+    this.positionQuickHeadingMenu()
     this.quickHeadingBtn.setAttribute('aria-expanded', 'true')
-    menu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
+    if (focusFirst) menu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
   }
 
   private closeQuickHeadingMenu(returnFocus: boolean): void {
