@@ -4874,14 +4874,7 @@ export class WebviewSyncController {
       const svg = diagram.querySelector('svg')
       if (!svg) continue
       try {
-        const rect = svg.getBoundingClientRect()
-        const left = Math.max(0, rect.left)
-        const right = Math.min(window.innerWidth, rect.right)
-        const top = Math.max(0, rect.top)
-        const bottom = Math.min(window.innerHeight, rect.bottom)
-        if (right <= left || bottom <= top) continue
-        const hit = document.elementFromPoint((left + right) / 2, (top + bottom) / 2)
-        if (hit && diagram.contains(hit)) {
+        if (isSvgPainted(svg)) {
           mermaidVisible = true
           break
         }
@@ -5508,6 +5501,46 @@ export class WebviewSyncController {
       })),
     ]
   }
+}
+
+/** Mermaid 图的真实可见区域：视口和各层裁切交集内，命中 SVG 本身或其子节点。 */
+function isSvgPainted(svg: SVGSVGElement): boolean {
+  const rect = svg.getBoundingClientRect()
+  let left = Math.max(0, rect.left)
+  let right = Math.min(window.innerWidth, rect.right)
+  let top = Math.max(0, rect.top)
+  let bottom = Math.min(window.innerHeight, rect.bottom)
+  for (let node: Element | null = svg; node; node = node.parentElement) {
+    const style = getComputedStyle(node)
+    if (style.display === 'none' || style.contentVisibility === 'hidden' ||
+        Number(style.opacity) === 0) return false
+    // visibility 可由后代覆写；SVG 的计算值才是它自身的有效值。
+    if (node === svg && style.visibility !== 'visible') return false
+    if (node === svg) continue
+    const clipsBoth = style.clipPath !== 'none' || style.contain.split(' ').includes('paint')
+    const clipX = clipsBoth || style.overflowX !== 'visible'
+    const clipY = clipsBoth || style.overflowY !== 'visible'
+    if (!clipX && !clipY) continue
+    const boundary = node.getBoundingClientRect()
+    if (clipX) {
+      left = Math.max(left, boundary.left)
+      right = Math.min(right, boundary.right)
+    }
+    if (clipY) {
+      top = Math.max(top, boundary.top)
+      bottom = Math.min(bottom, boundary.bottom)
+    }
+  }
+  if (right <= left || bottom <= top) return false
+  const xs = [left + (right - left) * 0.2, (left + right) / 2,
+    right - (right - left) * 0.2]
+  const ys = [top + (bottom - top) * 0.2, (top + bottom) / 2,
+    bottom - (bottom - top) * 0.2]
+  for (const y of ys) for (const x of xs) {
+    const hit = document.elementFromPoint(x, y)
+    if (hit === svg || (hit && svg.contains(hit))) return true
+  }
+  return false
 }
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
