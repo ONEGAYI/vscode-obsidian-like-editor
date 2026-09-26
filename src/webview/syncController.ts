@@ -3131,8 +3131,8 @@ export class WebviewSyncController {
             .map((el) => el.textContent ?? '')
             .filter((t) => t !== '')
           : [],
-        // #81 呈现态复制按钮在场数（编辑态块不发射；悬停显现是 CSS 态，
-        // DOM 常驻才能被此计数与宿主点击钩子命中）
+        // #81 复制按钮在场数（编辑态同样发射、常驻在场；可见性由 CSS 悬停
+        // 承担，DOM 常驻才能被此计数与宿主点击钩子命中；收起态不发射）
         copyCount: codeScope
           ? codeScope.querySelectorAll(`.${CODE_CARD_CLASS_NAMES.copy}`).length
           : 0,

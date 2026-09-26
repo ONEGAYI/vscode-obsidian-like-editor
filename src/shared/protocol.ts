@@ -299,8 +299,9 @@ export type WebviewToHost =
    *  webview 可加载地址（reqId 会话面板内自增，对应 image.result） */
   | { kind: 'image.request'; sessionId: string; docUri: string; reqId: number; src: string }
   /** 代码块复制请求（#81）：卡片头部复制按钮点击 → 宿主剪贴板 API 写入。
-   *  text 为代码体原文（两条围栏行之间，不含围栏与 info string，LF 坐标）；
-   *  webview 不触碰剪贴板权限，写入执行归宿主 */
+   *  text 为代码体原文（两条围栏行之间，不含围栏与 info string），恒为
+   *  LF（CM6 LF 模型）；宿主按文档 EOL 归一后写剪贴板（webview 不触碰
+   *  剪贴板权限） */
   | { kind: 'codeblock.copy'; sessionId: string; docUri: string; text: string }
   /** 打开 Vsidian 设置页（#33）：编辑器工具栏「设置」按钮 → 宿主
    *  createWebviewPanel。无 sessionId/docUri——打开设置页不依赖任何文档
@@ -519,7 +520,7 @@ export interface PaintProbe {
     cardLineCount: number
     /** #80 视口内卡内行号文本序列（如 ['1','2','3']；关闭或无行为 null） */
     lineNumberTexts?: string[] | null
-    /** #81 呈现态复制按钮在场数（编辑态所在块不发射按钮） */
+    /** #81 呈现态复制按钮在场数（编辑态同样常驻，收起态不发射） */
     copyCount?: number
     /** #82 视口内收起态头部数（chevron -collapsed 计数） */
     foldedCount?: number

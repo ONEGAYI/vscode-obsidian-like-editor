@@ -24,6 +24,9 @@ export interface CodeCardConfig {
   highlight: boolean
 }
 
+// facet 兜底默认 card:false 是刻意的保守缺省：装配早期（设置快照未到达）
+// 不发射卡片；syncController 恒以 CODEBLOCK_*_DEFAULT 提供配置，此兜底
+// 仅测试直驱可触达。
 const DEFAULT_CONFIG: CodeCardConfig = { card: false, lineNumbers: true, copyButton: true, highlight: true }
 
 /** 卡片配置通道（Compartment 内静态值；变更经 reconfigure 触发全量重建） */

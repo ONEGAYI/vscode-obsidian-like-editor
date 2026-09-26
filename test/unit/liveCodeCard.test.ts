@@ -4,21 +4,25 @@
 // （mermaid）编辑态接入与呈现态让位、设置总开关关闭、语言标签映射
 // （shared/codeLangs）、增量 == 全量对拍。
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Compartment, EditorSelection, EditorState } from '@codemirror/state'
 import {
   CODE_CARD_CLASS_NAMES,
+  CODE_HEADER_DECO_CACHE_LIMIT,
   CodeCardHeaderWidget,
   CodeCardLineNumberWidget,
   buildCodeCardDecorations,
+  buildCopyButton,
   codeCardConfigFacet,
   codeCardDecorations,
   codeCardFoldField,
   codeCardFoldToggle,
+  codeHeaderDecoCacheSize,
+  headerDeco,
 } from '../../src/webview/liveCodeCard'
 import { liveDecorationsField } from '../../src/webview/liveDecorations'
 import { mermaidFencesField } from '../../src/webview/liveMermaid'
-import { resolveCodeLanguage } from '../../src/shared/codeLangs'
+import { resolveCodeLanguage, codeInfoFirstWord } from '../../src/shared/codeLangs'
 
 interface Item {
   from: number
@@ -222,6 +226,30 @@ describe('语言标签映射（shared/codeLangs）', () => {
   it('未识别语言的标签回退为 trim 后的原文', () => {
     const text = '```zzz\ncode\n```'
     expect(decos(text, 0).find((i) => i.widget)!.widget!.label).toBe('zzz')
+  })
+
+  it('codeInfoFirstWord：提取首个空白分隔词，空白返回空串', () => {
+    expect(codeInfoFirstWord('js title=x')).toBe('js')
+    expect(codeInfoFirstWord('  python title="x y"  ')).toBe('python')
+    expect(codeInfoFirstWord('c++')).toBe('c++')
+    expect(codeInfoFirstWord('   ')).toBe('')
+    expect(codeInfoFirstWord('')).toBe('')
+  })
+
+  it('多词 info string 按首词路由（CommonMark 语义，两视图同路由）', () => {
+    expect(resolveCodeLanguage('js title=x')?.id).toBe('javascript')
+    expect(resolveCodeLanguage('c++')?.id).toBe('cpp')
+    expect(resolveCodeLanguage('python title="x y"')?.id).toBe('python')
+    expect(resolveCodeLanguage('mermaid x')).toBeNull()
+    // 标签原文仍显示 trim 后全文（未识别不回退任何语言）
+    expect(resolveCodeLanguage('zzz opt=1')).toBeNull()
+  })
+
+  it('live 标签链：```js title=x 头部标签为 JavaScript（首词路由）', () => {
+    const text = '```js title=x\nlet a\n```'
+    const header = decos(text, 0).find((i) => i.widget)!.widget!
+    expect(header.label).toBe('JavaScript')
+    expect(header.languageId).toBe('javascript')
   })
 
   it('无语言标记显示 Plain text', () => {
@@ -612,6 +640,63 @@ describe('语法高亮 mark（#83）', () => {
   it('折叠块不着色（整块不可见）', () => {
     const { items } = decosFolded(DOC, 0, FENCE_FROM)
     expect(items.filter((i) => i.cls?.includes('tok-'))).toHaveLength(0)
+  })
+})
+
+describe('头部装饰缓存有界（LRU，照 mermaidWidgetDeco 形态）', () => {
+  it('同 key 复用装饰实例（RangeSet.eq 前提）', () => {
+    const a = headerDeco('JavaScript', 'javascript', true, 'let a', false)
+    expect(headerDeco('JavaScript', 'javascript', true, 'let a', false)).toBe(a)
+  })
+
+  it('缓存条目 ≤ CODE_HEADER_DECO_CACHE_LIMIT：超出后最旧被逐出', () => {
+    const first = headerDeco('JavaScript', 'javascript', true, 'evict-first', false)
+    // 插入远超上限的不同 code（块内击键即新增 key 的场景）
+    for (let i = 0; i < CODE_HEADER_DECO_CACHE_LIMIT + 8; i++) {
+      headerDeco('JavaScript', 'javascript', true, `evict-${i}`, false)
+    }
+    expect(codeHeaderDecoCacheSize()).toBeLessThanOrEqual(CODE_HEADER_DECO_CACHE_LIMIT)
+    // 最旧条目被逐出：重建产出新实例（ Decoration.widget 每次新建对象）
+    expect(headerDeco('JavaScript', 'javascript', true, 'evict-first', false)).not.toBe(first)
+    // 最近插入的仍在缓存（命中复用）
+    const lastKey = `evict-${CODE_HEADER_DECO_CACHE_LIMIT + 7}`
+    const last = headerDeco('JavaScript', 'javascript', true, lastKey, false)
+    expect(headerDeco('JavaScript', 'javascript', true, lastKey, false)).toBe(last)
+  })
+
+  it('命中刷新 LRU 位置：刚访问的条目不被后续插入逐出', () => {
+    const anchor = headerDeco('JavaScript', 'javascript', true, 'lru-anchor', false)
+    // 比 anchor 晚插入的键（FIFO 语义下 anchor 会先于它被逐出）
+    headerDeco('JavaScript', 'javascript', true, 'lru-after-anchor', false)
+    // 命中 anchor → 移至最新端
+    expect(headerDeco('JavaScript', 'javascript', true, 'lru-anchor', false)).toBe(anchor)
+    // 再插入 LIMIT-1 个新键：总逐出数 = 旧容量-1，FIFO 语义下 anchor 会先于
+    // lru-after-anchor 被逐出；LRU 刷新后 anchor 是旧条目中最新的，得以保留
+    for (let i = 0; i < CODE_HEADER_DECO_CACHE_LIMIT - 1; i++) {
+      headerDeco('JavaScript', 'javascript', true, `lru-fresh-${i}`, false)
+    }
+    expect(headerDeco('JavaScript', 'javascript', true, 'lru-anchor', false)).toBe(anchor)
+  })
+})
+
+describe('复制按钮 ✓ 反馈（#81）', () => {
+  it('连点不截短：第二次点击重置复原定时器（1200ms 内 ✓ 类仍在）', () => {
+    vi.useFakeTimers()
+    try {
+      const btn = buildCopyButton('let a', () => {})
+      btn.click()
+      expect(btn.classList.contains(CODE_CARD_CLASS_NAMES.copyDone)).toBe(true)
+      vi.advanceTimersByTime(1000)
+      // 第二次点击：旧实现的第一个定时器仍会在 1200ms 处提前复原第二次的 ✓
+      btn.click()
+      expect(btn.classList.contains(CODE_CARD_CLASS_NAMES.copyDone)).toBe(true)
+      vi.advanceTimersByTime(1000)
+      expect(btn.classList.contains(CODE_CARD_CLASS_NAMES.copyDone)).toBe(true)
+      vi.advanceTimersByTime(200)
+      expect(btn.classList.contains(CODE_CARD_CLASS_NAMES.copyDone)).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

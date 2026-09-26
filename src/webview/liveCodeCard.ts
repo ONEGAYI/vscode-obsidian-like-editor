@@ -218,14 +218,21 @@ export function buildCopyButton(code: string, onCopy: (code: string) => void): H
     '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8">' +
     '<path d="M3.5 8.5l3 3 6-7"></path></svg>'
   btn.append(copyIcon, checkIcon)
+  // ✓ 复原定时器连点防护：点击时先清旧定时器再重设，避免 1.2s 内连点时
+  // 旧定时器到点提前复原第二次点击的 ✓
+  let restoreTimer: ReturnType<typeof setTimeout> | undefined
   btn.addEventListener('mousedown', (event) => {
     event.preventDefault()
   })
   btn.addEventListener('click', () => {
     onCopy(code)
     btn.classList.add(CODE_CARD_CLASS_NAMES.copyDone)
-    setTimeout(() => {
+    if (restoreTimer !== undefined) {
+      clearTimeout(restoreTimer)
+    }
+    restoreTimer = setTimeout(() => {
       btn.classList.remove(CODE_CARD_CLASS_NAMES.copyDone)
+      restoreTimer = undefined
     }, 1200)
   })
   return btn
@@ -268,8 +275,19 @@ function cardLineDeco(cls: string): ReturnType<typeof Decoration.line> {
   return deco
 }
 
+/** 头部装饰缓存上限（key 含代码体全文——块内击键即新增条目，须有界；
+ *  照 liveMermaid 的 MERMAID_DECO_CACHE_LIMIT 形态） */
+export const CODE_HEADER_DECO_CACHE_LIMIT = 128
+
 const headerDecos = new Map<string, ReturnType<typeof Decoration.widget>>()
-function headerDeco(
+
+/** 头部装饰缓存观测量（测试用：钉住缓存有界） */
+export function codeHeaderDecoCacheSize(): number {
+  return headerDecos.size
+}
+
+/** 头部装饰实例缓存（同 key 复用，RangeSet.eq 前提；上限与 LRU 见上） */
+export function headerDeco(
   label: string,
   languageId: string | null,
   copy: boolean,
@@ -277,14 +295,25 @@ function headerDeco(
   folded: boolean,
 ): ReturnType<typeof Decoration.widget> {
   const key = `${label}\u0000${languageId ?? ''}\u0000${copy ? 1 : 0}\u0000${code}\u0000${folded ? 1 : 0}`
-  let deco = headerDecos.get(key)
-  if (!deco) {
-    deco = Decoration.widget({
-      widget: new CodeCardHeaderWidget(label, languageId, copy, code, folded),
-      block: true,
-      side: -1,
-    })
-    headerDecos.set(key, deco)
+  const hit = headerDecos.get(key)
+  if (hit) {
+    // LRU 位置维护：Map 迭代序即插入序，命中条目先删再插移到最新端
+    headerDecos.delete(key)
+    headerDecos.set(key, hit)
+    return hit
+  }
+  const deco = Decoration.widget({
+    widget: new CodeCardHeaderWidget(label, languageId, copy, code, folded),
+    block: true,
+    side: -1,
+  })
+  headerDecos.set(key, deco)
+  while (headerDecos.size > CODE_HEADER_DECO_CACHE_LIMIT) {
+    const oldest = headerDecos.keys().next().value
+    if (oldest === undefined) {
+      break
+    }
+    headerDecos.delete(oldest)
   }
   return deco
 }

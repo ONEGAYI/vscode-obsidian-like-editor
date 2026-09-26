@@ -14,11 +14,20 @@ import { CODE_CARD_CLASS_NAMES } from '../../src/webview/liveCodeCard'
 
 const CODE = 'const a = 1;\nfunction hi() {'
 
-function makeBlock(info = 'js', code = CODE): HTMLElement {
+function makeBlock(
+  info = 'js',
+  code = CODE,
+  chunk?: { start: number; total: number },
+): HTMLElement {
   const block = document.createElement('div')
   block.className = 'vsidian-reading-block vsidian-reading-code-block'
   block.dataset['vsidianSrcStart'] = '0'
   const pre = document.createElement('pre')
+  if (chunk) {
+    // 大围栏分块（FENCE_CHUNK_LINES）片的跨片行号契约（readingBlocks 落位）
+    pre.setAttribute('data-vsidian-code-start', String(chunk.start))
+    pre.setAttribute('data-vsidian-code-total', String(chunk.total))
+  }
   const codeEl = document.createElement('code')
   codeEl.className = info ? `language-${info}` : ''
   codeEl.textContent = code
@@ -103,6 +112,16 @@ describe('阅读代码块卡片（#84）', () => {
     expect(expanded.classList.contains(READING_CODE_CARD_FOLDED_CLASS)).toBe(false)
   })
 
+  it('折叠收起态头部无复制按钮、展开态有（与 Live 的收起态不发射口径一致）', () => {
+    const folded = makeBlock('js')
+    decorate(folded, { folded: true })
+    expect(folded.querySelector(`.${CODE_CARD_CLASS_NAMES.fold}`)).not.toBeNull()
+    expect(folded.querySelector(`.${CODE_CARD_CLASS_NAMES.copy}`)).toBeNull()
+    const expanded = makeBlock('js')
+    decorate(expanded, { folded: false })
+    expect(expanded.querySelector(`.${CODE_CARD_CLASS_NAMES.copy}`)).not.toBeNull()
+  })
+
   it('复制与折叠回调：点击按钮携带代码体/触发切换', () => {
     const block = makeBlock('js')
     let copied = ''
@@ -142,5 +161,36 @@ describe('阅读代码块卡片（#84）', () => {
     const para = document.createElement('div')
     para.className = 'vsidian-reading-block vsidian-reading-paragraph'
     expect(isReadingCodeBlock(para)).toBe(false)
+  })
+
+  it('大围栏分块行号连续：片携带 start/total → 行号 1..60 与 61..120、列宽一致按整块 3 位', () => {
+    // 模拟 readingBlocks 60 行分块产物：120 行围栏切成两片，各 60 内容行
+    const lines60 = Array.from({ length: 60 }, (_, i) => `line-${i}`).join('\n')
+    const first = makeBlock('js', lines60, { start: 0, total: 120 })
+    const second = makeBlock('js', lines60, { start: 60, total: 120 })
+    decorate(first)
+    decorate(second)
+    const numsOf = (b: HTMLElement) =>
+      [...b.querySelectorAll(`.${CODE_CARD_CLASS_NAMES.linenumber}`)].map((n) => n.textContent)
+    expect(numsOf(first)).toEqual(Array.from({ length: 60 }, (_, i) => String(i + 1)))
+    expect(numsOf(second)).toEqual(Array.from({ length: 60 }, (_, i) => String(61 + i)))
+    // 两片列宽一致：按整块 total（120 → 3 位）而非片行数（60 → 2 位）
+    const widths = [...first.querySelectorAll(`.${CODE_CARD_CLASS_NAMES.linenumber}`), ...second.querySelectorAll(`.${CODE_CARD_CLASS_NAMES.linenumber}`)]
+      .map((n) => (n as HTMLElement).style.width)
+    expect(new Set(widths)).toEqual(new Set(['3ch']))
+  })
+
+  it('无分块 data 属性时回退现行为：每片独立从 1 编号、列宽按片行数（幂等兼容旧 DOM）', () => {
+    const block = makeBlock('js', 'a\nb\nc')
+    decorate(block)
+    const nums = [...block.querySelectorAll(`.${CODE_CARD_CLASS_NAMES.linenumber}`)]
+    expect(nums.map((n) => n.textContent)).toEqual(['1', '2', '3'])
+    expect((nums[0] as HTMLElement).style.width).toBe('2ch')
+  })
+
+  it('c++ 片块类提取后命中 cpp（类名正则可提取 + 注册表别名路由一致）', () => {
+    const block = makeBlock('c++', 'int main() {}')
+    decorate(block)
+    expect(block.querySelector(`.${CODE_CARD_CLASS_NAMES.headerLabel}`)!.textContent).toContain('C++')
   })
 })

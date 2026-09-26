@@ -23,7 +23,7 @@ VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 
 ## 打包与发布
 
-- **体积红线**：VSIX 解压总量警告 5.5 MB / 上限 6.5 MB（#85 代码块高亮后基线约 4.45 MB，距旧警告线 4.5 MB 仅约 57 KB，用户决策两条线各上调 1 MB），一般单文件警告 3 MB / 上限 4 MB，图标上限 100 KB（256×256）。阈值定义在 `scripts/release.mjs` 的 `SIZE_LIMITS`；修改阈值视同变更本约定，需同步本节。#60 起基线含 mermaid 独立产物 `out/webview/mermaid.js`（minify 后约 2.6 MB，刻意 vendored 的按需懒加载渲染器，单文件与总量阈值据此上调；主 bundle main.js 约 0.80 MB 随之不再触发单文件警告，其增长由总量线约束——属已接受取舍）。
+- **体积红线**：VSIX 解压总量警告 5.5 MB / 上限 6.5 MB（#85 代码块高亮后基线约 4.45 MB，距旧警告线 4.5 MB 仅约 57 KB，用户决策两条线各上调 1 MB），一般单文件警告 3 MB / 上限 4 MB，图标上限 100 KB（256×256）。阈值定义在 `scripts/release.mjs` 的 `SIZE_LIMITS`；修改阈值视同变更本约定，需同步本节。#60 起基线含 mermaid 独立产物 `out/webview/mermaid.js`（minify 后约 2.6 MB，刻意 vendored 的按需懒加载渲染器，单文件与总量阈值据此上调）——彼时主 bundle main.js 约 0.80 MB 不触单文件警告；#83 代码块高亮语言包并入后 main.js 约 2.4 MB（距单文件警告线 3 MB 约 0.6 MB 余量），其增长由总量线约束——属已接受取舍。
 - **双重防线**：`.vscodeignore` 挡打包输入，`scripts/release.mjs` 的 `inspectVsixEntries` 检查最终产物（必需清单 + `out/` 白名单 + 禁止模式 + 体积阈值），每次发布前必跑（`npm run release:check`，或随 `npm run release` / CI 自动执行）。新增运行时资产时两处同步维护：`.vscodeignore` 放行 + `REQUIRED_EXTENSION` 登记；漏登记（缺失）与 out/ 未登记产物（多余，如调试遗留）都会被发布检查拦下（`.github/` 混入包内即此类事故，实测发生过）。字体只随包 woff2（chrome118 目标足够），`.woff`/`.ttf` 混入即硬错误——它是字体裁剪失效的信号。
 - **图标**：`media/vsidian-icon.png` 为原图（1254×1254），仅存仓库溯源、**不进 VSIX**；打包用 `media/vsidian-icon-256.png`（package.json `icon` 指向它）。替换图标时重新生成 256 版（PIL LANCZOS + optimize 即可），保持两文件同名关系。
 - **发布流程**：`CHANGELOG.md` 最新 `## <版本> - <日期>` 段落必须与 package.json `version` 一致（`scripts/release.mjs` 强校验，并以该段落作为 GitHub Release 说明）。发版步骤：升 `version` + 新建 CHANGELOG 段落 → 提交 → `npm run release:check` 本地过检查 → `git tag v<版本>` → `npm run release`（或推 tag 由 CI 执行）。

@@ -60,7 +60,7 @@ export const CODEBLOCK_LINE_NUMBERS_DEFAULT = true
 
 /**
  * #81「复制按钮」子开关：卡片头部悬停显现的复制按钮（点击经宿主剪贴板
- * API 复制代码体）。依附卡片总开关；编辑态（光标在块内）始终隐藏。
+ * API 复制代码体）。依附卡片总开关；编辑态同样常驻，收起态不发射。
  */
 export const CODEBLOCK_COPY_BUTTON_KEY = 'codeblock.copyButton'
 export const CODEBLOCK_COPY_BUTTON_DEFAULT = true

@@ -1,9 +1,9 @@
 // 阅读视图代码块卡片（工单 #84，规格 docs/specs/code-block-card.md）：
 // 挂载钩子内把朴素 `<pre><code class="language-x">` 增强为与 Live 相同的
 // 卡片契约——头部横带（徽标 + 语言标签 + 折叠 + 复制）、卡内行号（每块
-// 从 1、与 Live 同类名）、tok-* 语法着色（与 Live 共用 codeHighlight 引擎
-// 与色板）。与阅读虚拟化协同：块卸载随 DOM 丢弃，重挂载从 data 属性的
-// 源码原文重新增强（幂等）。
+// 从 1、大围栏分块跨片连续、与 Live 同类名）、tok-* 语法着色（与 Live 共用
+// codeHighlight 引擎与色板）。与阅读虚拟化协同：块卸载随 DOM 丢弃，重挂载从
+// data 属性的源码原文重新增强（幂等）。
 //
 // 形态矩阵（与设置开关对齐）：
 // - card + highlight：卡片 + 行号 + token 着色
@@ -25,6 +25,28 @@ import type { CodeCardConfig } from './liveCodeCard'
  *  被 token span 改写后的 DOM） */
 const CODE_SRC_ATTR = 'data-vsidian-code-src'
 const CODE_INFO_ATTR = 'data-vsidian-code-info'
+
+/**
+ * 大围栏分块（FENCE_CHUNK_LINES）的跨片行号契约：readingBlocks 在分片
+ * `<pre>` 上落位片首行 0 基行号（data-vsidian-code-start）与整块内容行数
+ * （data-vsidian-code-total）。增强过程不改写 pre 的属性，重读与首捕快照
+ * 等价；无属性（未分块 / 旧 DOM）时回退每片独立编号（start=0、
+ * total=片行数）保持幂等。
+ */
+const CODE_CHUNK_START_ATTR = 'data-vsidian-code-start'
+const CODE_CHUNK_TOTAL_ATTR = 'data-vsidian-code-total'
+
+/** 片首行 0 基行号（非法/缺失回退 0） */
+function chunkStartLineOf(codeEl: HTMLElement): number {
+  const raw = codeEl.parentElement?.getAttribute(CODE_CHUNK_START_ATTR)
+  return typeof raw === 'string' && /^\d+$/.test(raw) ? Number(raw) : 0
+}
+
+/** 整块内容行数（非法/缺失回退片行数） */
+function chunkTotalLinesOf(codeEl: HTMLElement, fallback: number): number {
+  const raw = codeEl.parentElement?.getAttribute(CODE_CHUNK_TOTAL_ATTR)
+  return typeof raw === 'string' && /^\d+$/.test(raw) && Number(raw) > 0 ? Number(raw) : fallback
+}
 
 /** 阅读卡片块级类（选择器映射表登记：vsidian-reading-code-block 的卡片化外壳） */
 export const READING_CODE_CARD_CLASS = 'vsidian-reading-code-card'
@@ -95,7 +117,8 @@ export function decorateReadingCodeCard(block: HTMLElement, opts: ReadingCodeCar
   const actions = document.createElement('span')
   actions.className = CODE_CARD_CLASS_NAMES.headerActions
   actions.appendChild(buildFoldButton(opts.folded, opts.onFoldToggle))
-  if (opts.config.copyButton) {
+  // 收起态不发射复制按钮（与 Live 的 copy = config.copyButton && !isFolded 同口径）
+  if (opts.config.copyButton && !opts.folded) {
     actions.appendChild(buildCopyButton(code, opts.onCopy))
   }
   header.append(labelEl, actions)
@@ -108,7 +131,11 @@ export function decorateReadingCodeCard(block: HTMLElement, opts: ReadingCodeCar
     return
   }
   const lines = code === '' ? [] : code.split('\n')
-  const widthCh = Math.max(2, String(lines.length).length)
+  // 跨片行号（大围栏分块）：值 = 片首行 + 块内序号（1 基），列宽按整块
+  // 内容行数对齐——两片列宽一致、行号跨片连续（规格 code-block-card.md）
+  const startLine = chunkStartLineOf(codeEl)
+  const totalLines = chunkTotalLinesOf(codeEl, lines.length)
+  const widthCh = Math.max(2, String(totalLines).length)
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!
     const row = document.createElement('span')
@@ -117,7 +144,7 @@ export function decorateReadingCodeCard(block: HTMLElement, opts: ReadingCodeCar
     if (opts.config.lineNumbers) {
       const ln = document.createElement('span')
       ln.className = CODE_CARD_CLASS_NAMES.linenumber
-      ln.textContent = String(i + 1)
+      ln.textContent = String(startLine + i + 1)
       ln.style.width = `${widthCh}ch`
       ln.setAttribute('aria-hidden', 'true')
       row.appendChild(ln)

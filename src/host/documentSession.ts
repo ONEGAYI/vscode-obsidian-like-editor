@@ -32,12 +32,15 @@ import type { ImageResolution } from './linkTarget'
 /** 权威文档适配器：vscode 层实现 */
 export interface HostDocumentPort {
   readonly version: number
+  /** 权威文档行尾（镜像 vscode.EndOfLine：1=LF、2=CRLF）。#81 复制产物
+   *  按此归一（webview 出站恒为 LF）；缺省按 LF 处理 */
+  readonly eol?: 1 | 2
   getText(): string
   /** 应用一组全文偏移变更；返回是否成功 */
   applyChanges(changes: SerChange[]): Promise<boolean>
   /** 对权威文档执行宿主撤销（undoRedoService 文本栈）；返回是否执行 */
   undo(): Promise<boolean>
-  /** 对权威文档执行宿主重做；返回是否执行 */
+  /** 对权威文档执行宿主重做（undoRedoService 文本栈）；返回是否执行 */
   redo(): Promise<boolean>
 }
 
@@ -59,7 +62,8 @@ export interface PanelPort {
    *  init 后的 settings.get 以 settings.snapshot 响应） */
   requestSettings?(): SettingsPayload
   /** #81 代码块复制执行（vscode 层注入：vscode.env.clipboard.writeText）；
-   *  只读交互，暂停态同样放行 */
+   *  入参 text 已按文档 EOL 归一（CRLF 文档收到 \r\n 文本）；只读交互，
+   *  暂停态同样放行 */
   copyCode?(text: string): void
 }
 
@@ -438,11 +442,13 @@ export class DocumentSession {
       }
       case 'codeblock.copy': {
         // #81 代码块复制请求：webview 只上报代码体原文，剪贴板写入执行
-        // 归宿主（webview 不触碰剪贴板权限）；只读交互，暂停态同样放行
+        // 归宿主（webview 不触碰剪贴板权限）；只读交互，暂停态同样放行。
+        // webview 出站恒为 LF（CM6 LF 模型，代码体不含 \r）——CRLF 文档按
+        // 权威行尾归一后写入，复制产物与文档行尾一致
         if (!panel.ready || message.docUri !== this.docUri) {
           return Promise.resolve()
         }
-        panel.port.copyCode?.(message.text)
+        panel.port.copyCode?.(this.doc.eol === 2 ? message.text.replace(/\n/g, '\r\n') : message.text)
         return Promise.resolve()
       }
       case 'image.request': {

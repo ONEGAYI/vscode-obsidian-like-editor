@@ -392,6 +392,8 @@ export function createTextEditorProvider(
       get version() {
         return doc.version
       },
+      // #81 复制产物按权威文档行尾归一（documentSession 消费）
+      eol: doc.eol as 1 | 2,
       getText: () => doc.getText(),
       applyChanges: async (changes: SerChange[]) => {
         const edit = new vscode.WorkspaceEdit()
@@ -700,7 +702,8 @@ export function createTextEditorProvider(
         // 设置页 webview 链路，不经文档会话）
         openSettings: () => settings?.page.open(),
         requestSettings: () => settings?.service.getSnapshot() ?? {},
-        // #81 代码块复制执行端口（vscode.env.clipboard，webview 无剪贴板权限）
+        // #81 代码块复制执行端口（vscode.env.clipboard，webview 无剪贴板
+        // 权限）；text 已由会话按文档 EOL 归一，此处原样写入
         copyCode: (text: string): void => {
           void vscode.env.clipboard.writeText(text)
         },

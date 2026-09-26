@@ -41,7 +41,7 @@
 
 ## 复制按钮
 
-- 悬停卡片时显现；点击复制**代码体**（两条围栏行之间的原文，逐字节一致，不含围栏与 info string）。
+- 悬停卡片时显现；点击复制**代码体**（两条围栏行之间的原文，不含围栏与 info string）。内容一致性口径：webview 出站恒为 LF 形态，宿主按文档 EOL 归一后写入剪贴板——CRLF 文档粘贴到仅认 CRLF 的环境（如旧记事本）不串行，LF 文档仍得 LF。
 - 写入经宿主剪贴板 API（`vscode.env.clipboard.writeText`），webview 内不触碰剪贴板权限。
 - 点击后图标变 ✓ 约 1.2 秒复原。
 - **编辑态同样常驻**（用户验收决策）：渲染型围栏（mermaid）只有编辑态卡片——呈现态是渲染图无头部，编辑态再隐藏按钮会让复制功能对这类块完全不可用；普通块随同统一。收起态仍不发射。
@@ -72,11 +72,12 @@
 | Markdown | `@codemirror/lang-markdown`（已随包依赖） | `md` |
 | Verilog | legacy-modes `verilog` | `systemverilog`、`sv` |
 
+- **多词 info string**：语言路由取 info string 的**首个空白分隔词**（CommonMark 惯例）——`` ```js title=x `` 识别为 JavaScript，`` ```c++ `` 命中 C++ 别名。`mermaid` 是刻意例外：渲染管线对标签**全等匹配**，多词 info string 不命中渲染管线。
 - 无语言标记或 `text`/`plaintext`：卡片正常呈现，标签显示 `Plain text`，不着色。
 - **未识别语言**：回退纯文本（卡片与行号仍在）。
 - **token 类名**：采用 `@lezer/highlight` `classHighlighter` 的 `tok-*` 稳定词表（如 `tok-keyword`、`tok-string`），两视图共用；配套 CSS 色板以主题 class 区分明暗。
 - **配色**：内置明暗两套固定色板，取色参照 VSCode Dark+ / Light+；随现有明暗主题管线（`EditorView.darkTheme` facet + body class）自动切换。卡片外壳（背景、行号、标签、分隔线）继续走 `--vscode-*` 主题变量。
-- **语言图标**：仅注册表内语言的彩色 SVG（约 20 个，vendored），头部标签左侧显示；未收录语言无图标。
+- **语言徽标**：v1 为字形徽标（typographic badge）——等宽缩写 + 品牌近似色（`CODE_LANG_ICONS`），随头部标签显示，仅注册表内语言有徽标，未收录语言无徽标；矢量 logo 集为后续工单（体积与素材来源另行决策）。
 - **性能**：Live 侧高亮按块计算并缓存，编辑仅重算受影响块；呈现态与编辑态均保持高亮；大围栏（10 万行档）不阻塞输入。
 
 **体积红线**：语言包解包合计约 430 KB（`@codemirror/language` 已随 lang-markdown 在包内，不额外增），legacy-modes 按模式 tree-shake。**实测（#85）**：main.js 增至约 2.4 MB（语言包增量约 1.6 MB，预估的 0.4–0.5 MB 偏低——Lezer 解析表 minify 后仍大于解包体积占比的直觉）；VSIX 解压总量 4551 KB，单文件警告线 3 MB 未触线，总量距旧警告线 4.5 MB 余量仅约 57 KB——**用户决策（#85 验收）总量警告/上限各上调 1 MB 至 5.5 / 6.5 MB**，无需独立懒加载产物。后续增补语言包前仍需先核对总量余量（新警告线下约 1.06 MB）。
@@ -113,6 +114,12 @@
 ## 稳定样式入口
 
 新增稳定类名（登记入 [选择器映射表](../design/obsidian-selector-map.md)）：`.vsidian-code-card-line`、`.vsidian-code-card-edge-top/-bottom`、`.vsidian-code-card-header`（含 `-label`/`-actions`）、`.vsidian-code-card-copy`（`-done` 修饰）、`.vsidian-code-card-fold`（`-collapsed` 修饰）、`.vsidian-code-card-linenumber`、`tok-*` token 族；公开变量 `--vsidian-code-card-background`（默认回落 `--vscode-textCodeBlock-background`）。
+
+## 已知限制与语义
+
+- **折叠集残留边角**：折叠围栏 A 后，一次性删除「A 开围栏行起至紧邻围栏 B 起始行前」的内容时，B 可能继承折叠收起态——折叠集只随 ChangeSet 做位置映射、不做围栏表修剪（「消费点以围栏起点查询」是已声明取舍，见 `codeCardState.ts` 头注释），删除后 B 的起点可能恰好等于残留的映射位置而命中。纯视图态，重开文档恢复全展开。
+- **卡片按钮回调的定位依赖**：复制/折叠按钮点击回调经 `EditorView.findFromDOM` 从头部 widget 根反查视图，依赖 CM6 当前版本 widget Tile 携带的内部标记（非公开 API 承诺面）——升级 `@codemirror/view` 大版本时须把「卡片按钮点击」列入回归清单。
+- **阅读视图大围栏分片的复制边界**：60 行分块是阅读虚拟化的挂载单位，每片有独立头部与复制按钮——复制只得该片的代码体，不做跨片聚合（聚合与按需挂载/卸载语义冲突，接受为已知行为）；卡内行号已跨片连续。
 
 ## 验证与测试边界
 

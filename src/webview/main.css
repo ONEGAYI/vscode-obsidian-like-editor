@@ -485,8 +485,9 @@ body {
   user-select: none;
 }
 
-/* 复制按钮（#81）：悬停卡片显现（focus-visible 键盘可达）；编辑态按钮
-   不发射（非 CSS 隐藏）；✓ 反馈本地切换约 1.2s */
+/* 复制按钮（#81）：悬停卡片显现（focus-visible 键盘可达）；编辑态同样
+   发射（常驻在场），可见性由 CSS 悬停承担，收起态不发射；✓ 反馈本地
+   切换约 1.2s */
 #app .vsidian-code-card-header .vsidian-code-card-copy {
   display: inline-flex;
   align-items: center;
