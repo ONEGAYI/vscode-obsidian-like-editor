@@ -1,59 +1,75 @@
-/* 设置页样式（#33）：独立样式文件，不与编辑器排版规则（#32 范围）混用。
-   颜色与字体跟随 VSCode CSS 变量（与 main.css 同口径）。 */
-html,
+/* 独立设置页：使用 VSCode 主题变量，侧栏搜索与内容分页相互独立。 */
+html, body, #app { min-height: 100%; margin: 0; padding: 0; }
+* { box-sizing: border-box; }
 body {
-  height: 100%;
-  margin: 0;
-  padding: 0;
+  font-family: var(--vscode-font-family, system-ui, sans-serif);
+  font-size: var(--vscode-font-size, 13px);
+  color: var(--vscode-editor-foreground, #333);
+  background: var(--vscode-editor-background, #fff);
 }
-
-body {
-  font-family: var(--vscode-font-family);
-  color: var(--vscode-editor-foreground);
-  background-color: var(--vscode-editor-background);
+button, input { font: inherit; }
+button { cursor: pointer; }
+button:focus-visible, input:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: 3px;
 }
-
 .vsidian-settings {
-  max-width: 640px;
-  margin: 0 auto;
-  padding: 24px 20px;
-  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  min-height: 100vh;
 }
-
-.vsidian-settings-title {
-  font-size: 1.4em;
-  font-weight: 600;
-  margin: 0 0 4px;
+.vsidian-settings-sidebar {
+  padding: 28px 16px;
+  background: var(--vscode-sideBar-background, #f6f7f9);
+  border-right: 1px solid var(--vscode-panel-border, #d9dde3);
 }
-
-.vsidian-settings-subtitle {
-  color: var(--vscode-descriptionForeground);
-  margin: 0 0 20px;
+.vsidian-settings-title { font-size: 17px; font-weight: 600; margin: 0 10px 26px; }
+.vsidian-settings-search-wrap { position: relative; }
+.vsidian-settings svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.vsidian-settings-search-wrap > svg { position: absolute; left: 11px; top: 10px; pointer-events: none; color: var(--vscode-descriptionForeground, #666); }
+.vsidian-settings-search {
+  width: 100%; height: 40px; padding: 8px 8px 8px 38px; border-radius: 8px;
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, #cbd0d8));
+  color: var(--vscode-input-foreground, #333); background: var(--vscode-input-background, #fff);
 }
-
-.vsidian-settings-item {
-  padding: 10px 0;
-  border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+.vsidian-settings-search::placeholder { color: var(--vscode-input-placeholderForeground, #737b89); }
+.vsidian-settings-nav-label { margin: 26px 12px 10px; color: var(--vscode-descriptionForeground, #666); font-size: 12px; }
+.vsidian-settings-nav { display: grid; gap: 6px; }
+.vsidian-settings-nav-item {
+  width: 100%; display: flex; align-items: center; gap: 12px; padding: 11px 12px;
+  border: 1px solid transparent; border-radius: 9px; text-align: left;
+  color: inherit; background: transparent;
 }
-
-.vsidian-settings-item-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
+.vsidian-settings-nav-item:hover { background: var(--vscode-list-hoverBackground, #e9ebef); }
+.vsidian-settings-nav-item[aria-current="page"] {
+  color: var(--vscode-list-activeSelectionForeground, #242a34);
+  background: var(--vscode-list-activeSelectionBackground, #e0e4eb);
+  border-color: var(--vscode-contrastActiveBorder, transparent);
 }
-
-.vsidian-settings-item-title {
-  font-size: var(--vscode-font-size, 13px);
-}
-
-.vsidian-settings-item-description {
-  margin: 4px 0 0 24px;
-  color: var(--vscode-descriptionForeground);
-  font-size: var(--vscode-font-size, 13px);
-}
-
-.vsidian-settings-empty {
-  color: var(--vscode-descriptionForeground);
-  padding: 24px 0;
+.vsidian-settings-main { min-width: 0; padding: 28px clamp(24px, 5vw, 72px) 48px; }
+.vsidian-settings-list { max-width: 850px; }
+.vsidian-settings-heading { font-size: 24px; font-weight: 600; margin: 0 0 10px; }
+.vsidian-settings-subtitle { color: var(--vscode-descriptionForeground, #666); line-height: 1.7; margin: 0 0 32px; }
+.vsidian-settings-group-title { font-size: 13px; font-weight: 600; margin: 0; padding: 0 0 12px; border-bottom: 1px solid var(--vscode-panel-border, #d9dde3); }
+.vsidian-settings-item { padding: 22px 0; border-bottom: 1px solid var(--vscode-panel-border, #d9dde3); }
+.vsidian-settings-item-label { display: flex; justify-content: space-between; align-items: center; gap: 28px; cursor: pointer; }
+.vsidian-settings-item-copy { min-width: 0; }
+.vsidian-settings-item-title { font-size: 14px; font-weight: 500; }
+.vsidian-settings-item-description { display: block; color: var(--vscode-descriptionForeground, #666); margin: 7px 0 0; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.vsidian-settings-checkbox { width: 18px; height: 18px; margin: 0 3px; flex: none; accent-color: var(--vscode-focusBorder, #007fd4); cursor: pointer; }
+.vsidian-settings-item-located { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: 8px; border-radius: 3px; }
+.vsidian-settings-status { min-height: 20px; margin: 0 0 14px; color: var(--vscode-descriptionForeground, #666); font-size: 12px; }
+.vsidian-settings-empty { color: var(--vscode-descriptionForeground, #666); padding: 24px 0; }
+.vsidian-settings-result { display: block; width: 100%; text-align: left; padding: 18px; margin: 0 0 12px; border: 1px solid var(--vscode-panel-border, #d9dde3); border-radius: 8px; background: transparent; color: inherit; }
+.vsidian-settings-result:hover { background: var(--vscode-list-hoverBackground, #e9ebef); }
+.vsidian-settings-result-category { display: block; font-size: 12px; margin-bottom: 7px; color: var(--vscode-descriptionForeground, #666); }
+@media (max-width: 600px) {
+  .vsidian-settings { grid-template-columns: minmax(0, 1fr); align-content: start; }
+  .vsidian-settings-sidebar { padding: 18px 20px; border-right: 0; border-bottom: 1px solid var(--vscode-panel-border, #d9dde3); }
+  .vsidian-settings-title { margin: 0 0 16px; }
+  .vsidian-settings-nav-label { display: none; }
+  .vsidian-settings-nav { display: flex; flex-wrap: wrap; margin-top: 14px; }
+  .vsidian-settings-nav-item { width: auto; flex: 1 1 auto; }
+  .vsidian-settings-main { padding: 16px 24px 32px; }
+  .vsidian-settings-subtitle { margin-bottom: 24px; }
 }

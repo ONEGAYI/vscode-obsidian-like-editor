@@ -15,7 +15,7 @@ An Obsidian-like Markdown editing experience in VS Code: a source-text-based edi
 - **Mermaid diagrams**: fenced code blocks tagged `mermaid` render as diagrams in live preview and reading mode (flowcharts, sequence diagrams, etc.; mermaid bundled locally and lazy-loaded, no CDN); the cursor entering a fence reveals its source for direct editing, syntax errors fall back to an error note with readable source that never swallows the rest of the document; light/dark themes are followed automatically, and links inside diagrams never navigate.
 - **Task toggling**: click a checkbox in either view to write back to the source text, with undo support.
 - **Find**: Ctrl+F / Cmd+F inside the editor (when the Vsidian editor is active).
-- **Standalone settings page**: settings live in the extension's own settings page (not the VSCode Settings UI) — saved per user, restored on reopen, applied to open editors immediately.
+- **Standalone settings page**: settings live in the extension's own settings page (not the VSCode Settings UI) — category navigation and global name/description search help locate settings, with light/dark themes, narrow layouts and keyboard access. Settings are saved per user, restored on reopen and applied immediately; failed saves restore the active value with feedback.
 - **Input & sync safety**: IME composition (e.g. Chinese input) is buffered so half-typed candidates never hit the file; when an external change cannot be synced safely, a conflict banner appears and local input is never lost.
 
 ## Installation
