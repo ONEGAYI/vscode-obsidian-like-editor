@@ -43,9 +43,10 @@ function makeStorage(writes: Array<{ key: string; value: unknown }> = []): Setti
 }
 
 describe('快照读取', () => {
-  it('生产注册表（#34 起）：快照为定义默认值（五项均开）', () => {
+  it('生产注册表（#34 起）：快照为定义默认值（五开关均开 + 语言 auto）', () => {
     const svc = new SettingsService(makeStorage(), PRODUCTION_SETTING_DEFINITIONS)
     expect(svc.getSnapshot()).toEqual({
+      'general.language': 'auto',
       'editor.lineNumbers': true,
       'codeblock.card': true,
       'codeblock.lineNumbers': true,

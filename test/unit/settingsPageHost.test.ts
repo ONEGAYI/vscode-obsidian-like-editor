@@ -12,6 +12,9 @@ vi.mock('vscode', () => ({
 }))
 
 import { createSettingsPage } from '../../src/host/settingsPage'
+import { installLocale } from '../../src/shared/i18n'
+import { en } from '../../src/shared/locales/en'
+import { zhCn } from '../../src/shared/locales/zh-cn'
 
 function makePanel() {
   let disposed = false
@@ -25,6 +28,7 @@ function makePanel() {
     html: '',
   }
   const panel = {
+    title: '',
     get webview() {
       if (disposed) throw new Error('Webview is disposed')
       return webview
@@ -71,5 +75,34 @@ describe('设置页异步回信与面板生命周期', () => {
     expect(panel.webview.html).toContain('<html lang="en">')
     expect(panel.webview.html).toContain('<script type="application/json" id="vsidian-locale">')
     expect(panel.webview.html).toContain('"lang":"en"')
+  })
+
+  it('notifyLocaleChanged：向自身面板发 locale.changed 携完整新包，标题同步新语言（#96）', () => {
+    // 宿主装配（真实链路由 provider 先 installHostLocale 再通知；此处直接
+    // 模拟两态：zh 开面板 → 切 en）
+    installLocale('zh-cn', zhCn)
+    const { panel, sent } = makePanel()
+    // createWebviewPanel 的第二参即面板标题（真实 API 语义），mock 回填
+    vscodeMock.createWebviewPanel.mockImplementation(((_viewType: unknown, title: string) => {
+      panel.title = title
+      return panel
+    }) as never)
+    const service = {
+      getSnapshot: () => ({}),
+      apply: () => Promise.resolve({ ok: true as const, values: {} }),
+    }
+    const page = createSettingsPage({ extensionUri: 'extension' } as never, service as never,
+      { getSnapshot: () => ({}) } as never)
+    page.open()
+    expect(panel.title).toBe(zhCn['settings.pageTitle'])
+    // 宿主换包发生在通知之前（title 取词即时为新语言）
+    installLocale('en', en)
+    page.notifyLocaleChanged('en')
+    expect(sent).toContainEqual({ kind: 'locale.changed', lang: 'en', messages: en })
+    expect(panel.title).toBe(en['settings.pageTitle'])
+    // 面板未开时 no-op（不抛错；下次 open 按新快照语言生成）
+    page.close()
+    page.notifyLocaleChanged('zh-cn')
+    expect(sent).toHaveLength(1)
   })
 })

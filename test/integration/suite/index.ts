@@ -67,17 +67,20 @@ export async function run(): Promise<void> {
       // #38 合并 main 后新增：每用例前重置设置键到默认（lineNumbers 开、
       // fixture 键清理）。设置 globalState 与模式记忆同层，同样存在 1.86.2
       // storage 迟到回翻（见 cases.ts 的 waitSettings 注释）——用例中断会在
-      // "行号已关"状态留下残留，跨用例污染后续行号断言，读回校验后放行
+      // "行号已关"状态留下残留，跨用例污染后续行号断言，读回校验后放行。
+      // #96 起语言偏好并入重置面：显式语言残留会污染后续用例的标题断言
+      // （settings.pageTitle 随生效语言）与宿主装配
       for (let attempt = 0; ; attempt++) {
         await vscode.commands.executeCommand('onegayi.vsidian._test.setSettings', {
           'editor.lineNumbers': true,
+          'general.language': 'auto',
         })
         const readBack = (await vscode.commands.executeCommand(
           'onegayi.vsidian._test.getSettings')) as Record<string, unknown>
-        if (readBack['editor.lineNumbers'] === true || attempt >= 10) {
+        if ((readBack['editor.lineNumbers'] === true && readBack['general.language'] === 'auto') || attempt >= 10) {
           if (attempt >= 10) {
             console.warn(
-              `[集成测试][WARN] 设置重置未稳定为 lineNumbers=true（最终 ${String(readBack['editor.lineNumbers'])}），放行用例「${name}」`,
+              `[集成测试][WARN] 设置重置未稳定（lineNumbers=true / language=auto，最终 ${String(readBack['editor.lineNumbers'])} / ${String(readBack['general.language'])}），放行用例「${name}」`,
             )
           }
           break

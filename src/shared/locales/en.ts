@@ -26,6 +26,11 @@ export const en = {
   'settings.editorSubtitle': 'Adjust how the live preview is displayed. Changes are saved automatically.',
   'settings.empty': 'Nothing to configure yet.',
   'settings.groupDisplay': 'Display',
+  /** 设置页「常规」分组标题（#96 general.* 设置项的归属分组） */
+  'settings.generalSection': 'General',
+  /** 设置页「常规」分组副文案（对齐「编辑器」分组的说明句式） */
+  'settings.generalSectionDescription':
+    'Adjust basic Vsidian behavior. Changes save automatically.',
 
   // ---- keybindingSettings.（快捷键分页：标题、模式标签、状态、搜索、按钮）----
   'keybindingSettings.title': 'Keybindings',
@@ -71,6 +76,12 @@ export const en = {
   'setting.codeblockCopyButton.description': 'Show a copy button on the card header on hover; click to copy the whole block (without fence lines). Requires "Code block card".',
   'setting.codeblockHighlight.title': 'Syntax highlighting',
   'setting.codeblockHighlight.description': 'Colorize code block content by language (also applies to plain fences when the card is off; unrecognized languages fall back to plain text).',
+  /** 设置项「界面语言」（#96 general.language，经 titleKey/descriptionKey 取词） */
+  'setting.language.title': 'Interface language',
+  'setting.language.description':
+    'The display language for interface text. Auto follows the VS Code display language (Simplified Chinese in Chinese environments, English otherwise); an explicit choice no longer follows it. Changes take effect immediately.',
+  /** 语言下拉 auto 档显示名（随当前语言取词；具体语言为静态自名不自译） */
+  'setting.languageAuto': 'Auto',
   /** 测试钩子 fixture 定义（VSIDIAN_TEST_HOOKS 注入设置页的占位开关） */
   'setting.testFlag.title': 'Test flag',
 

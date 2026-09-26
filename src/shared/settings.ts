@@ -12,6 +12,10 @@
 // - 值域语义：无效存量（类型不符）恢复默认值；未知键（历史遗留）忽略；
 //   补丁应用按批原子——任一键非法整批拒绝，有效值不落地。
 
+// 纯类型导入：MessageKey 只用于 optionLabelKeys 的编译期约束（esbuild 剥除
+// type import，字典字节不进 webview 产物——settings.ts 被两端共享）
+import type { MessageKey } from './locales/en'
+
 /** 协议载荷中的设置值：标量容器（协议层只约束形态，合法性由本模块按定义判定；
  *  放宽数值类型不需要改协议——「整体下发而非逐项布尔」的扩展预留） */
 export type SettingsPayloadValue = boolean | number | string
@@ -40,16 +44,22 @@ export interface BooleanSettingDefinition extends SettingDefinitionBase {
 /**
  * 字符串枚举设置项（#93 i18n 设置 schema 扩展）：值域必填（枚举非空、
  * 无重复），默认值必须在值域内；设置页渲染为下拉控件，enum 顺序即选项
- * 顺序。optionLabels 提供枚举值 → 显示名（缺省显示原值；语言设置项的
- * 「语言自名」约定见规格「语言设置项」）。
+ * 顺序。optionLabels 提供枚举值 → 静态显示名（缺省显示原值；语言设置项的
+ * 「语言自名不自译」约定见规格「语言设置项」）。optionLabelKeys（#96）
+ * 提供枚举值 → 消息键，渲染层经 t() 取词——显示名随当前装配语言变化
+ * （语言设置 auto 档「自动 / Auto」）。显示名优先级：optionLabels >
+ * optionLabelKeys > 原值。键类型经 import type 引入（纯类型依赖，不把
+ * 字典字节带进 webview 产物）。
  */
 export interface StringEnumSettingDefinition extends SettingDefinitionBase {
   type: 'string'
   default: string
   /** 值域（非空、无重复） */
   enum: readonly string[]
-  /** 可选：枚举值 → 选项显示名 */
+  /** 可选：枚举值 → 选项静态显示名（不随语言变化，如语言自名） */
   optionLabels?: Readonly<Record<string, string>>
+  /** 可选：枚举值 → 消息键（渲染层 t() 取词，随当前语言变化） */
+  optionLabelKeys?: Readonly<Record<string, MessageKey>>
 }
 
 export type SettingDefinition = BooleanSettingDefinition | StringEnumSettingDefinition
@@ -94,21 +104,38 @@ export const CODEBLOCK_HIGHLIGHT_KEY = 'codeblock.highlight'
 export const CODEBLOCK_HIGHLIGHT_DEFAULT = true
 
 /**
- * 语言设置键（#93 预留，#4 注册定义与「常规」分区）：值域 auto | zh-cn |
+ * 语言设置键（#93 预留，#96 注册定义与「常规」分区）：值域 auto | zh-cn |
  * en（StringEnumSettingDefinition），解析与语言包装配见 shared/locales。
  * 键常量先行导出——宿主 HTML 生成点读取快照中的该键决定注入语言（缺省
  * 走 auto 语义），设置项注册后无需再改取键方。
  */
 export const LANGUAGE_KEY = 'general.language'
 
+/** 语言设置默认值：auto（跟随 VSCode 显示语言解析，规格「两层语言模型」） */
+export const LANGUAGE_DEFAULT = 'auto'
+
 /**
  * 生产设置定义注册表：#33 交付空状态页面与完整数据链路，#34 加入首个
  * 实际设置项「显示行号」（设置页自此渲染真实开关），#79 加入「代码块卡片」，
- * #80 加入「卡内行号」，#81 加入「复制按钮」，#83 加入「语法高亮」。
+ * #80 加入「卡内行号」，#81 加入「复制按钮」，#83 加入「语法高亮」，#96
+ * 加入「界面语言」（首个 string 枚举项，归属设置页「常规」分组——键前缀
+ * general.* 的定义渲染进常规分组，见 settingsPageView 分组规则）。
  * #95 i18n 起文案字段键化（titleKey/descriptionKey → 字典 setting.*），
  * 注册表不再含用户可见字面量。
  */
 export const PRODUCTION_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
+  {
+    key: LANGUAGE_KEY,
+    type: 'string',
+    default: LANGUAGE_DEFAULT,
+    enum: ['auto', 'zh-cn', 'en'],
+    titleKey: 'setting.language.title',
+    descriptionKey: 'setting.language.description',
+    // 语言自名不自译（规格「语言设置项」）：静态直显，不随界面语言翻译
+    optionLabels: { 'zh-cn': '简体中文', en: 'English' },
+    // auto 档例外：随当前界面语言取词（自动 / Auto）
+    optionLabelKeys: { auto: 'setting.languageAuto' },
+  },
   {
     key: SHOW_LINE_NUMBERS_KEY,
     type: 'boolean',
@@ -181,6 +208,14 @@ export function isSettingDefinition(v: unknown): v is SettingDefinition {
     if (
       v.optionLabels !== undefined &&
       (!isObject(v.optionLabels) || !Object.values(v.optionLabels).every((label) => typeof label === 'string'))
+    ) {
+      return false
+    }
+    // #96 optionLabelKeys：形态校验（对象、值全字符串）；键是否真实存在
+    // 由渲染层 t() 回退链兜底（编译期类型已约束生产注册表）
+    if (
+      v.optionLabelKeys !== undefined &&
+      (!isObject(v.optionLabelKeys) || !Object.values(v.optionLabelKeys).every((k) => typeof k === 'string'))
     ) {
       return false
     }

@@ -3994,6 +3994,81 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await vscode.commands.executeCommand(CMD.closeSettingsPage)
   }],
 
+  // ---- #96：语言设置项与切换即生效 ----
+
+  ['语言设置：切换即生效——宿主换包、面板标题同步、持久化重开按新语言（#96）', async () => {
+    // auto 基线：与扩展装配同源计算（宿主显示语言解析；测试宿主多为英文
+    // 环境 → en，中文环境 → zh-cn，两种环境断言都成立）
+    const autoLang = resolveLocale(undefined, vscode.env.language)
+    const autoTitle = LOCALE_MESSAGES[autoLang]['settings.pageTitle']
+    await vscode.commands.executeCommand('onegayi.vsidian.openSettings')
+    const info = await poll('设置页打开并就绪', async () => {
+      const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
+        | { open: boolean; ready: boolean; title: string }
+        | undefined
+      return i?.open && i.ready ? i : undefined
+    })
+    assert(info.title === autoTitle,
+      `auto 基线面板标题应按宿主语言（${autoLang} → ${autoTitle}），实际 ${info.title}`)
+
+    // 已打开编辑器面板在场：切换时 locale.changed 广播路径真实执行
+    // （与 settings.changed 同一 postToPanel 通道；webview 侧换包由浏览器
+    // 套件与单测钉住，此处验证广播后会话保持健康）
+    await openWithEditor('untouched.md', true)
+    await waitSessionReady('untouched.md')
+
+    // 切到 auto 反侧语言：宿主即时换包 → 已开设置页面板标题同步（真实
+    // panel.title，用户在标签上看到的文字）
+    const target = autoLang === 'en' ? 'zh-cn' : 'en'
+    const targetTitle = LOCALE_MESSAGES[target]['settings.pageTitle']
+    const saved = (await vscode.commands.executeCommand(CMD.setSettings, {
+      'general.language': target,
+    })) as { ok: boolean }
+    assert(saved.ok === true, '语言设置保存应成功')
+    await poll('面板标题随语言切换', async () => {
+      const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
+        | { title: string }
+        | undefined
+      return i?.title === targetTitle ? true : undefined
+    })
+
+    // 广播后编辑器会话保持健康（面板未被语言切换打断）
+    const after = (await vscode.commands.executeCommand(CMD.sessionState, wsUri('untouched.md').toString())) as SessionState
+    assert(after.found === true && after.panels.length >= 1,
+      '语言切换广播后编辑器面板应仍在会话中')
+
+    // 持久化重开回显：关闭重开设置页，新面板 HTML 按持久化偏好语言生成
+    await vscode.commands.executeCommand(CMD.closeSettingsPage)
+    await poll('设置页关闭', async () => {
+      const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
+        | { open: boolean }
+        | undefined
+      return i && !i.open ? true : undefined
+    })
+    await vscode.commands.executeCommand('onegayi.vsidian.openSettings')
+    const reopened = await poll('设置页重开并就绪', async () => {
+      const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
+        | { open: boolean; ready: boolean; title: string }
+        | undefined
+      return i?.open && i.ready ? i : undefined
+    })
+    assert(reopened.title === targetTitle,
+      `重开应按持久化语言（${target} → ${targetTitle}）显示标题，实际 ${reopened.title}`)
+    await vscode.commands.executeCommand(CMD.closeSettingsPage)
+
+    // 恢复 auto：宿主换包回到基线语言（不污染后续用例的标题断言）
+    const back = (await vscode.commands.executeCommand(CMD.setSettings, {
+      'general.language': 'auto',
+    })) as { ok: boolean }
+    assert(back.ok === true, '恢复 auto 应保存成功')
+    await poll('宿主恢复 auto 语言', async () => {
+      const i = (await vscode.commands.executeCommand(CMD.settingsPageInfo)) as
+        | { title: string }
+        | undefined
+      return i?.title === autoTitle ? true : undefined
+    })
+  }],
+
   // ---- #34：实时预览源文件行号 ----
 
   ['实时预览默认显示从 1 起的源文件行号（结构混合与软换行不新增行号）', async () => {

@@ -50,6 +50,12 @@ export const CJK_LITERALS_WHITELIST: Readonly<Record<string, readonly string[]>>
     "跳转到笔记末尾",
     "重置大纲",
   ],
+  // #96 语言设置项残留：语言自名不自译（规格「语言设置项」）——静态直显的
+  // 「简体中文」是刻意的字面量，不随界面语言翻译；title/description 字面量
+  // 已随 #95 键化（setting.language.*）消灭，不入白名单
+  'src/shared/settings.ts': [
+    "简体中文",
+  ],
   'src/webview/imageResource.ts': [
     "未知原因",
   ],

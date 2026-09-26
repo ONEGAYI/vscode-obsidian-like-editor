@@ -21,6 +21,10 @@ export const zhCn: Record<MessageKey, string> = {
   'settings.editorSubtitle': '调整实时预览的显示方式。更改会自动保存。',
   'settings.empty': '暂无可配置项。',
   'settings.groupDisplay': '显示',
+  /** 设置页「常规」分组标题（#96 general.* 设置项的归属分组） */
+  'settings.generalSection': '常规',
+  /** 设置页「常规」分组副文案（对齐「编辑器」分组的说明句式） */
+  'settings.generalSectionDescription': '调整 Vsidian 的基础行为。更改会自动保存。',
 
   // ---- keybindingSettings.（快捷键分页）----
   'keybindingSettings.title': '快捷键',
@@ -63,6 +67,12 @@ export const zhCn: Record<MessageKey, string> = {
   'setting.codeblockCopyButton.description': '卡片头部悬停显示复制按钮，点击复制整块代码（不含围栏行）。需开启「代码块卡片」。',
   'setting.codeblockHighlight.title': '语法高亮',
   'setting.codeblockHighlight.description': '代码块内容按语言着色（卡片关闭时朴素围栏同样生效；未识别语言回退纯文本）。',
+  /** 设置项「界面语言」（#96 general.language，经 titleKey/descriptionKey 取词） */
+  'setting.language.title': '界面语言',
+  'setting.language.description':
+    '界面文案的显示语言。选择「自动」时跟随 VS Code 显示语言（中文环境显示简体中文，其余显示英文）；显式选择后不再跟随。更改立即生效。',
+  /** 语言下拉 auto 档显示名（随当前语言取词；具体语言为静态自名不自译） */
+  'setting.languageAuto': '自动',
   'setting.testFlag.title': '测试开关',
 
   // ---- host.（宿主消息）----

@@ -1,6 +1,6 @@
 // 设置页生产入口的真实浏览器集成：原生输入、绘制属性、主题与窄屏。
 // #95 i18n：页面注入 zh-cn 数据岛首帧装配语言包，文案断言与字典同源
-// （经 loadZhCn 取词，不再复制字面量）。
+// （经 loadZhCn 取词，不再复制字面量）。#96 起导航默认选中「常规」分组。
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -36,8 +36,11 @@ try {
       } })
     })
     await page.addScriptTag({ path: output })
-    const nav = page.getByRole('button', { name: zhCn['settings.editorCategory'], exact: true })
+    // #96 默认选中分组为「常规」（首个分类）——选中态绘制断言取第一个
+    // 导航按钮；「编辑器」按钮仍存在（下一行 exact 匹配保证）
+    const nav = page.locator('.vsidian-settings-nav-item').first()
     await nav.waitFor()
+    await page.getByRole('button', { name: zhCn['settings.editorCategory'], exact: true }).waitFor()
     const paint = await nav.evaluate(el => {
       const cs = getComputedStyle(el)
       const svg = getComputedStyle(el.querySelector('svg'))
