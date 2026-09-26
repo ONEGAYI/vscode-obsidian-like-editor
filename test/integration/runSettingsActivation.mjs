@@ -36,6 +36,7 @@ try {
       ...process.env,
       VSIDIAN_TEST_HOOKS: '1',
     },
+    reportPath: path.join(root, '.vscode-test', 'settings-activation.log'),
   })
   if (code !== 0) throw new Error(`空窗口激活实测退出码 ${code}`)
 } catch (err) {

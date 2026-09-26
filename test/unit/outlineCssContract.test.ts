@@ -109,3 +109,298 @@ describe('侧栏顶栏按钮（#54）', () => {
     expect(active).toMatch(/background:\s*var\(--vscode-toolbar-hoverBackground/)
   })
 })
+
+// ---- #65 行内样式透传：字重语义与主题色同源 ----
+
+describe('大纲条目字重语义（#65：只认显式标记）', () => {
+  it('条目一律常规字重（不继承标题级别加粗），CSS 钉住', () => {
+    const item = rule('.vsidian-sidebar .vsidian-outline-item')
+    expect(item).toMatch(/font-weight:\s*400/)
+  })
+
+  it('仅显式粗体段加重：strong span 字重 700', () => {
+    expect(rule('.vsidian-sidebar .vsidian-outline-item .vsidian-outline-strong'))
+      .toMatch(/font-weight:\s*700/)
+  })
+
+  it('斜体/行内代码/删除线的透传呈现规则', () => {
+    expect(rule('.vsidian-sidebar .vsidian-outline-item .vsidian-outline-emphasis'))
+      .toMatch(/font-style:\s*italic/)
+    const code = rule('.vsidian-sidebar .vsidian-outline-item .vsidian-outline-code')
+    expect(code).toMatch(/font-family:\s*var\(--vscode-editor-font-family/)
+    expect(code).toMatch(/background-color:\s*var\(--vsidian-live-code-background/)
+    expect(rule('.vsidian-sidebar .vsidian-outline-item .vsidian-outline-strike'))
+      .toMatch(/text-decoration:\s*line-through/)
+  })
+})
+
+describe('主题色同源（#65：大纲层级与正文标题引用同一变量族）', () => {
+  it('#app 定义标题层级色变量族 1–6（当前默认前景色，主题分级仅改此处）', () => {
+    for (let n = 1; n <= 6; n++) {
+      expect(css, `--vsidian-heading-color-${n} 应定义于 #app`).toMatch(
+        new RegExp(`--vsidian-heading-color-${n}:\\s*var\\(--vscode-editor-foreground\\)`),
+      )
+    }
+  })
+
+  it('live 标题行级与大纲条目级引用同一变量（一处定义两处生效）', () => {
+    for (let n = 1; n <= 6; n++) {
+      const live = rule(`#app .cm-editor .cm-scroller .vsidian-heading-line-${n}`)
+      expect(live, `live 标题 ${n} 级应引用层级色变量`).toMatch(
+        new RegExp(`color:\\s*var\\(--vsidian-heading-color-${n}\\)`),
+      )
+      const outline = rule(`.vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-${n}`)
+      expect(outline, `大纲条目 ${n} 级应引用层级色变量`).toMatch(
+        new RegExp(`color:\\s*var\\(--vsidian-heading-color-${n}\\)`),
+      )
+    }
+  })
+
+  it('阅读标题块级同引变量族（正文两模式同源）', () => {
+    for (let n = 1; n <= 6; n++) {
+      const reading = rule(`#app .vsidian-view-reading .vsidian-reading-heading-${n}`)
+      expect(reading, `阅读标题 ${n} 级应引用层级色变量`).toMatch(
+        new RegExp(`color:\\s*var\\(--vsidian-heading-color-${n}\\)`),
+      )
+    }
+  })
+})
+
+describe('常驻高亮横条（#66）', () => {
+  it('located 条目半透明背景横条：类切换是唯一差异来源，颜色跟随 VSCode 变量', () => {
+    // 用户看到的东西（AGENTS 视觉层断言）：半透明覆盖横条——非 located
+    // 条目无背景规则，两态差异唯一来源是本规则；样式失效时无横条可被
+    // 集成 computed 断言捕获。回退值为半透明 rgba（无变量主题下仍可见）
+    const located = rule('.vsidian-sidebar .vsidian-outline-item.vsidian-outline-located')
+    expect(located).toMatch(/background:\s*var\(--vscode-list-hoverBackground,\s*rgba\(/)
+    expect(located).toMatch(/border-radius:\s*4px/)
+  })
+
+  it('非 located 条目无背景：基础条目规则不含 background（高亮不透底）', () => {
+    const item = rule('.vsidian-sidebar .vsidian-outline-item')
+    expect(item).not.toMatch(/background/)
+  })
+})
+
+// ---- #67 折叠滑块与手动折叠：滑块行、圆点串珠、箭头与折叠隐藏 ----
+
+describe('折叠滑块行（#67：结绳记事）', () => {
+  it('滑块行显隐唯一开关是侧栏容器的 outline-active 类（默认隐藏，与面板同模式）', () => {
+    const hidden = rule('#app .vsidian-sidebar .vsidian-outline-slider')
+    expect(hidden).toMatch(/display:\s*none/)
+    const shown = rule('#app .vsidian-sidebar.vsidian-outline-active .vsidian-outline-slider')
+    expect(shown).toMatch(/display:\s*flex/)
+  })
+
+  it('圆点按钮为正圆小点：border-radius 50% + 固定宽高 + 空心面（透明回退）', () => {
+    const dot = rule('.vsidian-sidebar .vsidian-outline-slider-dot')
+    expect(dot).toMatch(/border-radius:\s*50%/)
+    expect(dot).toMatch(/width:\s*8px/)
+    expect(dot).toMatch(/height:\s*8px/)
+    // 空闲珠空心（侧栏背景遮线、透明主题回退穿珠可见）——当前档与空闲档
+    // 的用户可见差异唯一来源是 active 类规则（实心填充 + 描边跟随）
+    expect(dot).toMatch(/background:\s*var\(--vscode-sideBar-background,\s*transparent\)/)
+    expect(dot).toMatch(/border:\s*1px solid/)
+  })
+
+  it('当前档圆点实心高亮：active 类规则是唯一差异来源（颜色跟随 VSCode 变量）', () => {
+    const active = rule(
+      '.vsidian-sidebar .vsidian-outline-slider-dot.vsidian-outline-slider-active',
+    )
+    expect(active).toMatch(/background:\s*var\(--vscode-button-background/)
+  })
+
+  it('横线串联（结绳意象）：滑块行 ::before 贯穿横线规则存在', () => {
+    expect(css, '滑块行应有 ::before 横线规则').toMatch(
+      /\.vsidian-sidebar \.vsidian-outline-slider::before/,
+    )
+  })
+})
+
+describe('折叠箭头与折叠隐藏（#67）', () => {
+  it('箭头为条目内图标按钮：inline-flex、透明底、无边框、指针形态', () => {
+    const chevron = rule('.vsidian-sidebar .vsidian-outline-item .vsidian-outline-chevron')
+    expect(chevron).toMatch(/display:\s*inline-flex/)
+    expect(chevron).toMatch(/background:\s*transparent/)
+    expect(chevron).toMatch(/border:\s*none/)
+    expect(chevron).toMatch(/cursor:\s*pointer/)
+  })
+
+  it('箭头 SVG 尺寸钉住（16px，与侧栏图标口径一致）', () => {
+    expect(rule('.vsidian-sidebar .vsidian-outline-item .vsidian-outline-chevron svg'))
+      .toMatch(/width:\s*16px/)
+  })
+
+  it('折叠态箭头旋转：collapsed 类规则是两态差异唯一来源', () => {
+    const rotated = rule(
+      '.vsidian-sidebar .vsidian-outline-item.vsidian-outline-collapsed .vsidian-outline-chevron',
+    )
+    expect(rotated).toMatch(/transform:\s*rotate\(/)
+  })
+
+  it('折叠隐藏：hidden 条目 display:none（类切换是唯一显隐开关）', () => {
+    const hidden = rule('.vsidian-sidebar .vsidian-outline-item.vsidian-outline-hidden')
+    expect(hidden).toMatch(/display:\s*none/)
+  })
+
+  it('占位与箭头同宽对齐（无子项条目文字与有子项条目文字左缘对齐）', () => {
+    const spacer = rule('.vsidian-sidebar .vsidian-outline-item .vsidian-outline-chevron-spacer')
+    expect(spacer).toMatch(/width:\s*18px/)
+    expect(rule('.vsidian-sidebar .vsidian-outline-item .vsidian-outline-chevron'))
+      .toMatch(/width:\s*18px/)
+  })
+})
+
+// ---- #68 工具条与标题搜索：工具条行、按钮形态、搜索框、片段高亮、无匹配占位 ----
+
+describe('大纲工具条行（#68）', () => {
+  it('工具条行显隐唯一开关是侧栏容器的 outline-active 类（默认隐藏，与面板同模式）', () => {
+    const hidden = rule('#app .vsidian-sidebar .vsidian-outline-toolbar')
+    expect(hidden).toMatch(/display:\s*none/)
+    const shown = rule('#app .vsidian-sidebar.vsidian-outline-active .vsidian-outline-toolbar')
+    expect(shown).toMatch(/display:\s*flex/)
+  })
+
+  it('按钮为透明图标按钮（与侧栏顶栏按钮同形态：透明底、无边框、悬停高亮）', () => {
+    const btn = rule('#app .vsidian-sidebar .vsidian-outline-toolbar button')
+    expect(btn).toMatch(/background:\s*transparent/)
+    expect(btn).toMatch(/border:\s*none/)
+    expect(css, '悬停高亮规则应存在').toMatch(
+      /#app \.vsidian-sidebar \.vsidian-outline-toolbar button:hover/,
+    )
+    // 图标尺寸钉住（选择器命中 DOM 实际结构；类名写错时 SVG 回退默认尺寸）
+    expect(rule('#app .vsidian-sidebar .vsidian-outline-toolbar button svg'))
+      .toMatch(/width:\s*16px/)
+  })
+
+  it('搜索输入框占余宽（flex:1）且不撑破侧栏（min-width:0），VSCode 输入变量配色', () => {
+    const input = rule('#app .vsidian-sidebar .vsidian-outline-toolbar .vsidian-outline-search')
+    expect(input).toMatch(/flex:\s*1\s+1\s+auto/)
+    expect(input).toMatch(/min-width:\s*0/)
+    expect(input).toMatch(/background:\s*var\(--vscode-input-background/)
+    expect(input).toMatch(/color:\s*var\(--vscode-input-foreground/)
+  })
+
+  it('搜索框占位文案弱化（placeholder 前景变量）', () => {
+    expect(css, 'placeholder 规则应存在').toMatch(
+      /\.vsidian-sidebar \.vsidian-outline-toolbar \.vsidian-outline-search::placeholder/,
+    )
+  })
+})
+
+describe('搜索片段高亮与无匹配占位（#68）', () => {
+  it('命中片段 mark：查找高亮变量配色的背景规则（样式失效时无背景可被 computed 断言捕获）', () => {
+    const mark = rule('.vsidian-sidebar .vsidian-outline-item mark.vsidian-outline-search-hit')
+    expect(mark).toMatch(/background:\s*var\(--vscode-editor-findMatchHighlightBackground/)
+    expect(mark).toMatch(/color:\s*inherit/)
+  })
+
+  it('无匹配占位：弱化文字（用户可读的「无匹配」反馈，与空态同口径）', () => {
+    const nomatch = rule('.vsidian-sidebar .vsidian-outline-nomatch')
+    expect(nomatch).toMatch(/opacity:\s*0\.7/)
+    expect(nomatch).toMatch(/padding:\s*8px 10px/)
+  })
+})
+
+// ---- #69 右键菜单与重命名：浮层定位、菜单项、级联子菜单、编辑态 ----
+
+describe('右键菜单浮层（#69）', () => {
+  it('侧栏 position:relative（菜单 absolute 锚定的前提）', () => {
+    // declaration 过滤：@media (reduced-motion) 内同名选择器不参与（只一个主块带 position）
+    expect(rule('#app .vsidian-sidebar', /position:\s*relative/))
+      .toMatch(/position:\s*relative/)
+  })
+
+  it('菜单容器 absolute 浮层：背景跟随 VSCode 菜单变量、边框圆角、z-index 抬升', () => {
+    const menu = rule('.vsidian-sidebar .vsidian-outline-menu')
+    expect(menu).toMatch(/position:\s*absolute/)
+    expect(menu).toMatch(/background:\s*var\(--vscode-menu-background/)
+    expect(menu).toMatch(/border:\s*1px solid var\(--vscode-menu-border/)
+    expect(menu).toMatch(/z-index:\s*30/)
+    expect(menu).toMatch(/min-width:\s*160px/)
+  })
+
+  it('菜单项按钮：全宽块状、透明底、指针形态', () => {
+    const item = rule('.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-item')
+    expect(item).toMatch(/display:\s*block/)
+    expect(item).toMatch(/width:\s*100%/)
+    expect(item).toMatch(/background:\s*transparent/)
+    expect(item).toMatch(/border:\s*none/)
+    expect(item).toMatch(/cursor:\s*pointer/)
+    expect(item).toMatch(/text-align:\s*left/)
+  })
+
+  it('菜单项 hover/focus 高亮：两态规则存在（键盘可达的视觉反馈）', () => {
+    const hover = rule('.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-item:not(:disabled):hover')
+    expect(hover).toMatch(/background:\s*var\(--vscode-menu-selectionBackground|list-hoverBackground/)
+    expect(css, 'focus-visible 规则应存在').toMatch(
+      /\.vsidian-outline-menu-item:not\(:disabled\):focus-visible/,
+    )
+  })
+
+  it('禁用项弱化（递归展开在无子项条目上）：透明度与默认指针', () => {
+    const disabled = rule('.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-item:disabled')
+    expect(disabled).toMatch(/opacity:\s*0\.4/)
+    expect(disabled).toMatch(/cursor:\s*default/)
+  })
+
+  it('删除项 danger 红字（破坏性命令的视觉差异锚点）', () => {
+    const danger = rule('.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-danger')
+    expect(danger).toMatch(/color:\s*var\(--vscode-errorForeground/)
+  })
+
+  it('子菜单指示箭头（cue）：右移留隙并弱化（有子菜单父项的可读暗示）', () => {
+    const cue = rule('.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-cue')
+    expect(cue).toMatch(/margin-left:\s*1\.5em/)
+    expect(cue).toMatch(/opacity:\s*0\.7/)
+  })
+
+  it('级联子菜单默认隐藏，父项 hover/focus-within 展开（CSS 显隐唯一开关）', () => {
+    const hidden = rule('.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-submenu')
+    expect(hidden).toMatch(/display:\s*none/)
+    expect(hidden).toMatch(/position:\s*absolute/)
+    expect(hidden).toMatch(/left:\s*100%/)
+    const hover = rule('.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-host:hover .vsidian-outline-menu-submenu')
+    expect(hover).toMatch(/display:\s*block/)
+    const focus = rule('.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-host:focus-within .vsidian-outline-menu-submenu')
+    expect(focus).toMatch(/display:\s*block/)
+  })
+
+  it('父项宿主 relative（子菜单 left:100% 的定位锚）', () => {
+    expect(rule('.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-host'))
+      .toMatch(/position:\s*relative/)
+  })
+
+  it('重命名输入框：撑满条目、继承字号、VSCode 输入框边框变量', () => {
+    const input = rule('.vsidian-sidebar .vsidian-outline-item .vsidian-outline-rename-input')
+    expect(input).toMatch(/width:\s*100%/)
+    expect(input).toMatch(/min-width:\s*0/)
+    expect(input).toMatch(/font-size:\s*var\(--vsidian-outline-font-size,\s*12px\)/)
+    expect(input).toMatch(/background:\s*var\(--vscode-input-background/)
+    expect(input).toMatch(/border:\s*1px solid var\(--vscode-input-border/)
+    expect(input).toMatch(/color:\s*var\(--vscode-input-foreground/)
+  })
+})
+
+// ---- #70 拖拽排序：源条目提示与三态落点指示 ----
+
+describe('拖拽视觉反馈（#70：类切换是唯一差异来源）', () => {
+  it('拖动中源条目弱化（opacity 提示"这段正在被搬走"，不改变布局）', () => {
+    expect(rule('.vsidian-sidebar .vsidian-outline-item.vsidian-outline-dragging'))
+      .toMatch(/opacity:\s*0\.45/)
+  })
+
+  it('before/after 落点 = 目标上/下缘插入线（inset box-shadow，焦点变量配色）', () => {
+    const before = rule('.vsidian-sidebar .vsidian-outline-item.vsidian-outline-drop-before')
+    expect(before).toMatch(/box-shadow:\s*inset 0 2px 0 0 var\(--vscode-focusBorder/)
+    const after = rule('.vsidian-sidebar .vsidian-outline-item.vsidian-outline-drop-after')
+    expect(after).toMatch(/box-shadow:\s*inset 0 -2px 0 0 var\(--vscode-focusBorder/)
+  })
+
+  it('inside 落点 = 目标包裹高亮（outline 内缩 + 半透明背景，与 located 同变量族）', () => {
+    const inside = rule('.vsidian-sidebar .vsidian-outline-item.vsidian-outline-drop-inside')
+    expect(inside).toMatch(/outline:\s*1px solid var\(--vscode-focusBorder/)
+    expect(inside).toMatch(/background:\s*var\(--vscode-list-hoverBackground,\s*rgba\(/)
+    expect(inside).toMatch(/border-radius:\s*4px/)
+  })
+})

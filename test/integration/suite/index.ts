@@ -17,10 +17,12 @@ export async function run(): Promise<void> {
   if (ext && !ext.isActive) {
     await ext.activate()
   }
-  // 诊断过滤：VSIDIAN_IT_FILTER=子串 只跑名称含该子串的用例（失败定位用）
-  const only = process.env.VSIDIAN_IT_FILTER
+  // 定向重跑：VSIDIAN_TEST_CASES=子串（逗号分隔任一命中即跑）只跑匹配
+  // 用例（开发调试用；缺省跑全量）。代码块卡片分支曾用单子串变量
+  // VSIDIAN_IT_FILTER（d351eda），main 侧 #86 已落多子串版本，合并取超集
+  const filter = process.env['VSIDIAN_TEST_CASES']
   for (const [name, fn] of cases) {
-    if (only && !name.includes(only)) {
+    if (filter && !filter.split(',').some((part) => name.includes(part.trim()))) {
       continue
     }
     try {

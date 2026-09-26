@@ -38,6 +38,16 @@ body {
   /* 代码块卡片底色（#79 起公开变量，选择器映射表登记；头部与代码区共用，
      阅读卡片同源） */
   --vsidian-code-card-background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.12));
+  /* ---- #65 标题层级色变量族：正文标题（live 行级 / 阅读块级）与大纲条目
+     共用同一变量族（结构装饰与正文主题同源，不做读值复制）。当前主题无
+     分级着色（各级同默认前景色）；未来主题分级着色仅改此族定义，一处
+     定义三处生效。变量引用关系由 outlineCssContract 契约测试钉住 */
+  --vsidian-heading-color-1: var(--vscode-editor-foreground);
+  --vsidian-heading-color-2: var(--vscode-editor-foreground);
+  --vsidian-heading-color-3: var(--vscode-editor-foreground);
+  --vsidian-heading-color-4: var(--vscode-editor-foreground);
+  --vsidian-heading-color-5: var(--vscode-editor-foreground);
+  --vsidian-heading-color-6: var(--vscode-editor-foreground);
 }
 
 #app .cm-editor {
@@ -106,12 +116,12 @@ body {
   color: var(--vscode-editor-foreground);
 }
 
-#app .cm-editor .cm-scroller .vsidian-heading-line-1 { font-size: 1.55em; }
-#app .cm-editor .cm-scroller .vsidian-heading-line-2 { font-size: 1.35em; }
-#app .cm-editor .cm-scroller .vsidian-heading-line-3 { font-size: 1.2em; }
-#app .cm-editor .cm-scroller .vsidian-heading-line-4 { font-size: 1.1em; }
-#app .cm-editor .cm-scroller .vsidian-heading-line-5 { font-size: 1em; }
-#app .cm-editor .cm-scroller .vsidian-heading-line-6 { font-size: 1em; }
+#app .cm-editor .cm-scroller .vsidian-heading-line-1 { font-size: 1.55em; color: var(--vsidian-heading-color-1); }
+#app .cm-editor .cm-scroller .vsidian-heading-line-2 { font-size: 1.35em; color: var(--vsidian-heading-color-2); }
+#app .cm-editor .cm-scroller .vsidian-heading-line-3 { font-size: 1.2em; color: var(--vsidian-heading-color-3); }
+#app .cm-editor .cm-scroller .vsidian-heading-line-4 { font-size: 1.1em; color: var(--vsidian-heading-color-4); }
+#app .cm-editor .cm-scroller .vsidian-heading-line-5 { font-size: 1em; color: var(--vsidian-heading-color-5); }
+#app .cm-editor .cm-scroller .vsidian-heading-line-6 { font-size: 1em; color: var(--vsidian-heading-color-6); }
 
 /* ---- 编辑器铬件明暗主题（CSP 修复后 baseTheme 复活的配套）----
    光标与选区颜色不在此覆盖：syncController 以 darkCompartment 声明
@@ -170,6 +180,8 @@ body {
   flex: 0 0 auto;
   width: 0;
   box-sizing: border-box;
+  /* #69 右键菜单浮层的定位锚（菜单 absolute 挂在侧栏内，坐标相对侧栏） */
+  position: relative;
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
@@ -317,6 +329,10 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   color: inherit;
+  /* #65 字重语义：条目一律常规字重（不继承标题级别的结构性加粗；正文
+     标题行是 600——大纲侧显式钉 400 防意外继承），仅显式 **粗体** 段经
+     下方的 strong 规则加重 */
+  font-weight: 400;
   font-size: var(--vsidian-outline-font-size, 12px);
   line-height: 22px;
   cursor: default;
@@ -325,26 +341,59 @@ body {
 
 .vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-1 {
   padding-inline-start: 0;
+  /* #65 主题色同源：层级颜色引用正文标题的同一变量族（默认前景色），
+     主题分级着色一处定义两处生效 */
+  color: var(--vsidian-heading-color-1);
 }
 
 .vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-2 {
   padding-inline-start: 10px;
+  color: var(--vsidian-heading-color-2);
 }
 
 .vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-3 {
   padding-inline-start: 20px;
+  color: var(--vsidian-heading-color-3);
 }
 
 .vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-4 {
   padding-inline-start: 30px;
+  color: var(--vsidian-heading-color-4);
 }
 
 .vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-5 {
   padding-inline-start: 40px;
+  color: var(--vsidian-heading-color-5);
 }
 
 .vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-6 {
   padding-inline-start: 50px;
+  color: var(--vsidian-heading-color-6);
+}
+
+/* ---- #65 行内样式透传：白名单标记的条目内呈现 ----
+   语义元素（strong/em/code/del）+ 稳定类名双入口（样式与断言的锚点；
+   Obsidian 无对应选择器，本项目自有命名空间，见选择器映射表）。强调语义
+   只认显式标记：strong 700 与条目 400 的对照是用户可见差异；行内代码
+   背景与 live 侧 .vsidian-inline-code 同源变量（--vsidian-live-code-background）。
+   双链/链接为纯文本（无 a 元素），不在此设链接样式 */
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-strong {
+  font-weight: 700;
+}
+
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-emphasis {
+  font-style: italic;
+}
+
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  background-color: var(--vsidian-live-code-background, rgba(128, 128, 128, 0.14));
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-strike {
+  text-decoration: line-through;
 }
 
 /* 空态占位：无标题文档的弱化反馈（保持面板可读内容与高度语义） */
@@ -352,6 +401,362 @@ body {
   opacity: 0.7;
   padding: 8px 10px;
   font-size: var(--vsidian-outline-font-size, 12px);
+}
+
+/* #66 常驻高亮横条：当前控制域条目（视口顶部行向上最近标题）的半透明
+   覆盖背景。类切换（vsidian-outline-located）是两态差异唯一来源——非
+   located 条目无背景规则；颜色跟随 VSCode 变量（无变量主题回退半透明
+   灰），样式失效时无横条可被 computed 断言捕获。这是常亮位置指示器，
+   非滚动瞬时反馈 */
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-located {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.14));
+  border-radius: 4px;
+}
+
+/* ---- #68 大纲工具条行（侧栏顶栏与滑块行之间：跳转到末尾、重置、搜索框）----
+   显隐唯一开关是侧栏容器的 outline-active 类（与面板/滑块行同模式）。
+   按钮与侧栏顶栏按钮同形态（透明底、悬停高亮跟随 VSCode 变量）；搜索框
+   占余宽（flex:1 + min-width:0——长词条不撑破侧栏），配色走 VSCode 输入
+   变量族。可访问口径：按钮 aria-label + 搜索框 aria-label 与 placeholder */
+#app .vsidian-sidebar .vsidian-outline-toolbar {
+  display: none;
+}
+
+#app .vsidian-sidebar.vsidian-outline-active .vsidian-outline-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  width: var(--vsidian-sidebar-width, 280px);
+  box-sizing: border-box;
+  height: 26px;
+  margin: 2px 0 0;
+  padding: 0 10px;
+}
+
+#app .vsidian-sidebar .vsidian-outline-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  cursor: pointer;
+  color: var(--vscode-editor-foreground);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+}
+
+#app .vsidian-sidebar .vsidian-outline-toolbar button:hover,
+#app .vsidian-sidebar .vsidian-outline-toolbar button:focus-visible {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
+  outline: none;
+}
+
+#app .vsidian-sidebar .vsidian-outline-toolbar button svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+#app .vsidian-sidebar .vsidian-outline-toolbar .vsidian-outline-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 22px;
+  box-sizing: border-box;
+  margin-left: 2px;
+  padding: 0 6px;
+  color: var(--vscode-input-foreground, inherit);
+  background: var(--vscode-input-background, rgba(128, 128, 128, 0.12));
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: inherit;
+  outline: none;
+}
+
+#app .vsidian-sidebar .vsidian-outline-toolbar .vsidian-outline-search:focus {
+  border-color: var(--vscode-focusBorder, #4fc1ff);
+}
+
+#app .vsidian-sidebar .vsidian-outline-toolbar .vsidian-outline-search::placeholder {
+  color: var(--vscode-input-placeholderForeground, rgba(128, 128, 128, 0.7));
+}
+
+/* #68 命中片段高亮：mark 只包命中子串（文本层切分，与语义元素正交）。
+   背景跟随查找高亮变量（与正文查找命中同族视觉语言）；无变量主题回退
+   半透明橙——样式失效时 mark 无背景可被集成 computed 断言捕获 */
+.vsidian-sidebar .vsidian-outline-item mark.vsidian-outline-search-hit {
+  background: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 146, 25, 0.35));
+  color: inherit;
+  border-radius: 2px;
+  padding: 0;
+}
+
+/* #68 无匹配占位：有词条零命中的可读反馈（与「无标题」空态同口径弱化） */
+.vsidian-sidebar .vsidian-outline-nomatch {
+  opacity: 0.7;
+  padding: 8px 10px;
+  font-size: var(--vsidian-outline-font-size, 12px);
+}
+
+/* ---- #67 折叠滑块行（结绳记事：六圆点 + 横线串联）----
+   显隐唯一开关是侧栏容器的 outline-active 类（与面板同模式）。六档：
+   0=No-Expand（全部折叠只露顶层）、1–5=展开到 H1–H5（展开所有 level≤n
+   且有子项的父节点）。当前档与空闲档的用户可见差异唯一来源是圆点的
+   active 类规则（空闲珠=透明面描边圆环、当前珠=实心），样式失效时
+   六珠同态可被集成 computed 断言捕获。横线由行容器的 ::before 绘制
+   （贯穿珠心，珠面相对定位盖线）。可访问口径：role=group 六按钮组 */
+#app .vsidian-sidebar .vsidian-outline-slider {
+  display: none;
+}
+
+#app .vsidian-sidebar.vsidian-outline-active .vsidian-outline-slider {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  position: relative;
+  width: var(--vsidian-sidebar-width, 280px);
+  box-sizing: border-box;
+  height: 22px;
+  margin: 2px 0;
+  padding: 0 24px;
+}
+
+/* 串珠横线：绝对定位贯穿行中心（行高 22px，珠心 11px；线高 2px 居中） */
+.vsidian-sidebar .vsidian-outline-slider::before {
+  content: '';
+  position: absolute;
+  left: 28px;
+  right: 28px;
+  top: 10px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.4));
+}
+
+/* 圆点（珠）：8px 正圆；空闲珠空心（透明面 + 描边圆环，主题侧栏背景
+   透明时绳线穿珠可见——结绳意象），当前珠实心。珠面相对定位抬到线之上 */
+.vsidian-sidebar .vsidian-outline-slider-dot {
+  display: block;
+  position: relative;
+  z-index: 1;
+  width: 8px;
+  height: 8px;
+  box-sizing: border-box;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--vscode-descriptionForeground, rgba(128, 128, 128, 0.7));
+  background: var(--vscode-sideBar-background, transparent);
+  cursor: pointer;
+}
+
+.vsidian-sidebar .vsidian-outline-slider-dot:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #4fc1ff);
+  outline-offset: 2px;
+}
+
+.vsidian-sidebar .vsidian-outline-slider-dot.vsidian-outline-slider-active {
+  border-color: var(--vscode-button-background, #0e639c);
+  background: var(--vscode-button-background, #0e639c);
+}
+
+/* ---- #67 手动折叠：条目箭头与折叠隐藏 ----
+   有子项条目前置箭头按钮（点击折叠/展开；点文字仍跳转——事件按目标
+   分流），无子项条目渲染同宽占位保持文字左缘对齐。折叠中的父节点条目
+   加 collapsed 类：箭头旋转 -90° 朝右是两态差异唯一来源。折叠遮蔽的
+   条目加 hidden 类：display:none 是唯一显隐开关（DOM 保留——索引与
+   outlineItems 同序的不变式不因折叠破坏，高亮回退按可见代表施加） */
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 22px;
+  padding: 0;
+  box-sizing: border-box;
+  margin: 0;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  vertical-align: middle;
+  flex: 0 0 auto;
+}
+
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-chevron:hover,
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-chevron:focus-visible {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
+  outline: none;
+}
+
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-chevron svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+/* 展开态箭头朝下（图标本体）；折叠态由 collapsed 类旋转朝右 */
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-collapsed .vsidian-outline-chevron {
+  transform: rotate(-90deg);
+}
+
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-chevron-spacer {
+  display: inline-block;
+  width: 18px;
+  height: 22px;
+}
+
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-hidden {
+  display: none;
+}
+
+/* ---- #69 右键菜单：自绘浮层（挂侧栏内 absolute）、级联子菜单、重命名 ----
+   菜单项一律 button（键盘 Tab/Enter/空格可达）；子菜单显隐唯一开关是
+   父项宿主的 :hover/:focus-within 规则（无 JS 展开状态——键盘聚焦父项
+   时子菜单同样展开，可达性由 CSS 承载）。颜色跟随 VSCode 菜单变量
+   （menu-background/selectionBackground 等），无变量主题回退半透明值 */
+.vsidian-sidebar .vsidian-outline-menu {
+  position: absolute;
+  z-index: 30;
+  min-width: 160px;
+  max-width: calc(100% - 8px);
+  box-sizing: border-box;
+  padding: 4px;
+  background: var(--vscode-menu-background, rgba(37, 37, 38, 0.98));
+  border: 1px solid var(--vscode-menu-border, rgba(128, 128, 128, 0.4));
+  border-radius: 5px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+  color: var(--vscode-menu-foreground, var(--vscode-editor-foreground));
+}
+
+.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-host {
+  position: relative; /* 级联子菜单 left:100% 的定位锚 */
+}
+
+.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-item {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 10px;
+  font-size: var(--vsidian-outline-font-size, 12px);
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: inherit;
+}
+
+.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-item:not(:disabled):hover {
+  background: var(--vscode-menu-selectionBackground, rgba(9, 71, 113, 0.55));
+  color: var(--vscode-menu-selectionForeground, inherit);
+  outline: none;
+}
+
+.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-item:not(:disabled):focus-visible {
+  background: var(--vscode-menu-selectionBackground, rgba(9, 71, 113, 0.55));
+  color: var(--vscode-menu-selectionForeground, inherit);
+  outline: none;
+}
+
+.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 破坏性命令（删除）红字：danger 类是唯一差异来源 */
+.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-danger {
+  color: var(--vscode-errorForeground, #f48771);
+}
+
+/* 子菜单指示箭头（▸）：随父项文字右侧（margin-left:auto 不适用 block
+   布局，用前置空隙） */
+.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-cue {
+  margin-left: 1.5em;
+  opacity: 0.7;
+}
+
+/* 级联子菜单：默认隐藏，父项宿主 hover/focus-within 展开（显隐唯一开关）。
+   left:100% 挂父项右侧；超出侧栏右缘时由菜单容器 max-width 约束行宽 */
+.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-submenu {
+  display: none;
+  position: absolute;
+  left: 100%;
+  top: -5px; /* 对齐父项宿主的菜单容器 padding（4px）+1px 边框 */
+  min-width: 150px;
+  box-sizing: border-box;
+  padding: 4px;
+  background: var(--vscode-menu-background, rgba(37, 37, 38, 0.98));
+  border: 1px solid var(--vscode-menu-border, rgba(128, 128, 128, 0.4));
+  border-radius: 5px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+}
+
+.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-host:hover .vsidian-outline-menu-submenu {
+  display: block;
+}
+
+.vsidian-sidebar .vsidian-outline-menu .vsidian-outline-menu-host:focus-within .vsidian-outline-menu-submenu {
+  display: block;
+}
+
+/* 重命名行内编辑态：条目内容区被 input 替换（原文可含行内标记）。
+   撑满条目剩余宽度、继承条目字号；VSCode 输入框三变量 */
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-rename-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  height: 20px;
+  padding: 0 4px;
+  font-size: var(--vsidian-outline-font-size, 12px);
+  font-family: inherit;
+  line-height: 18px;
+  color: var(--vscode-input-foreground, inherit);
+  background: var(--vscode-input-background, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--vscode-input-border, rgba(128, 128, 128, 0.5));
+  border-radius: 2px;
+  outline: none;
+}
+
+/* ---- #70 大纲拖拽排序：源条目提示与三态落点指示 ----
+   类切换是两态差异唯一来源（与 located/collapsed 同模式）：
+   - dragging：拖动中的源条目整体弱化（源位置提示——用户看到"这段正在
+     被搬走"），不改变布局（透明度不触发重排）
+   - drop-before / drop-after：目标条目上/下缘插入线（inset box-shadow，
+     不占布局空间、不与 located 背景冲突），颜色跟随 VSCode 焦点变量
+   - drop-inside：目标包裹高亮（outline 内缩一圈 + 半透明背景，与 located
+     同变量族）——「放入成为子标题」的视觉区分
+   拖拽入口是鼠标专用（review-loops 第 2 轮披露）：触屏按住条目会被浏览器
+   接管为滚动并派发 pointercancel，会话按取消处理（零写回）。此处刻意不加
+   touch-action: none——该声明会让整个大纲面板失去触屏滚动，而面板滚动是
+   面板的核心可用性；触屏排序当前不支持（限制见人工验证清单） */
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-dragging {
+  opacity: 0.45;
+}
+
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-drop-before {
+  box-shadow: inset 0 2px 0 0 var(--vscode-focusBorder, #4fc1ff);
+}
+
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-drop-after {
+  box-shadow: inset 0 -2px 0 0 var(--vscode-focusBorder, #4fc1ff);
+}
+
+.vsidian-sidebar .vsidian-outline-item.vsidian-outline-drop-inside {
+  outline: 1px solid var(--vscode-focusBorder, #4fc1ff);
+  outline-offset: -1px;
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.14));
+  border-radius: 4px;
 }
 
 /* 侧栏顶栏按钮（#54「大纲」）：与主编辑区顶栏图标按钮同形态（透明底、
@@ -985,12 +1390,12 @@ body {
   max-width: var(--vsidian-reading-max-width);
 }
 
-#app .vsidian-view-reading .vsidian-reading-heading-1 { font-size: 1.55em; font-weight: 600; margin: 0.6em 0 0.4em; }
-#app .vsidian-view-reading .vsidian-reading-heading-2 { font-size: 1.35em; font-weight: 600; margin: 0.6em 0 0.4em; }
-#app .vsidian-view-reading .vsidian-reading-heading-3 { font-size: 1.2em; font-weight: 600; margin: 0.6em 0 0.4em; }
-#app .vsidian-view-reading .vsidian-reading-heading-4 { font-size: 1.1em; font-weight: 600; margin: 0.6em 0 0.4em; }
-#app .vsidian-view-reading .vsidian-reading-heading-5 { font-size: 1em; font-weight: 600; margin: 0.6em 0 0.4em; }
-#app .vsidian-view-reading .vsidian-reading-heading-6 { font-size: 1em; font-weight: 600; margin: 0.6em 0 0.4em; }
+#app .vsidian-view-reading .vsidian-reading-heading-1 { font-size: 1.55em; font-weight: 600; margin: 0.6em 0 0.4em; color: var(--vsidian-heading-color-1); }
+#app .vsidian-view-reading .vsidian-reading-heading-2 { font-size: 1.35em; font-weight: 600; margin: 0.6em 0 0.4em; color: var(--vsidian-heading-color-2); }
+#app .vsidian-view-reading .vsidian-reading-heading-3 { font-size: 1.2em; font-weight: 600; margin: 0.6em 0 0.4em; color: var(--vsidian-heading-color-3); }
+#app .vsidian-view-reading .vsidian-reading-heading-4 { font-size: 1.1em; font-weight: 600; margin: 0.6em 0 0.4em; color: var(--vsidian-heading-color-4); }
+#app .vsidian-view-reading .vsidian-reading-heading-5 { font-size: 1em; font-weight: 600; margin: 0.6em 0 0.4em; color: var(--vsidian-heading-color-5); }
+#app .vsidian-view-reading .vsidian-reading-heading-6 { font-size: 1em; font-weight: 600; margin: 0.6em 0 0.4em; color: var(--vsidian-heading-color-6); }
 
 /* markdown-it 的语义标题保留在块内；字号与间距由阅读块统一控制，
    避免浏览器 h1..h6 默认样式再次放大字号和上下留白。 */

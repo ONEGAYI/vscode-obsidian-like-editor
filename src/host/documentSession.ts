@@ -61,10 +61,14 @@ export interface PanelPort {
   /** #33 设置快照拉取（vscode 层注入：SettingsService.getSnapshot；面板
    *  init 后的 settings.get 以 settings.snapshot 响应） */
   requestSettings?(): SettingsPayload
-  /** #81 代码块复制执行（vscode 层注入：vscode.env.clipboard.writeText）；
-   *  入参 text 已按文档 EOL 归一（CRLF 文档收到 \r\n 文本）；只读交互，
-   *  暂停态同样放行 */
-  copyCode?(text: string): void
+  /** #69 剪贴板写（直写）：vscode 层注入 env.clipboard.writeText。只读
+   *  交互（不写文档、不入撤销栈），暂停态同样放行。#81 代码块复制同走
+   *  此端口——入参 text 已由会话按文档 EOL 归一（CRLF 文档收到 \r\n） */
+  writeClipboard?(text: string): void
+  /** #69 剪贴板写（标题链接）：`[[笔记名#标题]]` 的拼接在 vscode 层——
+   *  笔记名 = docUri 文件名去扩展名（Obsidian 语义），标题为 webview
+   *  上报的条目原文（含行内标记，与宿主 findHeadingOffset 的字面匹配同源） */
+  writeHeadingLinkClipboard?(docUri: string, heading: string): void
 }
 
 /** 会话通知（#4）：冲突暂停、复制请求、面板关闭时存在未确认输入等需要
@@ -296,6 +300,16 @@ export class DocumentSession {
         // #33 设置保存只在设置页 webview 链路（settingsPage 模块）处理，
         // 编辑器面板不会发出；到达此处无副作用
         return Promise.resolve()
+      case 'clipboard.write':
+        // #69 剪贴板写：与 link.activate 同口径的只读交互（不受写回暂停
+        // 影响）；两变体（text 直写 / linkHeading 宿主拼标题链接）分别
+        // 转发到注入端口
+        if ('text' in message) {
+          panel.port.writeClipboard?.(message.text)
+        } else if (message.linkHeading !== undefined) {
+          panel.port.writeHeadingLinkClipboard?.(message.linkHeading.docUri, message.linkHeading.heading)
+        }
+        return Promise.resolve()
       case 'ready': {
         const wasReady = panel.ready
         this.sendInit(panel)
@@ -448,7 +462,7 @@ export class DocumentSession {
         if (!panel.ready || message.docUri !== this.docUri) {
           return Promise.resolve()
         }
-        panel.port.copyCode?.(this.doc.eol === 2 ? message.text.replace(/\n/g, '\r\n') : message.text)
+        panel.port.writeClipboard?.(this.doc.eol === 2 ? message.text.replace(/\n/g, '\r\n') : message.text)
         return Promise.resolve()
       }
       case 'image.request': {

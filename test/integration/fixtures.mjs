@@ -311,6 +311,71 @@ const OUTLINE_LONG_DOC = (() => {
   return out.join('\n')
 })()
 
+// #65 大纲样式透传样例：白名单四标记（粗体/斜体/行内代码/删除线）、
+// 嵌套粗斜体、双链别名与链接文字的纯文本降级——plainText/spans 断言载体
+const OUTLINE_STYLE_DOC = [
+  '# **重点** 结论',
+  '## *斜体* 与 `代码`',
+  '### ~~删除线~~ 与 [[目标笔记|显示别名]]',
+  '#### [链接文字](https://example.com) 尾注',
+  '##### ***粗斜*** 与普通',
+  '',
+].join('\n')
+// #69 右键菜单样例：多级嵌套 + 跨级（H4 挂 H2 下）+ 行内标记标题（重命名
+// 的资产保留断言）+ Setext（调级/重命名规范化 ATX 的载体）+ 文末段。
+// 条目序列：0 主(H1) 1 加粗 Alpha(H2) 2 Alpha 子(H3) 3 Beta(H2) 4 Beta 深(H4)
+//           5 Setext 标题(H1) 6 第二顶(H1)
+const OUTLINE_MENU_DOC = [
+  '# 主标题',
+  '',
+  '## **加粗** Alpha',
+  '',
+  'Alpha 内容。',
+  '',
+  '### Alpha 子',
+  '',
+  '子内容。',
+  '',
+  '## Beta',
+  '',
+  'Beta 内容。',
+  '',
+  '#### Beta 深',
+  '',
+  '深内容。',
+  '',
+  'Setext 标题',
+  '============',
+  '',
+  'Setext 内容。',
+  '',
+  '# 第二顶',
+  '',
+  '内容。',
+  '',
+].join('\n')
+
+// #70 拖拽排序样例：frontmatter（控制域外零变更锚点）+ 跨级（H4 挂 H2 下）
+// + 文末段无尾换行（插入补换行/前置换行的边界载体）。
+// 条目序列：0 甲(H1) 1 乙(H2) 2 丁(H4,跨级挂乙) 3 丙(H2) 4 戊(H1)
+// 子树：甲=[甲,乙,丁,丙]（乙丁丙全挂甲下）、乙=[乙,丁]、丁=[丁]、丙=[丙]、戊=[戊]
+const OUTLINE_DRAG_DOC = [
+  '---',
+  'title: 拖拽',
+  '---',
+  '',
+  '# 甲',
+  '甲内容。',
+  '## 乙',
+  '乙内容。',
+  '#### 丁',
+  '丁内容。',
+  '## 丙',
+  '丙内容。',
+  '# 戊',
+  '戊内容。',
+].join('\n')
+
 // #11 双链样例：合法四形态（按名/显式路径/别名/标题）+ 降级形态
 // （嵌入/块引用/残缺）+ 代码上下文（围栏与行内代码内不解析）
 const WIKILINKS_DOC = [
@@ -503,6 +568,9 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   writeFileSync(path.join(wsDir, 'linenumbers.md'), LINENUMBERS_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'outline.md'), OUTLINE_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'outline-long.md'), OUTLINE_LONG_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'outline-style.md'), OUTLINE_STYLE_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'outline-menu.md'), OUTLINE_MENU_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'outline-drag.md'), OUTLINE_DRAG_DOC, 'utf8')
   writeFileSync(path.join(wsDir, '链接目标.md'), '# 链接目标\n中文目标文档内容。\n', 'utf8')
   writeFileSync(path.join(wsDir, '无扩展名目标.md'), '# 无扩展名目标\n省略扩展名解析目标。\n', 'utf8')
   mkdirSync(path.join(wsDir, '子 目录'), { recursive: true })

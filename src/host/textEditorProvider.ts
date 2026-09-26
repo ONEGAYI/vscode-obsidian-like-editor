@@ -157,6 +157,33 @@ function imageResourceRoot(document: vscode.TextDocument): vscode.Uri {
   )
 }
 
+/** #69 笔记名（标题链接 `[[笔记名#标题]]` 的锚）：docUri 字符串 → 文件名
+ *  去扩展名（Obsidian 语义：不含路径不含 .md）。URI 解析失败回退原文。
+ *  review-loops 第 2 轮披露：笔记名不做转义（理由与标题侧 outlineLinkHeading
+ *  同口径——形态学不认 `\]`/`\|`/`\#`，转义是空操作），故文件名含 `|`/`]`/`#`
+ *  时该链接无法表达这个目标：`|` 被当作别名分隔符（链接静默指向按名解析出的
+ *  另一笔记）、`]` 提前闭合、`#` 起标题分隔段。属 wikilink 形态学已知限制，
+ *  与标题侧同口径（限制见人工验证清单） */
+export function outlineNoteNameOf(docUri: string): string {
+  try {
+    const fsPath = vscode.Uri.parse(docUri).fsPath
+    const base = path.basename(fsPath)
+    return base.replace(/\.[^.]+$/, '')
+  } catch {
+    return docUri
+  }
+}
+
+/** 标题进 wikilink 的文本：原样拼接，不做反斜杠转义（review-loops 第 2 轮）。
+ *  双链形态学（src/shared/wikilink.ts）不认 `\]`/`\|`/`\#`——转义后要么仍切
+ *  别名（`\|`），要么整条不命中（`]` 触发扫描守卫、`#` 触发标题内禁字符），
+ *  转义只是凭空多出反斜杠；Obsidian 同样没有 wikilink 内的转义语法。故标题
+ *  含 `]`/`|`/`#`/`^` 时链接无法表达该标题，属形态学已知限制（构造时不做
+ *  无效改写，限制见人工验证清单） */
+function outlineLinkHeading(heading: string): string {
+  return heading
+}
+
 /** 链接目标解析上下文（宿主文件系统语义：扩展宿主进程的平台即工作区
  *  文件系统所在机器——本地 Windows 是 win32，远程 SSH 宿主是远程平台，
  *  两类路径语义天然不混用） */
@@ -702,10 +729,18 @@ export function createTextEditorProvider(
         // 设置页 webview 链路，不经文档会话）
         openSettings: () => settings?.page.open(),
         requestSettings: () => settings?.service.getSnapshot() ?? {},
-        // #81 代码块复制执行端口（vscode.env.clipboard，webview 无剪贴板
-        // 权限）；text 已由会话按文档 EOL 归一，此处原样写入
-        copyCode: (text: string): void => {
+        // #69 剪贴板端口：webview 无 navigator.clipboard 权限面，经宿主
+        // env.clipboard.writeText。标题链接变体在此拼 `[[笔记名#标题]]`——
+        // 笔记名 = docUri 文件名去扩展名（Obsidian 语义），标题为 webview
+        // 上报的条目原文（含行内标记，与 findHeadingOffset 的字面比较同源）。
+        // #81 代码块复制同走 writeClipboard（text 已由会话按文档 EOL 归一）
+        writeClipboard: (text: string) => {
           void vscode.env.clipboard.writeText(text)
+        },
+        writeHeadingLinkClipboard: (docUri: string, heading: string) => {
+          void vscode.env.clipboard.writeText(
+            `[[${outlineNoteNameOf(docUri)}#${outlineLinkHeading(heading)}]]`,
+          )
         },
       })
       entry.panels.set(sessionId, webviewPanel)

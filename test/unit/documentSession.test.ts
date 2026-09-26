@@ -1105,7 +1105,7 @@ describe('#81 codeblock.copy：按文档 EOL 归一后交剪贴板端口', () =>
     const copies: string[] = []
     const id = s.session.attachPanel({
       send: () => undefined,
-      copyCode: (text) => copies.push(text),
+      writeClipboard: (text) => copies.push(text),
     })
     await ready10(s, id)
     await s.send(id, { kind: 'codeblock.copy', sessionId: id, docUri: DOC_URI, text: 'let a = 1\n\nconst b' })
@@ -1125,7 +1125,7 @@ describe('#81 codeblock.copy：按文档 EOL 归一后交剪贴板端口', () =>
     const copies: string[] = []
     const id = s.session.attachPanel({
       send: () => undefined,
-      copyCode: (text) => copies.push(text),
+      writeClipboard: (text) => copies.push(text),
     })
     await s.session.handleWebviewMessage(
       { kind: 'codeblock.copy', sessionId: id, docUri: DOC_URI, text: 'a' },
@@ -1135,5 +1135,45 @@ describe('#81 codeblock.copy：按文档 EOL 归一后交剪贴板端口', () =>
     await ready10(s, id)
     await s.send(id, { kind: 'codeblock.copy', sessionId: id, docUri: 'file:///other.md', text: 'a' })
     expect(copies).toEqual([])
+  })
+})
+
+describe('#69 clipboard.write：两变体路由到注入端口', () => {
+  it('text 变体直写 writeClipboard（原样文本，不拼接）', async () => {
+    const s = setup()
+    const written: string[] = []
+    const links: unknown[] = []
+    const id = s.session.attachPanel({
+      send: () => undefined,
+      writeClipboard: (text) => written.push(text),
+      writeHeadingLinkClipboard: (docUri, heading) => links.push([docUri, heading]),
+    })
+    await s.send(id, { kind: 'clipboard.write', text: '标题\n多行' })
+    expect(written).toEqual(['标题\n多行'])
+    expect(links).toEqual([])
+  })
+
+  it('linkHeading 变体路由 writeHeadingLinkClipboard（docUri + 剥标记标题）', async () => {
+    const s = setup()
+    const written: unknown[] = []
+    const links: Array<[string, string]> = []
+    const id = s.session.attachPanel({
+      send: () => undefined,
+      writeClipboard: (text) => written.push(text),
+      writeHeadingLinkClipboard: (docUri, heading) => links.push([docUri, heading]),
+    })
+    await s.send(id, {
+      kind: 'clipboard.write',
+      linkHeading: { docUri: 'file:///d%3A/notes/a.md', heading: '重点 结论' },
+    })
+    expect(links).toEqual([['file:///d%3A/notes/a.md', '重点 结论']])
+    expect(written).toEqual([])
+  })
+
+  it('未注入端口的面板静默忽略（可选端口，无副作用）', async () => {
+    const s = setup()
+    const id = s.session.attachPanel({ send: () => undefined })
+    await s.send(id, { kind: 'clipboard.write', text: 'x' })
+    // 无异常即通过
   })
 })

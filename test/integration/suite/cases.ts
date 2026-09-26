@@ -484,9 +484,76 @@ interface ViewState {
     toggleIconSizePx: number | null
     panelScrollHeightPx: number | null
     panelClientHeightPx: number | null
-    items: Array<{ level: number; text: string; line: number }>
+    /** #65：items 含 plainText（剥标记可见文本）与 spans（白名单标记区间） */
+    items: Array<{
+      level: number
+      text: string
+      plainText: string
+      spans: Array<{ kind: string; start: number; end: number }>
+      line: number
+    }>
     toggleAriaLabel: string | null
     panelAriaLabel: string | null
+    /** #65 样式透传绘制证据（computed；jsdom 无 CSS 引擎时字段为 null） */
+    style?: {
+      itemFontWeight: string | null
+      strongFontWeight: string | null
+      codeFontFamily: string | null
+      itemFontFamily: string | null
+      itemColor: string | null
+      headingColor: string | null
+    }
+    /** #66 当前控制域条目（视口顶行向上最近标题；null = 无标题/首标题前） */
+    locatedItemIndex: number | null
+    locatedText: string | null
+    /** 高亮横条绘制证据（中心点命中 + computed 背景非全透明） */
+    locatedPainted: boolean
+    /** #67 展开档位（0=全部折叠、1–5=展开到 Hn） */
+    expandLevel: number
+    /** #67 可见条目索引序列（折叠遮蔽后的用户实际可见集） */
+    visibleIndices: number[]
+    /** #67 滑块行绘制证据（elementFromPoint 命中滑块容器） */
+    sliderPainted: boolean
+    /** #67 当前档圆点绘制证据（命中 active 圆点 + computed 背景非全透明） */
+    sliderActiveDotPainted: boolean
+    /** #67 折叠箭头绘制证据（首个箭头中心点命中） */
+    chevronPainted: boolean
+    /** #68 当前搜索词（空串 = 无过滤） */
+    searchQuery: string
+    /** #68 搜索态（词条非空） */
+    searchActive: boolean
+    /** #68 组合可见索引序列（折叠可见 ∩ 搜索保留；搜索关闭时与 visibleIndices 同值） */
+    filteredVisibleIndices: number[]
+    /** #68 工具条行绘制证据（elementFromPoint 命中工具条容器） */
+    toolbarPainted: boolean
+    /** #68 跳转到末尾按钮可访问名称 */
+    jumpBottomAriaLabel: string | null
+    /** #68 重置按钮可访问名称 */
+    resetAriaLabel: string | null
+    /** #68 搜索框 placeholder 文案 */
+    searchPlaceholder: string | null
+    /** #68 命中片段绘制证据（可见条目内 mark 命中 + computed 背景非全透明） */
+    searchHitPainted: boolean
+    /** #68 无匹配占位绘制证据 */
+    nomatchPainted: boolean
+    /** #69 右键菜单打开态 */
+    menuOpen: boolean
+    /** #69 菜单目标条目索引（items 下标；未打开为 null） */
+    menuTargetIndex: number | null
+    /** #69 菜单容器绘制证据（中心点 elementFromPoint 命中自身） */
+    menuPainted: boolean
+    /** #69 级联子菜单可见证据（hover/focus 展开；未展开为 false） */
+    submenuVisible: boolean
+    /** #69 重命名编辑态条目索引（null = 无编辑态） */
+    renamingIndex: number | null
+    /** #70 拖拽态源条目索引（null = 无拖拽；仅 moved 后回报） */
+    draggingIndex: number | null
+    /** #70 有效落点目标索引（null = 未悬停或落点无效） */
+    dropTargetIndex: number | null
+    /** #70 落点三态（null = 无有效落点） */
+    dropPosition: 'before' | 'after' | 'inside' | null
+    /** #70 落点指示绘制证据（指示条目中心命中 + 插入线/包裹高亮可读） */
+    dropHintPainted: boolean
   }
 }
 
@@ -4649,6 +4716,876 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // 收起侧栏收尾
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
     await waitViewState('outline-long.md', (v) => v.sidebar?.open === false)
+  }],
+
+  ['大纲条目行内样式透传与主题色同源：标记渲染、字重与颜色绘制证据（#65）', async () => {
+    // 绘制层断言口径（视觉层断言必查）：outline.style 经 computed style 读取
+    // 条目与标记 span 的字重/字体族/颜色——CSS 注入失效（如 CSP 拦截）或
+    // 选择器写错时取不到目标元素或值退化，数据层 plainText/spans 对拍源文档
+    // 标题结构。fixture 见 fixtures.mjs 的 OUTLINE_STYLE_DOC。
+    await openWithEditor('outline-style.md')
+    await waitSessionReady('outline-style.md')
+    const uri = wsUri('outline-style.md').toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    const opened = await waitViewState('outline-style.md',
+      (v) => v.sidebar?.open === true && v.outline?.panelPainted === true && v.outline?.style !== undefined)
+
+    // 数据层：plainText 剥标记、白名单 spans 结构、原文保留、双链/链接纯文本
+    const expected: Array<[number, string, string, Array<{ kind: string; start: number; end: number }>, number]> = [
+      [1, '**重点** 结论', '重点 结论', [{ kind: 'strong', start: 0, end: 2 }], 1],
+      [2, '*斜体* 与 `代码`', '斜体 与 代码',
+        [{ kind: 'emphasis', start: 0, end: 2 }, { kind: 'code', start: 5, end: 7 }], 2],
+      [3, '~~删除线~~ 与 [[目标笔记|显示别名]]', '删除线 与 显示别名',
+        [{ kind: 'strike', start: 0, end: 3 }], 3],
+      [4, '[链接文字](https://example.com) 尾注', '链接文字 尾注', [], 4],
+      [5, '***粗斜*** 与普通', '粗斜 与普通',
+        [{ kind: 'emphasis', start: 0, end: 2 }, { kind: 'strong', start: 0, end: 2 }], 5],
+    ]
+    const items = opened.outline!.items
+    assert(items.length === expected.length,
+      `大纲条目数应为 ${expected.length}，实际 ${items.length}：${JSON.stringify(items)}`)
+    for (let i = 0; i < expected.length; i++) {
+      const [level, text, plainText, spans, line] = expected[i]!
+      assert(items[i]!.level === level && items[i]!.text === text && items[i]!.line === line,
+        `大纲第 ${i + 1} 项基础字段应为 [${level}, ${text}, ${line}]，实际 ${JSON.stringify(items[i])}`)
+      assert(items[i]!.plainText === plainText,
+        `第 ${i + 1} 项 plainText 应为 ${plainText}（标记字符不得透出），实际 ${JSON.stringify(items[i]!.plainText)}`)
+      assert(JSON.stringify(items[i]!.spans) === JSON.stringify(spans),
+        `第 ${i + 1} 项 spans 应为 ${JSON.stringify(spans)}，实际 ${JSON.stringify(items[i]!.spans)}`)
+    }
+
+    // 绘制层：条目常规字重（不继承标题级别加粗）与显式粗体段加重的对照
+    const style = opened.outline!.style!
+    const isRegular = (v: string | null) => v === '400' || v === 'normal'
+    const isBold = (v: string | null) => v === '700' || v === 'bold'
+    assert(style.itemFontWeight !== null, '条目 computed 字重应可读（面板已绘制且有条目）')
+    assert(isRegular(style.itemFontWeight),
+      `大纲条目应为常规字重（400/normal，不继承标题级别加粗），实际 ${style.itemFontWeight}`)
+    assert(isBold(style.strongFontWeight),
+      `显式 **粗体** 段应加重（700/bold），实际 ${String(style.strongFontWeight)}`)
+    assert(style.codeFontFamily !== null && style.itemFontFamily !== null,
+      '行内代码与条目的 computed 字体族应可读')
+
+    // 主题色同源：大纲条目与正文标题引用同一变量族，当前主题下解析同值；
+    // 大纲侧脱钩（改引别的变量/硬编码）时两值分叉，断言即失败
+    assert(style.itemColor !== null && style.headingColor !== null,
+      '条目与正文标题 computed 颜色应可读（两侧均有绘制内容）')
+    assert(style.itemColor === style.headingColor,
+      `大纲条目与正文标题应引用同一层级色变量族（同值），条目=${style.itemColor}，标题=${style.headingColor}`)
+
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-style.md', (v) => v.sidebar?.open === false)
+  }],
+
+  // ---- #66 大纲点击跳转与常驻高亮 ----
+
+  ['大纲点击跳转与常驻高亮：双模式定位、绘制层高亮、零写回、防抖动护栏（#66）', async () => {
+    // 断言口径（视觉层断言必查）：
+    // - 点击跳转：live 光标落标题行首（selectionOffset 对拍宿主 offset）、
+    //   reading 锚点为标题块 start（readingAnchorStart 对拍）——复用
+    //   view.locate 双模式路径，零 edit.request / 版本不变
+    // - 常驻高亮：locatedItemIndex/locatedText 状态对拍 + locatedPainted
+    //   绘制层证据（elementFromPoint 命中 + computed 背景非全透明——
+    //   样式注入失效时高亮横条不可见，此断言必失败）
+    // - 防抖动护栏：跳转居中滚动后视口顶行在目标标题上方（上一控制域），
+    //   程序性滚动不得把高亮反向改写回上一章——真宿主有真实滚动事件，
+    //   护栏语义在此可真实验证（浏览器回归同款断言的宿主侧对应）
+    await openWithEditor('outline-long.md')
+    await waitSessionReady('outline-long.md')
+    const uri = wsUri('outline-long.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('outline-long.md'))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-long.md', (v) => v.sidebar?.open === true && v.outline?.panelPainted === true)
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+
+    // 首屏高亮：文档初始位于顶部，视口顶行在主标题控制域（首条目在面板
+    // 可视区内——绘制层断言要求 located 条目可被 elementFromPoint 命中）
+    const initial = await waitViewState('outline-long.md',
+      (v) => v.outline?.locatedItemIndex === 0 && v.outline?.locatedPainted === true)
+    assert(initial.outline!.locatedText === '长文档主标题',
+      `首屏高亮应为主标题，实际 ${JSON.stringify(initial.outline!.locatedItemIndex)} ${String(initial.outline!.locatedText)}`)
+    assert(initial.outline!.locatedPainted === true,
+      `首屏高亮横条应真实绘制（命中 + 半透明背景）：${JSON.stringify(initial.outline)}`)
+
+    // live 点击「第 30 章」（items[59]，标题行）：光标落标题行首 + 高亮即时落位。
+    // 该条目在面板滚动区可视范围外（长大纲溢出），locatedPainted 的命中
+    // 口径不适用（#67 的「高亮行滚进大纲可视区」落地前不断言），绘制层
+    // 证据由首屏与下方 reading 可视区内条目覆盖
+    const chapter30Line = initial.outline!.items[59]!.line
+    assert(initial.outline!.items[59]!.text === '第 30 章',
+      `items[59] 应为「第 30 章」，实际 ${JSON.stringify(initial.outline!.items[59])}`)
+    const chapter30Offset = doc.offsetAt(new vscode.Position(chapter30Line - 1, 0))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.itemClick', index: 59 })
+    const jumped = await waitViewState('outline-long.md',
+      (v) => v.selectionOffset === chapter30Offset && v.outline?.locatedItemIndex === 59)
+    assert(jumped.outline!.locatedText === '第 30 章', '跳转后 locatedText 应为目标标题')
+
+    // 零写回：版本与写回计数不变（跳转是纯视图操作，不入撤销历史）
+    const afterJump = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterJump.version === before.version && afterJump.appliedEdits === before.appliedEdits,
+      `大纲跳转不得推进版本或产生写回（${before.version}/${before.appliedEdits} → ` +
+        `${afterJump.version}/${afterJump.appliedEdits}）`)
+
+    // 防抖动护栏：居中滚动的事件突发期（真宿主为真实 scroll 事件）过后，
+    // 高亮不得被视口顶行重算反向改写（无护栏时会回到第 29 章的控制域）
+    await new Promise((r) => setTimeout(r, 700))
+    const guarded = await waitViewState('outline-long.md', (v) => v.selectionOffset === chapter30Offset)
+    assert(guarded.outline!.locatedItemIndex === 59,
+      `程序性滚动不得改写跳转高亮（实际 ${guarded.outline!.locatedItemIndex}；` +
+        `无护栏时会被视口顶行重算到第 29 章附近）`)
+
+    // reading 点击「第 2 章」（items[3]，面板可视区内——locatedPainted 的
+    // elementFromPoint 命中口径成立）：锚点滚到标题块 + 高亮跟随 + 绘制层
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    await waitViewState('outline-long.md', (v) => v.viewMode === 'reading')
+    const chapter2Line = initial.outline!.items[3]!.line
+    assert(initial.outline!.items[3]!.text === '第 2 章',
+      `items[3] 应为「第 2 章」，实际 ${JSON.stringify(initial.outline!.items[3])}`)
+    const chapter2Offset = doc.offsetAt(new vscode.Position(chapter2Line - 1, 0))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.itemClick', index: 3 })
+    const readingJumped = await waitViewState('outline-long.md',
+      (v) => v.readingAnchorStart === chapter2Offset && v.outline?.locatedItemIndex === 3)
+    assert(readingJumped.outline!.locatedPainted === true,
+      `阅读模式高亮横条应真实绘制（located 条目在面板可视区内）：${JSON.stringify(readingJumped.outline)}`)
+    assert((readingJumped.readingBlockCount ?? 0) > 0, '阅读正文应正常渲染')
+
+    // 阅读跳转同样零写回
+    const afterReading = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterReading.version === before.version && afterReading.appliedEdits === before.appliedEdits,
+      '阅读模式跳转同样不得产生写回')
+
+    // 模式切换即时重算：切回 live 后 located 即时重算（非 null；具体值随
+    // 锚点恢复滚动位置而定）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'live' })
+    const backLive = await waitViewState('outline-long.md',
+      (v) => v.viewMode === 'live' && v.outline !== undefined && v.outline.locatedItemIndex !== null)
+    assert(backLive.outline!.locatedItemIndex! >= 0, '切回 live 后应即时重算 located')
+
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-long.md', (v) => v.sidebar?.open === false)
+  }],
+
+  // ---- #67 大纲折叠滑块与手动折叠 ----
+
+  ['大纲折叠滑块与手动折叠：档位语义、绘制层证据、滚动展开、编辑存活（#67）', async () => {
+    // 断言口径（视觉层断言必查）：
+    // - 档位语义：visibleIndices 状态对拍（档 1 = 展开 H1 父节点 → 51 条
+    //   可见；档 0 = 只露顶层）——「展开到 Hn = 展开 level≤n 父节点」而非
+    //   只显示 level≤n 标题
+    // - 绘制层证据：sliderPainted/sliderActiveDotPainted（active 圆点命中
+    //   + computed 实心）/chevronPainted（elementFromPoint 命中，样式注入
+    //   失败时必失败）与 locatedPainted（#67 落地后补全的口径：高亮行
+    //   滚进面板可视区后命中成立——跳转到面板滚动区深处的折叠条目）
+    // - 滚动动态展开：view.locate 落进折叠区 → only-expand 展开当前路径
+    //   （其余折叠区不动）、locatedPainted 成立
+    // - 编辑存活：宿主 WorkspaceEdit 重命名后折叠视图不扰动（迁移保键）
+    // - 零写回：滑块/箭头操作不推进版本、不产生写回
+    await openWithEditor('outline-long.md')
+    await waitSessionReady('outline-long.md')
+    const uri = wsUri('outline-long.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('outline-long.md'))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    // 条目序列（101 项）：0=主标题(H1)；第 i 章 H2=index 2i-1、H3=index 2i
+    const initial = await waitViewState('outline-long.md',
+      (v) => v.sidebar?.open === true && v.outline?.panelPainted === true && v.outline.items.length === 101)
+    assert(initial.outline!.expandLevel === 5, `默认档应为 5（实际 ${initial.outline!.expandLevel}）`)
+    assert(initial.outline!.visibleIndices.length === 101, `默认档全展开应 101 条可见（实际 ${initial.outline!.visibleIndices.length}）`)
+    assert(initial.outline!.sliderPainted === true,
+      `滑块行应真实绘制（命中失败：${JSON.stringify(initial.outline)}）`)
+    assert(initial.outline!.sliderActiveDotPainted === true,
+      `当前档圆点应实心绘制（命中 + computed 背景：${JSON.stringify(initial.outline)}）`)
+    assert(initial.outline!.chevronPainted === true,
+      `折叠箭头应真实绘制（命中失败：${JSON.stringify(initial.outline)}）`)
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+
+    // 档 1：展开 H1 父节点 → H2 直接子级全可见（51 条），H3 全折叠
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.expandClick', level: 1 })
+    const level1 = await waitViewState('outline-long.md', (v) => v.outline?.expandLevel === 1)
+    assert(level1.outline!.visibleIndices.length === 51,
+      `档 1 应 51 条可见（实际 ${level1.outline!.visibleIndices.length}）`)
+    assert(level1.outline!.visibleIndices[1] === 1 && level1.outline!.visibleIndices[2] === 3,
+      '档 1 可见序列应为 0,1,3,…（H2 可见、H3 折叠）')
+    assert(level1.outline!.sliderActiveDotPainted === true, '切档后当前档圆点应仍实心绘制')
+
+    // 手动箭头叠加在档位上（档 1 下 H2 本就折叠中——档位精确集只含
+    // level≤1 父节点）：点第 1 章箭头 = 展开（其 H3 可见），再点 = 折叠
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.chevronClick', index: 1 })
+    const expanded = await waitViewState('outline-long.md',
+      (v) => v.outline !== undefined && v.outline.visibleIndices.length === 52)
+    assert(expanded.outline!.visibleIndices.includes(2), '档 1 下手动展开第 1 章后其小节应可见')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.chevronClick', index: 1 })
+    const collapsed = await waitViewState('outline-long.md',
+      (v) => v.outline !== undefined && v.outline.visibleIndices.length === 51)
+    assert(!collapsed.outline!.visibleIndices.includes(2), '手动折叠第 1 章后其小节应不可见')
+    // 点折叠中的父条目文字跳转：条目自身可见（折叠遮子不遮己），不触发展开
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.itemClick', index: 1 })
+    const jumpParent = await waitViewState('outline-long.md', (v) => v.outline?.locatedItemIndex === 1)
+    assert(jumpParent.outline!.visibleIndices.length === 51,
+      '跳转到折叠中的父条目自身不得展开（自身可见，无祖先可展开）')
+    assert(jumpParent.outline!.locatedPainted === true, '父条目高亮横条应真实绘制（面板可视区内）')
+
+    // 跳转到被折叠遮蔽的深层条目（第 45 章 H3, index 90，面板滚动区深处）：
+    // only-expand 展开其祖先链（第 45 章 H2）+ 高亮行滚进面板可视区——
+    // #66 留下的「locatedPainted 暂不断言」口径在本票落地后的补全
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.itemClick', index: 90 })
+    const jumpDeep = await waitViewState('outline-long.md', (v) => v.outline?.locatedItemIndex === 90)
+    assert(jumpDeep.outline!.visibleIndices.length === 52,
+      `跳转深层折叠条目应展开其祖先链（实际 ${jumpDeep.outline!.visibleIndices.length}）`)
+    assert(jumpDeep.outline!.visibleIndices.includes(90), '展开后目标条目应可见')
+    assert(jumpDeep.outline!.locatedPainted === true,
+      `高亮行应滚进大纲面板可视区并真实绘制（${JSON.stringify(jumpDeep.outline)}）`)
+
+    // 滑块/箭头操作零写回（纯视图状态）
+    const afterCollapse = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterCollapse.version === before.version && afterCollapse.appliedEdits === before.appliedEdits,
+      `折叠操作不得推进版本或产生写回（${before.version}/${before.appliedEdits} → ` +
+        `${afterCollapse.version}/${afterCollapse.appliedEdits}）`)
+
+    // 档 0 + 宿主 view.locate 落进折叠区：only-expand 展开当前路径（目标
+    // 的祖先链 = 第 45 章 H2 + 主标题 H1——展开 H1 使全部 H2 作为直接子级
+    // 可见，这是「展开祖先链让目标可见」的语义代价），其余 H3 折叠不动
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.expandClick', level: 0 })
+    await waitViewState('outline-long.md', (v) => v.outline?.visibleIndices.length === 1)
+    const targetLine = jumpDeep.outline!.items[90]!.line
+    const targetOffset = doc.offsetAt(new vscode.Position(targetLine - 1, 0))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: targetOffset })
+    const located = await waitViewState('outline-long.md', (v) => v.outline?.locatedItemIndex === 90)
+    assert(located.outline!.visibleIndices.includes(90),
+      `定位到折叠区应 only-expand 使目标可见（实际 ${JSON.stringify(located.outline!.visibleIndices)}）`)
+    assert(!located.outline!.visibleIndices.includes(2) && !located.outline!.visibleIndices.includes(88),
+      `其余 H3 不得被展开（only-expand 只动当前路径）：${JSON.stringify(located.outline!.visibleIndices)}`)
+    assert(located.outline!.visibleIndices.length === 52,
+      `可见集应为 H1 + 50 个 H2 + 目标 H3（52 条，实际 ${located.outline!.visibleIndices.length}）`)
+    assert(located.outline!.locatedPainted === true, '定位后的高亮行应滚进可视区并真实绘制')
+
+    // 编辑存活：宿主 WorkspaceEdit 重命名第 45 章标题 → 折叠视图不扰动。
+    // 注意口径：doc 变化触发视口顶行重算 + only-expand（合法展开当前路径
+    // 的邻章），故不精确对拍数组——断言当前路径仍展开、远端章节仍折叠
+    const renameEdit = new vscode.WorkspaceEdit()
+    const headingLine = jumpDeep.outline!.items[89]!.line - 1
+    const lineText = doc.lineAt(headingLine)
+    renameEdit.replace(
+      wsUri('outline-long.md'),
+      lineText.range,
+      lineText.text.replace('第 45 章', '第 45 章改名'),
+    )
+    await vscode.workspace.applyEdit(renameEdit)
+    const renamed = await waitViewState('outline-long.md',
+      (v) => v.outline?.items[89] !== undefined && v.outline.items[89].text === '第 45 章改名')
+    assert(renamed.outline!.visibleIndices.includes(89) && renamed.outline!.visibleIndices.includes(90),
+      `重命名后当前展开路径应保持可见（实际 ${JSON.stringify(renamed.outline!.visibleIndices)}）`)
+    assert(!renamed.outline!.visibleIndices.includes(2) && !renamed.outline!.visibleIndices.includes(20),
+      `远端章节的 H3 不得因重命名被展开（实际 ${JSON.stringify(renamed.outline!.visibleIndices)}）`)
+
+    // 档位持久化：切档 1 后重载 webview（Developer: Reload Webviews——
+    // retainContextWhenHidden 关闭：销毁重建同一 panel，走 bridge state
+    // 恢复，#6 模式记忆的同款验证路径）→ 档位恢复为 1；重载同时恢复锚点
+    // （视口回到第 45 章区域），only-expand 会合法展开当前路径（至多
+    // +2 条 H3），可见数允许 51–53 而非精确 51
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.expandClick', level: 1 })
+    await waitViewState('outline-long.md', (v) => v.outline?.expandLevel === 1)
+    await vscode.commands.executeCommand('workbench.action.webview.reloadWebviewAction')
+    // 档位先从持久化状态恢复；等待宿主全文同步后的条目重建，避免读到空大纲。
+    const reopened = await waitViewState('outline-long.md',
+      (v) => v.outline?.expandLevel === 1 && v.outline.visibleIndices.length >= 51)
+    assert(reopened.outline!.visibleIndices.length >= 51 && reopened.outline!.visibleIndices.length <= 53,
+      `重载后档 1 基础可见集应恢复（51–53 条，实际 ${reopened.outline!.visibleIndices.length}）`)
+
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-long.md', (v) => v.sidebar?.open === false)
+  }],
+
+  // ---- #68 大纲工具条与标题搜索 ----
+
+  ['大纲工具条与标题搜索：过滤、片段高亮绘制、快照回放、重置与跳末（#68）', async () => {
+    // 断言口径（视觉层断言必查）：
+    // - 工具条装配与绘制：toolbarPainted（elementFromPoint 命中，样式注入
+    //   失败时必失败）+ 按钮可访问名称 + placeholder 文案
+    // - 搜索语义：filteredVisibleIndices 组合可见口径对拍（档 1 折叠下
+    //   搜索命中 → 匹配路径展开可见）；清空回放进入前快照（QO 语义）
+    // - 绘制层证据：searchHitPainted（可见条目内 mark 命中 + computed
+    //   背景非全透明）与 nomatchPainted（无匹配占位真实可见）
+    // - 重置三合一与跳转到末尾：状态对拍 + locatedPainted（高亮滚进
+    //   可视区）+ locatedItemIndex 落末尾控制域 + 零写回（版本不推进）
+    await openWithEditor('outline-long.md')
+    await waitSessionReady('outline-long.md')
+    const uri = wsUri('outline-long.md').toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    const initial = await waitViewState('outline-long.md',
+      (v) => v.sidebar?.open === true && v.outline?.panelPainted === true && v.outline.items.length === 101)
+    assert(initial.outline!.toolbarPainted === true,
+      `工具条行应真实绘制（命中失败：${JSON.stringify(initial.outline)}）`)
+    assert(initial.outline!.jumpBottomAriaLabel === '跳转到笔记末尾',
+      `跳末按钮可访问名称（实际 ${String(initial.outline!.jumpBottomAriaLabel)}）`)
+    assert(initial.outline!.resetAriaLabel === '重置',
+      `重置按钮可访问名称（实际 ${String(initial.outline!.resetAriaLabel)}）`)
+    assert(initial.outline!.searchPlaceholder === '输入以搜索',
+      `搜索框 placeholder（实际 ${String(initial.outline!.searchPlaceholder)}）`)
+    assert(initial.outline!.searchActive === false, '初始应无搜索过滤')
+    assert(initial.outline!.filteredVisibleIndices.length === 101,
+      '搜索关闭时组合可见口径与折叠口径同值（101 条）')
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+
+    // 档 1（H3 折叠遮蔽）下搜索「第 45 章」：命中第 45 章 H2（89）与
+    // 「第 45 章小节」H3（90，子串命中），匹配路径自动展开——组合可见
+    // 口径 = 主标题 + 89 + 90（其余 50 章 H2 折叠可见但不保留）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.expandClick', level: 1 })
+    await waitViewState('outline-long.md', (v) => v.outline?.expandLevel === 1)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.searchInput', text: '第 45 章' })
+    const filtered = await waitViewState('outline-long.md', (v) => v.outline?.searchActive === true)
+    assert(filtered.outline!.filteredVisibleIndices.join(',') === '0,89,90',
+      `搜索「第 45 章」组合可见应为 [0,89,90]（实际 ${JSON.stringify(filtered.outline!.filteredVisibleIndices)}）`)
+    assert(filtered.outline!.searchQuery === '第 45 章', 'probe 应回报搜索词实值')
+
+    // 清空回放进入搜索前的档 1 快照（H3 重新被折叠遮蔽）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.searchInput', text: '' })
+    const restored = await waitViewState('outline-long.md', (v) => v.outline?.searchActive === false)
+    assert(restored.outline!.visibleIndices.length === 51,
+      `清空应回放档 1 快照（51 条，实际 ${restored.outline!.visibleIndices.length}）`)
+    assert(restored.outline!.filteredVisibleIndices.length === 51, '清空后组合口径与折叠口径同值')
+
+    // 搜索「第 1 章」：命中在面板顶部可视区——mark 片段高亮的绘制层证据
+    // （elementFromPoint 命中 + computed 背景非全透明）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.searchInput', text: '第 1 章' })
+    const hit = await waitViewState('outline-long.md',
+      (v) => v.outline?.searchActive === true && v.outline.searchHitPainted === true)
+    assert(hit.outline!.filteredVisibleIndices.join(',') === '0,1,2',
+      `搜索「第 1 章」应保留主标题与第 1 章路径（实际 ${JSON.stringify(hit.outline!.filteredVisibleIndices)}）`)
+    assert(hit.outline!.searchHitPainted === true,
+      `命中片段 mark 应真实绘制（命中 + computed 背景：${JSON.stringify(hit.outline)}）`)
+
+    // 无匹配：占位真实可见、组合可见口径为空、mark 不绘制
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.searchInput', text: '不存在的词条' })
+    const nomatch = await waitViewState('outline-long.md', (v) => v.outline?.nomatchPainted === true)
+    assert(nomatch.outline!.filteredVisibleIndices.length === 0, '无匹配时组合可见口径应为空')
+    assert(nomatch.outline!.searchHitPainted === false, '无匹配时不得有命中片段绘制')
+    assert(nomatch.outline!.nomatchPainted === true, '「无匹配」占位应真实可见')
+
+    // 重置三合一：清搜索词 + 档位回默认 5 + 清手动折叠（档 1 整体替换）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.toolbarClick', action: 'reset' })
+    const reset = await waitViewState('outline-long.md', (v) =>
+      v.outline?.searchActive === false && v.outline.expandLevel === 5)
+    assert(reset.outline!.filteredVisibleIndices.length === 101,
+      `重置后应全展开 101 条（实际 ${reset.outline!.filteredVisibleIndices.length}）`)
+    assert(reset.outline!.nomatchPainted === false, '重置后无匹配占位应消失')
+
+    // 跳转到末尾：located 落末尾控制域（第 50 章小节 = index 100，面板
+    // 滚动区深处——高亮行滚进可视区后命中成立）、正文文本零变化
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.toolbarClick', action: 'jump-bottom' })
+    const bottom = await waitViewState('outline-long.md', (v) => v.outline?.locatedItemIndex === 100)
+    assert(bottom.outline!.locatedText === '第 50 章小节',
+      `跳末后控制域应为最后一个标题（实际 ${String(bottom.outline!.locatedText)}）`)
+    assert(bottom.outline!.locatedPainted === true, '跳末后高亮行应滚进面板可视区并真实绘制')
+
+    // 搜索/重置/跳末全程零写回（纯视图状态）
+    const after = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(after.version === before.version && after.appliedEdits === before.appliedEdits,
+      `工具条与搜索操作不得推进版本或产生写回（${before.version}/${before.appliedEdits} → ` +
+        `${after.version}/${after.appliedEdits}）`)
+
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-long.md', (v) => v.sidebar?.open === false)
+  }],
+
+  // ---- #69 大纲右键菜单 ----
+
+  ['大纲右键菜单开合与结构命令：绘制层证据、折叠状态对拍（#69）', async () => {
+    // 断言口径（视觉层断言必查）：menuPainted 是菜单容器的 elementFromPoint
+    // 命中（真实布局 + 浮层样式生效——样式失效时 DOM 存在但命中失败）；
+    // 结构命令经 outline.test.contextMenu + menuClick 真实按钮点击链路驱动，
+    // visibleIndices 状态对拍（与 #67 同口径）
+    await openWithEditor('outline-menu.md')
+    await waitSessionReady('outline-menu.md')
+    const uri = wsUri('outline-menu.md').toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-menu.md',
+      (v) => v.sidebar?.open === true && v.outline?.panelPainted === true && v.outline.items.length === 7)
+    // 右键「加粗 Alpha」（index 1）：菜单打开、目标索引正确、真实绘制
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index: 1 })
+    const opened = await waitViewState('outline-menu.md', (v) => v.outline?.menuOpen === true)
+    assert(opened.outline!.menuTargetIndex === 1,
+      `菜单目标应为条目 1（实际 ${String(opened.outline!.menuTargetIndex)}）`)
+    assert(opened.outline!.menuPainted === true,
+      `菜单应真实绘制（命中失败：${JSON.stringify(opened.outline)}）`)
+    // 关闭后再开（开合幂等）：menuClose 后 menuOpen=false
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClose' })
+    await waitViewState('outline-menu.md', (v) => v.outline?.menuOpen === false)
+    // 结构命令（折叠同级）：主标题（index 0）的同级组 = 主、Setext、第二顶；
+    // 折叠主标题遮 Alpha 与 Beta 子树（1–4 隐藏）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index: 0 })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClick', command: 'collapseSiblings' })
+    const collapsed = await waitViewState('outline-menu.md',
+      (v) => v.outline?.menuOpen === false && v.outline.visibleIndices.length === 3)
+    assert(JSON.stringify(collapsed.outline!.visibleIndices) === JSON.stringify([0, 5, 6]),
+      `折叠同级后应只露顶层三标题（实际 ${JSON.stringify(collapsed.outline!.visibleIndices)}）`)
+    // 展开同级（顶层组父节点键加回）：主标题展开 → 全部条目可见
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index: 0 })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClick', command: 'expandSiblings' })
+    const expanded = await waitViewState('outline-menu.md',
+      (v) => v.outline?.visibleIndices.length === 7)
+    assert(JSON.stringify(expanded.outline!.visibleIndices) === JSON.stringify([0, 1, 2, 3, 4, 5, 6]),
+      `展开同级后应全部可见（实际 ${JSON.stringify(expanded.outline!.visibleIndices)}）`)
+    // 递归展开（目标须自身可见——递归展开只动目标子树、不展开目标祖先）：
+    // 手动折叠 Beta（箭头）后对其递归展开，Beta 深恢复可见
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.chevronClick', index: 3 })
+    await waitViewState('outline-menu.md', (v) => v.outline?.visibleIndices.length === 6)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index: 3 })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClick', command: 'expandRecursively' })
+    const recursed = await waitViewState('outline-menu.md',
+      (v) => v.outline?.visibleIndices.length === 7)
+    assert(JSON.stringify(recursed.outline!.visibleIndices) === JSON.stringify([0, 1, 2, 3, 4, 5, 6]),
+      `递归展开 Beta 后 Beta 深应恢复可见（实际 ${JSON.stringify(recursed.outline!.visibleIndices)}）`)
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-menu.md', (v) => v.sidebar?.open === false)
+  }],
+
+  ['大纲复制五项经宿主剪贴板：端到端读写对拍（#69）', async () => {
+    // 断言口径：复制走 webview→宿主 clipboard.write 消息桥，宿主
+    // env.clipboard.writeText 写入系统剪贴板——集成侧以 readText 读回对拍
+    // （端到端：webview 载荷计算 → 消息桥 → 宿主拼接 → 剪贴板全程真实）；
+    // 标题链接另做「复制 → 注入定位」往返对拍（链路见下段注释）
+    await openWithEditor('outline-menu.md')
+    await waitSessionReady('outline-menu.md')
+    const uri = wsUri('outline-menu.md').toString()
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-menu.md',
+      (v) => v.sidebar?.open === true && v.outline?.panelPainted === true && v.outline.items.length === 7)
+    const copy = async (index: number, command: string): Promise<string> => {
+      await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index })
+      await waitViewState('outline-menu.md', (v) => v.outline?.menuOpen === true)
+      await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClick', command })
+      await waitViewState('outline-menu.md', (v) => v.outline?.menuOpen === false)
+      return vscode.env.clipboard.readText()
+    }
+    // 标题（plainText：**加粗** 标记不透出）
+    assert(await copy(1, 'copyHeading') === '加粗 Alpha', '复制标题应为剥标记可见文本')
+    // 标题和兄弟标题（同父组 = Alpha、Beta，含自身）
+    assert(await copy(1, 'copySiblings') === '加粗 Alpha\nBeta', '兄弟复制为同父全部标题逐行')
+    // 标题和子标题（Alpha 子树 = Alpha、Alpha 子）
+    assert(await copy(1, 'copyChildren') === '加粗 Alpha\nAlpha 子', '子标题复制含后代')
+    // 标题链接（宿主拼 [[笔记名#标题]]：笔记名 = 文件名去扩展名；标题取条目
+    // 原文（含 **加粗** 等行内标记）——宿主 findHeadingOffset 按 ATX 标题行
+    // 字面文本比较，两侧口径同源才能定位回原标题；剥标记文本只服务「复制
+    // 标题」纯文本场景，写进链接必然定位落空（review-loops 第 2 轮）
+    const markedLink = await copy(1, 'copyLink')
+    assert(markedLink === '[[outline-menu#**加粗** Alpha]]',
+      `含标记标题的链接应为标题原文，实际 ${markedLink}`)
+    // 纯文本标题链接（Beta，index 3）：无标记可剥，原文 == 可见文本，一期口径不变
+    const plainLink = await copy(3, 'copyLink')
+    assert(plainLink === '[[outline-menu#Beta]]', `纯文本标题链接应不变，实际 ${plainLink}`)
+    // Setext 标题链接（index 5）：同样取原文（其不能定位属一期已知限制，见下方往返断言）
+    const setextLink = await copy(5, 'copyLink')
+    assert(setextLink === '[[outline-menu#Setext 标题]]',
+      `Setext 标题链接应为标题原文，实际 ${setextLink}`)
+    // 该段内容（整控制域源文含标题行，标记原样）
+    assert(await copy(3, 'copySection') === '## Beta\n\nBeta 内容。\n\n#### Beta 深\n\n深内容。', '该段内容为整控制域源文')
+    // Setext 标题的复制（plainText）
+    assert(await copy(5, 'copyHeading') === 'Setext 标题', 'Setext 标题复制为可见文本')
+
+    // ---- 端到端往返：复制出的链接能否定位回原标题（#69 写入端 × #11 读回端） ----
+    // 剪贴板文本 → 剥 [[ ]] 得注入目标 → injectWikilink（与真实 webview 消息
+    // 同一校验与处理入口）→ 宿主解析/定位 → 日志 locate + 面板实际落点对拍。
+    // 这是本用例的核心契约：读取端按标题行字面文本比较，故写入端必须上报条目
+    // 原文；剥标记口径下含标记标题的链接必然 locate=none（修复前实测形态）
+    const fixtureText = await readDisk('outline-menu.md')
+    /** 标题行在全文中的行首 offset（LF 系；整行全等匹配，避免子串误命中） */
+    const headingOffsetOf = (lineText: string): number => {
+      let offset = 0
+      for (const line of fixtureText.split('\n')) {
+        if (line.replace(/\r$/, '') === lineText) {
+          return offset
+        }
+        offset += line.length + 1
+      }
+      throw new Error(`fixture 中不存在该标题行：${lineText}`)
+    }
+    const roundTrip = async (link: string, headingLine: string): Promise<void> => {
+      assert(link.startsWith('[[outline-menu#') && link.endsWith(']]'),
+        `标题链接形态应为 [[outline-menu#…]]，实际 ${link}`)
+      const heading = headingLine.replace(/^#+ /, '')
+      await injectWikilink(uri, link.slice(2, -2))
+      const log = await waitWikilinkLog(uri, (e) => e.kind === 'wikilink-doc' && e.heading === heading)
+      assert(log.locate !== 'none',
+        `复制出的链接应定位回原标题「${heading}」，实际 locate=${String(log.locate)}`)
+      assert(log.path === wsUri('outline-menu.md').fsPath,
+        `定位目标应为 outline-menu.md，实际 ${String(log.path)}`)
+      const offset = headingOffsetOf(headingLine)
+      if (log.locate === 'custom-panel') {
+        // 目标（outline-menu.md）即本面板自身：宿主 reveal 面板后发 view.locate，
+        // live 态光标落标题行首——面板侧可见落点，不只看日志
+        const view = await waitViewState('outline-menu.md', (v) => v.selectionOffset === offset)
+        assert(view.selectionOffset === offset,
+          `面板光标应落标题行首 offset ${offset}，实际 ${view.selectionOffset}`)
+      } else {
+        // 目标面为文本编辑器：以标题行 selection reveal。此处目标恒为本面板
+        // 自身，该分支用于让落点断言不硬编码定位面（按日志回报的实际面取证据）
+        const editor = await poll('标题跳转落到文本编辑器', () =>
+          vscode.window.activeTextEditor?.document.uri.toString() === wsUri('outline-menu.md').toString()
+            ? vscode.window.activeTextEditor
+            : undefined)
+        const line = editor.document.lineAt(editor.selection.active).text
+        assert(line === headingLine, `文本编辑器 selection 应在标题行「${headingLine}」，实际「${line}」`)
+      }
+    }
+    // 含标记标题（index 1）：写入端原文 → 读回端字面匹配原文，本轮修复的回归钉子
+    await roundTrip(markedLink, '## **加粗** Alpha')
+    // 纯文本标题（index 3）：原文 == 可见文本，两侧口径本来就一致（防误伤）
+    await roundTrip(plainLink, '## Beta')
+    // Setext 标题（index 5）：一期标题匹配规则明示「仅 ATX 标题行」（钉在
+    // test/unit/wikilinkTarget.test.ts），其链接不能定位——已知限制，显式钉住
+    // 而非静默略过
+    await injectWikilink(uri, setextLink.slice(2, -2))
+    const setextLog = await waitWikilinkLog(uri,
+      (e) => e.kind === 'wikilink-doc' && e.heading === 'Setext 标题')
+    assert(setextLog.locate === 'none',
+      `一期已知限制：Setext 标题链接不定位（findHeadingOffset 仅认 ATX 标题行），实际 locate=${String(setextLog.locate)}`)
+    // 不定位 = 面板光标停在上一跳落点（settle 窗等可能的定位消息到达后复查）
+    const betaOffset = headingOffsetOf('## Beta')
+    await new Promise((r) => setTimeout(r, 200))
+    const settled = await waitViewState('outline-menu.md')
+    assert(settled.selectionOffset === betaOffset,
+      `Setext 链接不应移动光标（应保持 ${betaOffset}），实际 ${settled.selectionOffset}`)
+
+    // 形态学已知限制（不另造 fixture）：标题含「] | # ^」时 wikilink 无法表达该
+    // 标题——「]」触发扫描守卫、「|」切别名、「#」二次分割标题、「^」按块引用降级
+    // （见 src/shared/wikilink.ts 与 outlineLinkHeading 注释）。此类标题的链接既
+    // 不保证可表达也不保证可定位，属一期已知边界，本用例不覆盖。
+
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-menu.md', (v) => v.sidebar?.open === false)
+  }],
+
+  ['大纲调整层级写回：钳制、单事务撤销、控制域外零变更（#69）', async () => {
+    // 断言口径：写操作对权威文档生效（doc.getText 对拍）+ sessionState 的
+    // version/appliedEdits 推进（单笔 edit.request）+ history.request undo
+    // 完整回滚（单事务可一次撤销）
+    await openWithEditor('outline-menu.md')
+    await waitSessionReady('outline-menu.md')
+    const uri = wsUri('outline-menu.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('outline-menu.md'))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-menu.md',
+      (v) => v.sidebar?.open === true && v.outline?.items.length === 7)
+    const original = doc.getText()
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    // H1 减少钳制：零写回（版本与 appliedEdits 不动）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index: 0 })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClick', command: 'levelDown' })
+    await new Promise((r) => setTimeout(r, 150))
+    const clamped = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(clamped.version === before.version && clamped.appliedEdits === before.appliedEdits,
+      `H1 减少钳制不得写回（${before.version}/${before.appliedEdits} → ${clamped.version}/${clamped.appliedEdits}）`)
+    // 递归增加 Beta（index 3，子树含 Beta 深）：一笔多段单事务
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index: 3 })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClick', command: 'levelUpRecursive' })
+    const upped = await waitViewState('outline-menu.md', (v) =>
+      v.outline?.items[3] !== undefined && v.outline.items[3].level === 3 && v.outline.items[4].level === 5)
+    assert(upped.outline!.items[3]!.text === 'Beta' && upped.outline!.items[4]!.text === 'Beta 深',
+      '调级只改层级不改文字')
+    const uppedText = doc.getText()
+    assert(uppedText.includes('### Beta\n') && uppedText.includes('##### Beta 深'),
+      '权威文档应重写 # 数量')
+    assert(uppedText.includes('## **加粗** Alpha') && uppedText.includes('Setext 标题'),
+      '控制域外内容零变更')
+    const afterUp = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterUp.appliedEdits === before.appliedEdits + 1,
+      `递归调级应为单笔写回（实际 +${afterUp.appliedEdits - before.appliedEdits}）`)
+    // 撤销一次完整回滚（单事务）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await waitViewState('outline-menu.md', (v) =>
+      v.outline?.items[3] !== undefined && v.outline.items[3].level === 2 && v.outline.items[4].level === 4)
+    assert(doc.getText() === original, '单次撤销应完整回滚递归调级')
+    // Setext 调级：规范化为 ATX 单行（内容+下划线两行 → 一行）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index: 5 })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClick', command: 'levelUp' })
+    const setextUp = await waitViewState('outline-menu.md', (v) =>
+      v.outline?.items[5] !== undefined && v.outline.items[5].level === 2)
+    assert(setextUp.outline!.items[5]!.text === 'Setext 标题', 'Setext 调级保留标题文字')
+    const setextText = doc.getText()
+    assert(setextText.includes('## Setext 标题\n') && !setextText.includes('============'),
+      'Setext 调级应规范化为 ATX 单行（下划线行消除）')
+    assert(setextText.includes('# 第二顶\n\n内容。'), 'Setext 段后内容完整保留')
+    // 撤销收尾回原文
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await waitViewState('outline-menu.md', (v) => v.outline?.items[5] !== undefined && v.outline.items[5].level === 1)
+    if (doc.isDirty) {
+      await doc.save()
+    }
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-menu.md', (v) => v.sidebar?.open === false)
+  }],
+
+  ['大纲重命名与删除：编辑原文保留标记、整控制域删除、撤销回滚（#69）', async () => {
+    await openWithEditor('outline-menu.md')
+    await waitSessionReady('outline-menu.md')
+    const uri = wsUri('outline-menu.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('outline-menu.md'))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-menu.md',
+      (v) => v.sidebar?.open === true && v.outline?.items.length === 7 && v.outline.panelPainted === true)
+    const original = doc.getText()
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    // 重命名「**加粗** Alpha」（index 1）：编辑原文（标记是资产）+ renamingIndex 观测
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index: 1 })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClick', command: 'rename' })
+    const renaming = await waitViewState('outline-menu.md', (v) => v.outline?.renamingIndex === 1)
+    assert(renaming.outline!.renamingIndex === 1, '重命名编辑态应回报条目索引')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'outline.test.renameKey', text: '**改名** 加粗', key: 'enter' })
+    const renamed = await waitViewState('outline-menu.md', (v) =>
+      v.outline?.items[1] !== undefined && v.outline.items[1].text === '**改名** 加粗')
+    assert(renamed.outline!.items[1]!.plainText === '改名 加粗', '重命名后 plainText 剥标记')
+    assert(renamed.outline!.renamingIndex === null, '提交后编辑态退出')
+    assert(doc.getText().includes('## **改名** 加粗'), '权威文档整标题行替换（# 数量保持）')
+    assert(renamed.outline!.items[0]!.text === '主标题' && renamed.outline!.items[2]!.text === 'Alpha 子',
+      '重命名只影响目标条目')
+    // Esc 取消零写回
+    const editsAfterRename = ((await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState).appliedEdits
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index: 1 })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClick', command: 'rename' })
+    await waitViewState('outline-menu.md', (v) => v.outline?.renamingIndex === 1)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'outline.test.renameKey', text: '不该出现', key: 'escape' })
+    await waitViewState('outline-menu.md', (v) => v.outline?.renamingIndex === null)
+    const afterEsc = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterEsc.appliedEdits === editsAfterRename, 'Esc 取消不得写回')
+    // 删除 Beta 段（index 3，跨级子树随段）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.contextMenu', index: 3 })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.menuClick', command: 'delete' })
+    const deleted = await waitViewState('outline-menu.md', (v) =>
+      v.outline !== undefined && v.outline.items.length === 5)
+    assert(JSON.stringify(deleted.outline!.items.map((i) => i.text)) ===
+      JSON.stringify(['主标题', '**改名** 加粗', 'Alpha 子', 'Setext 标题', '第二顶']),
+      '删除应移除 Beta 与 Beta 深两条（控制域整体）')
+    const deletedText = doc.getText()
+    assert(!deletedText.includes('Beta'), '权威文档不再含 Beta 段')
+    assert(deletedText.includes('子内容。') && deletedText.includes('Setext 内容。'),
+      '相邻段内容不丢失')
+    // 撤销删除（重命名与删除各一笔，两次撤销回原文）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await waitViewState('outline-menu.md', (v) => v.outline !== undefined && v.outline.items.length === 7)
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await waitViewState('outline-menu.md', (v) =>
+      v.outline?.items[1] !== undefined && v.outline.items[1].text === '**加粗** Alpha')
+    assert(doc.getText() === original, '两次撤销后应回到原文')
+    const final = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(final.appliedEdits - before.appliedEdits === 2, '重命名与删除各一笔写回')
+    if (doc.isDirty) {
+      await doc.save()
+    }
+    // 收起侧栏收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-menu.md', (v) => v.sidebar?.open === false)
+  }],
+
+  // ---- #70 大纲拖拽排序 ----
+
+  ['大纲拖拽三态写回：全文对拍、控制域外零变更、单事务撤销（#70）', async () => {
+    // 断言口径：写操作对权威文档生效（doc.getText 全文对拍）+ sessionState 的
+    // appliedEdits 每次拖拽恰好 +1（单笔 edit.request）+ history.request undo
+    // 完整回滚（单事务可一次撤销）。outline.test.drag 驱动真实 pointer 事件
+    // 序列（与用户拖拽同一处理器链）。fixture 条目序：0 甲(H1) 1 乙(H2)
+    // 2 丁(H4,跨级挂乙) 3 丙(H2) 4 戊(H1)；甲的子树含乙丁丙
+    await openWithEditor('outline-drag.md')
+    await waitSessionReady('outline-drag.md')
+    const uri = wsUri('outline-drag.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('outline-drag.md'))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-drag.md',
+      (v) => v.sidebar?.open === true && v.outline?.panelPainted === true && v.outline.items.length === 5)
+    const original = doc.getText()
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    const drag = (from: number, to: number, position: string, action: string): Thenable<unknown> =>
+      vscode.commands.executeCommand(CMD.postToPanel, uri,
+        { kind: 'outline.test.drag', from, to, position, action })
+
+    // before 落点：丁(H4) 拖到丙(H2) 之前 → 对齐 H2
+    await drag(2, 3, 'before', 'drop')
+    const beforeDrop = await waitViewState('outline-drag.md', (v) =>
+      v.outline?.items[2] !== undefined && v.outline.items[2].text === '丁' && v.outline.items[2].level === 2)
+    assert(beforeDrop.outline!.items.map((i) => [i.level, i.text]).map(String).join() ===
+      [[1, '甲'], [2, '乙'], [2, '丁'], [2, '丙'], [1, '戊']].map(String).join(),
+      'before 落点条目序与调级（实际 ' + JSON.stringify(beforeDrop.outline!.items.map((i) => [i.level, i.text])) + '）')
+    assert(doc.getText() === [
+      '---', 'title: 拖拽', '---', '',
+      '# 甲', '甲内容。', '## 乙', '乙内容。', '## 丁', '丁内容。', '## 丙', '丙内容。', '# 戊', '戊内容。',
+    ].join('\n'), 'before 落点全文对拍')
+    let state = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(state.appliedEdits - before.appliedEdits === 1, 'before 落点应为单笔写回')
+    // 撤销一次完整回滚（单事务）
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await waitViewState('outline-drag.md', (v) => v.outline?.items[2]?.text === '丁' && v.outline.items[2].level === 4)
+    assert(doc.getText() === original, '单次撤销应完整回滚 before 拖拽')
+
+    // #67 迁移交互：before 拖拽把丁移出乙子树后乙降格为叶（展开键被
+    // safeFilter 丢弃），undo 回滚文本后乙重新成为父节点但键已丢——丁处于
+    // 折叠遮蔽态。重设档位 5 恢复全展开再继续（隐藏条目不可拖是既定口径）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.expandClick', level: 5 })
+    await waitViewState('outline-drag.md', (v) => v.outline?.visibleIndices.length === 5)
+    // inside 落点：丁拖到丙内部 → 降 H3 成为丙的最后子级（物理移到丙段尾）
+    await drag(2, 3, 'inside', 'drop')
+    const insideDrop = await waitViewState('outline-drag.md', (v) =>
+      v.outline?.items[3] !== undefined && v.outline.items[3].text === '丁' && v.outline.items[3].level === 3)
+    assert(doc.getText() === [
+      '---', 'title: 拖拽', '---', '',
+      '# 甲', '甲内容。', '## 乙', '乙内容。', '## 丙', '丙内容。', '### 丁', '丁内容。', '# 戊', '戊内容。',
+    ].join('\n'), 'inside 落点全文对拍')
+    assert(JSON.stringify(insideDrop.outline!.items.map((i) => [i.level, i.text])) ===
+      JSON.stringify([[1, '甲'], [2, '乙'], [2, '丙'], [3, '丁'], [1, '戊']]),
+      'inside 落点条目序与调级')
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await waitViewState('outline-drag.md', (v) => v.outline?.items[3]?.text === '丙')
+    assert(doc.getText() === original, '单次撤销应完整回滚 inside 拖拽')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.expandClick', level: 5 })
+    await waitViewState('outline-drag.md', (v) => v.outline?.visibleIndices.length === 5)
+
+    // after 落点：乙（含跨级子丁）拖到戊之后 → 乙升 H1、丁随行 H3；
+    // 插入点为文档末尾（文末无尾换行 → 搬移段前置换行）
+    await drag(1, 4, 'after', 'drop')
+    const afterDrop = await waitViewState('outline-drag.md', (v) =>
+      v.outline?.items[2] !== undefined && v.outline.items[2].text === '戊')
+    assert(doc.getText() === [
+      '---', 'title: 拖拽', '---', '',
+      '# 甲', '甲内容。', '## 丙', '丙内容。', '# 戊', '戊内容。',
+      '# 乙', '乙内容。', '### 丁', '丁内容。', '',
+    ].join('\n'), 'after 落点全文对拍（子树随行递归调级 + 末尾前置换行）')
+    assert(JSON.stringify(afterDrop.outline!.items.map((i) => [i.level, i.text])) ===
+      JSON.stringify([[1, '甲'], [2, '丙'], [1, '戊'], [1, '乙'], [3, '丁']]),
+      'after 落点条目序与子树递归调级')
+    state = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(state.appliedEdits - before.appliedEdits === 3, '三态拖拽各一笔写回（累计 +3）')
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await waitViewState('outline-drag.md', (v) => v.outline?.items[1]?.text === '乙' && v.outline.items[1].level === 2)
+    assert(doc.getText() === original, '单次撤销应完整回滚 after 拖拽（正文与大纲同步还原）')
+    if (doc.isDirty) {
+      await doc.save()
+    }
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-drag.md', (v) => v.sidebar?.open === false)
+  }],
+
+  ['大纲拖拽无效落点与悬停观测：拒绝零写回、落点指示绘制层证据（#70）', async () => {
+    // 断言口径（视觉层断言必查）：dropHintPainted 是落点指示的中心点命中 +
+    // computed 插入线/包裹高亮可读（样式失效时类在而视觉差异不在）；无效
+    // 落点（拖入自身子树）不显示指示、drop 零写回；Esc 取消零写回
+    await openWithEditor('outline-drag.md')
+    await waitSessionReady('outline-drag.md')
+    const uri = wsUri('outline-drag.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('outline-drag.md'))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-drag.md',
+      (v) => v.sidebar?.open === true && v.outline?.panelPainted === true && v.outline.items.length === 5)
+    const original = doc.getText()
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    // 无效悬停：甲的子树含乙丁丙 → 目标乙（inside）无有效落点
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'outline.test.drag', from: 0, to: 1, position: 'inside', action: 'hover' })
+    const invalidHover = await waitViewState('outline-drag.md', (v) => v.outline?.draggingIndex === 0)
+    assert(invalidHover.outline!.dropTargetIndex === null, '拖入自身子树不得出现有效落点')
+    assert(invalidHover.outline!.dropPosition === null, '无效落点三态应为 null')
+    assert(invalidHover.outline!.dropHintPainted === false, '无效落点不得绘制指示')
+    // 有效悬停：丙 → 戊 上缘（before），绘制层证据成立
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'outline.test.drag', from: 3, to: 4, position: 'before', action: 'hover' })
+    const validHover = await waitViewState('outline-drag.md', (v) => v.outline?.dropTargetIndex === 4)
+    assert(validHover.outline!.draggingIndex === 3, '悬停态应回报拖拽源')
+    assert(validHover.outline!.dropPosition === 'before', '悬停态应回报三态')
+    assert(validHover.outline!.dropHintPainted === true,
+      `落点指示应真实绘制（命中失败：${JSON.stringify(validHover.outline)}）`)
+    // 无效落点 drop（丁在甲子树内）：零写回
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'outline.test.drag', from: 0, to: 2, position: 'after', action: 'drop' })
+    await waitViewState('outline-drag.md', (v) => v.outline?.draggingIndex === null)
+    await new Promise((r) => setTimeout(r, 150))
+    const afterInvalid = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterInvalid.appliedEdits === before.appliedEdits, '无效落点 drop 不得写回')
+    assert(doc.getText() === original, '无效落点 drop 后文档保持')
+    // Esc 取消：零写回、状态清空
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'outline.test.drag', from: 3, to: 0, position: 'after', action: 'escape' })
+    const escaped = await waitViewState('outline-drag.md', (v) => v.outline?.draggingIndex === null)
+    assert(escaped.outline!.dropTargetIndex === null, 'Esc 后落点清空')
+    const afterEsc = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(afterEsc.appliedEdits === before.appliedEdits, 'Esc 取消不得写回')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-drag.md', (v) => v.sidebar?.open === false)
+  }],
+
+  ['大纲折叠与搜索态下的拖拽：视图状态随写回存活重算（#70）', async () => {
+    // 折叠态：No-Expand 下拖可见条目（戊 → 甲之前），写回后折叠迁移语义
+    // 保持（戊升至首位、甲的子树仍折叠遮蔽）；搜索态：词条保持、过滤对
+    // 新序列重算
+    await openWithEditor('outline-drag.md')
+    await waitSessionReady('outline-drag.md')
+    const uri = wsUri('outline-drag.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('outline-drag.md'))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-drag.md',
+      (v) => v.sidebar?.open === true && v.outline?.items.length === 5)
+    const original = doc.getText()
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    // No-Expand：乙丁丙折叠遮蔽（可见 = 甲、戊）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.expandClick', level: 0 })
+    await waitViewState('outline-drag.md', (v) =>
+      JSON.stringify(v.outline?.visibleIndices) === JSON.stringify([0, 4]))
+    // 戊(index 4) → 甲(index 0) 之前（before；两者皆可见，合法落点）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'outline.test.drag', from: 4, to: 0, position: 'before', action: 'drop' })
+    const folded = await waitViewState('outline-drag.md', (v) =>
+      v.outline?.items[0]?.text === '戊' && v.outline.items[0].level === 1)
+    // 尾部换行说明：删除自 # 戊 行首起，丙内容行的终止符留在原位（行尾
+    // 换行不属于被搬移的戊段——段自标题行首起算）
+    assert(doc.getText() === [
+      '---', 'title: 拖拽', '---', '',
+      '# 戊', '戊内容。', '# 甲', '甲内容。', '## 乙', '乙内容。', '#### 丁', '丁内容。', '## 丙', '丙内容。', '',
+    ].join('\n'), '折叠态拖拽写回全文对拍')
+    // 折叠迁移：档位仍 0；戊（新首位，叶）与甲（父，子树仍折叠）可见
+    assert(folded.outline!.expandLevel === 0, '档位不受拖拽影响')
+    assert(JSON.stringify(folded.outline!.visibleIndices) === JSON.stringify([0, 1]),
+      `折叠遮蔽语义应随写回存活（实际 ${JSON.stringify(folded.outline!.visibleIndices)}）`)
+    // 撤销回原
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await waitViewState('outline-drag.md', (v) => v.outline?.items[0]?.text === '甲')
+    assert(doc.getText() === original, '撤销应回原文')
+    // 搜索态：词条「丁」只保留 甲乙丁（丙戊过滤隐藏）；丁 → 甲之前
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.expandClick', level: 5 })
+    await waitViewState('outline-drag.md', (v) => v.outline?.visibleIndices.length === 5)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.searchInput', text: '丁' })
+    await waitViewState('outline-drag.md', (v) =>
+      JSON.stringify(v.outline?.filteredVisibleIndices) === JSON.stringify([0, 1, 2]))
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'outline.test.drag', from: 2, to: 0, position: 'before', action: 'drop' })
+    const searched = await waitViewState('outline-drag.md', (v) =>
+      v.outline?.items[0]?.text === '丁' && v.outline.items[0].level === 1)
+    assert(doc.getText() === [
+      '---', 'title: 拖拽', '---', '',
+      '# 丁', '丁内容。', '# 甲', '甲内容。', '## 乙', '乙内容。', '## 丙', '丙内容。', '# 戊', '戊内容。',
+    ].join('\n'), '搜索态拖拽写回全文对拍')
+    // 搜索态存活：词条保持，过滤对新序列重算（丁升至首位且无祖先 → 仅命中项可见）
+    assert(searched.outline!.searchQuery === '丁' && searched.outline!.searchActive === true,
+      '搜索词条与态应随写回保持')
+    assert(JSON.stringify(searched.outline!.filteredVisibleIndices) === JSON.stringify([0]),
+      `过滤可见集应重算（实际 ${JSON.stringify(searched.outline!.filteredVisibleIndices)}）`)
+    // 清搜索、撤销回原、收尾
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'outline.test.searchInput', text: '' })
+    await waitViewState('outline-drag.md', (v) => v.outline?.searchActive === false)
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await waitViewState('outline-drag.md', (v) => v.outline?.items[0]?.text === '甲' && v.outline.items.length === 5)
+    assert(doc.getText() === original, '撤销后应回原文')
+    const final = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(final.appliedEdits - before.appliedEdits === 2, '折叠与搜索态拖拽各一笔写回')
+    if (doc.isDirty) {
+      await doc.save()
+    }
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('outline-drag.md', (v) => v.sidebar?.open === false)
   }],
 
   // ---- 工单 #59：公式渲染（KaTeX）实时预览/阅读/一致性 ----

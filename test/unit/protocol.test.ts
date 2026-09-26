@@ -301,11 +301,12 @@ describe('isWebviewToHost', () => {
     expect(isHostToWebview({ kind: 'sidebar.test.clickx' })).toBe(false)
   })
 
-  it('view.state 的 outline 观测（#54）：合法样本接受、字段非法拒绝', () => {
+  it('view.state 的 outline 观测（#54/#65）：合法样本接受、字段非法拒绝', () => {
     const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
     // 合法：active 布尔；绘制命中布尔；图标尺寸与滚动几何 null 或非负数
     // （jsdom 无布局时 null）；items 每项 level 1-6 整数 + 字符串文字 +
-    // 非负行号；名称字符串或 null
+    // plainText（#65 剥标记可见文本）+ 白名单标记区间数组 + 非负行号；
+    // 名称字符串或 null；style（#65 绘制证据）缺省或字段全为字符串或 null
     expect(
       isWebviewToHost({
         ...base,
@@ -317,11 +318,50 @@ describe('isWebviewToHost', () => {
           panelScrollHeightPx: 1328,
           panelClientHeightPx: 570,
           items: [
-            { level: 1, text: '文档主标题', line: 1 },
-            { level: 2, text: '', line: 5 },
+            { level: 1, text: '**重点** 结论', plainText: '重点 结论', line: 1,
+              spans: [{ kind: 'strong', start: 0, end: 2 }] },
+            { level: 2, text: '', plainText: '', line: 5, spans: [] },
           ],
           toggleAriaLabel: '大纲',
           panelAriaLabel: '大纲',
+          style: {
+            itemFontWeight: '400',
+            strongFontWeight: '700',
+            codeFontFamily: 'monospace',
+            itemFontFamily: 'sans-serif',
+            itemColor: 'rgb(204, 204, 204)',
+            headingColor: 'rgb(204, 204, 204)',
+          },
+          locatedItemIndex: 1,
+          locatedText: '',
+          locatedPainted: true,
+          // #67 折叠观测（必填：probe 形态演进，旧样本同步补齐）
+          expandLevel: 5,
+          visibleIndices: [0, 1],
+          sliderPainted: true,
+          sliderActiveDotPainted: true,
+          chevronPainted: true,
+          // #68 搜索与工具条观测（必填）
+          searchQuery: '',
+          searchActive: false,
+          filteredVisibleIndices: [0, 1],
+          toolbarPainted: true,
+          jumpBottomAriaLabel: '跳转到笔记末尾',
+          resetAriaLabel: '重置',
+          searchPlaceholder: '输入以搜索',
+          searchHitPainted: false,
+          nomatchPainted: false,
+          // #69 菜单观测（必填）
+          menuOpen: false,
+          menuTargetIndex: null,
+          menuPainted: false,
+          submenuVisible: false,
+          renamingIndex: null,
+          // #70 拖拽观测（必填：悬停态样本，dropHintPainted 由真宿主断言）
+          draggingIndex: 0,
+          dropTargetIndex: 1,
+          dropPosition: 'inside',
+          dropHintPainted: true,
         },
       }),
     ).toBe(true)
@@ -338,6 +378,32 @@ describe('isWebviewToHost', () => {
           items: [],
           toggleAriaLabel: null,
           panelAriaLabel: null,
+          locatedItemIndex: null,
+          locatedText: null,
+          locatedPainted: false,
+          expandLevel: 0,
+          visibleIndices: [],
+          sliderPainted: false,
+          sliderActiveDotPainted: false,
+          chevronPainted: false,
+          searchQuery: '甲',
+          searchActive: true,
+          filteredVisibleIndices: [],
+          toolbarPainted: false,
+          jumpBottomAriaLabel: null,
+          resetAriaLabel: null,
+          searchPlaceholder: null,
+          searchHitPainted: true,
+          nomatchPainted: true,
+          menuOpen: false,
+          menuTargetIndex: null,
+          menuPainted: false,
+          submenuVisible: false,
+          renamingIndex: null,
+          draggingIndex: null,
+          dropTargetIndex: null,
+          dropPosition: null,
+          dropHintPainted: false,
         },
       }),
     ).toBe(true)
@@ -361,35 +427,377 @@ describe('isWebviewToHost', () => {
     expect(
       isWebviewToHost({
         ...base,
-        outline: { active: true, items: [{ level: 0, text: 'x', line: 1 }] },
+        outline: { active: true, items: [{ level: 0, text: 'x', plainText: 'x', spans: [], line: 1 }] },
       }),
     ).toBe(false)
     expect(
       isWebviewToHost({
         ...base,
-        outline: { active: true, items: [{ level: 7, text: 'x', line: 1 }] },
+        outline: { active: true, items: [{ level: 7, text: 'x', plainText: 'x', spans: [], line: 1 }] },
       }),
     ).toBe(false)
     expect(
       isWebviewToHost({
         ...base,
-        outline: { active: true, items: [{ level: 2, text: 3, line: 1 }] },
+        outline: { active: true, items: [{ level: 2, text: 3, plainText: 'x', spans: [], line: 1 }] },
       }),
     ).toBe(false)
     expect(
       isWebviewToHost({
         ...base,
-        outline: { active: true, items: [{ level: 2, text: 'x', line: -1 }] },
+        outline: { active: true, items: [{ level: 2, text: 'x', plainText: 'x', spans: [], line: -1 }] },
+      }),
+    ).toBe(false)
+    // 非法（#65）：缺 plainText / spans 非数组 / 白名单外 kind / 负偏移 /
+    // 区间倒置 / style 字段非字符串
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: { active: true, items: [{ level: 2, text: 'x', spans: [], line: 1 }] },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: { active: true, items: [{ level: 2, text: 'x', plainText: 'x', spans: 'strong', line: 1 }] },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: { active: true, items: [{ level: 2, text: 'x', plainText: 'x', line: 1,
+          spans: [{ kind: 'highlight', start: 0, end: 1 }] }] },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: { active: true, items: [{ level: 2, text: 'x', plainText: 'x', line: 1,
+          spans: [{ kind: 'strong', start: -1, end: 1 }] }] },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: { active: true, items: [{ level: 2, text: 'x', plainText: 'x', line: 1,
+          spans: [{ kind: 'strong', start: 2, end: 1 }] }] },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        outline: { active: true, items: [], style: { itemFontWeight: 400 } },
       }),
     ).toBe(false)
     // 缺省合法（向后兼容：大纲观测未装配的旧 webview）
     expect(isWebviewToHost(base)).toBe(true)
   })
 
+  it('view.state 的 outline 观测（#66）：located 字段非法拒绝', () => {
+    const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
+    const legal = {
+      active: true,
+      togglePainted: false,
+      panelPainted: false,
+      toggleIconSizePx: null,
+      panelScrollHeightPx: null,
+      panelClientHeightPx: null,
+      items: [] as unknown[],
+      toggleAriaLabel: null,
+      panelAriaLabel: null,
+    }
+    // locatedItemIndex：null 或非负整数（负数、小数、字符串拒绝）
+    expect(isWebviewToHost({ ...base, outline: { ...legal, locatedItemIndex: -1, locatedText: null, locatedPainted: false } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, locatedItemIndex: 1.5, locatedText: null, locatedPainted: false } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, locatedItemIndex: '0', locatedText: null, locatedPainted: false } })).toBe(false)
+    // locatedText：字符串或 null；locatedPainted：布尔
+    expect(isWebviewToHost({ ...base, outline: { ...legal, locatedItemIndex: 0, locatedText: 7, locatedPainted: false } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, locatedItemIndex: 0, locatedText: null, locatedPainted: 1 } })).toBe(false)
+  })
+
   it('outline.test.click 测试钩子消息校验（#54）', () => {
     expect(isHostToWebview({ kind: 'outline.test.click' })).toBe(true)
     expect(isHostToWebview({ kind: 'outline.test.click', extra: 1 })).toBe(true)
     expect(isHostToWebview({ kind: 'outline.test.clickx' })).toBe(false)
+  })
+
+  it('outline.test.itemClick 测试钩子消息校验（#66）：非负整数 index', () => {
+    expect(isHostToWebview({ kind: 'outline.test.itemClick', index: 0 })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.itemClick', index: 12, extra: 1 })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.itemClick', index: -1 })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.itemClick', index: 1.5 })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.itemClick', index: '0' })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.itemClick' })).toBe(false)
+  })
+
+  it('view.state 的 outline 观测（#67）：expandLevel/visibleIndices/滑块与箭头绘制字段校验', () => {
+    const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
+    const legal = {
+      active: true,
+      togglePainted: false,
+      panelPainted: false,
+      toggleIconSizePx: null,
+      panelScrollHeightPx: null,
+      panelClientHeightPx: null,
+      items: [] as unknown[],
+      toggleAriaLabel: null,
+      panelAriaLabel: null,
+      locatedItemIndex: null,
+      locatedText: null,
+      locatedPainted: false,
+      // #68 必填字段（本测试的 spread 断言自动携带）
+      searchQuery: '',
+      searchActive: false,
+      filteredVisibleIndices: [] as number[],
+      toolbarPainted: false,
+      jumpBottomAriaLabel: null,
+      resetAriaLabel: null,
+      searchPlaceholder: null,
+      searchHitPainted: false,
+      nomatchPainted: false,
+      // #70 必填字段（同上）
+      draggingIndex: null,
+      dropTargetIndex: null,
+      dropPosition: null,
+      dropHintPainted: false,
+    }
+    // 合法：档位 0-5 整数、可见索引非负整数数组、三个绘制命中布尔
+    expect(isWebviewToHost({
+      ...base,
+      outline: { ...legal, expandLevel: 0, visibleIndices: [0, 1, 3],
+        sliderPainted: true, sliderActiveDotPainted: true, chevronPainted: false,
+        menuOpen: false, menuTargetIndex: null, menuPainted: false, submenuVisible: false, renamingIndex: null },
+    })).toBe(true)
+    expect(isWebviewToHost({
+      ...base,
+      outline: { ...legal, expandLevel: 5, visibleIndices: [], sliderPainted: false,
+        sliderActiveDotPainted: false, chevronPainted: false,
+        menuOpen: false, menuTargetIndex: null, menuPainted: false, submenuVisible: false, renamingIndex: null },
+    })).toBe(true)
+    // 非法：档位越界（-1、6）、小数、字符串
+    for (const level of [-1, 6, 2.5, '2']) {
+      expect(isWebviewToHost({ ...base, outline: { ...legal, expandLevel: level,
+        visibleIndices: [], sliderPainted: false, sliderActiveDotPainted: false, chevronPainted: false } }))
+        .toBe(false)
+    }
+    // 非法：visibleIndices 非数组 / 含负数 / 含非整数
+    expect(isWebviewToHost({ ...base, outline: { ...legal, expandLevel: 2, visibleIndices: '0',
+      sliderPainted: false, sliderActiveDotPainted: false, chevronPainted: false } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, expandLevel: 2, visibleIndices: [0, -1],
+      sliderPainted: false, sliderActiveDotPainted: false, chevronPainted: false } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, expandLevel: 2, visibleIndices: [0.5],
+      sliderPainted: false, sliderActiveDotPainted: false, chevronPainted: false } })).toBe(false)
+    // 非法：绘制字段非布尔
+    expect(isWebviewToHost({ ...base, outline: { ...legal, expandLevel: 2, visibleIndices: [],
+      sliderPainted: 1, sliderActiveDotPainted: false, chevronPainted: false } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, expandLevel: 2, visibleIndices: [],
+      sliderPainted: false, sliderActiveDotPainted: 'x', chevronPainted: false } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, expandLevel: 2, visibleIndices: [],
+      sliderPainted: false, sliderActiveDotPainted: false, chevronPainted: null } })).toBe(false)
+  })
+
+  it('outline.test.expandClick / outline.test.chevronClick 测试钩子消息校验（#67）', () => {
+    // expandClick：档位 0-5 整数
+    for (const level of [0, 1, 2, 3, 4, 5]) {
+      expect(isHostToWebview({ kind: 'outline.test.expandClick', level })).toBe(true)
+    }
+    expect(isHostToWebview({ kind: 'outline.test.expandClick', level: -1 })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.expandClick', level: 6 })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.expandClick', level: 1.5 })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.expandClick', level: '2' })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.expandClick' })).toBe(false)
+    // chevronClick：非负整数 index（与 itemClick 同口径）
+    expect(isHostToWebview({ kind: 'outline.test.chevronClick', index: 0 })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.chevronClick', index: 3, extra: 1 })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.chevronClick', index: -1 })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.chevronClick', index: '0' })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.chevronClick' })).toBe(false)
+  })
+
+  it('clipboard.write 消息校验（#69）：text 直写或 linkHeading 由宿主拼标题链接', () => {
+    expect(isWebviewToHost({ kind: 'clipboard.write', text: '标题文本' })).toBe(true)
+    expect(isWebviewToHost({ kind: 'clipboard.write', text: '' })).toBe(true)
+    expect(isWebviewToHost({
+      kind: 'clipboard.write',
+      linkHeading: { docUri: 'file:///d%3A/notes/a.md', heading: '剥标记标题' },
+    })).toBe(true)
+    // 非法：text 非字符串
+    expect(isWebviewToHost({ kind: 'clipboard.write', text: 7 })).toBe(false)
+    expect(isWebviewToHost({ kind: 'clipboard.write' })).toBe(false)
+    // 非法：linkHeading 字段缺失/类型不对
+    expect(isWebviewToHost({ kind: 'clipboard.write', linkHeading: {} })).toBe(false)
+    expect(isWebviewToHost({
+      kind: 'clipboard.write',
+      linkHeading: { docUri: 1, heading: 'x' },
+    })).toBe(false)
+    expect(isWebviewToHost({
+      kind: 'clipboard.write',
+      linkHeading: { docUri: 'file:///a.md', heading: null },
+    })).toBe(false)
+  })
+
+  it('outline.test.contextMenu / menuClick / menuClose / renameKey 测试钩子消息校验（#69）', () => {
+    expect(isHostToWebview({ kind: 'outline.test.contextMenu', index: 0 })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.contextMenu', index: 4, extra: 1 })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.contextMenu', index: -1 })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.contextMenu', index: 1.5 })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.contextMenu' })).toBe(false)
+    // menuClick：command 为已知菜单命令字符串
+    expect(isHostToWebview({ kind: 'outline.test.menuClick', command: 'delete' })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.menuClick', command: 'copyLink' })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.menuClick', command: 'unknown' })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.menuClick', command: 7 })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.menuClick' })).toBe(false)
+    // menuClose：无参
+    expect(isHostToWebview({ kind: 'outline.test.menuClose' })).toBe(true)
+    // renameKey：text 字符串 + enter/escape
+    expect(isHostToWebview({ kind: 'outline.test.renameKey', text: '新名', key: 'enter' })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.renameKey', text: '', key: 'escape' })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.renameKey', text: 'x', key: 'tab' })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.renameKey', text: 7, key: 'enter' })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.renameKey', key: 'enter' })).toBe(false)
+  })
+
+  it('outline.test.drag 测试钩子消息校验（#70）：非负索引 + 三态 + 三动作', () => {
+    for (const position of ['before', 'after', 'inside'] as const) {
+      for (const action of ['hover', 'drop', 'escape'] as const) {
+        expect(isHostToWebview({ kind: 'outline.test.drag', from: 0, to: 3, position, action })).toBe(true)
+      }
+    }
+    expect(isHostToWebview({ kind: 'outline.test.drag', from: 1, to: 0, position: 'inside', action: 'drop', extra: 1 })).toBe(true)
+    // 非法：索引负数/小数/缺失、三态外取值、动作外取值
+    expect(isHostToWebview({ kind: 'outline.test.drag', from: -1, to: 0, position: 'before', action: 'drop' })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.drag', from: 0, to: 1.5, position: 'before', action: 'drop' })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.drag', from: 0, position: 'before', action: 'drop' })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.drag', from: 0, to: 1, position: 'onto', action: 'drop' })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.drag', from: 0, to: 1, position: 'before', action: 'cancel' })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.drag' })).toBe(false)
+  })
+
+  it('view.state 的 outline 观测（#68/#69）：搜索、工具条与菜单字段校验', () => {
+    const base = { kind: 'view.state', text: '# t', docLength: 4, lineCount: 1, renderedLines: 40 }
+    const legal = {
+      active: true,
+      togglePainted: false,
+      panelPainted: false,
+      toggleIconSizePx: null,
+      panelScrollHeightPx: null,
+      panelClientHeightPx: null,
+      items: [] as unknown[],
+      toggleAriaLabel: null,
+      panelAriaLabel: null,
+      locatedItemIndex: null,
+      locatedText: null,
+      locatedPainted: false,
+      expandLevel: 5,
+      visibleIndices: [] as number[],
+      sliderPainted: false,
+      sliderActiveDotPainted: false,
+      chevronPainted: false,
+      searchQuery: '',
+      searchActive: false,
+      filteredVisibleIndices: [] as number[],
+      toolbarPainted: false,
+      jumpBottomAriaLabel: null,
+      resetAriaLabel: null,
+      searchPlaceholder: null,
+      searchHitPainted: false,
+      nomatchPainted: false,
+      menuOpen: false,
+      menuTargetIndex: null,
+      menuPainted: false,
+      submenuVisible: false,
+      renamingIndex: null,
+      draggingIndex: null,
+      dropTargetIndex: null,
+      dropPosition: null,
+      dropHintPainted: false,
+    }
+    // 合法：词条字符串 + 搜索态布尔 + 组合可见索引数组 + 绘制布尔 + 名称/占位文案
+    expect(isWebviewToHost({
+      ...base,
+      outline: { ...legal, searchQuery: '标题', searchActive: true,
+        filteredVisibleIndices: [0, 2], toolbarPainted: true,
+        jumpBottomAriaLabel: '跳转到笔记末尾', resetAriaLabel: '重置',
+        searchPlaceholder: '输入以搜索', searchHitPainted: true, nomatchPainted: false },
+    })).toBe(true)
+    // 非法：searchQuery 非字符串 / searchActive 非布尔
+    expect(isWebviewToHost({ ...base, outline: { ...legal, searchQuery: 1, searchActive: false,
+      filteredVisibleIndices: [], toolbarPainted: false, jumpBottomAriaLabel: null,
+      resetAriaLabel: null, searchPlaceholder: null, searchHitPainted: false, nomatchPainted: false } }))
+      .toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, searchQuery: '', searchActive: 1,
+      filteredVisibleIndices: [], toolbarPainted: false, jumpBottomAriaLabel: null,
+      resetAriaLabel: null, searchPlaceholder: null, searchHitPainted: false, nomatchPainted: false } }))
+      .toBe(false)
+    // 非法：filteredVisibleIndices 非数组 / 含负数 / 含非整数
+    expect(isWebviewToHost({ ...base, outline: { ...legal, searchQuery: '', searchActive: false,
+      filteredVisibleIndices: '0,1', toolbarPainted: false, jumpBottomAriaLabel: null,
+      resetAriaLabel: null, searchPlaceholder: null, searchHitPainted: false, nomatchPainted: false } }))
+      .toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, searchQuery: '', searchActive: false,
+      filteredVisibleIndices: [0, -1], toolbarPainted: false, jumpBottomAriaLabel: null,
+      resetAriaLabel: null, searchPlaceholder: null, searchHitPainted: false, nomatchPainted: false } }))
+      .toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, searchQuery: '', searchActive: false,
+      filteredVisibleIndices: [1.5], toolbarPainted: false, jumpBottomAriaLabel: null,
+      resetAriaLabel: null, searchPlaceholder: null, searchHitPainted: false, nomatchPainted: false } }))
+      .toBe(false)
+    // 非法：绘制字段非布尔、名称/占位文案非字符串非 null
+    expect(isWebviewToHost({ ...base, outline: { ...legal, searchQuery: '', searchActive: false,
+      filteredVisibleIndices: [], toolbarPainted: 1, jumpBottomAriaLabel: null,
+      resetAriaLabel: null, searchPlaceholder: null, searchHitPainted: false, nomatchPainted: false } }))
+      .toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, searchQuery: '', searchActive: false,
+      filteredVisibleIndices: [], toolbarPainted: false, jumpBottomAriaLabel: 7,
+      resetAriaLabel: null, searchPlaceholder: null, searchHitPainted: false, nomatchPainted: false } }))
+      .toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, searchQuery: '', searchActive: false,
+      filteredVisibleIndices: [], toolbarPainted: false, jumpBottomAriaLabel: null,
+      resetAriaLabel: null, searchPlaceholder: true, searchHitPainted: false, nomatchPainted: false } }))
+      .toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, searchQuery: '', searchActive: false,
+      filteredVisibleIndices: [], toolbarPainted: false, jumpBottomAriaLabel: null,
+      resetAriaLabel: null, searchPlaceholder: null, searchHitPainted: 'x', nomatchPainted: false } }))
+      .toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, searchQuery: '', searchActive: false,
+      filteredVisibleIndices: [], toolbarPainted: false, jumpBottomAriaLabel: null,
+      resetAriaLabel: null, searchPlaceholder: null, searchHitPainted: false, nomatchPainted: null } }))
+      .toBe(false)
+    // 合法：菜单打开态 + 目标索引 + 绘制布尔 + 重命名索引
+    expect(isWebviewToHost({
+      ...base,
+      outline: { ...legal, menuOpen: true, menuTargetIndex: 2, menuPainted: true, renamingIndex: 2 },
+    })).toBe(true)
+    // 非法：menuOpen/menuPainted/submenuVisible 非布尔
+    expect(isWebviewToHost({ ...base, outline: { ...legal, menuOpen: 1 } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, menuPainted: 'x' } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, submenuVisible: null } })).toBe(false)
+    // 非法：menuTargetIndex/renamingIndex 非 null 非非负整数
+    expect(isWebviewToHost({ ...base, outline: { ...legal, menuTargetIndex: -1 } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, menuTargetIndex: 1.5 } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, renamingIndex: '0' } })).toBe(false)
+    // 合法：拖拽悬停态（#70）
+    expect(isWebviewToHost({
+      ...base,
+      outline: { ...legal, draggingIndex: 0, dropTargetIndex: 2, dropPosition: 'after', dropHintPainted: true },
+    })).toBe(true)
+    // 非法：拖拽索引负数/小数、三态外取值、绘制布尔非布尔
+    expect(isWebviewToHost({ ...base, outline: { ...legal, draggingIndex: -1 } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, dropTargetIndex: 1.5 } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, dropPosition: 'onto' } })).toBe(false)
+    expect(isWebviewToHost({ ...base, outline: { ...legal, dropHintPainted: 1 } })).toBe(false)
+  })
+
+  it('outline.test.searchInput / outline.test.toolbarClick 测试钩子消息校验（#68）', () => {
+    expect(isHostToWebview({ kind: 'outline.test.searchInput', text: '' })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.searchInput', text: '标题', extra: 1 })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.searchInput', text: 7 })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.searchInput' })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.toolbarClick', action: 'jump-bottom' })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.toolbarClick', action: 'reset', extra: 1 })).toBe(true)
+    expect(isHostToWebview({ kind: 'outline.test.toolbarClick', action: 'top' })).toBe(false)
+    expect(isHostToWebview({ kind: 'outline.test.toolbarClick' })).toBe(false)
   })
 
   it('表格绘制样本校验：可见性和边框计算值类型必须可信', () => {
