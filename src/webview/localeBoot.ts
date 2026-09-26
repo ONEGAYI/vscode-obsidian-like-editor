@@ -15,16 +15,26 @@ export { onLocaleChanged, currentLocaleLang }
 
 /**
  * 首帧装配：读取文档数据岛并安装语言包。数据岛缺失/损坏返回 false
- * （取词回退键名，不抛错）；成功时同步 <html lang>（与宿主注入双保险）。
+ * （取词回退键名，不抛错）并 console.warn 留下定位信息（R4：语言链路的
+ * 静默失败可观测）；成功时同步 <html lang>（与宿主注入双保险）。
  */
 export function bootLocaleFromDocument(): boolean {
   const island = document.getElementById(LOCALE_ISLAND_ID)
   const text = island?.textContent
   if (!text) {
+    console.warn(
+      `[vsidian] locale island #${LOCALE_ISLAND_ID} is missing or empty: ` +
+        `all texts fall back to message keys (current lang=${JSON.stringify(currentLocaleLang())})`,
+    )
     return false
   }
   const data = parseLocaleIsland(text)
   if (!data) {
+    console.warn(
+      `[vsidian] locale island #${LOCALE_ISLAND_ID} is malformed: ` +
+        `texts fall back to message keys (current lang=${JSON.stringify(currentLocaleLang())}, ` +
+        `raw head=${JSON.stringify(text.slice(0, 80))})`,
+    )
     return false
   }
   installLocale(data.lang, data.messages)
@@ -33,13 +43,29 @@ export function bootLocaleFromDocument(): boolean {
 }
 
 /**
- * 宿主消息入口（locale.changed）：非该消息静默忽略；命中时原子换包并
- * 同步 <html lang>，installLocale 通知触发常驻文本重渲染。
+ * 宿主消息入口（locale.changed）：非该消息静默忽略（不是语言链路的失败）；
+ * 命中但载荷非法（协议校验不过）时丢弃并 console.warn 留下当前 lang 现值
+ * （R4）；合法时原子换包并同步 <html lang>，installLocale 通知触发常驻
+ * 文本重渲染。
  */
 export function handleLocaleChangedMessage(message: unknown): void {
-  if (!isHostToWebview(message) || message.kind !== 'locale.changed') {
+  if (
+    typeof message !== 'object' ||
+    message === null ||
+    (message as { kind?: unknown }).kind !== 'locale.changed'
+  ) {
     return
   }
-  installLocale(message.lang, message.messages)
-  document.documentElement.lang = message.lang
+  // 造型到目标形态后经协议守卫整体校验（isHostToWebview 的收窄无法与
+  // 上方的手写 kind 判定关联，须先造型）
+  const localeMessage = message as { kind: 'locale.changed'; lang: string; messages: Record<string, string> }
+  if (!isHostToWebview(localeMessage)) {
+    console.warn(
+      '[vsidian] dropping malformed locale.changed message ' +
+        `(current lang=${JSON.stringify(currentLocaleLang())})`,
+    )
+    return
+  }
+  installLocale(localeMessage.lang, localeMessage.messages)
+  document.documentElement.lang = localeMessage.lang
 }

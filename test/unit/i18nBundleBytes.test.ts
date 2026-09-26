@@ -88,6 +88,19 @@ function readBundle(bundle: string): string {
   }
 }
 
+/** 还原 esbuild 的 \uXXXX 转义（R5）：esbuild 默认 charset=ascii，非 ASCII
+ *  字节以 \uXXXX 形态进产物（含大小写两种十六进制写法）——zh 词条的
+ *  includes 检查必须先还原，否则永不命中（辅检空转）。字符串里的字面
+ *  反斜杠编码为 \\，使 \u 前的反斜杠总数成偶——此时 u… 是普通文本，
+ *  按奇偶判定不还原（捕获组长度 +1 即总数，组为偶 = 总数为奇 = 真转义） */
+function decodeUnicodeEscapes(source: string): string {
+  return source.replace(/(\\*)\\u([0-9a-fA-F]{4})/g, (match, slashes: string, hex: string) =>
+    slashes.length % 2 === 0
+      ? `${slashes}${String.fromCharCode(parseInt(hex, 16))}`
+      : match,
+  )
+}
+
 describe('webview 构建产物不含字典字节', () => {
   it.for(WEBVIEW_BUNDLES)('%s 不含字典键的属性形态（静态 import 字典/注册表即全键泄漏）', (bundle) => {
     const source = readBundle(bundle)
@@ -101,7 +114,9 @@ describe('webview 构建产物不含字典字节', () => {
   })
 
   it.for(WEBVIEW_BUNDLES)('%s 不含各命名空间最长词条（防键形态之外的搬运）', (bundle) => {
-    const source = readBundle(bundle)
+    // R5：比较在转义还原后的产物文本上进行（zh 词条以 \uXXXX 形态进产物，
+    // 直接 includes 永不命中）；主检（键属性形态）键为 ASCII，无须还原
+    const source = decodeUnicodeEscapes(readBundle(bundle))
     const leaked = LONGEST_MARKERS.filter((value) => source.includes(value))
     expect(
       leaked,

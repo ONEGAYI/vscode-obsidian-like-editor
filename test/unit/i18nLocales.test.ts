@@ -35,6 +35,20 @@ describe('两语言包契约（en 为类型基准）', () => {
     }
   })
 
+  it('同键占位符集合在 en / zh-cn 两包一致（插值参数 parity，含无占位符键）', () => {
+    // R3：编译期 parity 只锁键集，不锁占位符——某语言漏写/错写 {x} 会让
+    // t() 在该语言下把占位符原样漏给用户。契约与 t() 的 /\{(\w+)\}/ 同源。
+    const placeholders = (value: string): string[] => (value.match(/\{\w+\}/g) ?? []).sort()
+    const mismatches: string[] = []
+    for (const [key, enValue] of Object.entries(en)) {
+      const zhValue = zhCn[key as keyof typeof zhCn]
+      if (placeholders(enValue).join(',') !== placeholders(zhValue).join(',')) {
+        mismatches.push(key)
+      }
+    }
+    expect(mismatches, `占位符集合不一致的键：${mismatches.join(', ')}`).toEqual([])
+  })
+
   it('注册表 LOCALE_MESSAGES 覆盖全部支持语言', () => {
     expect([...SUPPORTED_LOCALES].sort()).toEqual(['en', 'zh-cn'])
     for (const code of SUPPORTED_LOCALES) {

@@ -59,9 +59,10 @@ export function t(key: MessageKey | (string & {}), params?: MessageParams): stri
     return key
   }
   if (params) {
-    for (const [name, value] of Object.entries(params)) {
-      text = text!.replaceAll(`{${name}}`, String(value))
-    }
+    // 单遍扫描（R2）：替换值不参与后续匹配——逐参数 replaceAll 会级联，
+    // 值中含后续占位符字样（如 "{y}"）时被二次替换
+    text = text.replace(/\{(\w+)\}/g, (match, name: string) =>
+      name in params ? String(params[name]) : match)
   }
   return text!
 }

@@ -28,6 +28,14 @@ describe('t() 插值（{x} 简单占位，无复数语法）', () => {
     installLocale('en', { 'math.brace': 'set {x} = {{literal}}' })
     expect(t('math.brace', { x: '1' })).toBe('set 1 = {{literal}}')
   })
+
+  it('插值单遍扫描：替换值中的占位符字样不被后续轮二次替换（R2）', () => {
+    installLocale('en', { 'a.chain': '{x} and {y}', 'a.adjacent': '{x}{y}' })
+    // 旧实现按 params 顺序逐个 replaceAll：先替换的 {x} 值 "{y}" 会被第二轮
+    // {y} 替换吞掉（级联）；单遍扫描的值不参与后续替换
+    expect(t('a.chain', { x: '{y}', y: 'V' })).toBe('{y} and V')
+    expect(t('a.adjacent', { x: '{y}', y: 'z' })).toBe('{y}z')
+  })
 })
 
 describe('t() 回退链（当前包 → en 包 → 键名本身，防御性）', () => {
