@@ -9,6 +9,9 @@
 // - 任务项转换：li 首文本 `[ ] `/`[x] ` → disabled checkbox + marker 区间锚点
 //   （#8 只做显示，#9 实现勾选写回）
 import { describe, it, expect } from 'vitest'
+import { Text } from '@codemirror/state'
+import type { SyntaxNode } from '@lezer/common'
+import { docInput, markdownTreeParser } from '../../src/webview/markdownDoc'
 import {
   convertTaskItems,
   buildLineBounds,
@@ -91,6 +94,90 @@ describe('列表项源锚点（list_item_open 自定义规则）', () => {
     // 外层 li 的源区间覆盖其嵌套列表（DOM 上嵌套 ul 在该 li 内，区间语义一致）
     expect(src.slice(starts[1]!, ends[1]!)).toBe('- 乙项\n  - 嵌套项')
     expect(src.slice(starts[2]!, ends[2]!)).toBe('  - 嵌套项')
+  })
+})
+
+describe('高亮 ==text== 行内规则（#105）', () => {
+  it('成对 == 渲染为 mark 语义元素（html:false 下输出语义标签）', () => {
+    const md = createMarkdownRenderer()
+    const host = renderToDom(md, '正文 ==高亮== 文本\n')
+    const marks = host.querySelectorAll('mark')
+    expect(marks).toHaveLength(1)
+    expect(marks[0]!.textContent).toBe('高亮')
+    expect(host.textContent).toContain('正文 高亮 文本')
+  })
+
+  it('同行多个高亮各自配对；嵌套行内标记照常渲染', () => {
+    const md = createMarkdownRenderer()
+    const host = renderToDom(md, '==甲== 与 ==**粗亮**==\n')
+    expect([...host.querySelectorAll('mark')].map((m) => m.textContent)).toEqual(['甲', '粗亮'])
+    expect(host.querySelector('mark strong')?.textContent).toBe('粗亮')
+  })
+
+  it('残缺与空格紧贴形态按普通文本降级（源文保真）', () => {
+    const md = createMarkdownRenderer()
+    for (const src of ['a == b == c\n', '==未闭合\n', '空 == 内容 == 间隔\n']) {
+      const host = renderToDom(md, src)
+      expect(host.querySelectorAll('mark')).toHaveLength(0)
+      expect(host.textContent).toContain('==')
+    }
+  })
+
+  it('行内代码内的 == 不转换（代码内容字面呈现）', () => {
+    const md = createMarkdownRenderer()
+    const host = renderToDom(md, '`==x==`\n')
+    expect(host.querySelectorAll('mark')).toHaveLength(0)
+    expect(host.querySelector('code')?.textContent).toBe('==x==')
+  })
+
+  it('段内跨行可配对（与 lezer 侧同判）', () => {
+    const md = createMarkdownRenderer()
+    const host = renderToDom(md, '==首行\n次行==\n')
+    expect(host.querySelectorAll('mark')).toHaveLength(1)
+    expect(host.querySelector('mark')?.textContent).toBe('首行\n次行')
+  })
+
+  it('close 扫描跳过行内代码：code span 内 == 不被误配（与 lezer 侧同判）', () => {
+    const md = createMarkdownRenderer()
+    const src = '==use `a==b` now==\n'
+    const host = renderToDom(md, src)
+    // mark 覆盖整段高亮，code span 完整落在 mark 内、内容字面呈现
+    const mark = host.querySelector('mark')
+    expect(mark).not.toBeNull()
+    expect(mark?.textContent).toBe('use a==b now')
+    expect(mark?.querySelector('code')?.textContent).toBe('a==b')
+    // lezer 侧对拍：InlineCode 消费 `a==b`，Highlight 的 close 定界符在
+    // code span 之外——两侧内容区间一致，不因裸搜索把 close 切进 code span
+    const tree = markdownTreeParser.parse(docInput(Text.of(src.trimEnd().split('\n'))))
+    const findHighlight = (node: SyntaxNode): SyntaxNode | null => {
+      if (node.name === 'Highlight') return node
+      for (let c = node.firstChild; c; c = c.nextSibling) {
+        const hit = findHighlight(c)
+        if (hit) return hit
+      }
+      return null
+    }
+    const highlight = findHighlight(tree.topNode)
+    expect(highlight).not.toBeNull()
+    const inner: SyntaxNode[] = []
+    for (let c = highlight!.firstChild; c; c = c.nextSibling) {
+      if (c.name !== 'HighlightMark') inner.push(c)
+    }
+    expect(inner.map((n) => n.name)).toEqual(['InlineCode'])
+  })
+
+  it('==== 空内容形态不产空 mark（源码降级，与 live 侧口径一致）', () => {
+    for (const src of ['====\n', '====x\n', 'a ====\n']) {
+      const host = renderToDom(createMarkdownRenderer(), src)
+      expect(host.querySelectorAll('mark')).toHaveLength(0)
+      expect(host.textContent).toContain('====')
+    }
+  })
+
+  it('未配对反引号按普通文本：其后的 == 照常闭合', () => {
+    const md = createMarkdownRenderer()
+    const host = renderToDom(md, '==a`b== c\n')
+    expect(host.querySelector('mark')?.textContent).toBe('a`b')
   })
 })
 

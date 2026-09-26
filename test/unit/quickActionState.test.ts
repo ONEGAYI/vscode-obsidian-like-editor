@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { markdownLanguage } from '@codemirror/lang-markdown'
 import { Text } from '@codemirror/state'
+import { markdownTreeParser } from '../../src/webview/markdownDoc'
 import { quickActionState } from '../../src/webview/quickActionState'
 
 function state(text: string, op: Parameters<typeof quickActionState>[2], from: number, to = from) {
-  return quickActionState(Text.of(text.split('\n')), markdownLanguage.parser.parse(text), op, { from, to }, null, true)
+  return quickActionState(Text.of(text.split('\n')), markdownTreeParser.parse(text), op, { from, to }, null, true)
 }
 
 describe('快速操作可用状态', () => {
@@ -24,16 +24,26 @@ describe('快速操作可用状态', () => {
 
   it('已应用的粗体是可切换状态，阅读态禁用', () => {
     const text = '**中文**'
-    const tree = markdownLanguage.parser.parse(text)
+    const tree = markdownTreeParser.parse(text)
     const doc = Text.of([text])
     expect(quickActionState(doc, tree, 'bold', { from: 3, to: 3 }, null, true)).toBe('active')
     expect(quickActionState(doc, tree, 'bold', { from: 3, to: 3 }, null, false)).toBe('disabled')
   })
 
+  it('高亮（#105）：光标在高亮内为已应用态，选区全含高亮内容 active、含圈外文字 mixed', () => {
+    expect(state('==高亮文字==', 'highlight', 4)).toBe('active')
+    expect(state('普通文字', 'highlight', 2)).toBe('inactive')
+    const text = '前 ==中段== 后'
+    const tree = markdownTreeParser.parse(text)
+    const doc = Text.of(text.split('\n'))
+    expect(quickActionState(doc, tree, 'highlight', { from: 2, to: 8 }, null, true)).toBe('active')
+    expect(quickActionState(doc, tree, 'highlight', { from: 0, to: 5 }, null, true)).toBe('mixed')
+  })
+
   it('矩形格区按各格汇总应用与混合状态，块级按钮禁用', () => {
     const text = '| **A** | B |\n| --- | --- |\n| **x** | y |'
     const doc = Text.of(text.split('\n'))
-    const tree = markdownLanguage.parser.parse(text)
+    const tree = markdownTreeParser.parse(text)
     const firstColumn = { tableFrom: 0, rowFrom: 0, rowTo: 1, columnFrom: 0, columnTo: 0 }
     const firstRow = { ...firstColumn, rowTo: 0, columnTo: 1 }
     expect(quickActionState(doc, tree, 'bold', { from: 0, to: 0 }, firstColumn, true)).toBe('active')

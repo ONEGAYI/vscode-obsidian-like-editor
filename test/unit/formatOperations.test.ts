@@ -159,4 +159,52 @@ describe('格式操作的文本契约', () => {
     expect(apply('_one_ _two_', 'italic', 7, 10).text).toBe('_one_ two')
     expect(apply('_one_ _two_', 'clearInline', 7, 10).text).toBe('_one_ two')
   })
+
+  it('分割线插入：光标处成段插入 --- 并规整前后空行，光标落在行尾', () => {
+    // 空文档：只插入 --- 本体
+    expect(apply('', 'horizontalRule', 0)).toEqual({ text: '---', selection: { anchor: 3 } })
+    // 行内光标：左右文字各自成段，前后空行隔开
+    expect(apply('上文\n下文', 'horizontalRule', 2))
+      .toEqual({ text: '上文\n\n---\n\n下文', selection: { anchor: 7 } })
+    expect(apply('左字右字', 'horizontalRule', 2))
+      .toEqual({ text: '左字\n\n---\n\n右字', selection: { anchor: 7 } })
+    // 已有空行不叠加：前侧空行 / 后侧空行 / 空行行内三种位置
+    expect(apply('上文\n\n下文', 'horizontalRule', 2))
+      .toEqual({ text: '上文\n\n---\n\n下文', selection: { anchor: 7 } })
+    expect(apply('上文\n\n下文', 'horizontalRule', 3))
+      .toEqual({ text: '上文\n\n---\n\n下文', selection: { anchor: 7 } })
+    // 文档末尾：后无内容时不追加尾部空行
+    expect(apply('上文', 'horizontalRule', 2))
+      .toEqual({ text: '上文\n\n---', selection: { anchor: 7 } })
+    // 选区内容保留在分割线之后（与 fencePlan 等兄弟插入操作口径一致）
+    expect(apply('前文中段后文', 'horizontalRule', 2, 4))
+      .toEqual({ text: '前文\n\n---\n\n中段后文', selection: { anchor: 7 } })
+    // 跨行选区：选区整体（含中间行）保留在 --- 之后，不静默丢弃
+    expect(apply('第一段\n选中AA\n选中BB\n后续', 'horizontalRule', 6, 13))
+      .toEqual({ text: '第一段\n选中\n\n---\n\nAA\n选中BB\n后续', selection: { anchor: 11 } })
+  })
+
+  it('分割线插入：表格矩形选区内禁用（块级结构不入格）', () => {
+    const table = '| A | B |\n| --- | --- |\n| x | y |'
+    const region = { tableFrom: 0, rowFrom: 0, rowTo: 0, columnFrom: 0, columnTo: 0 }
+    expect(apply(table, 'horizontalRule', table.indexOf('A'), table.indexOf('A'), region).text).toBe(table)
+  })
+
+  it('高亮（#105）：扩词包裹、选区包裹、两态取消与清除均正确', () => {
+    expect(apply('中文 English', 'highlight', 0).text).toBe('==中文== English')
+    expect(apply('甲乙丙', 'highlight', 1, 2).text).toBe('甲==乙==丙')
+    expect(apply('==编辑文字==', 'highlight', 4).text).toBe('编辑文字')
+    expect(apply('前==中==后', 'highlight', 0, 7).text).toBe('==前中后==')
+    expect(apply('# ==亮== 与 **粗**', 'clearInline', 2, 13).text).toBe('# 亮 与 粗')
+  })
+
+  it('高亮（#105）：空白插入成对标记并把光标置于开围栏内侧（按 == 长度）', () => {
+    expect(apply('', 'highlight', 0)).toEqual({ text: '====', selection: { anchor: 2 } })
+    expect(apply('甲 乙', 'highlight', 1)).toEqual({ text: '甲==== 乙', selection: { anchor: 3 } })
+  })
+
+  it('高亮（#105）：行内代码内不写高亮，代码块内不写行内样式', () => {
+    expect(apply('`==码==`', 'highlight', 4).text).toBe('`==码==`')
+    expect(apply('```\n==文==\n```', 'highlight', 6).text).toBe('```\n==文==\n```')
+  })
 })

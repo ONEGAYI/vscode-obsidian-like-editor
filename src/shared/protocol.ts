@@ -596,6 +596,45 @@ export interface PaintProbe {
     /** 当前激活视图内 .vsidian-mermaid 容器总数 */
     count: number
   }
+  /** #106 分割线绘制：当前激活视图内渲染态横线的实际可见性与计数。可见性
+   *  口径 = 任一候选命中（首个候选可能滚出视口，取首条会把「新分割线已
+   *  绘制」误判为不可见，hr.md 插入用例实测）；display/backgroundImage/
+   *  borderTopWidth 取该命中元素，全不命中时取首条供字段观测。jsdom 无
+   *  布局（rect 恒 0），visible 恒 false，只作真宿主集成断言依据；live
+   *  态探渲染 widget .vsidian-hr（光标触及该行时源码显形、计数归零），
+   *  reading 态探阅读容器内原生 <hr>。无分割线时整个字段缺省。 */
+  hr?: {
+    /** 任一横线元素的 rect 有面积且 elementFromPoint 命中 */
+    visible: boolean
+    /** 该横线元素 computed display（'none' = 未绘制） */
+    display: string | null
+    /** computed background-image（live 态横线以居中渐变落笔，'none' = 未绘制） */
+    backgroundImage: string | null
+    /** computed border-top-width（reading 态原生 <hr> 以 border-top 落笔） */
+    borderTopWidth: string | null
+    /** 当前激活视图内横线元素总数 */
+    count: number
+  }
+  /** #105 高亮绘制：当前激活视图内高亮元素的实际可见性与计数（可见性
+   *  口径 = 任一候选命中，同 hr 探针；字段取该命中元素，全不命中时取
+   *  首条供观测）。live 态探 .vsidian-highlight span，reading 态探 mark。
+   *  backgroundColor 证明底色真实画出（'rgba(0, 0, 0, 0)' = 透明，样式
+   *  注入失效的信号）；delimitersHidden 为 live 态 == 定界符隐藏观测
+   *  （激活视口文本不含 == 且高亮 span 存在——文本口径不依赖布局，
+   *  jsdom 同样成立），reading 态该字段 null（定界符天然不进渲染产物）。
+   *  无高亮时整个字段缺省。 */
+  highlight?: {
+    /** 任一高亮元素的 rect 有面积且 elementFromPoint 命中 */
+    visible: boolean
+    /** 该元素 computed display（'none' = 未绘制） */
+    display: string | null
+    /** 该元素 computed background-color */
+    backgroundColor: string | null
+    /** 当前激活视图内高亮元素数 */
+    count: number
+    /** live 态：视口内源文 == 已被隐藏装饰移除（false = 光标触及显形中） */
+    delimitersHidden: boolean | null
+  }
   /** #111 图形化代码块按钮组与图表弹窗绘制：当前激活视图内 frame/按钮
    *  计数与浮层状态（按钮显隐由 CSS 悬停承担，此处观测 DOM 在场与
    *  渲染成功态联动；浮层覆盖为真实绘制断言依据）。无图形块时缺省。 */
@@ -785,8 +824,8 @@ export interface SidebarProbe {
 }
 
 /** #65 大纲条目行内标记类型（白名单 = 正文已支持的行内标记子集；
- *  高亮/公式/行内颜色待正文支持后按同一机制接入，此处不预留松散类型） */
-export type OutlineSpanKind = 'strong' | 'emphasis' | 'code' | 'strike'
+ *  #105 起高亮接入；公式/行内颜色待正文支持后按同一机制接入） */
+export type OutlineSpanKind = 'strong' | 'emphasis' | 'code' | 'strike' | 'highlight'
 
 /** #65 大纲条目行内标记区间：kind + plainText 内偏移（start 含、end 不含） */
 export interface OutlineSpanInfo {
@@ -1005,7 +1044,8 @@ function isSidebarProbe(v: unknown): v is SidebarProbe {
 function isOutlineSpan(v: unknown): v is OutlineSpanInfo {
   return (
     isObject(v) &&
-    (v.kind === 'strong' || v.kind === 'emphasis' || v.kind === 'code' || v.kind === 'strike') &&
+    (v.kind === 'strong' || v.kind === 'emphasis' || v.kind === 'code' || v.kind === 'strike' ||
+      v.kind === 'highlight') &&
     isNonNegativeInt(v.start) &&
     isNonNegativeInt(v.end) &&
     (v.start as number) <= (v.end as number)
@@ -1164,6 +1204,15 @@ function isPaintProbe(v: unknown): v is PaintProbe {
       isNullOrString(v.math.display) &&
       isNonNegativeInt(v.math.count)
     )) &&
+    (v.highlight === undefined || (
+      isObject(v.highlight) &&
+      typeof v.highlight.visible === 'boolean' &&
+      isNullOrString(v.highlight.display) &&
+      isNullOrString(v.highlight.backgroundColor) &&
+      isNonNegativeInt(v.highlight.count) &&
+      (v.highlight.delimitersHidden === undefined || v.highlight.delimitersHidden === null ||
+        typeof v.highlight.delimitersHidden === 'boolean')
+    )) &&
     (v.graphic === undefined || (
       isObject(v.graphic) &&
       isNonNegativeInt(v.graphic.frames) &&
@@ -1180,6 +1229,14 @@ function isPaintProbe(v: unknown): v is PaintProbe {
       isNonNegativeInt(v.mermaid.rendered) &&
       isNonNegativeInt(v.mermaid.error) &&
       isNonNegativeInt(v.mermaid.count)
+    )) &&
+    (v.hr === undefined || (
+      isObject(v.hr) &&
+      typeof v.hr.visible === 'boolean' &&
+      isNullOrString(v.hr.display) &&
+      isNullOrString(v.hr.backgroundImage) &&
+      isNullOrString(v.hr.borderTopWidth) &&
+      isNonNegativeInt(v.hr.count)
     )) &&
     (v.quickActions === undefined || (
       isObject(v.quickActions) &&

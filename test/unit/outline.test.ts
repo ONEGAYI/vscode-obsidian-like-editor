@@ -296,6 +296,28 @@ describe('extractOutline：行内标记结构（#65 白名单透传）', () => {
     expect(items[1]!.spans).toEqual([])
   })
 
+  it('高亮（#105）产出 highlight span：剥 == 定界符、嵌套标记保留', () => {
+    const items = extractOutline(text('# ==高亮段== 尾\n'))
+    expect(items[0]!.text).toBe('==高亮段== 尾')
+    expect(items[0]!.plainText).toBe('高亮段 尾')
+    expect(items[0]!.spans).toEqual([{ kind: 'highlight', start: 0, end: 3 }])
+  })
+
+  it('高亮嵌套粗体（==**粗亮**==）同区间双类型（外→内序）', () => {
+    const items = extractOutline(text('# ==**粗亮**==\n'))
+    expect(items[0]!.plainText).toBe('粗亮')
+    expect(items[0]!.spans).toEqual([
+      { kind: 'highlight', start: 0, end: 2 },
+      { kind: 'strong', start: 0, end: 2 },
+    ])
+  })
+
+  it('残缺 == 形态不产 span（字面文本，白名单外不受影响）', () => {
+    const items = extractOutline(text('# 残缺 == 高亮\n'))
+    expect(items[0]!.plainText).toBe('残缺 == 高亮')
+    expect(items[0]!.spans).toEqual([])
+  })
+
   it('Setext 多行标题：换行归一为空格，标记结构保留', () => {
     const items = extractOutline(text('首行 **粗** 内容\n次行\n===\n'))
     expect(items[0]!.text).toBe('首行 **粗** 内容 次行')

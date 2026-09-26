@@ -2,18 +2,60 @@ import type { SyntaxNode, Tree } from '@lezer/common'
 import type { Text } from '@codemirror/state'
 import type { FormatOperationId } from '../shared/formatOperations'
 import type { FormatSelection } from './formatOperations'
+import { INLINE } from './formatOperations'
 import type { TableRegion } from './tableRegion'
 import { parseTableDelimiter, tableRowCellsForColumns } from './tableCells'
 
 export type QuickActionState = 'inactive' | 'active' | 'mixed' | 'disabled'
 
-const INLINE_NODES: Partial<Record<FormatOperationId, string>> = {
-  bold: 'StrongEmphasis', italic: 'Emphasis', strikethrough: 'Strikethrough', inlineCode: 'InlineCode',
-}
+// ---- 行内围栏全部从 formatOperations 的 INLINE 表派生（#103 两处登记
+// 约定闭环）：节点名、操作集、mark 字符集与包裹判定零围栏枚举。前缀
+// 冲突（italic `*` ⊂ bold `**`）的环视例外按表内前缀关系自动推导，
+// 新增围栏两处登记即自动生效，本文件不需要跟着改 ----
+const INLINE_NODES = Object.fromEntries(
+  Object.entries(INLINE).map(([op, config]) => [op, config!.node]),
+) as Partial<Record<FormatOperationId, string>>
 const INLINE_NODE_NAMES = new Set(Object.values(INLINE_NODES))
 const INLINE_OPS = new Set<FormatOperationId>([
-  'bold', 'italic', 'strikethrough', 'inlineCode', 'link', 'clearInline', 'inlineMath',
+  ...(Object.keys(INLINE) as FormatOperationId[]), 'link', 'clearInline', 'inlineMath',
 ])
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[\\^$.*+?()[\]{}|]/gu, '\\$&')
+}
+
+/** 更长且共前缀的 mark（italic `*` → [`**`]）：此类围栏的裸字面量判定
+ *  会误吞更长 mark，检测须以环视排除、包裹判定须排除更长 mark 前后缀 */
+function conflictingMarks(op: FormatOperationId): string[] {
+  const mark = INLINE[op]!.mark
+  return Object.entries(INLINE)
+    .filter(([other, config]) => other !== op && config!.mark.length > mark.length &&
+      config!.mark.startsWith(mark))
+    .map(([, config]) => config!.mark)
+}
+
+/** 选区内容长度按 mark 字符集合剥离（包裹定界符不算内容） */
+const INLINE_MARK_STRIP = new RegExp(`[\\s${
+  [...new Set(Object.values(INLINE).flatMap((config) => [...config!.mark]))]
+    .map((ch) => ch.replace(/[\\\]^-]/gu, '\\$&')).join('')}]`, 'gu')
+
+/** 格区单元格的行内格式探测正则：各围栏 mark 字面量交替；前缀冲突
+ *  围栏（italic）以单字符环视排除更长 mark 的误吞 */
+const CELL_INLINE_PATTERN = new RegExp(Object.entries(INLINE)
+  .map(([op, config]) => conflictingMarks(op as FormatOperationId).length
+    ? `(?<!${escapeRegExp(config!.mark)})${escapeRegExp(config!.mark)}(?!${escapeRegExp(config!.mark)})`
+    : escapeRegExp(config!.mark))
+  .join('|'), 'u')
+
+/** 格区单元格「含 mark 对」判定：非冲突围栏退化为字面量 includes */
+function cellHasMarkPair(op: FormatOperationId, cell: string): boolean {
+  const mark = INLINE[op]!.mark
+  if (!conflictingMarks(op).length) return cell.includes(mark)
+  const m = escapeRegExp(mark)
+  // `(?<!m)m(?!m)((?!m).)+(?<!m)m(?!m)`：环视排除更长 mark，内容不含
+  // mark 字符——italic 下与「成对单星、两侧不贴星」的既有语义逐字等价
+  return new RegExp(`(?<!${m})${m}(?!${m})((?!${m}).)+(?<!${m})${m}(?!${m})`, 'u').test(cell)
+}
 
 function ancestors(tree: Tree, pos: number): SyntaxNode[] {
   const found: SyntaxNode[] = []
@@ -85,7 +127,7 @@ export function createQuickActionStateReader(doc: Text, tree: Tree, range: Forma
     } })
   }
   const contentLength = range.from === range.to ? 0
-    : doc.sliceString(range.from, range.to).replace(/[\s*~`]/gu, '').length
+    : doc.sliceString(range.from, range.to).replace(INLINE_MARK_STRIP, '').length
   const cells = region ? regionCells(doc, region) : null
   let lines: string[] | undefined
   return (op) => {
@@ -93,18 +135,16 @@ export function createQuickActionStateReader(doc: Text, tree: Tree, range: Forma
     if (region && !INLINE_OPS.has(op)) return 'disabled'
     if (region && cells === null) return 'disabled'
     if (cells && INLINE_NODES[op]) {
-      const mark = op === 'bold' ? '**' : op === 'italic' ? '*' : op === 'strikethrough' ? '~~' : '`'
-      const hasMark = (cell: string): boolean => op === 'italic'
-        ? /(?<!\*)\*(?!\*)[^*]+(?<!\*)\*(?!\*)/u.test(cell)
-        : cell.includes(mark)
+      const mark = INLINE[op]!.mark
+      const longer = conflictingMarks(op)
       const wrapped = cells.filter((cell) => cell.startsWith(mark) && cell.endsWith(mark) &&
         cell.length > mark.length * 2 &&
-        (op !== 'italic' || !cell.startsWith('**') && !cell.endsWith('**'))).length
-      const partial = cells.some(hasMark)
+        longer.every((m) => !cell.startsWith(m) && !cell.endsWith(m))).length
+      const partial = cells.some((cell) => cellHasMarkPair(op, cell))
       return wrapped === cells.length ? 'active' : wrapped || partial ? 'mixed' : 'inactive'
     }
     if (cells && op === 'clearInline') {
-      return cells.some((cell) => /\*\*|(?<!\*)\*(?!\*)|~~|`/u.test(cell))
+      return cells.some((cell) => CELL_INLINE_PATTERN.test(cell))
         ? 'inactive' : 'disabled'
     }
     if (cells && op === 'link') {
