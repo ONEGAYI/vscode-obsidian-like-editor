@@ -11,6 +11,11 @@
 import { describe, it, expect } from 'vitest'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
 import type { WebviewToHost } from '../../src/shared/protocol'
+import { installLocale } from '../../src/shared/i18n'
+import { zhCn } from '../../src/shared/locales/zh-cn'
+
+// #94 起文案经 t() 取词：装配生产中文包，断言与字典同源
+installLocale('zh-cn', zhCn)
 
 // jsdom 无布局：CM6 视口测量的零值 polyfill（与 outlinePanel.test.ts 同款）
 if (typeof Range !== 'undefined' && Range.prototype.getClientRects === undefined) {
@@ -131,12 +136,12 @@ describe('工具条装配（#68：布局与可访问性）', () => {
     const h = makeBridge()
     const { parent } = mountPanel(h)
     const d = searchDom(parent)
-    expect(d.jumpBottom!.getAttribute('aria-label')).toBe('跳转到笔记末尾')
-    expect(d.jumpBottom!.getAttribute('title')).toBe('跳转到笔记末尾')
-    expect(d.reset!.getAttribute('aria-label')).toBe('重置')
-    expect(d.reset!.getAttribute('title')).toBe('重置')
-    expect(d.search!.getAttribute('placeholder')).toBe('输入以搜索')
-    expect(d.search!.getAttribute('aria-label')).toBe('搜索大纲标题')
+    expect(d.jumpBottom!.getAttribute('aria-label')).toBe(zhCn['outline.jumpBottom'])
+    expect(d.jumpBottom!.getAttribute('title')).toBe(zhCn['outline.jumpBottom'])
+    expect(d.reset!.getAttribute('aria-label')).toBe(zhCn['outline.reset'])
+    expect(d.reset!.getAttribute('title')).toBe(zhCn['outline.reset'])
+    expect(d.search!.getAttribute('placeholder')).toBe(zhCn['outline.searchPlaceholder'])
+    expect(d.search!.getAttribute('aria-label')).toBe(zhCn['outline.searchLabel'])
     expect(d.search!.getAttribute('type')).toBe('search')
   })
 })
@@ -200,7 +205,7 @@ describe('搜索过滤与片段高亮（#68）', () => {
     c.handleHostMessage({ kind: 'outline.test.searchInput', text: '不存在' })
     const d = searchDom(parent)
     expect(d.hiddenIndices()).toEqual([0, 1, 2, 3, 4, 5])
-    expect(d.nomatch()?.textContent).toBe('无匹配')
+    expect(d.nomatch()?.textContent).toBe(zhCn['outline.noMatch'])
     const state = viewState(c, h)
     expect(state.outline?.filteredVisibleIndices).toEqual([])
     c.handleHostMessage({ kind: 'outline.test.searchInput', text: '' })
@@ -349,9 +354,9 @@ describe('probe 观测字段（#68：jsdom 无布局容错口径）', () => {
     const { c } = mountPanel(h)
     const state = viewState(c, h)
     expect(state.outline?.toolbarPainted).toBe(false) // jsdom 无布局恒 false
-    expect(state.outline?.jumpBottomAriaLabel).toBe('跳转到笔记末尾')
-    expect(state.outline?.resetAriaLabel).toBe('重置')
-    expect(state.outline?.searchPlaceholder).toBe('输入以搜索')
+    expect(state.outline?.jumpBottomAriaLabel).toBe(zhCn['outline.jumpBottom'])
+    expect(state.outline?.resetAriaLabel).toBe(zhCn['outline.reset'])
+    expect(state.outline?.searchPlaceholder).toBe(zhCn['outline.searchPlaceholder'])
     expect(state.outline?.nomatchPainted).toBe(false)
   })
 

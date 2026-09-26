@@ -30,6 +30,8 @@ import type { Text } from '@codemirror/state'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import type { OutlineSpanInfo, OutlineSpanKind } from '../shared/protocol'
 import type { OutlineSearchRange } from './outlineSearch'
+import { t } from '../shared/i18n'
+import { outlineExpandLevelLabel } from './outlineCollapse'
 import { parseWikilinkInner, scanWikilinksInLine } from '../shared/wikilink'
 import {
   docInput,
@@ -119,12 +121,6 @@ export const OUTLINE_CLASS_NAMES = {
   /** #70 落点指示三态：目标包裹高亮（inside 落点 = 成为子标题） */
   dropInside: 'vsidian-outline-drop-inside',
 } as const
-
-/** 大纲面板可访问名称（按钮 aria-label 与面板 aria-label 共用文案） */
-export const OUTLINE_LABEL = '大纲'
-
-/** #68 搜索框占位文案（QO「Input to search」的中文口径） */
-export const OUTLINE_SEARCH_PLACEHOLDER = '输入以搜索'
 
 /** 白名单节点名 → 标记类型（判定与 liveDecorations 的行内 span 同源；
  *  高亮/公式 GFM 解析器不产节点，正文支持后在此接入） */
@@ -546,7 +542,7 @@ export function renderOutlineItems(
   if (items.length === 0) {
     const empty = document.createElement('div')
     empty.className = OUTLINE_CLASS_NAMES.empty
-    empty.textContent = '无标题'
+    empty.textContent = t('outline.empty')
     panel.replaceChildren(empty)
     return
   }
@@ -570,7 +566,7 @@ export function renderOutlineItems(
       const chevron = document.createElement('button')
       chevron.type = 'button'
       chevron.className = OUTLINE_CLASS_NAMES.chevron
-      chevron.setAttribute('aria-label', '折叠或展开')
+      chevron.setAttribute('aria-label', t('outline.chevron'))
       chevron.setAttribute('aria-expanded', 'true')
       chevron.appendChild(createOutlineChevronIcon())
       el.appendChild(chevron)
@@ -689,8 +685,8 @@ export function buildOutlineDom(): { toggle: HTMLButtonElement; panel: HTMLEleme
   const toggle = document.createElement('button')
   toggle.type = 'button'
   toggle.className = 'vsidian-outline-toggle'
-  toggle.setAttribute('aria-label', OUTLINE_LABEL)
-  toggle.setAttribute('title', OUTLINE_LABEL)
+  toggle.setAttribute('aria-label', t('outline.label'))
+  toggle.setAttribute('title', t('outline.label'))
   toggle.setAttribute('aria-controls', 'vsidian-outline-panel')
   toggle.setAttribute('aria-expanded', 'true')
   toggle.appendChild(createOutlineListIcon())
@@ -698,7 +694,7 @@ export function buildOutlineDom(): { toggle: HTMLButtonElement; panel: HTMLEleme
   panel.className = OUTLINE_CLASS_NAMES.panel
   panel.id = 'vsidian-outline-panel'
   panel.setAttribute('role', 'region')
-  panel.setAttribute('aria-label', OUTLINE_LABEL)
+  panel.setAttribute('aria-label', t('outline.label'))
   return { toggle, panel }
 }
 
@@ -742,7 +738,7 @@ export function buildOutlineSlider(
   const row = document.createElement('div')
   row.className = OUTLINE_CLASS_NAMES.slider
   row.setAttribute('role', 'group')
-  row.setAttribute('aria-label', '大纲展开层级')
+  row.setAttribute('aria-label', t('outline.expandLevels'))
   const dots: HTMLButtonElement[] = []
   for (let n = 0; n <= 5; n++) {
     const dot = document.createElement('button')
@@ -820,26 +816,73 @@ export function buildOutlineToolbar(): OutlineToolbarDom {
   const jumpBottom = document.createElement('button')
   jumpBottom.type = 'button'
   jumpBottom.className = OUTLINE_CLASS_NAMES.jumpBottom
-  jumpBottom.setAttribute('aria-label', '跳转到笔记末尾')
-  jumpBottom.setAttribute('title', '跳转到笔记末尾')
+  jumpBottom.setAttribute('aria-label', t('outline.jumpBottom'))
+  jumpBottom.setAttribute('title', t('outline.jumpBottom'))
   jumpBottom.appendChild(createOutlineJumpBottomIcon())
   const reset = document.createElement('button')
   reset.type = 'button'
   reset.className = OUTLINE_CLASS_NAMES.reset
-  reset.setAttribute('aria-label', '重置')
-  reset.setAttribute('title', '重置')
+  reset.setAttribute('aria-label', t('outline.reset'))
+  reset.setAttribute('title', t('outline.reset'))
   reset.appendChild(createOutlineResetIcon())
   const search = document.createElement('input')
   search.type = 'search'
   search.className = OUTLINE_CLASS_NAMES.search
-  search.setAttribute('placeholder', OUTLINE_SEARCH_PLACEHOLDER)
-  search.setAttribute('aria-label', '搜索大纲标题')
+  search.setAttribute('placeholder', t('outline.searchPlaceholder'))
+  search.setAttribute('aria-label', t('outline.searchLabel'))
   search.autocomplete = 'off'
   search.spellcheck = false
   row.appendChild(jumpBottom)
   row.appendChild(reset)
   row.appendChild(search)
   return { row, jumpBottom, reset, search }
+}
+
+/**
+ * 语言切换时就地刷新大纲常驻文本（#94）：可访问名称、占位文案与滑块档位
+ * 名随包换词。条目正文是文档内容，不随语言变化；重命名输入框等编辑态
+ * 不打扰（失焦提交，由下次渲染自然取新词）。
+ */
+export function applyOutlineDomLocale(dom: {
+  toggle?: HTMLButtonElement
+  panel?: HTMLElement
+  slider?: OutlineSliderDom
+  toolbar?: OutlineToolbarDom
+}): void {
+  if (dom.toggle) {
+    dom.toggle.setAttribute('aria-label', t('outline.label'))
+    dom.toggle.setAttribute('title', t('outline.label'))
+  }
+  if (dom.panel) {
+    dom.panel.setAttribute('aria-label', t('outline.label'))
+    const empty = dom.panel.querySelector(`.${OUTLINE_CLASS_NAMES.empty}`)
+    if (empty) {
+      empty.textContent = t('outline.empty')
+    }
+    const nomatch = dom.panel.querySelector(`.${OUTLINE_CLASS_NAMES.nomatch}`)
+    if (nomatch) {
+      nomatch.textContent = t('outline.noMatch')
+    }
+    for (const chevron of dom.panel.querySelectorAll(`.${OUTLINE_CLASS_NAMES.chevron}`)) {
+      chevron.setAttribute('aria-label', t('outline.chevron'))
+    }
+  }
+  if (dom.slider) {
+    dom.slider.row.setAttribute('aria-label', t('outline.expandLevels'))
+    dom.slider.dots.forEach((dot, n) => {
+      const label = outlineExpandLevelLabel(n)
+      dot.setAttribute('aria-label', label)
+      dot.setAttribute('title', label)
+    })
+  }
+  if (dom.toolbar) {
+    dom.toolbar.jumpBottom.setAttribute('aria-label', t('outline.jumpBottom'))
+    dom.toolbar.jumpBottom.setAttribute('title', t('outline.jumpBottom'))
+    dom.toolbar.reset.setAttribute('aria-label', t('outline.reset'))
+    dom.toolbar.reset.setAttribute('title', t('outline.reset'))
+    dom.toolbar.search.setAttribute('placeholder', t('outline.searchPlaceholder'))
+    dom.toolbar.search.setAttribute('aria-label', t('outline.searchLabel'))
+  }
 }
 
 /** #68 跳转到末尾图标（lucide arrow-down-to-line 的 16px 缩放意象）：

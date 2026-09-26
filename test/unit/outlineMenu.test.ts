@@ -13,6 +13,11 @@ import {
   type OutlineMenuCommand,
   outlineStructuralExpand,
 } from '../../src/webview/outlineMenu'
+import { installLocale } from '../../src/shared/i18n'
+import { zhCn } from '../../src/shared/locales/zh-cn'
+
+// #94 起菜单文案经 t() 取词：装配生产中文包，断言与字典同源
+installLocale('zh-cn', zhCn)
 
 /** 折叠状态机消费形状的最小条目 */
 const level = (lv: number) => ({ level: lv })
@@ -33,35 +38,35 @@ describe('菜单结构模型（票面命令清单）', () => {
       'rename',
       'delete',
     ])
-    expect(spec.map((s) => s.label)).toEqual([
-      '递归展开',
-      '折叠同级',
-      '展开同级',
-      '复制',
-      '调整层级',
-      '重命名',
-      '删除',
+    expect(spec.map((s) => s.labelKey)).toEqual([
+      'outlineMenu.expandRecursively',
+      'outlineMenu.collapseSiblings',
+      'outlineMenu.expandSiblings',
+      'outlineMenu.copy',
+      'outlineMenu.adjustLevel',
+      'outlineMenu.rename',
+      'outlineMenu.delete',
     ])
   })
 
   it('复制子菜单五项（Obsidian 同款清单）', () => {
     const copy = outlineMenuSpec(true).find((s) => s.id === 'copy')
-    expect(copy?.children?.map((c) => [c.id, c.label])).toEqual([
-      ['copyHeading', '标题'],
-      ['copySiblings', '标题和兄弟标题'],
-      ['copyChildren', '标题和子标题'],
-      ['copyLink', '标题链接'],
-      ['copySection', '该段内容'],
+    expect(copy?.children?.map((c) => [c.id, c.labelKey])).toEqual([
+      ['copyHeading', 'outlineMenu.copyHeading'],
+      ['copySiblings', 'outlineMenu.copySiblings'],
+      ['copyChildren', 'outlineMenu.copyChildren'],
+      ['copyLink', 'outlineMenu.copyLink'],
+      ['copySection', 'outlineMenu.copySection'],
     ])
   })
 
   it('调级子菜单四项（增加/递归增加/减少/递归减少）', () => {
     const lv = outlineMenuSpec(true).find((s) => s.id === 'level')
-    expect(lv?.children?.map((c) => [c.id, c.label])).toEqual([
-      ['levelUp', '增加一级'],
-      ['levelUpRecursive', '递归增加一级'],
-      ['levelDown', '减少一级'],
-      ['levelDownRecursive', '递归减少一级'],
+    expect(lv?.children?.map((c) => [c.id, c.labelKey])).toEqual([
+      ['levelUp', 'outlineMenu.levelUp'],
+      ['levelUpRecursive', 'outlineMenu.levelUpRecursive'],
+      ['levelDown', 'outlineMenu.levelDown'],
+      ['levelDownRecursive', 'outlineMenu.levelDownRecursive'],
     ])
   })
 
@@ -127,8 +132,9 @@ describe('菜单 DOM 装配（键盘可达 + 稳定类名锚点）', () => {
   it('菜单项携带命令 id（data-vsidian-command，测试钩子与断言锚点）', () => {
     const menu = buildOutlineMenu(outlineMenuSpec(true), () => {})
     const btn = menu.querySelector<HTMLButtonElement>('button[data-vsidian-command="delete"]')
-    expect(btn?.textContent).toBe('删除')
-    expect(menu.querySelector('button[data-vsidian-command="copyLink"]')?.textContent).toBe('标题链接')
+    expect(btn?.textContent).toBe(zhCn['outlineMenu.delete'])
+    expect(menu.querySelector('button[data-vsidian-command="copyLink"]')?.textContent)
+      .toBe(zhCn['outlineMenu.copyLink'])
   })
 
   it('级联子菜单嵌套于父项内（hover/focus-within CSS 显隐的 DOM 前提）', () => {

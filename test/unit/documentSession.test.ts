@@ -129,6 +129,8 @@ function setup(
       sessionId: string,
       state: Extract<WebviewToHost, { kind: 'view.state' }>,
     ) => void
+    /** #96 R1：语言供应者（vscode 层注入 hostLocale + LOCALE_MESSAGES） */
+    requestLocale?: () => { lang: string; messages: Record<string, string> } | undefined
   },
 ) {
   const doc = new FakeDoc(text)
@@ -136,6 +138,7 @@ function setup(
     docUri: DOC_URI,
     onNotice: opts?.onNotice,
     onViewState: opts?.onViewState,
+    requestLocale: opts?.requestLocale,
   })
   doc.onDocChanged((changes, version) => session.handleDocChanged(changes, version))
   const sent = new Map<string, HostToWebview[]>()
@@ -219,6 +222,45 @@ describe('ready 握手与 init', () => {
     expect(msgs).toHaveLength(0)
     const init = await readyPanel(s, id)
     expect(init).toMatchObject({ version: 2, text: '外部改写' })
+  })
+})
+
+describe('ready 即语言校准（#96 R1：每次 ready 幂等补发 locale.changed）', () => {
+  it('首次 ready：init 之后补发 locale.changed（携供应者当前生效语言）', async () => {
+    const s = setup('# a\n', {
+      requestLocale: () => ({ lang: 'zh-cn', messages: { 'k.a': '词' } }),
+    })
+    const id = s.attach()
+    await s.send(id, { kind: 'ready' })
+    const msgs = s.sent.get(id)!
+    expect(msgs[0]?.kind).toBe('init')
+    expect(msgs[1]).toEqual({
+      kind: 'locale.changed',
+      lang: 'zh-cn',
+      messages: { 'k.a': '词' },
+    })
+  })
+
+  it('重复 ready（webview 重载）同样补发：数据岛装回创建时旧语言被拉正', async () => {
+    let lang = 'en'
+    const s = setup('x', {
+      requestLocale: () => ({ lang, messages: { 'k.a': 'w' } }),
+    })
+    const id = s.attach()
+    await s.send(id, { kind: 'ready' })
+    // 语言在面板创建之后变化（供应者即宿主当前生效语言的探针）
+    lang = 'zh-cn'
+    await s.send(id, { kind: 'ready' })
+    const localeMsgs = s.sent.get(id)!.filter((m) => m.kind === 'locale.changed')
+    expect(localeMsgs).toHaveLength(2)
+    expect(localeMsgs[1]).toMatchObject({ lang: 'zh-cn', messages: { 'k.a': 'w' } })
+  })
+
+  it('未注入语言供应者时 ready 不补发 locale.changed（默认装配行为不变）', async () => {
+    const s = setup()
+    const id = s.attach()
+    await s.send(id, { kind: 'ready' })
+    expect(s.sent.get(id)!.some((m) => m.kind === 'locale.changed')).toBe(false)
   })
 })
 

@@ -1,8 +1,8 @@
 {
   "name": "vsidian",
-  "displayName": "Vsidian",
+  "displayName": "%manifest.displayName%",
   "icon": "media/vsidian-icon-256.png",
-  "description": "类 Obsidian 的 Markdown 编辑体验：实时预览 + 阅读双视图 | Obsidian-like Markdown editing (live preview + reading)",
+  "description": "%manifest.description%",
   "version": "0.2.0",
   "publisher": "onegayi",
   "license": "MIT",
@@ -28,7 +28,7 @@
     "customEditors": [
       {
         "viewType": "onegayi.vsidian.editor",
-        "displayName": "Vsidian",
+        "displayName": "%manifest.displayName%",
         "selector": [
           {
             "filenamePattern": "*.md"
@@ -43,40 +43,40 @@
     "commands": [
       {
         "command": "onegayi.vsidian.toggleViewMode",
-        "title": "切换到下一视图模式",
+        "title": "%command.toggleViewMode.title%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.mode.toReading",
-        "title": "切换到阅读模式",
+        "title": "%command.mode.toReading.title%",
         "category": "Vsidian",
         "icon": "$(book)"
       },
       {
         "command": "onegayi.vsidian.mode.toSource",
-        "title": "切换到源码编辑器",
+        "title": "%command.mode.toSource.title%",
         "category": "Vsidian",
         "icon": "$(code)"
       },
       {
         "command": "onegayi.vsidian.mode.toLive",
-        "title": "切换到实时预览",
+        "title": "%command.mode.toLive.title%",
         "category": "Vsidian",
         "icon": "$(edit)"
       },
       {
         "command": "onegayi.vsidian.find",
-        "title": "查找（编辑区）",
+        "title": "%command.find.title%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.find.next",
-        "title": "下一个查找结果",
+        "title": "%command.find.next.title%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.find.previous",
-        "title": "上一个查找结果",
+        "title": "%command.find.previous.title%",
         "category": "Vsidian"
       },
       {
@@ -86,177 +86,177 @@
       },
       {
         "command": "onegayi.vsidian.table.insertRowAbove",
-        "title": "表格：上方插入行",
+        "title": "%command.table.insertRowAbove.title%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.table.insertRowBelow",
-        "title": "表格：下方插入行",
+        "title": "%command.table.insertRowBelow.title%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.table.deleteRow",
-        "title": "表格：删除行",
+        "title": "%command.table.deleteRow.title%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.table.insertColumnLeft",
-        "title": "表格：左侧插入列",
+        "title": "%command.table.insertColumnLeft.title%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.table.insertColumnRight",
-        "title": "表格：右侧插入列",
+        "title": "%command.table.insertColumnRight.title%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.table.deleteColumn",
-        "title": "表格：删除列",
+        "title": "%command.table.deleteColumn.title%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.format.bold",
-        "title": "粗体",
+        "title": "%format.bold%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.format.italic",
-        "title": "斜体",
+        "title": "%format.italic%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.format.strikethrough",
-        "title": "删除线",
+        "title": "%format.strikethrough%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.format.inlineCode",
-        "title": "行内代码",
+        "title": "%format.inlineCode%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.format.heading1",
-        "title": "一级标题",
+        "title": "%format.heading1%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.format.heading2",
-        "title": "二级标题",
+        "title": "%format.heading2%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.format.heading3",
-        "title": "三级标题",
+        "title": "%format.heading3%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.format.heading4",
-        "title": "四级标题",
+        "title": "%format.heading4%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.format.heading5",
-        "title": "五级标题",
+        "title": "%format.heading5%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.format.heading6",
-        "title": "六级标题",
+        "title": "%format.heading6%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.format.headingNone",
-        "title": "取消标题",
+        "title": "%format.headingNone%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.format.bulletList",
-        "title": "无序列表",
+        "title": "%format.bulletList%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.format.orderedList",
-        "title": "有序列表",
+        "title": "%format.orderedList%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.format.taskList",
-        "title": "任务列表",
+        "title": "%format.taskList%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.format.quote",
-        "title": "引用",
+        "title": "%format.quote%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.format.codeBlock",
-        "title": "代码块",
+        "title": "%format.codeBlock%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.format.link",
-        "title": "链接",
+        "title": "%format.link%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.format.clearInline",
-        "title": "清除行内格式",
+        "title": "%format.clearInline%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.insert.inlineMath",
-        "title": "插入行内公式",
+        "title": "%format.inlineMath%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.insert.blockMath",
-        "title": "插入块级公式",
+        "title": "%format.blockMath%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.insert.wikilink",
-        "title": "插入双链",
+        "title": "%format.wikilink%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.openSettings",
-        "title": "打开设置",
+        "title": "%command.openSettings.title%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.ui.sidebarToggle",
-        "title": "展开或收起右侧栏",
+        "title": "%command.ui.sidebarToggle.title%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.ui.outlineToggle",
-        "title": "显示或隐藏大纲",
+        "title": "%command.ui.outlineToggle.title%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.ui.outlineSearch",
-        "title": "搜索大纲标题",
+        "title": "%command.ui.outlineSearch.title%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.ui.outlineJumpBottom",
-        "title": "跳转到笔记末尾",
+        "title": "%command.ui.outlineJumpBottom.title%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.ui.outlineReset",
-        "title": "重置大纲",
+        "title": "%command.ui.outlineReset.title%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.ui.outlineCollapseAll",
-        "title": "折叠全部大纲",
+        "title": "%command.ui.outlineCollapseAll.title%",
         "category": "Vsidian"
       },
       {
         "command": "onegayi.vsidian.ui.outlineExpandAll",
-        "title": "展开全部大纲",
+        "title": "%command.ui.outlineExpandAll.title%",
         "category": "Vsidian"
       }
     ],
@@ -281,16 +281,17 @@
     }
   },
   "scripts": {
-    "compile": "node esbuild.mjs && tsc --noEmit",
-    "watch": "node esbuild.mjs --watch",
+    "gen:nls": "node scripts/genNls.mjs",
+    "compile": "node scripts/genNls.mjs && node esbuild.mjs && tsc --noEmit",
+    "watch": "node scripts/genNls.mjs && node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
     "test:unit": "vitest run && node --test test/integration/testHost.test.mjs test/release/release.test.mjs",
     "test:integration": "node esbuild.mjs && node ./test/integration/runTest.mjs",
-    "test:browser": "node test/browser/tableCaret.mjs && node test/browser/outlineJump.mjs && node test/browser/outlineCollapse.mjs && node test/browser/outlineHover.mjs && node test/browser/outlineSearch.mjs && node test/browser/outlineMenu.mjs && node test/browser/outlineDrag.mjs && node test/browser/outlineDragBoundary.mjs && node test/browser/settingsPage.mjs && node test/browser/quickActions.mjs && node test/browser/mermaidPaint.mjs && node test/browser/keybindings.mjs && node test/browser/keybindingEditor.mjs",
+    "test:browser": "node test/browser/tableCaret.mjs && node test/browser/outlineJump.mjs && node test/browser/outlineCollapse.mjs && node test/browser/outlineHover.mjs && node test/browser/outlineSearch.mjs && node test/browser/outlineMenu.mjs && node test/browser/outlineDrag.mjs && node test/browser/outlineDragBoundary.mjs && node test/browser/settingsPage.mjs && node test/browser/languageSwitch.mjs && node test/browser/quickActions.mjs && node test/browser/mermaidPaint.mjs && node test/browser/keybindings.mjs && node test/browser/keybindingEditor.mjs",
     "test:keybindings-host": "node test/browser/keybindingsHost.mjs",
     "release:check": "node scripts/release.mjs",
     "release": "node scripts/release.mjs --upload",
-    "vscode:prepublish": "node esbuild.mjs --production"
+    "vscode:prepublish": "node scripts/genNls.mjs && node esbuild.mjs --production"
   },
   "repository": {
     "type": "git",

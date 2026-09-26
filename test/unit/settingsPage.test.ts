@@ -2,22 +2,29 @@
 // 设置页 UI 契约（#33）：页面归属 Vsidian（标题）、空状态（无占位开关）、
 // fixture 定义渲染、快照回显、变更上送（settings.set）与权威值恢复
 // （宿主拒绝后以 settings.snapshot 回滚显示）。
+// #93 起：框架标题经 t() 取词——本文件装配生产 zh-cn 语言包（装配三径之
+// 单测注入），断言与字典同源（不再复制字面量）。#95 起设置项定义经
+// titleKey/descriptionKey 取词，fixture 定义复用生产词条键。
 import { describe, it, expect } from 'vitest'
 import {
   SettingsPageView,
   SETTINGS_PAGE_CLASS_NAMES,
 } from '../../src/webview/settingsPageView'
 import { PRODUCTION_SETTING_DEFINITIONS, type SettingDefinition } from '../../src/shared/settings'
+import { installLocale } from '../../src/shared/i18n'
+import { zhCn } from '../../src/shared/locales/zh-cn'
+
+installLocale('zh-cn', zhCn)
 
 const FIXTURE_DEFS: readonly SettingDefinition[] = [
   {
     key: 'editor.lineNumbers',
     type: 'boolean',
     default: false,
-    title: '显示源文件行号',
-    description: '在源文件左侧显示行号',
+    titleKey: 'setting.editorLineNumbers.title',
+    descriptionKey: 'setting.editorLineNumbers.description',
   },
-  { key: 'editor.spellcheck', type: 'boolean', default: true, title: '拼写检查' },
+  { key: 'editor.spellcheck', type: 'boolean', default: true, titleKey: 'setting.testFlag.title' },
 ]
 
 function makeView(defs: readonly SettingDefinition[]): {
@@ -33,9 +40,10 @@ function makeView(defs: readonly SettingDefinition[]): {
 }
 
 describe('页面结构（#33 归属与空状态）', () => {
-  it('标题明确归属 Vsidian 设置', () => {
+  it('标题经 t() 取词：与字典 settings.pageTitle 同源（#93）', () => {
     const { parent } = makeView(FIXTURE_DEFS)
     const title = parent.querySelector(`.${SETTINGS_PAGE_CLASS_NAMES.title}`)
+    expect(title?.textContent).toBe(zhCn['settings.pageTitle'])
     expect(title?.textContent).toContain('Vsidian')
     expect(title?.textContent).toContain('设置')
   })
@@ -44,23 +52,31 @@ describe('页面结构（#33 归属与空状态）', () => {
     const { parent } = makeView([])
     const empty = parent.querySelector(`.${SETTINGS_PAGE_CLASS_NAMES.empty}`)
     expect(empty, '应渲染空状态元素').toBeTruthy()
-    expect(empty!.textContent).toContain('暂无可配置项')
+    expect(empty!.textContent).toBe(zhCn['settings.empty'])
     expect(parent.querySelectorAll('input')).toHaveLength(0)
     expect(parent.querySelectorAll('button')).toHaveLength(0)
   })
 
   it('生产注册表（#34 起）渲染真实开关：显示行号、默认勾选', () => {
     // #34：首个实际设置项接入后设置页不再是空状态——注册表追加定义即
-    // 出现开关（#33 设计的预期演进），此处以生产定义直测渲染结果
+    // 出现开关（#33 设计的预期演进），此处以生产定义直测渲染结果。
+    // #96 起注册表含「界面语言」（string 枚举），设置页新增「常规」分组
+    // 且默认显示之——开关断言先切到「编辑器」分组
     expect(PRODUCTION_SETTING_DEFINITIONS.length).toBeGreaterThan(0)
     const { parent } = makeView(PRODUCTION_SETTING_DEFINITIONS)
     expect(parent.querySelector(`.${SETTINGS_PAGE_CLASS_NAMES.empty}`)).toBeNull()
+    // 默认分组 = 常规（首个分类）：语言项可见，无开关
+    expect(parent.querySelector(`select.${SETTINGS_PAGE_CLASS_NAMES.select}`)).toBeTruthy()
+    const editorNav = [...parent.querySelectorAll<HTMLButtonElement>('.vsidian-settings-nav-item')]
+      .find((b) => b.textContent === '编辑器')!
+    editorNav.click()
+    const booleanDefs = PRODUCTION_SETTING_DEFINITIONS.filter((d) => d.type === 'boolean')
     const boxes = parent.querySelectorAll<HTMLInputElement>(
       `input.${SETTINGS_PAGE_CLASS_NAMES.checkbox}`,
     )
-    expect(boxes).toHaveLength(PRODUCTION_SETTING_DEFINITIONS.length)
+    expect(boxes).toHaveLength(booleanDefs.length)
     const first = parent.querySelector(`.${SETTINGS_PAGE_CLASS_NAMES.itemTitle}`)
-    expect(first?.textContent).toBe('显示行号')
+    expect(first?.textContent).toBe(zhCn['setting.editorLineNumbers.title'])
     expect(boxes[0]!.checked).toBe(true) // 默认开启
   })
 })
@@ -72,9 +88,9 @@ describe('定义渲染与快照回显', () => {
     expect(items).toHaveLength(2)
     const first = items[0]!
     expect(first.querySelector(`.${SETTINGS_PAGE_CLASS_NAMES.itemTitle}`)?.textContent)
-      .toBe('显示源文件行号')
+      .toBe(zhCn['setting.editorLineNumbers.title'])
     expect(first.querySelector(`.${SETTINGS_PAGE_CLASS_NAMES.itemDescription}`)?.textContent)
-      .toBe('在源文件左侧显示行号')
+      .toBe(zhCn['setting.editorLineNumbers.description'])
     const boxes = parent.querySelectorAll<HTMLInputElement>(`input.${SETTINGS_PAGE_CLASS_NAMES.checkbox}`)
     expect(boxes[0]!.checked).toBe(false) // 默认 false
     expect(boxes[1]!.checked).toBe(true) // 默认 true
@@ -141,13 +157,13 @@ describe('分类与全局搜索（#90）', () => {
     search.dispatchEvent(new Event('input'))
     expect(parent.querySelectorAll('.vsidian-settings-result')).toHaveLength(1)
     const result = parent.querySelector<HTMLButtonElement>('.vsidian-settings-result')!
-    expect(result.textContent).toContain('编辑器')
+    expect(result.textContent).toContain(zhCn['settings.editorCategory'])
     result.click()
     expect(search.value).toBe('')
     expect(parent.querySelectorAll(`.${SETTINGS_PAGE_CLASS_NAMES.item}`)).toHaveLength(2)
     search.value = '不存在'
     search.dispatchEvent(new Event('input'))
-    expect(parent.textContent).toContain('未找到匹配的设置')
+    expect(parent.textContent).toContain(zhCn['settings.searchEmpty'])
     search.value = ''
     search.dispatchEvent(new Event('input'))
     expect(parent.querySelectorAll(`.${SETTINGS_PAGE_CLASS_NAMES.item}`)).toHaveLength(2)
@@ -165,7 +181,7 @@ it('保存拒绝恢复权威值并反馈，初始快照不报错，回包保持�
   box.dispatchEvent(new Event('change'))
   view.handleHostMessage({ kind: 'settings.snapshot', values: { 'editor.lineNumbers': false } })
   expect(box.checked).toBe(false)
-  expect(parent.querySelector('.vsidian-settings-status')?.textContent).toContain('未能保存')
+  expect(parent.querySelector('.vsidian-settings-status')?.textContent).toBe(zhCn['settings.saveFailed'])
   expect(document.activeElement).toBe(box)
   parent.remove()
 })

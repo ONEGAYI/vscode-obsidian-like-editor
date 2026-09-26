@@ -149,7 +149,9 @@ function preClassify(
   | { kind: 'path'; pathText: string } {
   const href = raw.trim()
   if (href === '' || href.startsWith('#')) {
-    return { kind: 'blocked', reason: 'empty', detail: href === '' ? '空白链接' : '仅锚点' }
+    // #95 i18n：empty 分支原带的 detail（空白链接/仅锚点）无消费方——反馈
+    // 文案由 vscode 层按 reason 键名取词，分类层不再产出文案字面量
+    return { kind: 'blocked', reason: 'empty' }
   }
   // 协议相对 //host/...：无显式 scheme 但按外站目标处理，一律拦截
   if (href.startsWith('//')) {

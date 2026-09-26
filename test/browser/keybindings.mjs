@@ -1,10 +1,13 @@
 // 生产设置页在 Chromium 中的原生按键录入、双键搜索与明暗绘制回归。
+// #95 i18n：页面注入 zh-cn 数据岛首帧装配语言包，文案断言与字典同源；
+// #94 起 format 操作标题也经 t() 取词（keybindingSettings 渲染层）。
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { mkdir } from 'node:fs/promises'
 import { build } from 'esbuild'
 import { chromium } from 'playwright'
+import { buildZhLocaleIsland } from './localeIsland.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const output = path.join(root, 'out/test/browser/keybindings.js')
@@ -12,6 +15,8 @@ await build({ entryPoints: [path.join(root, 'src/webview/settingsMain.ts')], bun
   outfile: output, format: 'iife' })
 const artifacts = path.join(root, 'out/task91')
 await mkdir(artifacts, { recursive: true })
+// 数据岛与宿主生成点同源；zhCn 为 zhCnMessages 的断言取词别名
+const { islandHtml, zhCnMessages: zhCn } = await buildZhLocaleIsland(root)
 const browser = await chromium.launch({ headless: true,
   channel: process.env.VSIDIAN_TEST_BROWSER_CHANNEL || undefined })
 try {
@@ -19,7 +24,7 @@ try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 720 } })
     const errors = []
     page.on('pageerror', error => errors.push(error.message))
-    await page.setContent('<html lang="zh-CN"><body><div id="app"></div></body></html>')
+    await page.setContent(`<html lang="zh-CN"><body>${islandHtml}<div id="app"></div></body></html>`)
     const palette = theme === 'light' ? ['#fff', '#30343b', '#f5f6f8', '#d7dce3', '#f2f4f7']
       : ['#1e1e1e', '#ddd', '#252526', '#474750', '#313136']
     await page.addStyleTag({ content: `:root { --vscode-editor-background:${palette[0]}; --vscode-editor-foreground:${palette[1]}; --vscode-sideBar-background:${palette[2]}; --vscode-panel-border:${palette[3]}; --vscode-editorWidget-background:${palette[4]}; --vscode-input-background:${palette[0]}; --vscode-input-foreground:${palette[1]}; --vscode-descriptionForeground:${palette[1]}; --vscode-focusBorder:#2687d4; }` })
@@ -43,9 +48,10 @@ try {
       } })
     })
     await page.addScriptTag({ path: output })
-    const globalSearch = page.getByRole('searchbox', { name: '搜索全部设置' })
+    const globalSearch = page.getByRole('searchbox', { name: zhCn['settings.searchAriaLabel'] })
     await globalSearch.fill('双链')
-    await page.locator('.vsidian-settings-result').filter({ hasText: '插入双链' }).click()
+    await page.locator('.vsidian-settings-result')
+      .filter({ hasText: zhCn['format.wikilink'] }).click()
     const located = await page.locator('[data-operation-id="wikilink"]').evaluate((row) => {
       const bounds = row.getBoundingClientRect()
       return { visible: bounds.top >= 0 && bounds.bottom <= innerHeight,
@@ -53,7 +59,7 @@ try {
     })
     assert.equal(located.visible, true, '全局搜索定位的操作行应滚动到视口内')
     assert.equal(located.focused, true, '全局搜索定位的操作行应获得键盘焦点')
-    await page.getByRole('button', { name: '快捷键', exact: true }).click()
+    await page.getByRole('button', { name: zhCn['keybindingSettings.title'], exact: true }).click()
     const bold = page.locator('[data-operation-id="bold"]')
     await bold.locator('kbd').waitFor()
     assert.equal(await bold.locator('kbd').innerText(), 'Ctrl+B')
@@ -65,7 +71,7 @@ try {
     assert.equal(paint.bg, theme === 'light' ? 'rgb(242, 244, 247)' : 'rgb(49, 49, 54)')
     assert.equal(paint.border, 'solid')
     assert.equal(paint.visible, true)
-    const nameSearch = page.getByRole('searchbox', { name: '搜索操作名' })
+    const nameSearch = page.getByRole('searchbox', { name: zhCn['keybindingSettings.searchNamePlaceholder'] })
     const searchNode = await nameSearch.elementHandle()
     await nameSearch.fill('粗体')
     await nameSearch.evaluate((input) => input.setSelectionRange(1, 1))
@@ -83,10 +89,10 @@ try {
     assert.equal(await nameSearch.evaluate((input) => input.selectionStart), 2)
     await nameSearch.fill('')
     const italic = page.locator('[data-operation-id="italic"]')
-    await italic.getByRole('button', { name: '添加绑定' }).click()
-    await italic.getByRole('textbox', { name: '按下单段或连续两段快捷键' }).focus()
+    await italic.getByRole('button', { name: zhCn['keybindingSettings.addBinding'] }).click()
+    await italic.getByRole('textbox', { name: zhCn['keybindingSettings.recordPlaceholder'] }).focus()
     await page.keyboard.press('Control+b')
-    await italic.getByRole('button', { name: '保存绑定' }).click()
+    await italic.getByRole('button', { name: zhCn['keybindingSettings.saveBinding'] }).click()
     await italic.getByRole('alert').waitFor()
     const conflictPaint = await italic.getByRole('alert').evaluate((node) => {
       const style = getComputedStyle(node)
@@ -96,18 +102,18 @@ try {
     assert.equal(conflictPaint.border, '3px')
     assert.equal(conflictPaint.visible, true)
     assert.equal(await page.evaluate(() => window.messages.filter(m => m.kind === 'keybindings.set').length), 0)
-    await italic.getByRole('button', { name: '替换原绑定' }).click()
-    await page.getByRole('status').filter({ hasText: '快捷键已保存' }).waitFor()
-    assert.equal(await bold.locator('.vsidian-keybindings-unbound').innerText(), '未绑定')
+    await italic.getByRole('button', { name: zhCn['keybindingSettings.replaceConflicts'] }).click()
+    await page.getByRole('status').filter({ hasText: zhCn['keybindingSettings.saved'] }).waitFor()
+    assert.equal(await bold.locator('.vsidian-keybindings-unbound').innerText(), zhCn['keybindingSettings.unbound'])
     const math = page.locator('[data-operation-id="inlineMath"]')
-    await math.getByRole('button', { name: '添加绑定' }).click()
-    await math.getByRole('textbox', { name: '按下单段或连续两段快捷键' }).focus()
+    await math.getByRole('button', { name: zhCn['keybindingSettings.addBinding'] }).click()
+    await math.getByRole('textbox', { name: zhCn['keybindingSettings.recordPlaceholder'] }).focus()
     await page.keyboard.press('Control+k')
     await page.keyboard.press('Control+m')
-    await math.getByRole('button', { name: '保存绑定' }).click()
-    await page.getByRole('status').filter({ hasText: '快捷键已保存' }).waitFor()
+    await math.getByRole('button', { name: zhCn['keybindingSettings.saveBinding'] }).click()
+    await page.getByRole('status').filter({ hasText: zhCn['keybindingSettings.saved'] }).waitFor()
     assert.equal(await math.locator('kbd').innerText(), 'Ctrl+K Ctrl+M')
-    const keySearch = page.getByRole('textbox', { name: '按键搜索绑定' })
+    const keySearch = page.getByRole('textbox', { name: zhCn['keybindingSettings.searchKeyPlaceholder'] })
     await keySearch.focus()
     await page.keyboard.press('Control+k')
     await page.keyboard.press('Control+m')
@@ -119,7 +125,7 @@ try {
       return { text: caption.textContent, display: getComputedStyle(node).display,
         visible: rect.width > 0 && rect.height > 0 }
     })
-    assert.deepEqual(searchLabelPaint, { text: '按键位搜索', display: 'flex', visible: true })
+    assert.deepEqual(searchLabelPaint, { text: zhCn['keybindingSettings.searchKeyCaption'], display: 'flex', visible: true })
     await page.screenshot({ path: path.join(artifacts, `keybindings-${theme}.png`) })
     assert.deepEqual(errors, [])
     console.log(`[快捷键页][PASS] ${theme}：原生录键、冲突替换、两段键搜索与标签绘制`)

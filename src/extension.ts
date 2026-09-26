@@ -5,11 +5,16 @@
 // #33 起：装配 Vsidian 独立设置链路（globalState 持久化 + 纯代码 schema
 // + 设置页面板）并注册「打开设置」命令——命令不要求当前有任何文档，
 // 空窗口同样可用。
+// #93 i18n：激活即按生效语言装配宿主侧语言包（auto 缺省按宿主显示语言
+// 解析；#4 注册 general.language 后由此读用户偏好），宿主通知/标题等
+// t() 取词随之就绪。
 import * as vscode from 'vscode'
 import { createTextEditorProvider, VIEW_TYPE } from './host/textEditorProvider'
 import { SettingsService } from './host/settingsService'
 import { createSettingsPage } from './host/settingsPage'
 import { PRODUCTION_SETTING_DEFINITIONS } from './shared/settings'
+import { installHostLocale } from './shared/locales'
+import { hostLocale } from './host/hostLocale'
 import { KeybindingService } from './host/keybindingService'
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -17,6 +22,8 @@ export function activate(context: vscode.ExtensionContext): void {
   // schema——不使用 workspace.getConfiguration、不声明 contributes.
   // configuration，与 VSCode 统一设置中心完全解耦（AGENTS.md「插件设置入口」）
   const settingsService = new SettingsService(context.globalState, PRODUCTION_SETTING_DEFINITIONS)
+  // #93 语言装配（宿主路径）：en 包同时登记为运行时回退
+  installHostLocale(hostLocale(settingsService.getSnapshot()))
   const keybindingService = new KeybindingService(context.globalState)
   const settingsPage = createSettingsPage(context, settingsService, keybindingService)
   const provider = createTextEditorProvider(context, {

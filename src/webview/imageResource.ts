@@ -17,6 +17,7 @@
 //
 // 本层不触碰编辑器状态与文档文本（图片是纯显示资源，零写回契约的使用方
 // 由 syncController 保证；重试点击会阻断冒泡以免触发外层链接导航）。
+import { t } from '../shared/i18n'
 
 /** 槽位状态（stable class/data 入口，样式见 main.css 与选择器映射表） */
 export type ImageSlotState = 'loading' | 'loaded' | 'error'
@@ -266,7 +267,7 @@ export class ImageResourceManager {
     }
     if (state === 'error') {
       slot.dataset['vsidianImgReason'] = reason ?? 'unknown'
-      slot.title = `图片加载失败（${reason ?? '未知原因'}），点击重试`
+      slot.title = t('decor.imageError', { reason: reason ?? t('decor.unknownReason') })
     } else {
       delete slot.dataset['vsidianImgReason']
     }

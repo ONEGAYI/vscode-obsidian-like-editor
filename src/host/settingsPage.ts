@@ -9,17 +9,25 @@
 //
 // 持久化权威在宿主（SettingsService + globalState）：页面只回显与上送，
 // 保存成功回 settings.changed、被拒回 settings.snapshot 恢复显示。
+// #93 i18n：面板标题经 t() 取词（激活时已按生效语言装配宿主语言包）；
+// HTML 生成点同步注入语言数据岛与 <html lang>（首帧文案即就绪）。
 import * as vscode from 'vscode'
 import { randomUUID } from 'node:crypto'
 import { isWebviewToHost } from '../shared/protocol'
+import { t } from '../shared/i18n'
+import { LOCALE_MESSAGES, type LocaleCode } from '../shared/locales'
+import { buildLocaleIslandHtml } from '../shared/locales/island'
+import { hostLocale } from './hostLocale'
 import type { SettingsService } from './settingsService'
 import type { KeybindingService } from './keybindingService'
 
 /** 设置页面板 viewType（createWebviewPanel 无需清单声明，customEditors 才要求） */
 export const SETTINGS_VIEW_TYPE = 'onegayi.vsidian.settings'
 
-/** 面板标题：界面与标题栏明确归属 Vsidian */
-export const SETTINGS_PAGE_TITLE = 'Vsidian 设置'
+/** 面板标题：界面与标题栏明确归属 Vsidian（#93 起经语言包取词，随装配语言） */
+export function settingsPageTitle(): string {
+  return t('settings.pageTitle')
+}
 
 /** 设置页观测信息（测试钩子与集成断言用） */
 export interface SettingsPageInfo {
@@ -37,6 +45,12 @@ export interface SettingsPageHandle {
   getInfo(): SettingsPageInfo
   /** 经正式处理入口注入设置页 webview → 宿主消息（测试钩子通道） */
   injectMessage(message: unknown): void
+  /**
+   * 语言切换通知（#96）：设置页自身面板同步换包（locale.changed 携完整
+   * 新语言包）并更新面板标题（宿主侧 t() 已由调用方先换包，标题取词即时
+   * 为新语言）。面板未开时为 no-op（下次 open 按新快照语言生成 HTML）
+   */
+  notifyLocaleChanged(lang: LocaleCode): void
 }
 
 export function createSettingsPage(
@@ -82,6 +96,18 @@ export function createSettingsPage(
           kind: 'settings.snapshot',
           values: service.getSnapshot(),
         })
+        // #96 R1 ready 即校准（设置页路径）：settings.get 是设置页的 ready
+        // 握手——应答链附带当前语言包（幂等补发，复用 locale.changed 消息，
+        // 协议零新增）。面板隐藏重载后 HTML 数据岛装回 open() 时的旧语言，
+        // 以此对齐当前生效语言；与编辑器面板 ready 补发同一模式
+        {
+          const locale = hostLocale(service.getSnapshot())
+          void current?.webview.postMessage({
+            kind: 'locale.changed',
+            lang: locale,
+            messages: LOCALE_MESSAGES[locale],
+          })
+        }
         return
       case 'settings.set': {
         void service.apply(message.values).then((result) => {
@@ -115,7 +141,7 @@ export function createSettingsPage(
     }
     const created = vscode.window.createWebviewPanel(
       SETTINGS_VIEW_TYPE,
-      SETTINGS_PAGE_TITLE,
+      settingsPageTitle(),
       vscode.ViewColumn.Active,
       {
         enableScripts: true,
@@ -124,7 +150,11 @@ export function createSettingsPage(
       },
     )
     panel = created
-    created.webview.html = buildSettingsPageHtml(created.webview, context.extensionUri)
+    created.webview.html = buildSettingsPageHtml(
+      created.webview,
+      context.extensionUri,
+      hostLocale(service.getSnapshot()),
+    )
     const messageSub = created.webview.onDidReceiveMessage(handleMessage)
     created.onDidDispose(() => {
       messageSub.dispose()
@@ -138,13 +168,32 @@ export function createSettingsPage(
       panel?.dispose()
     },
     isOpen: () => panel !== undefined,
-    getInfo: () => ({ open: panel !== undefined, ready, title: SETTINGS_PAGE_TITLE }),
+    // #96 title 优先读真实面板标题（面板开着时即用户在 VSCode 标签上看到
+    // 的文字）；未开时按当前装配语言计算（与下次 open 的标题一致）
+    getInfo: () => ({ open: panel !== undefined, ready, title: panel?.title ?? settingsPageTitle() }),
     injectMessage: handleMessage,
+    notifyLocaleChanged: (lang: LocaleCode) => {
+      if (!panel) {
+        return
+      }
+      void panel.webview.postMessage({
+        kind: 'locale.changed',
+        lang,
+        messages: LOCALE_MESSAGES[lang],
+      })
+      panel.title = settingsPageTitle()
+    },
   }
 }
 
-/** 设置页 HTML：CSP 四段与产物地址装配（照抄 buildWebviewHtml 模式） */
-function buildSettingsPageHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
+/** 设置页 HTML：CSP 四段与产物地址装配（照抄 buildWebviewHtml 模式）；
+ *  #93 同步注入 <html lang> 与语言数据岛（首帧文案即就绪，零字典字节进
+ *  settings.js——语言包只经数据岛进入 webview） */
+function buildSettingsPageHtml(
+  webview: vscode.Webview,
+  extensionUri: vscode.Uri,
+  locale: LocaleCode,
+): string {
   const nonce = randomUUID()
   const scriptUri = webview.asWebviewUri(
     vscode.Uri.joinPath(extensionUri, 'out', 'webview', 'settings.js'),
@@ -160,16 +209,17 @@ function buildSettingsPageHtml(webview: vscode.Webview, extensionUri: vscode.Uri
     `style-src ${webview.cspSource}`,
   ].join('; ')
   return `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="${locale}">
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link href="${styleUri}" rel="stylesheet">
-<title>${SETTINGS_PAGE_TITLE}</title>
+<title>${settingsPageTitle()}</title>
 </head>
 <body>
 <div id="app"></div>
+${buildLocaleIslandHtml(locale, LOCALE_MESSAGES[locale])}
 <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`

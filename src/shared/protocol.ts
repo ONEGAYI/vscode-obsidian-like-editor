@@ -183,6 +183,12 @@ export type HostToWebview =
    *  编辑器面板与设置页（含变更发起页面）。values 仍为全量快照；消费方按
    *  需读取关心的键（#34 场景：editor.lineNumbers 触发 CM6 扩展热重配） */
   | { kind: 'settings.changed'; values: SettingsPayload }
+  /** 语言包切换（#93 i18n）：携带新语言代码与完整新语言包，host→webview。
+   *  语言变化不走 settings.changed 附带（语言包体积大，随每次设置变更附带
+   *  是浪费）；宿主检测到 general.language 变化时发送。webview 收到后原子
+   *  换包（shared/i18n.installLocale）、重渲染常驻文本节点并同步
+   *  <html lang>；按需创建的控件自然取新词 */
+  | { kind: 'locale.changed'; lang: string; messages: Record<string, string> }
   | { kind: 'keybindings.snapshot' | 'keybindings.changed'; overrides: KeybindingOverrides; requestId?: number; ok?: boolean; reason?: 'invalid' | 'conflict' | 'storage'; conflicts?: string[] }
 
 /** webview → 宿主消息 */
@@ -1669,6 +1675,15 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return isSettingsPayload(v.values)
     case 'settings.changed':
       return isSettingsPayload(v.values)
+    case 'locale.changed':
+      // #93 语言包切换：形态校验（非空语言代码 + 全字符串词条的完整包）；
+      // 语言代码是否在支持清单内由宿主发送侧保证（解析见 locales/resolveLocale）
+      return (
+        typeof v.lang === 'string' &&
+        v.lang.length > 0 &&
+        isObject(v.messages) &&
+        Object.values(v.messages).every(isString)
+      )
     default:
       return false
   }

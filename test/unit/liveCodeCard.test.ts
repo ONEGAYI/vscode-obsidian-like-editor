@@ -5,6 +5,11 @@
 // （shared/codeLangs）、增量 == 全量对拍。
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest'
+import { installLocale } from '../../src/shared/i18n'
+import { zhCn } from '../../src/shared/locales/zh-cn'
+
+// #94 起文案经 t() 取词：装配生产中文包，断言与字典同源
+installLocale('zh-cn', zhCn)
 import { Compartment, EditorSelection, EditorState } from '@codemirror/state'
 import {
   CODE_CARD_CLASS_NAMES,
@@ -715,7 +720,7 @@ describe('头部 widget 形态', () => {
     expect(dom.querySelector(`.${CODE_CARD_CLASS_NAMES.headerActions}`)).not.toBeNull()
     const btn = dom.querySelector(`button.${CODE_CARD_CLASS_NAMES.copy}`)!
     expect(btn).not.toBeNull()
-    expect(btn.getAttribute('aria-label')).toBe('复制代码')
+    expect(btn.getAttribute('aria-label')).toBe(zhCn['codeblock.copy'])
     // copy=false 时按钮不渲染
     const noCopy = new CodeCardHeaderWidget('JavaScript', 'javascript', false, 'let a').toDOM()
     expect(noCopy.querySelector(`.${CODE_CARD_CLASS_NAMES.copy}`)).toBeNull()

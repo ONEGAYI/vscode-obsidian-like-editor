@@ -53,6 +53,7 @@ import {
   type SourceRange,
 } from './markdownDoc'
 import { resolveTaskToggleAtMarker } from './taskToggle'
+import { t } from '../shared/i18n'
 import {
   barePipeAt,
   escapedPipeBackslashes,
@@ -166,7 +167,7 @@ class TaskCheckboxWidget extends WidgetType {
     box.className = this.checked
       ? `${LIVE_CLASS_NAMES.taskCheckbox} ${LIVE_CLASS_NAMES.taskChecked}`
       : LIVE_CLASS_NAMES.taskCheckbox
-    box.setAttribute('aria-label', this.checked ? '取消任务勾选' : '勾选任务')
+    box.setAttribute('aria-label', this.checked ? t('decor.taskUncheck') : t('decor.taskCheck'))
     const toggle = (): void => {
       const view = EditorView.findFromDOM(box)
       if (!view) {
@@ -252,7 +253,7 @@ class EmptyTableCellWidget extends WidgetType {
     span.className = this.active
       ? `${LIVE_CLASS_NAMES.tableGridCell} vsidian-table-grid-empty-active`
       : LIVE_CLASS_NAMES.tableGridCell
-    span.setAttribute('aria-label', '空单元格')
+    span.setAttribute('aria-label', t('decor.emptyCell'))
     span.addEventListener('mousedown', (event) => {
       const view = EditorView.findFromDOM(span)
       if (!view) return

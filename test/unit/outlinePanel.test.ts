@@ -10,6 +10,11 @@
 import { describe, it, expect, vi } from 'vitest'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
 import type { WebviewToHost } from '../../src/shared/protocol'
+import { installLocale } from '../../src/shared/i18n'
+import { zhCn } from '../../src/shared/locales/zh-cn'
+
+// #94 起面板文案经 t() 取词：装配生产中文包，断言与字典同源
+installLocale('zh-cn', zhCn)
 
 // jsdom 无布局：CM6 视口测量的零值 polyfill（与 sidebarLayout.test.ts 同款）
 if (typeof Range !== 'undefined' && Range.prototype.getClientRects === undefined) {
@@ -114,8 +119,8 @@ describe('大纲按钮与面板 DOM（#54）', () => {
     const { parent } = mountOutline(h)
     const d = outlineDom(parent)
     expect(d.toggle, '侧栏顶栏应有 vsidian-outline-toggle 按钮').toBeTruthy()
-    expect(d.toggle!.getAttribute('aria-label')).toBe('大纲')
-    expect(d.toggle!.getAttribute('title')).toBe('大纲')
+    expect(d.toggle!.getAttribute('aria-label')).toBe(zhCn['outline.label'])
+    expect(d.toggle!.getAttribute('title')).toBe(zhCn['outline.label'])
     expect(d.toggle!.getAttribute('aria-controls')).toBe('vsidian-outline-panel')
   })
 
@@ -126,7 +131,7 @@ describe('大纲按钮与面板 DOM（#54）', () => {
     expect(d.panel, '侧栏应有 vsidian-outline-panel 面板容器').toBeTruthy()
     expect(d.panel!.id).toBe('vsidian-outline-panel')
     expect(d.panel!.getAttribute('role')).toBe('region')
-    expect(d.panel!.getAttribute('aria-label')).toBe('大纲')
+    expect(d.panel!.getAttribute('aria-label')).toBe(zhCn['outline.label'])
   })
 
   it('默认 active：展开侧栏即见大纲（面板显隐唯一开关是侧栏容器类）', () => {
@@ -461,16 +466,16 @@ describe('折叠滑块装配（#67）', () => {
     const c = collapseDom(parent)
     expect(c.slider, '应有 vsidian-outline-slider 滑块行').toBeTruthy()
     expect(c.slider!.getAttribute('role')).toBe('group')
-    expect(c.slider!.getAttribute('aria-label')).toBe('大纲展开层级')
+    expect(c.slider!.getAttribute('aria-label')).toBe(zhCn['outline.expandLevels'])
     const dots = c.dots()
     expect(dots).toHaveLength(6)
     expect(dots.map((d) => d.getAttribute('aria-label'))).toEqual([
-      '全部折叠',
-      '展开到一级标题',
-      '展开到二级标题',
-      '展开到三级标题',
-      '展开到四级标题',
-      '展开到五级标题',
+      zhCn['outline.collapseAll'],
+      zhCn['outline.expandLevel1'],
+      zhCn['outline.expandLevel2'],
+      zhCn['outline.expandLevel3'],
+      zhCn['outline.expandLevel4'],
+      zhCn['outline.expandLevel5'],
     ])
     // 位于顶栏与面板之间（DOM 序：toolbar < slider < panelHost）
     const toolbar = c.sidebar.querySelector('.vsidian-sidebar-toolbar')!
@@ -797,8 +802,8 @@ describe('view.state 的 outline 观测（jsdom 无布局的容错口径）', ()
     const probe = state.outline
     expect(probe).toBeDefined()
     expect(probe!.active).toBe(true)
-    expect(probe!.toggleAriaLabel).toBe('大纲')
-    expect(probe!.panelAriaLabel).toBe('大纲')
+    expect(probe!.toggleAriaLabel).toBe(zhCn['outline.label'])
+    expect(probe!.panelAriaLabel).toBe(zhCn['outline.label'])
     // jsdom 无布局/无 CSS 引擎：绘制命中容错为 false（真宿主断言见集成）
     expect(probe!.togglePainted).toBe(false)
     expect(probe!.panelPainted).toBe(false)

@@ -1,43 +1,47 @@
 /** 用户操作、默认键位和生效模式的单一事实源。字符串采用 ctrl+shift+b / ctrl+k ctrl+b。 */
 import { FORMAT_OPERATIONS } from './formatOperations'
+import type { MessageKey } from './locales/en'
 
 export type BindingMode = 'live' | 'reading' | 'both'
 export interface KeybindingOperation {
   id: string
   command: string
-  title: string
+  /** 操作显示名的字典消息键：format 源持 format.*（工具条/快捷键页/manifest
+   *  三面同源），extra/UI 源持 command.*（快捷键页与 manifest NLS 同源，
+   *  键名按 command id 推导，与 genNls 的映射规则一致——无第二套文案） */
+  titleKey: MessageKey
   mode: BindingMode
   writes: boolean
   defaults: readonly string[]
 }
 
 const extra: readonly KeybindingOperation[] = [
-  { id: 'find', command: 'onegayi.vsidian.find', title: '查找', mode: 'both', writes: false, defaults: ['ctrl+f', 'meta+f'] },
-  { id: 'findNext', command: 'onegayi.vsidian.find.next', title: '下一个查找结果', mode: 'both', writes: false, defaults: ['f3'] },
-  { id: 'findPrevious', command: 'onegayi.vsidian.find.previous', title: '上一个查找结果', mode: 'both', writes: false, defaults: ['shift+f3'] },
-  { id: 'toggleViewMode', command: 'onegayi.vsidian.toggleViewMode', title: '切换视图模式', mode: 'both', writes: false, defaults: [] },
-  { id: 'toReading', command: 'onegayi.vsidian.mode.toReading', title: '切换到阅读模式', mode: 'live', writes: false, defaults: [] },
-  { id: 'toLive', command: 'onegayi.vsidian.mode.toLive', title: '切换到实时预览', mode: 'reading', writes: false, defaults: [] },
-  { id: 'toSource', command: 'onegayi.vsidian.mode.toSource', title: '切换到源码编辑器', mode: 'both', writes: false, defaults: [] },
-  { id: 'tableCreate', command: 'onegayi.vsidian.table.create', title: '创建表格', mode: 'live', writes: true, defaults: [] },
-  { id: 'insertRowAbove', command: 'onegayi.vsidian.table.insertRowAbove', title: '表格：上方插入行', mode: 'live', writes: true, defaults: [] },
-  { id: 'insertRowBelow', command: 'onegayi.vsidian.table.insertRowBelow', title: '表格：下方插入行', mode: 'live', writes: true, defaults: [] },
-  { id: 'deleteRow', command: 'onegayi.vsidian.table.deleteRow', title: '表格：删除行', mode: 'live', writes: true, defaults: [] },
-  { id: 'insertColumnLeft', command: 'onegayi.vsidian.table.insertColumnLeft', title: '表格：左侧插入列', mode: 'live', writes: true, defaults: [] },
-  { id: 'insertColumnRight', command: 'onegayi.vsidian.table.insertColumnRight', title: '表格：右侧插入列', mode: 'live', writes: true, defaults: [] },
-  { id: 'deleteColumn', command: 'onegayi.vsidian.table.deleteColumn', title: '表格：删除列', mode: 'live', writes: true, defaults: [] },
-  { id: 'openSettings', command: 'onegayi.vsidian.openSettings', title: '打开设置', mode: 'both', writes: false, defaults: [] },
+  { id: 'find', command: 'onegayi.vsidian.find', titleKey: 'command.find.title', mode: 'both', writes: false, defaults: ['ctrl+f', 'meta+f'] },
+  { id: 'findNext', command: 'onegayi.vsidian.find.next', titleKey: 'command.find.next.title', mode: 'both', writes: false, defaults: ['f3'] },
+  { id: 'findPrevious', command: 'onegayi.vsidian.find.previous', titleKey: 'command.find.previous.title', mode: 'both', writes: false, defaults: ['shift+f3'] },
+  { id: 'toggleViewMode', command: 'onegayi.vsidian.toggleViewMode', titleKey: 'command.toggleViewMode.title', mode: 'both', writes: false, defaults: [] },
+  { id: 'toReading', command: 'onegayi.vsidian.mode.toReading', titleKey: 'command.mode.toReading.title', mode: 'live', writes: false, defaults: [] },
+  { id: 'toLive', command: 'onegayi.vsidian.mode.toLive', titleKey: 'command.mode.toLive.title', mode: 'reading', writes: false, defaults: [] },
+  { id: 'toSource', command: 'onegayi.vsidian.mode.toSource', titleKey: 'command.mode.toSource.title', mode: 'both', writes: false, defaults: [] },
+  { id: 'tableCreate', command: 'onegayi.vsidian.table.create', titleKey: 'command.table.create.title', mode: 'live', writes: true, defaults: [] },
+  { id: 'insertRowAbove', command: 'onegayi.vsidian.table.insertRowAbove', titleKey: 'command.table.insertRowAbove.title', mode: 'live', writes: true, defaults: [] },
+  { id: 'insertRowBelow', command: 'onegayi.vsidian.table.insertRowBelow', titleKey: 'command.table.insertRowBelow.title', mode: 'live', writes: true, defaults: [] },
+  { id: 'deleteRow', command: 'onegayi.vsidian.table.deleteRow', titleKey: 'command.table.deleteRow.title', mode: 'live', writes: true, defaults: [] },
+  { id: 'insertColumnLeft', command: 'onegayi.vsidian.table.insertColumnLeft', titleKey: 'command.table.insertColumnLeft.title', mode: 'live', writes: true, defaults: [] },
+  { id: 'insertColumnRight', command: 'onegayi.vsidian.table.insertColumnRight', titleKey: 'command.table.insertColumnRight.title', mode: 'live', writes: true, defaults: [] },
+  { id: 'deleteColumn', command: 'onegayi.vsidian.table.deleteColumn', titleKey: 'command.table.deleteColumn.title', mode: 'live', writes: true, defaults: [] },
+  { id: 'openSettings', command: 'onegayi.vsidian.openSettings', titleKey: 'command.openSettings.title', mode: 'both', writes: false, defaults: [] },
 ]
 
 /** 视图中已有明确目标的按钮动作：命令面板、快捷键均可调用。 */
 export const UI_OPERATIONS = [
-  { id: 'sidebarToggle', command: 'onegayi.vsidian.ui.sidebarToggle', title: '展开或收起右侧栏', mode: 'both', writes: false, defaults: [] },
-  { id: 'outlineToggle', command: 'onegayi.vsidian.ui.outlineToggle', title: '显示或隐藏大纲', mode: 'both', writes: false, defaults: [] },
-  { id: 'outlineSearch', command: 'onegayi.vsidian.ui.outlineSearch', title: '搜索大纲标题', mode: 'both', writes: false, defaults: [] },
-  { id: 'outlineJumpBottom', command: 'onegayi.vsidian.ui.outlineJumpBottom', title: '跳转到笔记末尾', mode: 'both', writes: false, defaults: [] },
-  { id: 'outlineReset', command: 'onegayi.vsidian.ui.outlineReset', title: '重置大纲', mode: 'both', writes: false, defaults: [] },
-  { id: 'outlineCollapseAll', command: 'onegayi.vsidian.ui.outlineCollapseAll', title: '折叠全部大纲', mode: 'both', writes: false, defaults: [] },
-  { id: 'outlineExpandAll', command: 'onegayi.vsidian.ui.outlineExpandAll', title: '展开全部大纲', mode: 'both', writes: false, defaults: [] },
+  { id: 'sidebarToggle', command: 'onegayi.vsidian.ui.sidebarToggle', titleKey: 'command.ui.sidebarToggle.title', mode: 'both', writes: false, defaults: [] },
+  { id: 'outlineToggle', command: 'onegayi.vsidian.ui.outlineToggle', titleKey: 'command.ui.outlineToggle.title', mode: 'both', writes: false, defaults: [] },
+  { id: 'outlineSearch', command: 'onegayi.vsidian.ui.outlineSearch', titleKey: 'command.ui.outlineSearch.title', mode: 'both', writes: false, defaults: [] },
+  { id: 'outlineJumpBottom', command: 'onegayi.vsidian.ui.outlineJumpBottom', titleKey: 'command.ui.outlineJumpBottom.title', mode: 'both', writes: false, defaults: [] },
+  { id: 'outlineReset', command: 'onegayi.vsidian.ui.outlineReset', titleKey: 'command.ui.outlineReset.title', mode: 'both', writes: false, defaults: [] },
+  { id: 'outlineCollapseAll', command: 'onegayi.vsidian.ui.outlineCollapseAll', titleKey: 'command.ui.outlineCollapseAll.title', mode: 'both', writes: false, defaults: [] },
+  { id: 'outlineExpandAll', command: 'onegayi.vsidian.ui.outlineExpandAll', titleKey: 'command.ui.outlineExpandAll.title', mode: 'both', writes: false, defaults: [] },
 ] as const satisfies readonly KeybindingOperation[]
 export type UiOperationId = (typeof UI_OPERATIONS)[number]['id']
 export function isUiOperationId(value: unknown): value is UiOperationId {
@@ -46,7 +50,7 @@ export function isUiOperationId(value: unknown): value is UiOperationId {
 
 export const KEYBINDING_OPERATIONS: readonly KeybindingOperation[] = [
   ...FORMAT_OPERATIONS.map((op) => ({
-    id: op.id, command: op.command, title: op.title,
+    id: op.id, command: op.command, titleKey: op.titleKey,
     mode: op.mode, writes: op.writes,
     defaults: op.defaultKey ? [op.defaultKey] : op.id === 'italic' ? ['ctrl+i'] : [],
   })),

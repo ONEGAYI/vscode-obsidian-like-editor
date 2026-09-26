@@ -1,10 +1,21 @@
+// 快捷键设置分页（#91）。#95 i18n：本页文案经 t() 取词（settings./
+// keybindingSettings. 前缀）；分页标题/描述与 entries 为 getter——语言
+// 换包后由宿主容器重建分页时重新求值。操作名一律 t(op.titleKey) 直取
+// （注册表全源持字典键：format.* / command.*，与 manifest NLS 同源）。
 import {
   KEYBINDING_OPERATIONS, applyBindingChange,
   formatBindingLabel, getEffectiveBindings, type KeybindingOverrides,
 } from '../shared/keybindings'
+import { t } from '../shared/i18n'
 import type { SettingsPageBridge, SettingsPageSection } from './settingsPageView'
 import { keyStep } from './keybindingRouter'
 import { isHostToWebview } from '../shared/protocol'
+
+/** 冲突文案等的操作名取词（id 为运行时来源，未登记 id 回退显示 id 本身） */
+function titleOfId(id: string): string {
+  const op = KEYBINDING_OPERATIONS.find((item) => item.id === id)
+  return op ? t(op.titleKey) : id
+}
 
 function el(tag: string, cls: string, text = ''): HTMLElement {
   const node = document.createElement(tag)
@@ -13,13 +24,24 @@ function el(tag: string, cls: string, text = ''): HTMLElement {
   return node
 }
 
+/** 冲突文案的操作名串接（分隔符随语言：zh 顿号 / en 逗号） */
+function joinOpNames(ids: readonly string[]): string {
+  return ids.map(titleOfId).join(t('keybindingSettings.nameSeparator'))
+}
+
 export class KeybindingSettingsSection implements SettingsPageSection {
   readonly id = 'keybindings'
-  readonly title = '快捷键'
-  readonly description = '管理 Vsidian 操作的快捷键。冲突检查覆盖 Vsidian 内部；VS Code 和其他扩展的有效键位无法完整查询。'
   readonly icon = 'keyboard'
-  readonly entries = KEYBINDING_OPERATIONS.map((op) => ({ id: op.id, title: op.title,
-    description: `${op.mode === 'both' ? '实时预览、阅读' : op.mode === 'live' ? '实时预览' : '阅读'} · ${op.command}` }))
+  get title(): string { return t('keybindingSettings.title') }
+  get description(): string { return t('keybindingSettings.description') }
+  get entries() {
+    return KEYBINDING_OPERATIONS.map((op) => ({
+      id: op.id,
+      title: t(op.titleKey),
+      description: `${t(op.mode === 'both' ? 'keybindingSettings.modeBoth'
+        : op.mode === 'live' ? 'keybindingSettings.modeLive' : 'keybindingSettings.modeReading')} · ${op.command}`,
+    }))
+  }
 
   private overrides: KeybindingOverrides = {}
   private parent: HTMLElement | undefined
@@ -57,11 +79,10 @@ export class KeybindingSettingsSection implements SettingsPageSection {
     const payload = message
     this.overrides = payload.overrides
     if (payload.requestId !== undefined && payload.requestId === this.requestId) {
-      this.status = payload.ok ? '快捷键已保存并立即生效。'
-        : payload.reason === 'storage' ? '保存失败，已恢复当前生效绑定。'
-          : payload.reason === 'conflict' ? `Vsidian 内部冲突：${(payload.conflicts ?? []).map((id) =>
-            KEYBINDING_OPERATIONS.find((op) => op.id === id)?.title ?? id).join('、')}`
-            : '快捷键无效，未保存。'
+      this.status = payload.ok ? t('keybindingSettings.saved')
+        : payload.reason === 'storage' ? t('keybindingSettings.saveFailedStorage')
+          : payload.reason === 'conflict' ? t('keybindingSettings.conflictInternal', { names: joinOpNames(payload.conflicts ?? []) })
+            : t('keybindingSettings.invalid')
       if (payload.ok) this.conflict = undefined
     }
     this.updateStatus()
@@ -69,7 +90,7 @@ export class KeybindingSettingsSection implements SettingsPageSection {
   }
 
   private send(message: object): void {
-    this.status = '正在保存…'
+    this.status = t('keybindingSettings.saving')
     this.bridge.postMessage(message)
     this.updateStatus()
     this.renderRows()
@@ -80,9 +101,8 @@ export class KeybindingSettingsSection implements SettingsPageSection {
     if (!check.ok) {
       if (check.reason === 'conflict') {
         this.conflict = { id, bindings, ids: check.conflicts }
-        this.status = `Vsidian 内部冲突：${check.conflicts.map((item) =>
-          KEYBINDING_OPERATIONS.find((op) => op.id === item)?.title ?? item).join('、')}。可选择替换原绑定。`
-      } else this.status = '快捷键无效，未保存。'
+        this.status = t('keybindingSettings.conflictSave', { names: joinOpNames(check.conflicts) })
+      } else this.status = t('keybindingSettings.invalid')
       this.updateStatus()
       this.renderRows()
       return
@@ -98,9 +118,8 @@ export class KeybindingSettingsSection implements SettingsPageSection {
     if (!check.ok) {
       if (check.reason === 'conflict') {
         this.conflict = { id, bindings: defaults, ids: check.conflicts, reset: true }
-        this.status = `恢复默认与 ${check.conflicts.map((item) =>
-          KEYBINDING_OPERATIONS.find((op) => op.id === item)?.title ?? item).join('、')} 冲突。可选择替换原绑定。`
-      } else this.status = '恢复默认失败。'
+        this.status = t('keybindingSettings.conflictReset', { names: joinOpNames(check.conflicts) })
+      } else this.status = t('keybindingSettings.resetFailed')
       this.updateStatus()
       this.renderRows()
       return
@@ -148,20 +167,20 @@ export class KeybindingSettingsSection implements SettingsPageSection {
     const toolbar = el('div', 'vsidian-keybindings-toolbar')
     const nameSearch = el('input', 'vsidian-keybindings-search') as HTMLInputElement
     nameSearch.type = 'search'
-    nameSearch.placeholder = '搜索操作名'
-    nameSearch.setAttribute('aria-label', '搜索操作名')
+    nameSearch.placeholder = t('keybindingSettings.searchNamePlaceholder')
+    nameSearch.setAttribute('aria-label', t('keybindingSettings.searchNamePlaceholder'))
     nameSearch.value = this.query
     nameSearch.addEventListener('input', () => { this.query = nameSearch.value; this.renderRows() })
-    const keySearch = this.recorder('按键搜索绑定', (chord) => {
+    const keySearch = this.recorder(t('keybindingSettings.searchKeyPlaceholder'), (chord) => {
       this.keyQuery = chord
       this.renderRows()
     })
     keySearch.value = this.keyQuery ? formatBindingLabel(this.keyQuery) : ''
     keySearch.dataset.raw = this.keyQuery.includes(' ') ? '' : this.keyQuery
     const keySearchLabel = el('label', 'vsidian-keybindings-key-search') as HTMLLabelElement
-    keySearchLabel.append(el('span', 'vsidian-keybindings-key-search-caption', '按键位搜索'), keySearch)
+    keySearchLabel.append(el('span', 'vsidian-keybindings-key-search-caption', t('keybindingSettings.searchKeyCaption')), keySearch)
     toolbar.append(nameSearch, keySearchLabel,
-      this.button('全部恢复默认', () => this.send({ kind: 'keybindings.resetAll', requestId: ++this.requestId })))
+      this.button(t('keybindingSettings.resetAll'), () => this.send({ kind: 'keybindings.resetAll', requestId: ++this.requestId })))
     parent.append(toolbar)
     const status = el('p', 'vsidian-keybindings-status', this.status)
     status.setAttribute('role', 'status')
@@ -182,10 +201,10 @@ export class KeybindingSettingsSection implements SettingsPageSection {
     if (!parent) return
     parent.replaceChildren()
     let locatedRow: HTMLElement | undefined
-    const filtered = KEYBINDING_OPERATIONS.filter((op) => op.title.toLocaleLowerCase().includes(this.query.toLocaleLowerCase()) &&
+    const filtered = KEYBINDING_OPERATIONS.filter((op) => t(op.titleKey).toLocaleLowerCase().includes(this.query.toLocaleLowerCase()) &&
       (!this.keyQuery || getEffectiveBindings(this.overrides, op.id).some((binding) =>
         binding === this.keyQuery || binding.startsWith(`${this.keyQuery} `))))
-    if (!filtered.length) parent.append(el('p', 'vsidian-settings-empty', '没有匹配的操作。'))
+    if (!filtered.length) parent.append(el('p', 'vsidian-settings-empty', t('keybindingSettings.noMatch')))
     for (const op of filtered) {
       const row = el('section', 'vsidian-keybindings-row')
       row.dataset.operationId = op.id
@@ -194,12 +213,13 @@ export class KeybindingSettingsSection implements SettingsPageSection {
         locatedRow = row
       }
       const heading = el('div', 'vsidian-keybindings-row-heading')
-      heading.append(el('strong', '', op.title),
-        el('span', 'vsidian-keybindings-mode', op.mode === 'both' ? '实时预览 · 阅读' : op.mode === 'live' ? '实时预览' : '阅读'))
+      heading.append(el('strong', '', t(op.titleKey)),
+        el('span', 'vsidian-keybindings-mode', t(op.mode === 'both' ? 'keybindingSettings.modeLiveReading'
+          : op.mode === 'live' ? 'keybindingSettings.modeLive' : 'keybindingSettings.modeReading')))
       row.append(heading)
       const bindings = getEffectiveBindings(this.overrides, op.id)
       const tags = el('div', 'vsidian-keybindings-tags')
-      if (!bindings.length) tags.append(el('span', 'vsidian-keybindings-unbound', '未绑定'))
+      if (!bindings.length) tags.append(el('span', 'vsidian-keybindings-unbound', t('keybindingSettings.unbound')))
       for (const binding of bindings) {
         const tag = el('span', 'vsidian-keybindings-tag')
         tag.append(el('kbd', '', formatBindingLabel(binding)), this.button('×', () =>
@@ -208,26 +228,26 @@ export class KeybindingSettingsSection implements SettingsPageSection {
       }
       row.append(tags)
       const actions = el('div', 'vsidian-keybindings-actions')
-      actions.append(this.button('添加绑定', () => {
+      actions.append(this.button(t('keybindingSettings.addBinding'), () => {
         this.selected = this.selected === op.id ? undefined : op.id
         this.renderRows()
-      }), this.button('清空绑定', () => this.save(op.id, [])),
-      this.button('恢复默认', () => this.resetOne(op.id)))
+      }), this.button(t('keybindingSettings.clearBindings'), () => this.save(op.id, [])),
+      this.button(t('keybindingSettings.resetDefault'), () => this.resetOne(op.id)))
       row.append(actions)
       if (this.selected === op.id) {
         const editor = el('div', 'vsidian-keybindings-editor')
         let draft = ''
-        const recorder = this.recorder('按下单段或连续两段快捷键', (chord) => { draft = chord })
-        editor.append(recorder, this.button('保存绑定', () => {
+        const recorder = this.recorder(t('keybindingSettings.recordPlaceholder'), (chord) => { draft = chord })
+        editor.append(recorder, this.button(t('keybindingSettings.saveBinding'), () => {
           if (draft) this.save(op.id, [...bindings, draft])
         }))
         row.append(editor)
       }
       if (this.conflict?.id === op.id) {
         const warning = el('div', 'vsidian-keybindings-conflict',
-          `与 ${this.conflict.ids.map((id) => KEYBINDING_OPERATIONS.find((item) => item.id === id)?.title ?? id).join('、')} 冲突。`)
+          t('keybindingSettings.conflictRow', { names: joinOpNames(this.conflict.ids) }))
         warning.setAttribute('role', 'alert')
-        warning.append(this.button('替换原绑定', () => this.conflict!.reset
+        warning.append(this.button(t('keybindingSettings.replaceConflicts'), () => this.conflict!.reset
           ? this.resetOne(op.id, true) : this.save(op.id, this.conflict!.bindings, true)))
         row.append(warning)
       }

@@ -57,6 +57,7 @@ button:focus-visible, input:focus-visible {
 .vsidian-settings-item-title { font-size: 14px; font-weight: 500; }
 .vsidian-settings-item-description { display: block; color: var(--vscode-descriptionForeground, #666); margin: 7px 0 0; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
 .vsidian-settings-checkbox { width: 18px; height: 18px; margin: 0 3px; flex: none; accent-color: var(--vscode-focusBorder, #007fd4); cursor: pointer; }
+.vsidian-settings-select { flex: none; margin: 0 3px; padding: 3px 6px; font: inherit; color: var(--vscode-dropdown-foreground, inherit); background: var(--vscode-dropdown-background, transparent); border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border, #d9dde3)); border-radius: 2px; cursor: pointer; }
 .vsidian-settings-item-located { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: 8px; border-radius: 3px; }
 .vsidian-settings-status { min-height: 20px; margin: 0 0 14px; color: var(--vscode-descriptionForeground, #666); font-size: 12px; }
 .vsidian-settings-empty { color: var(--vscode-descriptionForeground, #666); padding: 24px 0; }

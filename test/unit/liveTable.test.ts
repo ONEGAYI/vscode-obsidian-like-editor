@@ -1,4 +1,9 @@
 // @vitest-environment jsdom
+import { installLocale } from '../../src/shared/i18n'
+import { zhCn } from '../../src/shared/locales/zh-cn'
+
+// #94 起文案经 t() 取词：装配生产中文包，断言与字典同源
+installLocale('zh-cn', zhCn)
 // 表格单元格编辑契约（工单 #12/#42）：live 网格装饰 + 编辑链路 + 权威回读。
 //
 // 核心断言（用户可观察行为，非实现复述）：
@@ -295,7 +300,8 @@ describe('live 表格装饰', () => {
       parent: document.body.appendChild(document.createElement('div')),
       state: EditorState.create({ doc: empty, extensions: [livePreviewDecorations], selection: EditorSelection.single(empty.length) }),
     })
-    const slot = emptyView.contentDOM.querySelector<HTMLElement>('[aria-label="空单元格"]')
+    const slot = emptyView.contentDOM.querySelector<HTMLElement>(
+      `[aria-label="${zhCn['decor.emptyCell']}"]`)
     expect(slot).not.toBeNull()
     expect(slot!.parentElement?.classList.contains(LIVE_CLASS_NAMES.tableGridRow)).toBe(true)
     expect(slot!.parentElement?.querySelectorAll(':scope > .cm-widgetBuffer')).toHaveLength(1)

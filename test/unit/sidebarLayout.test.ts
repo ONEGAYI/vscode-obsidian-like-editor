@@ -15,6 +15,11 @@
 import { describe, it, expect } from 'vitest'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
 import type { WebviewToHost } from '../../src/shared/protocol'
+import { installLocale } from '../../src/shared/i18n'
+import { zhCn } from '../../src/shared/locales/zh-cn'
+
+// #94 起文案经 t() 取词：装配生产中文包，断言与字典同源
+installLocale('zh-cn', zhCn)
 
 // jsdom 无布局：CM6 视口测量的零值 polyfill（与 viewMode.test.ts 同款）
 if (typeof Range !== 'undefined' && Range.prototype.getClientRects === undefined) {
@@ -180,8 +185,8 @@ describe('侧栏切换按钮（#53）', () => {
     const body = parent.querySelector<HTMLElement>('.vsidian-body')!
     const btn = parent.querySelector<HTMLButtonElement>('button.vsidian-sidebar-toggle')!
     expect(body.classList.contains('vsidian-sidebar-open')).toBe(false)
-    expect(btn.getAttribute('aria-label')).toBe('展开右侧栏')
-    expect(btn.getAttribute('title')).toBe('展开右侧栏')
+    expect(btn.getAttribute('aria-label')).toBe(zhCn['sidebar.expand'])
+    expect(btn.getAttribute('title')).toBe(zhCn['sidebar.expand'])
     expect(btn.getAttribute('aria-expanded')).toBe('false')
   })
 
@@ -192,12 +197,12 @@ describe('侧栏切换按钮（#53）', () => {
     const btn = parent.querySelector<HTMLButtonElement>('button.vsidian-sidebar-toggle')!
     btn.click()
     expect(body.classList.contains('vsidian-sidebar-open')).toBe(true)
-    expect(btn.getAttribute('aria-label')).toBe('收起右侧栏')
-    expect(btn.getAttribute('title')).toBe('收起右侧栏')
+    expect(btn.getAttribute('aria-label')).toBe(zhCn['sidebar.collapse'])
+    expect(btn.getAttribute('title')).toBe(zhCn['sidebar.collapse'])
     expect(btn.getAttribute('aria-expanded')).toBe('true')
     btn.click()
     expect(body.classList.contains('vsidian-sidebar-open')).toBe(false)
-    expect(btn.getAttribute('aria-label')).toBe('展开右侧栏')
+    expect(btn.getAttribute('aria-label')).toBe(zhCn['sidebar.expand'])
     expect(btn.getAttribute('aria-expanded')).toBe('false')
   })
 
@@ -307,7 +312,7 @@ describe('view.state 的 sidebar 观测（jsdom 无布局的容错口径）', ()
     const probe = state.sidebar
     expect(probe).toBeDefined()
     expect(probe!.open).toBe(false)
-    expect(probe!.toggleAriaLabel).toBe('展开右侧栏')
+    expect(probe!.toggleAriaLabel).toBe(zhCn['sidebar.expand'])
     expect(probe!.settingsAriaLabel).toBe('打开 Vsidian 设置')
     // jsdom 无布局/无 CSS 引擎：绘制命中与线宽读取容错为 false/null（真宿主断言见集成）
     expect(probe!.toggleBarStrokeWidth === null || typeof probe!.toggleBarStrokeWidth === 'string').toBe(true)

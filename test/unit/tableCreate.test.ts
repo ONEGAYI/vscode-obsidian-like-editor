@@ -41,7 +41,7 @@ describe('planCreateTable：光标处建立两列两内容行的空表格', () =
   })
 })
 
-it('命令面板按界面语言显示 Create a Table / 创建表格', () => {
+it('命令面板按界面语言显示 Create a table / 创建表格', () => {
   const manifest = JSON.parse(readFileSync('package.json', 'utf8')) as {
     contributes: { commands: Array<{ command: string; title: string; category: string }> }
   }
@@ -49,6 +49,8 @@ it('命令面板按界面语言显示 Create a Table / 创建表格', () => {
   expect(command).toMatchObject({ title: '%command.table.create.title%', category: 'Vsidian' })
   const english = JSON.parse(readFileSync('package.nls.json', 'utf8')) as Record<string, string>
   const chinese = JSON.parse(readFileSync('package.nls.zh-cn.json', 'utf8')) as Record<string, string>
-  expect(english['command.table.create.title']).toBe('Create a Table')
+  // #97 起 nls 值由字典生成（sentence case 文风，见 docs/specs/i18n.md），
+  // 旧 Title Case「Create a Table」随之修正；43 条全量契约见 nlsManifest.test.ts
+  expect(english['command.table.create.title']).toBe('Create a table')
   expect(chinese['command.table.create.title']).toBe('创建表格')
 })
