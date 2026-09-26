@@ -14,7 +14,7 @@ VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 
 ## 技术栈与构建（工单 #2 确立）
 
-- **运行时**：TypeScript + CodeMirror 6（`@codemirror/state`、`@codemirror/view`、`@codemirror/commands`，单包组合，不用 `codemirror` 聚合包与 basicSetup/history——撤销栈归宿主文本管线）。阅读模式用 markdown-it（#8 起）；公式渲染 KaTeX 0.16.47 + `@vscode/markdown-it-katex` 1.1.2（#59，仅随包 woff2 字体）；Mermaid 11.12.2 独立产物按需懒加载（#60）。
+- **运行时**：TypeScript + CodeMirror 6（`@codemirror/state`、`@codemirror/view`、`@codemirror/commands`，单包组合，不用 `codemirror` 聚合包与 basicSetup/history——撤销栈归宿主文本管线）。阅读模式用 markdown-it（#8 起）；公式渲染 KaTeX 0.16.47 + `@vscode/markdown-it-katex` 1.1.2（#59，仅随包 woff2 字体）；Mermaid 11.12.2 独立产物按需懒加载（#60）；代码块卡片（#78–#85，规格 `docs/specs/code-block-card.md`）语法高亮为 Lezer 官方语言包 + `@codemirror/legacy-modes` StreamLanguage 统一引擎（`tok-*` 词表两端共用，`src/webview/codeHighlight.ts`），围栏表复用 `mermaidFencesField`，语言注册表在 `src/shared/codeLangs.ts`。
 - **宿主端**（`src/extension.ts`、`src/host/`）：`CustomTextEditorProvider`，保存/dirty/Hot Exit 由 VSCode 文本管线自动处理；`TextDocument` 为权威文本，编辑经 `WorkspaceEdit` 写回。
 - **webview 端**（`src/webview/`）：CM6 EditorView + `acquireVsCodeApi` 消息桥；`src/shared/` 为两端共享的消息协议单一事实源（不依赖 vscode/DOM）。协议约定 webview 全程 LF 坐标（CM6 内部把 `\r\n` 规范化为 `\n`，宿主侧 `NewlineCoordinator` 负责双向坐标与文本转换）。
 - **构建**：esbuild 多产物——宿主 `out/extension.js`（node18/cjs/external vscode）、编辑器 webview `out/webview/main.js` 与设置页 webview `out/webview/settings.js`（#33；chrome118/iife，CSS 随 import 打包为同名 `.css`）；`npm run compile` 另跑 `tsc --noEmit` 做类型检查（esbuild 不查类型）。
@@ -25,7 +25,7 @@ VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 
 ## 打包与发布
 
-- **体积红线**：VSIX 解压总量警告 4.5 MB / 上限 5.5 MB，一般单文件警告 3 MB / 上限 4 MB，图标上限 100 KB（256×256）。阈值定义在 `scripts/release.mjs` 的 `SIZE_LIMITS`；修改阈值视同变更本约定，需同步本节。#60 起基线含 mermaid 独立产物 `out/webview/mermaid.js`（minify 后约 2.6 MB，刻意 vendored 的按需懒加载渲染器，单文件与总量阈值据此上调；主 bundle main.js 约 0.80 MB 随之不再触发单文件警告，其增长由总量线约束——属已接受取舍）。
+- **体积红线**：VSIX 解压总量警告 5.5 MB / 上限 6.5 MB（#85 代码块高亮后基线约 4.45 MB，距旧警告线 4.5 MB 仅约 57 KB，用户决策两条线各上调 1 MB），一般单文件警告 3 MB / 上限 4 MB，图标上限 100 KB（256×256）。阈值定义在 `scripts/release.mjs` 的 `SIZE_LIMITS`；修改阈值视同变更本约定，需同步本节。#60 起基线含 mermaid 独立产物 `out/webview/mermaid.js`（minify 后约 2.6 MB，刻意 vendored 的按需懒加载渲染器，单文件与总量阈值据此上调）——彼时主 bundle main.js 约 0.80 MB 不触单文件警告；#83 代码块高亮语言包并入后 main.js 约 2.4 MB（距单文件警告线 3 MB 约 0.6 MB 余量），其增长由总量线约束——属已接受取舍。
 - **双重防线**：`.vscodeignore` 挡打包输入，`scripts/release.mjs` 的 `inspectVsixEntries` 检查最终产物（必需清单 + `out/` 白名单 + 禁止模式 + 体积阈值），每次发布前必跑（`npm run release:check`，或随 `npm run release` / CI 自动执行）。新增运行时资产时两处同步维护：`.vscodeignore` 放行 + `REQUIRED_EXTENSION` 登记；漏登记（缺失）与 out/ 未登记产物（多余，如调试遗留）都会被发布检查拦下（`.github/` 混入包内即此类事故，实测发生过）。字体只随包 woff2（chrome118 目标足够），`.woff`/`.ttf` 混入即硬错误——它是字体裁剪失效的信号。
 - **图标**：`media/vsidian-icon.png` 为原图（1254×1254），仅存仓库溯源、**不进 VSIX**；打包用 `media/vsidian-icon-256.png`（package.json `icon` 指向它）。替换图标时重新生成 256 版（PIL LANCZOS + optimize 即可），保持两文件同名关系。
 - **发布流程**：`CHANGELOG.md` 最新 `## <版本> - <日期>` 段落必须与 package.json `version` 一致（`scripts/release.mjs` 强校验，并以该段落作为 GitHub Release 说明）。发版步骤：升 `version` + 新建 CHANGELOG 段落 → 提交 → `npm run release:check` 本地过检查 → `git tag v<版本>` → `npm run release`（或推 tag 由 CI 执行）。
@@ -78,6 +78,7 @@ vsidian/
 │   ├── design/   # 设计文档（选择器映射等）
 │   │   └── obsidian-selector-map.md # Obsidian 选择器映射表
 │   ├── perf/     # 性能实测数据与测量工具说明
+│   │   ├── 2026-09-code-block-card.md           # 代码块卡片性能实测（#85）
 │   │   ├── 2026-09-live-syntax-decorations.md   # 语法树装饰与大围栏细分实测（#8）
 │   │   ├── 2026-09-math-rendering.md            # 公式渲染性能实测（#59）
 │   │   ├── 2026-09-mermaid-rendering.md         # Mermaid 性能与边界（#60）
@@ -91,6 +92,7 @@ vsidian/
 │   │   ├── obsidian-live-preview-editor.md # Obsidian 技术栈与选型调研
 │   │   └── obsidian-viewport-rendering.md  # 视口渲染性能补充调研
 │   └── specs/    # 产品规格
+│       ├── code-block-card.md          # 代码块卡片功能规格
 │       ├── keybindings.md              # 快捷键清单与默认值
 │       ├── manual-verification.md      # 人工验证清单
 │       ├── mvp-issues.md               # MVP GitHub Issue 索引
@@ -123,6 +125,7 @@ vsidian/
 │   │   └── wikilinkTarget.ts     # 宿主侧双链目标解析纯逻辑（#11）
 │   ├── shared/      # 两端共享纯逻辑
 │   │   ├── changeMapping.ts    # 变更重定位纯函数
+│   │   ├── codeLangs.ts        # 代码块语言注册表与别名路由
 │   │   ├── formatOperations.ts # 格式操作注册清单
 │   │   ├── keybindings.ts      # 快捷键操作与冲突模型
 │   │   ├── math.ts             # 公式形态学纯函数（#59）
@@ -132,12 +135,15 @@ vsidian/
 │   │   ├── settings.ts         # 设置定义与读写纯逻辑
 │   │   └── wikilink.ts         # 双链形态学单一事实源（#11）
 │   └── webview/     # webview 端实现
+│       ├── codeCardState.ts        # 卡片共享状态中立模块
+│       ├── codeHighlight.ts        # 语法高亮引擎装配与缓存
 │       ├── css.d.ts                # CSS 导入类型声明
 │       ├── findSession.ts          # 查找匹配纯函数（#14）
 │       ├── formatOperations.ts     # 格式文本变换规划
 │       ├── imageResource.ts        # 图片资源状态机（#10）
 │       ├── keybindingRouter.ts     # 编辑器按键分发器
 │       ├── keybindingSettings.ts   # 快捷键设置分页
+│       ├── liveCodeCard.ts         # Live 代码块卡片装饰
 │       ├── liveDecorations.ts      # 语法树驱动 Live 装饰（#8）
 │       ├── liveLineNumbers.ts      # 表格段首行号与绘制探针
 │       ├── liveLinks.ts            # live 链接装饰与跳转（#10）
@@ -159,6 +165,7 @@ vsidian/
 │       ├── perfProbe.ts            # webview 性能探针（#5）
 │       ├── quickActionState.ts     # 快速操作状态判定
 │       ├── readingBlocks.ts        # markdown-it 阅读块切分
+│       ├── readingCodeCard.ts      # 阅读代码块卡片增强
 │       ├── readingMarkdown.ts      # markdown-it 安全渲染层
 │       ├── readingProbe.ts         # 阅读视图性能探针
 │       ├── readingView.ts          # 阅读视图 DOM 构建与锚点定位

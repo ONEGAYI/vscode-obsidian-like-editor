@@ -20,6 +20,8 @@ function applyToText(text: string, changes: SerChange[]): string {
 class FakeDoc implements HostDocumentPort {
   content: string
   ver: number
+  /** 权威文档行尾（镜像 vscode.EndOfLine：1=LF、2=CRLF；#81 复制归一驱动） */
+  eol: 1 | 2 = 1
   applyCalls: SerChange[][] = []
   applyResult = true
   fireChangeOnApply = true
@@ -1091,6 +1093,48 @@ describe('#10 image.request：会话解析、去重与结果回发', () => {
     expect(results.length).toBe(1)
     expect((results[0] as { ok: boolean; reason?: string }).ok).toBe(false)
     expect((results[0] as { reason?: string }).reason).toBe('read-error')
+  })
+})
+
+// ---- 工单 #81：代码块复制的行尾归一（webview 出站恒为 LF） ----
+
+describe('#81 codeblock.copy：按文档 EOL 归一后交剪贴板端口', () => {
+  async function sendCopy(eol: 1 | 2): Promise<string[]> {
+    const s = setup()
+    s.doc.eol = eol
+    const copies: string[] = []
+    const id = s.session.attachPanel({
+      send: () => undefined,
+      writeClipboard: (text) => copies.push(text),
+    })
+    await ready10(s, id)
+    await s.send(id, { kind: 'codeblock.copy', sessionId: id, docUri: DOC_URI, text: 'let a = 1\n\nconst b' })
+    return copies
+  }
+
+  it('CRLF 文档：剪贴板收到 \r\n 文本（复制产物与文档行尾一致）', async () => {
+    expect(await sendCopy(2)).toEqual(['let a = 1\r\n\r\nconst b'])
+  })
+
+  it('LF 文档：剪贴板收到原文（无二次转换）', async () => {
+    expect(await sendCopy(1)).toEqual(['let a = 1\n\nconst b'])
+  })
+
+  it('docUri 不匹配或未 ready 的复制请求被丢弃', async () => {
+    const s = setup()
+    const copies: string[] = []
+    const id = s.session.attachPanel({
+      send: () => undefined,
+      writeClipboard: (text) => copies.push(text),
+    })
+    await s.session.handleWebviewMessage(
+      { kind: 'codeblock.copy', sessionId: id, docUri: DOC_URI, text: 'a' },
+      id,
+    )
+    expect(copies).toEqual([])
+    await ready10(s, id)
+    await s.send(id, { kind: 'codeblock.copy', sessionId: id, docUri: 'file:///other.md', text: 'a' })
+    expect(copies).toEqual([])
   })
 })
 

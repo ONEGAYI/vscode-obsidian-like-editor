@@ -214,6 +214,31 @@ describe('大围栏按行细分（#7 超大单块缓解）', () => {
     const blocks = splitReadingBlocks(text)
     expect(blocks.filter((b) => b.kind === 'code-block')).toHaveLength(1)
   })
+
+  it('分片落位跨片行号契约：data-vsidian-code-start/total（片首行 0 基、整块内容行数）', () => {
+    const lines = FENCE_CHUNK_LINES * 3 + 7
+    const text = giantFence(lines)
+    const chunks = splitReadingBlocks(text).filter((b) => b.kind === 'code-block')
+    // 整块内容行数 = 187（不含开/闭围栏行）
+    expect(chunks[0]!.html).toContain(`data-vsidian-code-total="${lines}"`)
+    // 首片内容从围栏体第 0 行起（开围栏行占片内首行，内容 59 行）
+    expect(chunks[0]!.html).toContain('data-vsidian-code-start="0"')
+    // 第二片覆盖文档行 [start+60, start+119]，片首内容行为围栏体第 59 行
+    expect(chunks[1]!.html).toContain('data-vsidian-code-start="59"')
+    // 末片 start = 2*59 + 60（前两片内容行 59+60，末片首内容行接续）
+    expect(chunks[2]!.html).toContain('data-vsidian-code-start="119"')
+  })
+
+  it('分块语言类取 info 首词（CommonMark；js title=x → language-js、c++ → language-c++）', () => {
+    const body = Array.from({ length: FENCE_CHUNK_LINES + 2 }, (_, i) => `line-${i}`).join('\n')
+    const jsChunks = splitReadingBlocks(`\`\`\`js title=x\n${body}\n\`\`\``)
+      .filter((b) => b.kind === 'code-block')
+    expect(jsChunks.length).toBeGreaterThan(1)
+    expect(jsChunks[0]!.html).toContain('class="language-js"')
+    const cppChunks = splitReadingBlocks(`\`\`\`c++\n${body}\n\`\`\``)
+      .filter((b) => b.kind === 'code-block')
+    expect(cppChunks[0]!.html).toContain('class="language-c++"')
+  })
 })
 
 describe('blockForOffset：floor 语义（#6 契约保持）', () => {

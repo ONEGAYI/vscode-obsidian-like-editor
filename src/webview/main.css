@@ -35,6 +35,9 @@ body {
   --vsidian-content-padding-inline: 24px;
   /* 行号列与正文的固定间距：响应 VSCode UI 字号（界面元素大小） */
   --vsidian-ln-gap: calc(var(--vscode-font-size, 13px) * 2);
+  /* 代码块卡片底色（#79 起公开变量，选择器映射表登记；头部与代码区共用，
+     阅读卡片同源） */
+  --vsidian-code-card-background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.12));
   /* ---- #65 标题层级色变量族：正文标题（live 行级 / 阅读块级）与大纲条目
      共用同一变量族（结构装饰与正文主题同源，不做读值复制）。当前主题无
      分级着色（各级同默认前景色）；未来主题分级着色仅改此族定义，一处
@@ -914,6 +917,147 @@ body {
   opacity: 0.75;
 }
 
+/* ---- 代码块卡片（#79–#84，规格 docs/specs/code-block-card.md）----
+   呈现态围栏行内容被清空（replace 装饰零宽）但行槽保留；卡片 = 块首行
+   上方的头部横带（block widget）+ 连续块行底色 + 尾行底边圆角（顶边
+   圆角由头部承担）。行级类只做背景/圆角着色，不改变行高（#8 约束沿用）。 */
+#app .cm-editor .cm-scroller .cm-line.vsidian-code-card-line {
+  background-color: var(--vsidian-code-card-background, rgba(128, 128, 128, 0.12));
+}
+
+#app .cm-editor .cm-scroller .cm-line.vsidian-code-card-line.vsidian-code-card-edge-top {
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+}
+
+#app .cm-editor .cm-scroller .cm-line.vsidian-code-card-line.vsidian-code-card-edge-bottom {
+  border-bottom-left-radius: 6px;
+  border-bottom-right-radius: 6px;
+}
+
+#app .vsidian-code-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  margin: 4px 0 0;
+  padding: 5px 12px 4px;
+  background-color: var(--vsidian-code-card-background, rgba(128, 128, 128, 0.12));
+  border-radius: 6px 6px 0 0;
+  border-bottom: 1px solid var(--vscode-editorGroup-border, rgba(128, 128, 128, 0.35));
+  color: var(--vscode-descriptionForeground, rgba(128, 128, 128, 0.9));
+  user-select: none;
+}
+
+#app .vsidian-code-card-header .vsidian-code-card-header-label {
+  font-weight: 600;
+  font-size: var(--vscode-font-size, 13px);
+}
+
+#app .vsidian-code-card-header .vsidian-code-card-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 卡内行号（#80）：代码行行首右对齐数字，颜色与文档行号槽同源；与文档
+   行号槽两列并存（读图结论），user-select:none 且点击穿透编辑器 */
+#app .vsidian-code-card-linenumber {
+  display: inline-block;
+  min-width: 2ch;
+  text-align: right;
+  margin-right: 24px;
+  color: var(--vscode-editorLineNumber-foreground, rgba(128, 128, 128, 0.8));
+  user-select: none;
+}
+
+/* 复制按钮（#81）：悬停卡片显现（focus-visible 键盘可达）；编辑态同样
+   发射（常驻在场），可见性由 CSS 悬停承担，收起态不发射；✓ 反馈本地
+   切换约 1.2s */
+#app .vsidian-code-card-header .vsidian-code-card-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  box-sizing: border-box;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--vscode-editor-foreground, inherit);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
+}
+
+#app .vsidian-code-card-header:hover .vsidian-code-card-copy,
+#app .vsidian-code-card-header .vsidian-code-card-copy:focus-visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+#app .vsidian-code-card-header .vsidian-code-card-copy:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
+}
+
+#app .vsidian-code-card-header .vsidian-code-card-copy .vsidian-code-card-copy-icon-check {
+  display: none;
+}
+
+#app .vsidian-code-card-header .vsidian-code-card-copy-done .vsidian-code-card-copy-icon-copy {
+  display: none;
+}
+
+#app .vsidian-code-card-header .vsidian-code-card-copy-done .vsidian-code-card-copy-icon-check {
+  display: inline-flex;
+  color: var(--vscode-testing-iconPassed, #73c991);
+}
+
+#app .vsidian-code-card-header .vsidian-code-card-copy-done {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* 折叠 chevron（#82）：两态常驻（透明度低于复制按钮的常态呈现），收起态
+   转向 -90°；头部横带在收起时同时承担卡片底边（补底边圆角与底部分隔线去除） */
+#app .vsidian-code-card-header .vsidian-code-card-fold {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  box-sizing: border-box;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--vscode-descriptionForeground, rgba(128, 128, 128, 0.9));
+  opacity: 0.7;
+}
+
+#app .vsidian-code-card-header .vsidian-code-card-fold:hover,
+#app .vsidian-code-card-header .vsidian-code-card-fold:focus-visible {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
+  opacity: 1;
+}
+
+#app .vsidian-code-card-header .vsidian-code-card-fold svg {
+  transition: transform 0.12s ease;
+}
+
+#app .vsidian-code-card-header .vsidian-code-card-fold-collapsed svg {
+  transform: rotate(-90deg);
+}
+
+/* 收起态头部自身成为卡片底边：补底边圆角，分隔线弱化 */
+#app .vsidian-code-card-header:has(> .vsidian-code-card-header-actions > .vsidian-code-card-fold-collapsed) {
+  border-radius: 6px;
+  border-bottom-color: transparent;
+}
+
 /* 行内格式 span（mark 按各自范围显形；类名为稳定样式入口，Obsidian 对应
    .cm-header-N/.cm-strong/.cm-emphasis/.cm-inline-code，见映射表） */
 #app .cm-editor .cm-scroller .vsidian-strong {
@@ -1669,4 +1813,83 @@ body {
   white-space: pre-wrap;
   margin: 0;
   text-align: left;
+}
+
+/* ---- 代码块语法高亮 token 色板（#83）----
+   tok-* 为 @lezer/highlight classHighlighter 的稳定词表（两视图共用）；
+   取色参照 VSCode Dark+ / Light+，明暗随宿主 body 主题类切换
+   （vscode-dark / vscode-high-contrast 走深色组）。未列出的 tok-* 继承
+   编辑器前景色（词表全集见 @lezer/highlight 文档）。 */
+.vsidian-code-card-header .vsidian-code-card-header-icon {
+  display: inline-block;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: calc(var(--vscode-font-size, 13px) * 0.72);
+  font-weight: 700;
+  line-height: 1;
+  margin-right: 6px;
+  padding: 1px 3px;
+  border-radius: 3px;
+  border: 1px solid currentColor;
+}
+
+#app .tok-keyword,
+#app .tok-atom,
+#app .tok-bool { color: #0000ff; }
+#app .tok-string,
+#app .tok-string2 { color: #a31515; }
+#app .tok-comment,
+#app .tok-meta { color: #008000; }
+#app .tok-number { color: #098658; }
+#app .tok-typeName,
+#app .tok-className,
+#app .tok-namespace { color: #267f99; }
+#app .tok-function,
+#app .tok-macroName { color: #795e26; }
+#app .tok-variableName2,
+#app .tok-propertyName { color: #001080; }
+#app .tok-operator { color: inherit; }
+#app .tok-punctuation { color: inherit; }
+#app .tok-invalid { color: #cd3131; text-decoration: underline wavy #cd3131; }
+
+body.vscode-dark #app .tok-keyword,
+body.vscode-dark #app .tok-atom,
+body.vscode-dark #app .tok-bool,
+body.vscode-high-contrast #app .tok-keyword { color: #569cd6; }
+body.vscode-dark #app .tok-string,
+body.vscode-dark #app .tok-string2 { color: #ce9178; }
+body.vscode-dark #app .tok-comment,
+body.vscode-dark #app .tok-meta { color: #6a9955; }
+body.vscode-dark #app .tok-number { color: #b5cea8; }
+body.vscode-dark #app .tok-typeName,
+body.vscode-dark #app .tok-className,
+body.vscode-dark #app .tok-namespace { color: #4ec9b0; }
+body.vscode-dark #app .tok-function,
+body.vscode-dark #app .tok-macroName { color: #dcdcaa; }
+body.vscode-dark #app .tok-variableName2,
+body.vscode-dark #app .tok-propertyName { color: #9cdcfe; }
+body.vscode-dark #app .tok-operator { color: #d4d4d4; }
+body.vscode-dark #app .tok-invalid { color: #f44747; text-decoration-color: #f44747; }
+
+/* ---- 阅读视图代码块卡片（#84）----
+   与 Live 同类名（头部/行号/复制/折叠/徽标/tok 走上文泛化规则）；此处
+   补块级外壳：卡片底色与圆角、pre 融入卡片、行结构与收起态。 */
+#app .vsidian-view-reading .vsidian-reading-block.vsidian-reading-code-card {
+  background-color: var(--vsidian-code-card-background, rgba(128, 128, 128, 0.12));
+  border-radius: 6px;
+}
+
+#app .vsidian-view-reading .vsidian-reading-block.vsidian-reading-code-card > pre {
+  margin: 0;
+  border-radius: 0 0 6px 6px;
+  background-color: transparent;
+}
+
+#app .vsidian-view-reading .vsidian-reading-block.vsidian-reading-code-card .vsidian-reading-code-line {
+  display: block;
+  min-height: 1.5em;
+}
+
+/* 收起态：代码体隐藏，仅留头部横带（视图态，不持久化） */
+#app .vsidian-view-reading .vsidian-reading-block.vsidian-code-card-folded > pre {
+  display: none;
 }

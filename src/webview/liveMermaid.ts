@@ -22,6 +22,7 @@
 import { RangeSet, StateField, type Extension, type Range, type Text, type Transaction } from '@codemirror/state'
 import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view'
 import { liveDecorationsField, selectionTouchesRange } from './liveDecorations'
+import { codeCardFoldField } from './codeCardState'
 import { renderMermaidInto } from './mermaidRender'
 import {
   MERMAID_CLASS_NAMES,
@@ -227,6 +228,7 @@ function rebuildFences(prev: MermaidFenceTable, tr: Transaction): MermaidFenceTa
         char: m.span.char,
         run: m.span.run,
         mermaid: m.span.mermaid,
+        info: m.span.info,
         code: m.span.code,
       })
     }
@@ -254,13 +256,16 @@ export const mermaidFencesField = StateField.define<MermaidFenceTable>({
 
 /**
  * mermaid 围栏装饰构建（#60 契约入口；纯数据输入，可单测直驱）：
- * 光标/选区触及围栏区间 → 不发射（源码显形）；范围外 → replace widget。
+ * 光标/选区触及围栏区间 → 不发射（源码显形，代码块卡片接管编辑态外壳）；
+ * 范围外 → replace widget。折叠收起的围栏不发射（卡片收起形态接管，
+ * 避免 replace 重叠；card 关闭时折叠集已清空，不会走到让位分支）。
  * frontmatter 内围栏抑制（源码降级边界）。
  */
 export function buildMermaidDecorationRanges(
   selection: import('@codemirror/state').EditorSelection,
   fm: { end: number } | null,
   fences: readonly FenceSpan[],
+  folded: ReadonlySet<number> = new Set<number>(),
 ): Array<Range<Decoration>> {
   const out: Array<Range<Decoration>> = []
   for (const fence of fences) {
@@ -273,13 +278,18 @@ export function buildMermaidDecorationRanges(
     if (selectionTouchesRange(selection, fence.from, fence.to)) {
       continue
     }
+    if (folded.has(fence.from)) {
+      continue
+    }
     out.push(mermaidWidgetDeco(fence.code).range(fence.from, fence.to))
   }
   return out
 }
 
 /** 跨行块装饰（StateField，#60）：CM6 约束——跨行 replace 只能由 field
- *  提供；widget DOM 由 CM6 按视口惰性创建（屏外不物化）。 */
+ *  提供；widget DOM 由 CM6 按视口惰性创建（屏外不物化）。
+ *  折叠态联动（渲染型围栏接入卡片）：codeCardFoldField 变化时重建，
+ *  折叠收起的围栏让位给卡片收起形态。 */
 export const mermaidDecorations = StateField.define<DecorationSet>({
   create(state) {
     const field = state.field(liveDecorationsField, false)
@@ -287,14 +297,20 @@ export const mermaidDecorations = StateField.define<DecorationSet>({
       return RangeSet.empty
     }
     return RangeSet.of(
-      buildMermaidDecorationRanges(state.selection, field.fm, state.field(mermaidFencesField).spans),
+      buildMermaidDecorationRanges(
+        state.selection,
+        field.fm,
+        state.field(mermaidFencesField).spans,
+        state.field(codeCardFoldField, false) ?? new Set<number>(),
+      ),
       true,
     )
   },
   update(value, tr) {
     // Transaction 没有 selectionSet（那是 ViewUpdate 的属性）：以显式
     // selection 判定选区变化（liveDecorationsField/liveMath 同款口径）
-    if (!tr.docChanged && tr.selection === undefined) {
+    const foldChanged = tr.startState.field(codeCardFoldField, false) !== tr.state.field(codeCardFoldField, false)
+    if (!tr.docChanged && tr.selection === undefined && !foldChanged) {
       return value
     }
     const field = tr.state.field(liveDecorationsField, false)
@@ -302,7 +318,12 @@ export const mermaidDecorations = StateField.define<DecorationSet>({
       return RangeSet.empty
     }
     return RangeSet.of(
-      buildMermaidDecorationRanges(tr.state.selection, field.fm, tr.state.field(mermaidFencesField).spans),
+      buildMermaidDecorationRanges(
+        tr.state.selection,
+        field.fm,
+        tr.state.field(mermaidFencesField).spans,
+        tr.state.field(codeCardFoldField, false) ?? new Set<number>(),
+      ),
       true,
     )
   },

@@ -18,7 +18,8 @@ export async function run(): Promise<void> {
     await ext.activate()
   }
   // 定向重跑：VSIDIAN_TEST_CASES=子串（逗号分隔任一命中即跑）只跑匹配
-  // 用例（开发调试用；缺省跑全量）
+  // 用例（开发调试用；缺省跑全量）。代码块卡片分支曾用单子串变量
+  // VSIDIAN_IT_FILTER（d351eda），main 侧 #86 已落多子串版本，合并取超集
   const filter = process.env['VSIDIAN_TEST_CASES']
   const parts = filter?.split(',').map((part) => part.trim()).filter(Boolean) ?? []
   const selected = filter ? cases.filter(([name]) => parts.some((part) => name.includes(part))) : cases

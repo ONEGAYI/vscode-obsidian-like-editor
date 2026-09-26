@@ -32,12 +32,15 @@ import type { ImageResolution } from './linkTarget'
 /** 权威文档适配器：vscode 层实现 */
 export interface HostDocumentPort {
   readonly version: number
+  /** 权威文档行尾（镜像 vscode.EndOfLine：1=LF、2=CRLF）。#81 复制产物
+   *  按此归一（webview 出站恒为 LF）；缺省按 LF 处理 */
+  readonly eol?: 1 | 2
   getText(): string
   /** 应用一组全文偏移变更；返回是否成功 */
   applyChanges(changes: SerChange[]): Promise<boolean>
   /** 对权威文档执行宿主撤销（undoRedoService 文本栈）；返回是否执行 */
   undo(): Promise<boolean>
-  /** 对权威文档执行宿主重做；返回是否执行 */
+  /** 对权威文档执行宿主重做（undoRedoService 文本栈）；返回是否执行 */
   redo(): Promise<boolean>
 }
 
@@ -59,7 +62,8 @@ export interface PanelPort {
    *  init 后的 settings.get 以 settings.snapshot 响应） */
   requestSettings?(): SettingsPayload
   /** #69 剪贴板写（直写）：vscode 层注入 env.clipboard.writeText。只读
-   *  交互（不写文档、不入撤销栈），暂停态同样放行 */
+   *  交互（不写文档、不入撤销栈），暂停态同样放行。#81 代码块复制同走
+   *  此端口——入参 text 已由会话按文档 EOL 归一（CRLF 文档收到 \r\n） */
   writeClipboard?(text: string): void
   /** #69 剪贴板写（标题链接）：`[[笔记名#标题]]` 的拼接在 vscode 层——
    *  笔记名 = docUri 文件名去扩展名（Obsidian 语义），标题为 webview
@@ -455,6 +459,17 @@ export class DocumentSession {
           srcStart: message.srcStart,
           srcEnd: message.srcEnd,
         })
+        return Promise.resolve()
+      }
+      case 'codeblock.copy': {
+        // #81 代码块复制请求：webview 只上报代码体原文，剪贴板写入执行
+        // 归宿主（webview 不触碰剪贴板权限）；只读交互，暂停态同样放行。
+        // webview 出站恒为 LF（CM6 LF 模型，代码体不含 \r）——CRLF 文档按
+        // 权威行尾归一后写入，复制产物与文档行尾一致
+        if (!panel.ready || message.docUri !== this.docUri) {
+          return Promise.resolve()
+        }
+        panel.port.writeClipboard?.(this.doc.eol === 2 ? message.text.replace(/\n/g, '\r\n') : message.text)
         return Promise.resolve()
       }
       case 'image.request': {

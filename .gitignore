@@ -16,3 +16,6 @@ Thumbs.db
 
 # @vscode/test-electron 下载的宿主缓存
 .vscode-test/
+
+# 本地草稿目录（探针/输出/日志，已被 .vscodeignore 排除）
+.scratch/

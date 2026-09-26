@@ -42,6 +42,16 @@ export function isMermaidInfo(info: string): boolean {
   return info.trim() === 'mermaid'
 }
 
+/**
+ * 渲染型围栏的语言显示名（卡片编辑态的头部标签；键 = trim 后的 info）。
+ * 当前仅 mermaid——未来新增「会被渲染成图形的围栏语言」（图表 DSL 等）
+ * 时，在此登记显示名，并在围栏标志判定（FenceSpan.mermaid 的渲染型
+ * 语义）同步扩展；这类围栏编辑态走代码块卡片、呈现态让位专属渲染管线。
+ */
+export const RENDERED_FENCE_LABELS: Readonly<Record<string, string>> = {
+  mermaid: 'Mermaid',
+}
+
 /** 一次围栏出现（无论语言；非 mermaid 围栏由增量重建消费以抑制嵌套伪围栏）。
  *  from/to 为 LF 全文 UTF-16 code unit offset：from 含开围栏行行首、
  *  to 含闭围栏行行尾（不含换行），与 MathOccurrence 的映射语义同构 */
@@ -54,6 +64,8 @@ export interface FenceSpan {
   run: number
   /** info string 是否标记 mermaid */
   mermaid: boolean
+  /** 开围栏 info string 原文（#79 代码块卡片消费：语言路由与标签） */
+  info: string
   /** 围栏内容（内容行以 \n 拼接，不含围栏标记行） */
   code: string
 }
@@ -65,6 +77,8 @@ export interface OpenFence {
   char: '`' | '~'
   run: number
   mermaid: boolean
+  /** 开围栏 info string 原文（闭合时随 FenceSpan 产出） */
+  info: string
   /** 已累积的内容行（\n 拼接） */
   code: string
 }
@@ -130,13 +144,14 @@ export function scanFencesDetailed(
   initialOpen: OpenFence | null = null,
 ): FenceScanResult {
   const spans: FenceSpan[] = []
-  let open: { from: number; char: '`' | '~'; run: number; mermaid: boolean; code: string[] } | null =
+  let open: { from: number; char: '`' | '~'; run: number; mermaid: boolean; info: string; code: string[] } | null =
     initialOpen
       ? {
           from: initialOpen.from,
           char: initialOpen.char,
           run: initialOpen.run,
           mermaid: initialOpen.mermaid,
+          info: initialOpen.info,
           code: initialOpen.code === '' ? [] : initialOpen.code.split('\n'),
         }
       : null
@@ -153,6 +168,7 @@ export function scanFencesDetailed(
             char: open.char,
             run: open.run,
             mermaid: open.mermaid,
+            info: open.info,
             code: open.code.join('\n'),
           })
           open = null
@@ -167,13 +183,13 @@ export function scanFencesDetailed(
     if (cols <= 3) {
       const hit = matchFenceOpen(line.slice(restStart))
       if (hit && !(hit.char === '`' && hit.info.includes('`'))) {
-        open = { from: lineStart, char: hit.char, run: hit.run, mermaid: isMermaidInfo(hit.info), code: [] }
+        open = { from: lineStart, char: hit.char, run: hit.run, mermaid: isMermaidInfo(hit.info), info: hit.info, code: [] }
       }
     }
     lineStart += line.length + 1
   }
   return {
     spans,
-    open: open ? { from: open.from, char: open.char, run: open.run, mermaid: open.mermaid, code: open.code.join('\n') } : null,
+    open: open ? { from: open.from, char: open.char, run: open.run, mermaid: open.mermaid, info: open.info, code: open.code.join('\n') } : null,
   }
 }
