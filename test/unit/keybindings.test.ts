@@ -5,6 +5,8 @@ import {
   findBindingConflicts, applyBindingChange, resolveKeybinding,
   type KeybindingOverrides,
 } from '../../src/shared/keybindings'
+import { en } from '../../src/shared/locales/en'
+import { zhCn } from '../../src/shared/locales/zh-cn'
 
 describe('快捷键契约', () => {
   it('登记全部用户命令并保留固定默认值', () => {
@@ -18,6 +20,13 @@ describe('快捷键契约', () => {
     }
     for (const id of ['inlineMath', 'blockMath', 'wikilink']) {
       expect(getEffectiveBindings({}, id)).toEqual([])
+    }
+  })
+
+  it('全部操作名持字典键：titleKey 在两语言包中都有词条', () => {
+    for (const op of KEYBINDING_OPERATIONS) {
+      expect(typeof en[op.titleKey], `${op.id} 的 titleKey 缺 en 词条`).toBe('string')
+      expect(typeof zhCn[op.titleKey], `${op.id} 的 titleKey 缺 zh-cn 词条`).toBe('string')
     }
   })
 

@@ -1,7 +1,7 @@
 // 快捷键设置分页（#91）。#95 i18n：本页文案经 t() 取词（settings./
 // keybindingSettings. 前缀）；分页标题/描述与 entries 为 getter——语言
-// 换包后由宿主容器重建分页时重新求值。操作名取词见下方 opTitle（#94）：
-// format 源条目的 title 持字典键，extra/UI 源暂为白名单在案的存量字面量。
+// 换包后由宿主容器重建分页时重新求值。操作名一律 t(op.titleKey) 直取
+// （注册表全源持字典键：format.* / command.*，与 manifest NLS 同源）。
 import {
   KEYBINDING_OPERATIONS, applyBindingChange,
   formatBindingLabel, getEffectiveBindings, type KeybindingOverrides,
@@ -11,12 +11,10 @@ import type { SettingsPageBridge, SettingsPageSection } from './settingsPageView
 import { keyStep } from './keybindingRouter'
 import { isHostToWebview } from '../shared/protocol'
 
-/** 操作显示名：format 源 title 持字典消息键（t() 取词），extra/UI 源为
- *  存量字面量（t() 缺键回退原串，照常显示）——两种来源统一经此取词 */
-const opTitle = (op: { title: string }): string => t(op.title)
-const titleOfId = (id: string): string => {
+/** 冲突文案等的操作名取词（id 为运行时来源，未登记 id 回退显示 id 本身） */
+function titleOfId(id: string): string {
   const op = KEYBINDING_OPERATIONS.find((item) => item.id === id)
-  return op ? opTitle(op) : id
+  return op ? t(op.titleKey) : id
 }
 
 function el(tag: string, cls: string, text = ''): HTMLElement {
@@ -39,7 +37,7 @@ export class KeybindingSettingsSection implements SettingsPageSection {
   get entries() {
     return KEYBINDING_OPERATIONS.map((op) => ({
       id: op.id,
-      title: opTitle(op),
+      title: t(op.titleKey),
       description: `${t(op.mode === 'both' ? 'keybindingSettings.modeBoth'
         : op.mode === 'live' ? 'keybindingSettings.modeLive' : 'keybindingSettings.modeReading')} · ${op.command}`,
     }))
@@ -203,7 +201,7 @@ export class KeybindingSettingsSection implements SettingsPageSection {
     if (!parent) return
     parent.replaceChildren()
     let locatedRow: HTMLElement | undefined
-    const filtered = KEYBINDING_OPERATIONS.filter((op) => opTitle(op).toLocaleLowerCase().includes(this.query.toLocaleLowerCase()) &&
+    const filtered = KEYBINDING_OPERATIONS.filter((op) => t(op.titleKey).toLocaleLowerCase().includes(this.query.toLocaleLowerCase()) &&
       (!this.keyQuery || getEffectiveBindings(this.overrides, op.id).some((binding) =>
         binding === this.keyQuery || binding.startsWith(`${this.keyQuery} `))))
     if (!filtered.length) parent.append(el('p', 'vsidian-settings-empty', t('keybindingSettings.noMatch')))
@@ -215,7 +213,7 @@ export class KeybindingSettingsSection implements SettingsPageSection {
         locatedRow = row
       }
       const heading = el('div', 'vsidian-keybindings-row-heading')
-      heading.append(el('strong', '', opTitle(op)),
+      heading.append(el('strong', '', t(op.titleKey)),
         el('span', 'vsidian-keybindings-mode', t(op.mode === 'both' ? 'keybindingSettings.modeLiveReading'
           : op.mode === 'live' ? 'keybindingSettings.modeLive' : 'keybindingSettings.modeReading')))
       row.append(heading)

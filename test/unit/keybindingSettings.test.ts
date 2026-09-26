@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-// #95 i18n：分页文案经 t() 取词——装配生产 zh-cn 语言包，断言与字典同源
-// （操作名 op.title 仍为注册表存量文案，随编辑器 webview 迁移工单入字典）。
+// #95 i18n：分页文案经 t() 取词——装配生产 zh-cn 语言包，断言与字典同源。
+// #93 收尾：全部操作名（含 extra/UI 源）经 titleKey 直取字典（command.* 与
+// manifest NLS 同源），不再持字面量存量。
 import { describe, expect, it } from 'vitest'
 import { KeybindingSettingsSection } from '../../src/webview/keybindingSettings'
 import { installLocale } from '../../src/shared/i18n'
@@ -10,6 +11,22 @@ import { zhCn } from '../../src/shared/locales/zh-cn'
 installLocale('zh-cn', zhCn)
 
 describe('快捷键设置页', () => {
+  it('extra/UI 源操作名经 titleKey 直取字典渲染（与 manifest NLS 同源）', () => {
+    const section = new KeybindingSettingsSection({ postMessage: () => {} })
+    const root = document.createElement('div')
+    document.body.append(root)
+    section.mount(root)
+    for (const [id, key] of [
+      ['find', 'command.find.title'],
+      ['toggleViewMode', 'command.toggleViewMode.title'],
+      ['outlineSearch', 'command.ui.outlineSearch.title'],
+    ] as const) {
+      const row = root.querySelector<HTMLElement>(`[data-operation-id="${id}"]`)!
+      expect(row.querySelector('strong')?.textContent, id).toBe(zhCn[key])
+    }
+    root.remove()
+  })
+
   it('按键位搜索录入后仍保留可见名称', () => {
     const section = new KeybindingSettingsSection({ postMessage: () => {} })
     const root = document.createElement('div')

@@ -237,8 +237,11 @@ export const en = {
 
   // ---- #97 manifest NLS（命令 title 与 displayName/description 生成源）----
   // 工具条 21 条命令直接复用上方 format.* 既有键（FORMAT_OPERATIONS 的
-  // titleKey，见 scripts/genNls.mjs 映射）；此处只登记无 webview 对应者：
-  // 键名 = command.<command id 去掉 onegayi.vsidian. 前缀>.title。
+  // titleKey，见 scripts/genNls.mjs 映射）；其余命令的键按 id 推导：
+  // onegayi.vsidian.<suffix> → command.<suffix>.title（既有唯一键
+  // command.table.create.title 天然吻合该规则，单轨收编，不留双轨）。
+  // 这些 command.* 键同时是 KEYBINDING_OPERATIONS extra/UI 源操作名的
+  // titleKey（快捷键页与命令面板同源，无第二套文案）。
   /** 扩展市场 displayName / description（含 customEditors displayName 同源） */
   'manifest.displayName': 'Vsidian',
   'manifest.description': 'Obsidian-like Markdown editing: live preview + reading views',
