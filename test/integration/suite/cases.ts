@@ -15,6 +15,7 @@ const CMD = {
   injectMessage: 'onegayi.vsidian._test.injectWebviewMessage',
   postToPanel: 'onegayi.vsidian._test.postToPanel',
   viewState: 'onegayi.vsidian._test.requestViewState',
+  cachedViewState: 'onegayi.vsidian._test.getCachedViewState',
   conflictState: 'onegayi.vsidian._test.getConflictState',
   closedInput: 'onegayi.vsidian._test.getLastClosedInput',
   viewStateCache: 'onegayi.vsidian._test.getPanelViewStateCache',
@@ -22,6 +23,8 @@ const CMD = {
   perfProbe: 'onegayi.vsidian._test.perfProbe',
   readingPerf: 'onegayi.vsidian._test.readingPerf',
   linkLog: 'onegayi.vsidian._test.getLinkLog',
+  // #111 图表导出消息日志（钩子模式下宿主短路另存为对话框并记录）
+  diagramExportLog: 'onegayi.vsidian._test.takeDiagramExportLog',
   // #38 三态记忆
   getLastMode: 'onegayi.vsidian._test.getLastMode',
   resetLastMode: 'onegayi.vsidian._test.resetLastMode',
@@ -474,6 +477,16 @@ interface ViewState {
       count: number
       delimitersHidden: boolean | null
     }
+    /** #111 图形化代码块按钮组与图表弹窗绘制 */
+    graphic?: {
+      frames: number
+      editButtons: number
+      popupButtons: number
+      overlay: boolean
+      /** 浮层实际遮蔽正文（真宿主 elementFromPoint 断言依据） */
+      overlayVisible: boolean
+      overlaySvg: boolean
+    }
     quickActions?: {
       open: boolean
       togglePainted: boolean
@@ -519,6 +532,7 @@ interface ViewState {
     toggleFrameStrokeWidth: string | null
     mainWidthPx: number | null
     sidebarWidthPx: number | null
+    resizerPainted: boolean
     toggleAriaLabel: string | null
     settingsAriaLabel: string | null
   }
@@ -997,15 +1011,20 @@ export const cases: Array<[string, () => Promise<void>]> = [
       CMD.viewStateCache, syntaxUri,
     )) as { found: boolean; viewMode?: string }
     assert(keptLive.found && keptLive.viewMode === 'live', '非活动的 syntax 面板应保留自身状态')
+    const beforeResume = (await vscode.commands.executeCommand(
+      CMD.cachedViewState, syntaxUri,
+    )) as ViewState | undefined
 
     // 重显 syntax 面板使其活动（openWith 对已开面板是重显，不新建 tab），
     // toReading 只作用于 syntax；原生 mode 标签不受影响。不可见期间面板
-    // 可能经卸载重载：先以 0 轮探针（纯往返，不动文档）等待 webview 恢复
-    // 响应再下发模式命令，避免命令发给重载中的 webview 而丢失
+    // 可能经卸载重载：等待新 view.state 回报（与隐藏前缓存对象不同），
+    // 再下发模式命令，避免发给重载中的 webview 而丢失
     await vscode.commands.executeCommand('vscode.openWith', wsUri('syntax.md'), VIEW_TYPE)
     await waitActiveCustomTab('syntax.md')
-    await vscode.commands.executeCommand(
-      CMD.perfProbe, syntaxUri, { typingRounds: 0, scrollRounds: 0 })
+    await poll('重显面板恢复响应', async () => {
+      const current = (await vscode.commands.executeCommand(CMD.viewState, syntaxUri)) as ViewState | undefined
+      return current && current !== beforeResume ? true : undefined
+    })
     await vscode.commands.executeCommand('onegayi.vsidian.mode.toReading', wsUri('syntax.md'))
     await waitViewState('syntax.md', (v) => v.viewMode === 'reading')
     const backToMode = await vscode.window.showTextDocument(modeDoc)
@@ -4590,6 +4609,61 @@ export const cases: Array<[string, () => Promise<void>]> = [
       `收起回归后主编辑区宽度应复原（${collapsedMainWidth} → ${String(recollapsed.sidebar!.mainWidthPx)}）`)
   }],
 
+  ['右侧栏拖拽调宽：真实句柄事件序列、区间钳制与宽度记忆', async () => {
+    // 绘制层断言口径（视觉层断言必查）：宽度经布局度量（sidebarWidthPx 是
+    // 侧栏元素实宽——CSS 变量或样式失效时不呈现目标宽度）；句柄真实可见经
+    // elementFromPoint 命中（resizerPainted，收起态热区被裁切时命中失败）。
+    // DOM 存在性与逻辑坐标不能替代这些证据。
+    await openWithEditor('lf.md')
+    await waitSessionReady('lf.md')
+    const uri = wsUri('lf.md').toString()
+
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    const opened = await waitViewState('lf.md', (v) => v.sidebar?.open === true &&
+      v.sidebar.sidebarToolbarPainted === true && (v.sidebar.sidebarWidthPx ?? 0) > 200)
+    const baseWidth = opened.sidebar!.sidebarWidthPx ?? 0
+    assert(baseWidth > 200, `初始侧栏宽度应约 280px，实际 ${baseWidth}`)
+    assert(opened.sidebar!.resizerPainted === true,
+      `拖宽句柄应真实可见（命中测试失败：${JSON.stringify(opened.sidebar)}`)
+
+    // 向左拖 120px：宽度增加且主编辑区相应收缩（宽度真实参与布局）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.resize', delta: 120 })
+    const widened = await waitViewState('lf.md', (v) =>
+      Math.abs((v.sidebar?.sidebarWidthPx ?? -1) - (baseWidth + 120)) < 3)
+    const widenedWidth = widened.sidebar!.sidebarWidthPx ?? 0
+    assert(Math.abs(widenedWidth - (baseWidth + 120)) < 3,
+      `左拖 120px 后宽度应约 ${baseWidth + 120}，实际 ${widenedWidth}`)
+    assert((widened.sidebar!.mainWidthPx ?? 0) < (opened.sidebar!.mainWidthPx ?? Infinity) - 100,
+      `主编辑区应随侧栏增宽收缩（${opened.sidebar!.mainWidthPx} → ${widened.sidebar!.mainWidthPx}）`)
+
+    // 向右拖回 60px：收窄走同一链路
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.resize', delta: -60 })
+    await waitViewState('lf.md', (v) =>
+      Math.abs((v.sidebar?.sidebarWidthPx ?? -1) - (widenedWidth - 60)) < 3)
+
+    // 大力左拖钳到上限 720（再大力不越界）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.resize', delta: 5000 })
+    const capped = await waitViewState('lf.md', (v) => Math.abs((v.sidebar?.sidebarWidthPx ?? -1) - 720) < 3)
+    assert(Math.abs((capped.sidebar!.sidebarWidthPx ?? 0) - 720) < 3,
+      `钳制上限应为 720，实际 ${capped.sidebar!.sidebarWidthPx}`)
+
+    // 收起再展开：宽度记忆保持（PersistedState 链路）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('lf.md', (v) => v.sidebar?.open === false)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    const reopened = await waitViewState('lf.md', (v) => v.sidebar?.open === true &&
+      v.sidebar.sidebarToolbarPainted === true &&
+      Math.abs((v.sidebar.sidebarWidthPx ?? -1) - 720) < 3)
+    assert(Math.abs((reopened.sidebar!.sidebarWidthPx ?? 0) - 720) < 3,
+      `收起再展开后宽度应保持 720，实际 ${reopened.sidebar!.sidebarWidthPx}`)
+
+    // 清理：拖回默认宽度并收起侧栏，恢复后续用例的基线布局
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.resize', delta: -(720 - 280) })
+    await waitViewState('lf.md', (v) => Math.abs((v.sidebar?.sidebarWidthPx ?? -1) - 280) < 3)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('lf.md', (v) => v.sidebar?.open === false)
+  }],
+
   ['右侧栏与模式切换正交：两模式共用布局、零撤销记录、正文可编辑（#53）', async () => {
     // untouched.md 无任何前序用例编辑：全新面板 + 干净撤销栈基线
     await openWithEditor('untouched.md')
@@ -5879,6 +5953,97 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(reading.paint?.mermaid?.error === 1, `无效语法应降级 1 个，实际 ${reading.paint?.mermaid?.error}`)
     // 大围栏豁免切片 + 降级不吞后续块：切块数合理且锚点块可定位
     assert((reading.readingTotalBlocks ?? 0) >= 5, `阅读切块应含全部图表块，实际 ${reading.readingTotalBlocks}`)
+  }],
+
+  ['图形化代码块按钮组与图表弹窗：live/reading 形态与浮层装载（#111）', async () => {
+    await openWithEditor('mermaid.md')
+    await waitSessionReady('mermaid.md')
+    const uri = wsUri('mermaid.md').toString()
+    const diskBefore = await readDisk('mermaid.md')
+    const tailAnchor = diskBefore.indexOf('结尾段落')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: tailAnchor,
+    })
+    // live：全部 frame 就位，edit+popup 成对（含无效降级块——按钮显隐由
+    // CSS 渲染态联动，DOM 在场是发射形态断言）
+    const live = await waitViewState('mermaid.md', (v) =>
+      (v.liveMermaidCount ?? -1) === 5 && v.paint?.graphic?.frames === 5, 0, 60000)
+    assert(live.paint?.graphic?.editButtons === 5,
+      `live 应有 5 枚 edit 按钮，实际 ${live.paint?.graphic?.editButtons}`)
+    assert(live.paint?.graphic?.popupButtons === 5,
+      `live 应有 5 枚 popup 按钮，实际 ${live.paint?.graphic?.popupButtons}`)
+    assert(live.paint?.graphic?.overlay === false, '初始不得有浮层')
+    // 经测试钩子驱动真实处理器链路打开弹窗：浮层在场且 SVG 装载（绘制层）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'graphic.test.popup', view: 'live', index: 0,
+    })
+    const opened = await waitViewState('mermaid.md', (v) =>
+      v.paint?.graphic?.overlay === true && v.paint?.graphic?.overlaySvg === true, 0, 60000)
+    assert(opened.paint?.graphic?.overlaySvg === true, '图表弹窗内 SVG 应完成装载')
+    assert(opened.paint?.graphic?.overlayVisible === true,
+      '浮层应实际遮蔽正文（几何中心被浮层子树占据且可见）')
+    assert(await readDisk('mermaid.md') === diskBefore, '弹窗交互零写回')
+    // reading：edit 不发射（阅读无编辑入口）、popup 照常包 frame
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const readingChrome = await waitViewState('mermaid.md', (v) =>
+      v.viewMode === 'reading' && (v.readingMermaidCount ?? -1) === 5 &&
+      v.paint?.graphic?.frames === 5 && v.paint?.graphic?.editButtons === 0, 0, 60000)
+    assert(readingChrome.paint?.graphic?.popupButtons === 5,
+      `阅读应有 5 枚 popup 按钮，实际 ${readingChrome.paint?.graphic?.popupButtons}`)
+    assert(await readDisk('mermaid.md') === diskBefore, '模式切换不得触发磁盘写回')
+  }],
+
+  ['图表弹窗导出链路：webview→宿主消息形态（钩子模式短路另存为，#111）', async () => {
+    await openWithEditor('mermaid.md')
+    await waitSessionReady('mermaid.md')
+    const uri = wsUri('mermaid.md').toString()
+    const diskBefore = await readDisk('mermaid.md')
+    const tailAnchor = diskBefore.indexOf('结尾段落')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: tailAnchor,
+    })
+    await waitViewState('mermaid.md', (v) => (v.liveMermaidCount ?? -1) === 5, 0, 60000)
+    // 打开弹窗并驱动导出按钮：宿主测试钩子模式不弹真实另存为对话框，
+    // 短路为记录消息形态 + cancelled 回报——以此断言完整 webview→宿主链路
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'graphic.test.popup', view: 'live', index: 0,
+    })
+    await waitViewState('mermaid.md', (v) =>
+      v.paint?.graphic?.overlay === true && v.paint?.graphic?.overlaySvg === true, 0, 60000)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'graphic.test.popup', view: 'live', index: 0, action: 'export-svg',
+    })
+    let svgEntry: { format?: string; fileName?: string; reqId?: number; content?: string; docUri?: string } | undefined
+    for (let i = 0; i < 30 && svgEntry === undefined; i++) {
+      const log = (await vscode.commands.executeCommand(CMD.diagramExportLog, uri)) as
+        Array<{ format?: string; fileName?: string; reqId?: number; content?: string; docUri?: string }>
+      svgEntry = log.find((m) => m.format === 'svg')
+      if (svgEntry === undefined) {
+        await new Promise((r) => setTimeout(r, 200))
+      }
+    }
+    assert(svgEntry !== undefined, '宿主应收到 SVG 导出消息（钩子短路记录）')
+    assert(svgEntry!.fileName === 'mermaid-diagram.svg', `默认文件名应为 mermaid-diagram.svg，实际 ${svgEntry!.fileName}`)
+    assert(typeof svgEntry!.reqId === 'number' && svgEntry!.reqId! >= 1, 'reqId 应为正整数')
+    assert(svgEntry!.content!.includes('<svg'), 'SVG 导出内容应为序列化文档')
+    assert(svgEntry!.docUri === uri, '导出消息应携带来源文档 URI')
+    // PNG：真宿主 webview 为 Chromium，光栅化应产出非空 base64 载荷
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'graphic.test.popup', view: 'live', index: 0, action: 'export-png',
+    })
+    let pngEntry: { format?: string; content?: string } | undefined
+    for (let i = 0; i < 40 && pngEntry === undefined; i++) {
+      const log = (await vscode.commands.executeCommand(CMD.diagramExportLog, uri)) as
+        Array<{ format?: string; content?: string }>
+      pngEntry = log.find((m) => m.format === 'png')
+      if (pngEntry === undefined) {
+        await new Promise((r) => setTimeout(r, 250))
+      }
+    }
+    assert(pngEntry !== undefined, '宿主应收到 PNG 导出消息（真宿主内光栅化产出）')
+    assert(pngEntry!.content!.length > 100, `PNG base64 应为非平凡载荷，实际 ${pngEntry!.content?.length ?? 0} 字符`)
+    assert(/^[A-Za-z0-9+/]+={0,2}$/.test(pngEntry!.content!), 'PNG 内容应为严格 base64')
+    assert(await readDisk('mermaid.md') === diskBefore, '导出交互零写回')
   }],
 
   ['Mermaid 跨模式切换一致性：两模式计数对齐、文本不变、无写回（#60）', async () => {

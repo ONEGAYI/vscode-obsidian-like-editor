@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import test from 'node:test'
-import { buildTestHostArgs, resolveTestHostMode, runTestHost } from './testHost.mjs'
+import { buildTestHostArgs, cleanupTestDirs, createPortableShardHost, resolveTestHostMode, runTestHost } from './testHost.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -80,6 +80,49 @@ test('开发态和安装态都用相同参数集并隔离 profile', () => {
   assert.ok(buildTestHostArgs({ ...base, extensionPath: 'D:\\repo', disableExtensions: true }).includes('--disable-extensions'))
 })
 
+test('并行宿主共用程序但使用各自的便携数据目录与环境变量', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'vsidian-portable-shards-'))
+  const inherited = { VSCODE_PORTABLE: 'inherited', MARKER: 'kept' }
+  try {
+    const first = createPortableShardHost(dir, 1, inherited)
+    const second = createPortableShardHost(dir, 2, inherited)
+    assert.notEqual(first.portableDir, second.portableDir)
+    for (const shard of [first, second]) {
+      assert.equal(existsSync(shard.portableDir), true, 'VSCode 启动前必须预建便携目录')
+      assert.equal(shard.userDataDir, path.join(shard.portableDir, 'user-data'))
+      assert.equal(shard.extensionsDir, path.join(shard.portableDir, 'extensions'))
+      assert.equal(shard.env.VSCODE_PORTABLE, shard.portableDir)
+      assert.equal(shard.env.MARKER, 'kept')
+    }
+    assert.equal(inherited.VSCODE_PORTABLE, 'inherited', '不得修改父进程环境')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('临时目录清理遇到占用仍继续清理其余目录，并拒绝越界目标', () => {
+  const parent = mkdtempSync(path.join(tmpdir(), 'vsidian-cleanup-'))
+  const locked = path.join(parent, 'locked')
+  const removable = path.join(parent, 'removable')
+  mkdirSync(locked)
+  mkdirSync(removable)
+  const removed = []
+  try {
+    const failures = cleanupTestDirs([locked, removable, path.join(parent, '..', 'outside')], parent, (dir, options) => {
+      removed.push(dir)
+      if (dir === locked) throw new Error('locked')
+      rmSync(dir, options)
+    })
+    assert.deepEqual(removed, [locked, removable])
+    assert.equal(existsSync(removable), false)
+    assert.equal(failures.length, 2)
+    assert.match(failures[0], /locked/)
+    assert.match(failures[1], /outside/)
+  } finally {
+    rmSync(parent, { recursive: true, force: true })
+  }
+})
+
 test('Windows 默认独立桌面，仅显式指定才使用当前桌面', () => {
   assert.equal(resolveTestHostMode('win32', {}), 'desktop')
   assert.equal(resolveTestHostMode('win32', { VSIDIAN_TEST_HOST_MODE: 'foreground' }), 'foreground')
@@ -142,12 +185,14 @@ test('超时终止的运行同样落盘报告并记录超时退出码', async ()
   }
 })
 
-test('开发态、安装态与空窗口激活启动器都为宿主运行配置报告文件', () => {
+test('开发态分片各有报告，单片及另外两种启动器保留原报告名', () => {
   const expected = {
-    'runTest.mjs': 'integration-dev.log',
     'runInstalled.mjs': 'integration-installed.log',
     'runSettingsActivation.mjs': 'settings-activation.log',
   }
+  const dev = readFileSync(path.join(here, 'runTest.mjs'), 'utf8')
+  assert.match(dev, /integration-dev-s\$\{shard\}\.log/)
+  assert.match(dev, /'integration-dev\.log'/)
   for (const [launcher, reportName] of Object.entries(expected)) {
     const source = readFileSync(path.join(here, launcher), 'utf8')
     assert.match(

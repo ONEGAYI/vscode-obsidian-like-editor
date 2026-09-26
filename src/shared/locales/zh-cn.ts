@@ -147,6 +147,7 @@ export const zhCn: Record<MessageKey, string> = {
   'sidebar.quickActions': '快速操作条',
   'sidebar.collapse': '收起右侧栏',
   'sidebar.expand': '展开右侧栏',
+  'sidebar.resize': '拖拽调整侧栏宽度',
 
   'find.placeholder': '查找',
   'find.label': '在文档中查找',
@@ -202,6 +203,21 @@ export const zhCn: Record<MessageKey, string> = {
   'codeblock.copy': '复制代码',
   'codeblock.expand': '展开代码块',
   'codeblock.collapse': '折叠代码块',
+
+  /** 图形化代码块按钮组与图表弹窗（#111） */
+  'graphic.editSource': '编辑源码',
+  'graphic.popup': '弹窗预览',
+  'graphic.popupZoomIn': '放大',
+  'graphic.popupZoomOut': '缩小',
+  'graphic.popupReset': '重置缩放',
+  'graphic.popupRefresh': '刷新',
+  'graphic.popupExportSvg': '导出 SVG',
+  'graphic.popupExportPng': '导出 PNG',
+  'graphic.popupClose': '关闭',
+  'graphic.exportPngUnavailable': '当前环境暂不支持导出 PNG，可改用导出 SVG。',
+  'graphic.exportFailed': '图表导出失败',
+  'graphic.exportSvgFilter': 'SVG 文件',
+  'graphic.exportPngFilter': 'PNG 图片',
 
   'decor.taskCheck': '勾选任务',
   'decor.taskUncheck': '取消任务勾选',

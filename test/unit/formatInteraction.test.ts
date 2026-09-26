@@ -36,6 +36,24 @@ describe('格式命令生产链路', () => {
     ] })
   })
 
+  it('无选区围栏两态切换：包裹后光标在开围栏内侧，再按取消，三按复原', () => {
+    const cases = [
+      ['bold', '**word**'], ['italic', '*word*'],
+      ['strikethrough', '~~word~~'], ['inlineCode', '`word`'],
+    ] as const
+    for (const [op, wrapped] of cases) {
+      const { controller, view } = setup('word')
+      view.dispatch({ selection: { anchor: 0 } })
+      controller.handleHostMessage({ kind: 'format.command', op })
+      expect(view.state.doc.toString()).toBe(wrapped)
+      expect(view.state.selection.main.head).toBe(wrapped.indexOf('word'))
+      controller.handleHostMessage({ kind: 'format.command', op })
+      expect(view.state.doc.toString()).toBe('word')
+      controller.handleHostMessage({ kind: 'format.command', op })
+      expect(view.state.doc.toString()).toBe(wrapped)
+    }
+  })
+
   it('阅读态拒绝写入；源码模式不由格式命令接管', () => {
     const { controller, sent, view } = setup('文字')
     controller.handleHostMessage({ kind: 'view.mode.set', mode: 'reading' })

@@ -1,10 +1,11 @@
 # CI：push(main)、PR 与手动触发的持续集成。
 # unit 跑构建、类型检查与单元契约测试；integration 在 xvfb 虚拟显示下经
-# @vscode/test-electron 以真实 VSCode 1.86.2 宿主跑集成套件（与本地
-# npm run test:integration 同链路，测试钩子环境变量由 runTest.mjs 自带）；
+# @vscode/test-electron 以真实 VSCode 1.86.2 宿主跑集成套件；四个 runner
+# 各跑一片、每个 runner 仍只启动一个宿主（与本地启动器同一套件）；
 # browser 用 Playwright chromium 跑 test:browser 原生输入回归（#50）。
-# job 名 unit / integration 同时是 main 分支保护的必需状态检查，
-# 改名、增删 job 前需同步分支保护规则，否则保护会因找不到检查而挂起。
+# job 名 unit / integration 同时是 main 分支保护的必需状态检查。
+# integration_shard 为矩阵 job，integration 汇总四片并保留稳定检查名；
+# 改名、增删必需检查前需同步分支保护规则，否则保护会因找不到检查而挂起。
 # browser 暂未纳入必需检查（2026-09 核查保护规则仅含 unit / integration）：
 # 其失败不阻塞合并但会在 PR 状态区显示；是否升为必需由维护者视其稳定性决定，
 # 升级前无需改本文件，仅需在仓库设置中加入 browser 上下文。
@@ -38,10 +39,14 @@ jobs:
       - name: 单元测试
         run: npm run test:unit
 
-  integration:
-    name: integration
+  integration_shard:
+    name: integration shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -57,7 +62,20 @@ jobs:
           sudo apt-get install -y xvfb libnss3 libatk-bridge2.0-0t64 libdrm2 \
             libxkbcommon0 libgbm1 libasound2t64 libgtk-3-0t64 libsecret-1-0 libxkbfile1
       - name: 集成测试（真实 1.86.2 宿主）
+        env:
+          VSIDIAN_TEST_SHARD: ${{ matrix.shard }}/4
         run: xvfb-run -a npm run test:integration
+
+  integration:
+    name: integration
+    runs-on: ubuntu-latest
+    needs: integration_shard
+    if: ${{ always() }}
+    steps:
+      - name: 核验全部集成测试分片通过
+        env:
+          SHARD_RESULT: ${{ needs.integration_shard.result }}
+        run: test "$SHARD_RESULT" = success
 
   browser:
     name: browser

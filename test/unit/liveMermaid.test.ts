@@ -138,11 +138,25 @@ describe('装饰实例缓存与 widget 形态', () => {
     expect(w.lineBreaks).toBe(1)
   })
 
-  it('toDOM 产出稳定类名容器并携带源码 data 属性（渲染入口）', () => {
+  it('toDOM 产出 frame 包裹的渲染容器＋按钮组，携带源码 data 属性（#111）', () => {
     const w = new LiveMermaidWidget('graph TD\nA-->B')
     const dom = w.toDOM()
-    expect(dom.className).toBe(MERMAID_CLASS_NAMES.diagram)
-    expect(dom.getAttribute('data-vsidian-mermaid-code')).toBe('graph TD\nA-->B')
+    // frame 是定位宿主，渲染语义仍在内层稳定类名容器
+    expect(dom.className).toBe('vsidian-graphic-frame')
+    const inner = dom.querySelector(`.${MERMAID_CLASS_NAMES.diagram}`)
+    expect(inner).not.toBeNull()
+    expect(inner!.getAttribute('data-vsidian-mermaid-code')).toBe('graph TD\nA-->B')
+    // 按钮组：edit（仅实时预览装配）+ popup；显隐由 CSS 承担
+    const chrome = dom.querySelector('.vsidian-graphic-chrome')
+    expect(chrome).not.toBeNull()
+    expect(chrome!.querySelectorAll('button')).toHaveLength(2)
+    expect(chrome!.querySelector('.vsidian-graphic-chrome-edit')).not.toBeNull()
+    expect(chrome!.querySelector('.vsidian-graphic-chrome-popup')).not.toBeNull()
+  })
+
+  it('禁点击进编辑（#111 契约 2）：widget 吞掉指向图形的鼠标事件', () => {
+    const w = new LiveMermaidWidget('A-->B')
+    expect(w.ignoreEvent()).toBe(true)
   })
 })
 

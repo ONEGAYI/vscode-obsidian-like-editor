@@ -27,6 +27,7 @@ import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemir
 import { liveDecorationsField, selectionTouchesRange } from './liveDecorations'
 import { mermaidFencesField } from './liveMermaid'
 import { RENDERED_FENCE_LABELS, type FenceSpan } from '../shared/mermaid'
+import { graphicRendererFor } from './graphicRenderers'
 import { resolveCodeLanguage } from '../shared/codeLangs'
 import { hasHighlightEngine, highlightCodeRanges, splitRangeAtLineBreaks } from './codeHighlight'
 import { t } from '../shared/i18n'
@@ -412,7 +413,7 @@ export function buildCodeCardDecorations(
     // 渲染型围栏（当前仅 mermaid，标签见 shared/mermaid 的
     // RENDERED_FENCE_LABELS）：呈现态展开让位专属渲染管线（SVG replace），
     // 卡片零发射；编辑态与折叠收起态走通用卡片路径
-    if (fence.mermaid && !editing && !isFolded) {
+    if (fence.rendered && graphicRendererFor(fence.info.trim()) && !editing && !isFolded) {
       continue
     }
     const openLine = doc.lineAt(fence.from)

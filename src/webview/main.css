@@ -252,6 +252,61 @@ body.vscode-light #app {
   overflow: hidden;
 }
 
+/* 侧栏拖宽句柄：左缘全高 10px 热区（悬停显示 col-resize，hover/拖拽中
+   经 ::before 显 2px 高亮竖条，VSCode sash 风格）；触屏拖宽不被滚动
+   劫持（touch-action:none）；聚焦键盘微调（ArrowLeft/Right ±16px）显示
+   轮廓。热区须贴 left:0——侧栏 overflow:hidden 会裁掉负偏移外伸部分；
+   侧栏内容（工具条/面板条目）左内边距 12px，10px 热区不遮交互内容；
+   收起态热区随 width:0 + overflow:hidden 裁切归零，不可交互 */
+#app .vsidian-sidebar .vsidian-sidebar-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 10px;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  z-index: 5;
+}
+
+#app .vsidian-sidebar .vsidian-sidebar-resizer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: transparent;
+}
+
+#app .vsidian-sidebar .vsidian-sidebar-resizer:hover::before,
+#app .vsidian-sidebar.vsidian-sidebar-resizing .vsidian-sidebar-resizer::before {
+  background: var(--vscode-sash-hoverBorder, rgba(84, 175, 255, 0.65));
+}
+
+#app .vsidian-sidebar .vsidian-sidebar-resizer:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, rgba(128, 128, 128, 0.6));
+}
+
+/* 收起态句柄不可聚焦：width:0 + overflow:hidden 只裁掉视觉与命中，tab 序
+   仍可达——visibility:hidden 让真实浏览器把句柄移出 tab 序（JS 侧 keydown
+   另有 sidebarOpen 语义守卫双保险） */
+#app .vsidian-body:not(.vsidian-sidebar-open) .vsidian-sidebar-resizer {
+  visibility: hidden;
+}
+
+/* 拖拽期间：禁用宽度过渡（否则 0.15s ease-out 滞后于指针，不跟手），
+   侧栏全域锁定调整光标（指针捕获后可能移出热区） */
+#app .vsidian-sidebar.vsidian-sidebar-resizing {
+  transition: none;
+}
+
+#app .vsidian-sidebar.vsidian-sidebar-resizing,
+#app .vsidian-sidebar.vsidian-sidebar-resizing * {
+  cursor: col-resize;
+}
+
 /* 主编辑区顶栏（#53 图标化）：左端齿轮设置入口 + 右端侧栏切换按钮，
    高度与侧栏顶栏共用同一变量（对齐） */
 #app .vsidian-toolbar {
@@ -2026,6 +2081,205 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='horizontalRule
   margin: 0;
   text-align: left;
 }
+
+/* ---- 图形化代码块按钮组（#111）----
+   frame 承担 position:relative（渲染容器与按钮组的定位宿主）；按钮组
+   absolute 右上，仅在渲染成功态显示（后续兄弟选择器读渲染容器的
+   data 状态——降级/装载态无按钮），悬停 frame 或键盘 focus 显现。
+   交互契约：点击图形本体不进入编辑（widget 吞事件），edit 仅实时预览。 */
+#app .vsidian-graphic-frame {
+  position: relative;
+  display: block;
+  margin: 0.75em 0;
+}
+
+#app .vsidian-graphic-frame .vsidian-mermaid {
+  margin: 0;
+}
+
+#app .vsidian-graphic-chrome {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: none;
+  gap: 4px;
+  z-index: 5;
+  pointer-events: none;
+}
+
+#app .vsidian-mermaid[data-vsidian-mermaid-state="rendered"] ~ .vsidian-graphic-chrome {
+  display: flex;
+}
+
+#app .vsidian-graphic-chrome button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  box-sizing: border-box;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, 0.16));
+  color: var(--vscode-editor-foreground, inherit);
+  pointer-events: auto;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
+}
+
+#app .vsidian-graphic-frame:hover .vsidian-graphic-chrome button {
+  opacity: 1;
+  visibility: visible;
+}
+
+#app .vsidian-graphic-chrome button:focus-visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+#app .vsidian-graphic-chrome button:hover {
+  background: var(--vscode-button-secondaryBackground, rgba(128, 128, 128, 0.28));
+  color: var(--vscode-button-secondaryForeground, var(--vscode-editor-foreground));
+}
+
+/* ---- 图表弹窗（#111）----
+   webview 内全屏模态浮层：backdrop 毛玻璃压暗、stage 平移画布（内容
+   居中 + translate 摆位；缩放写 SVG 实际尺寸由 JS 承担）、底部居中
+   胶囊工具条。打开期间 body overflow 由 JS 置 hidden。 */
+.vsidian-diagram-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  animation: vsidian-diagram-fade-in 0.22s ease;
+}
+
+.vsidian-diagram-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: saturate(150%) blur(16px);
+}
+
+.vsidian-diagram-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  outline: none;
+  cursor: grab;
+}
+
+.vsidian-diagram-stage--dragging {
+  cursor: grabbing;
+}
+
+.vsidian-diagram-media {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: none;
+  will-change: transform;
+}
+
+.vsidian-diagram-media svg {
+  max-width: none;
+  display: block;
+}
+
+.vsidian-diagram-error {
+  color: var(--vscode-editorError-foreground, #f14c4c);
+  font-family: var(--vscode-ui-font-family, sans-serif);
+  font-size: 1em;
+  padding: 16px 24px;
+  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, 0.16));
+  border-radius: 6px;
+}
+
+.vsidian-diagram-note {
+  position: absolute;
+  bottom: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(80vw, 480px);
+  box-sizing: border-box;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-family: var(--vscode-ui-font-family, sans-serif);
+  font-size: 0.9em;
+  color: var(--vscode-editorWidget-foreground, var(--vscode-editor-foreground, #cccccc));
+  background: var(--vscode-editorWidget-background, rgba(64, 64, 64, 0.95));
+  border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.4));
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  z-index: 10002;
+  animation: vsidian-diagram-fade-in 0.22s ease;
+}
+
+.vsidian-diagram-toolbar {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border-radius: 10px;
+  background: var(--vscode-editorWidget-background, rgba(64, 64, 64, 0.95));
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  z-index: 10001;
+}
+
+.vsidian-diagram-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  box-sizing: border-box;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--vscode-editor-foreground, #cccccc);
+}
+
+.vsidian-diagram-toolbar button:hover:not(:disabled) {
+  background: var(--vscode-button-secondaryBackground, rgba(128, 128, 128, 0.3));
+  color: var(--vscode-button-secondaryForeground, var(--vscode-editor-foreground));
+}
+
+.vsidian-diagram-toolbar button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.vsidian-diagram-zoom-label {
+  min-width: 44px;
+  text-align: center;
+  font-family: var(--vscode-ui-font-family, sans-serif);
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground, var(--vscode-editor-foreground));
+  user-select: none;
+}
+
+@keyframes vsidian-diagram-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 
 /* ---- 代码块语法高亮 token 色板（#83）----
    tok-* 为 @lezer/highlight classHighlighter 的稳定词表（两视图共用）；

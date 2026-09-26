@@ -301,6 +301,16 @@ describe('isWebviewToHost', () => {
     expect(isHostToWebview({ kind: 'sidebar.test.clickx' })).toBe(false)
   })
 
+  it('sidebar.test.resize 测试钩子只接受有限数位移（负值收窄合法）', () => {
+    expect(isHostToWebview({ kind: 'sidebar.test.resize', delta: 120 })).toBe(true)
+    expect(isHostToWebview({ kind: 'sidebar.test.resize', delta: -60 })).toBe(true)
+    expect(isHostToWebview({ kind: 'sidebar.test.resize', delta: 0 })).toBe(true)
+    expect(isHostToWebview({ kind: 'sidebar.test.resize', delta: Number.NaN })).toBe(false)
+    expect(isHostToWebview({ kind: 'sidebar.test.resize', delta: Number.POSITIVE_INFINITY })).toBe(false)
+    expect(isHostToWebview({ kind: 'sidebar.test.resize', delta: '120' })).toBe(false)
+    expect(isHostToWebview({ kind: 'sidebar.test.resize' })).toBe(false)
+  })
+
   it('quick.test.click 与快速操作绘制探针只接受契约字段（#89）', () => {
     expect(isHostToWebview({ kind: 'quick.test.click', action: 'toggle' })).toBe(true)
     expect(isHostToWebview({ kind: 'quick.test.click', action: 'heading1' })).toBe(true)
@@ -1592,5 +1602,41 @@ describe('设置消息协议（#33）', () => {
     expect(isWebviewToHost({ ...baseViewState, settings: { bad: { x: 1 } } })).toBe(false)
     expect(isWebviewToHost({ ...baseViewState, settings: { bad: null } })).toBe(false)
     expect(isWebviewToHost({ ...baseViewState, settings: 'x' })).toBe(false)
+  })
+})
+
+describe('图表导出协议校验（#111）', () => {
+  const base = {
+    kind: 'diagram.export',
+    sessionId: 's1',
+    docUri: 'file:///d/a.md',
+    reqId: 3,
+    format: 'svg',
+    fileName: 'mermaid-diagram.svg',
+    content: '<svg/>',
+  }
+  it('合法载荷通过 isWebviewToHost', () => {
+    expect(isWebviewToHost(base)).toBe(true)
+    expect(isWebviewToHost({ ...base, format: 'png', content: 'aGk=' })).toBe(true)
+  })
+  it('非法格式/缺字段拒绝', () => {
+    expect(isWebviewToHost({ ...base, format: 'exe' })).toBe(false)
+    expect(isWebviewToHost({ ...base, reqId: 0 })).toBe(false)
+    expect(isWebviewToHost({ ...base, content: 1 })).toBe(false)
+  })
+  it('diagram.export.result 双向校验：ok 必填、reason 枚举', () => {
+    expect(isHostToWebview({ kind: 'diagram.export.result', reqId: 3, ok: true })).toBe(true)
+    expect(isHostToWebview({ kind: 'diagram.export.result', reqId: 3, ok: false, reason: 'cancelled' })).toBe(true)
+    expect(isHostToWebview({ kind: 'diagram.export.result', reqId: 3, ok: false, reason: 'nope' })).toBe(false)
+    expect(isHostToWebview({ kind: 'diagram.export.result', reqId: 3 })).toBe(false)
+  })
+
+  it('graphic.test.popup：action 可选且只认导出枚举', () => {
+    const base = { kind: 'graphic.test.popup', view: 'live', index: 0 } as const
+    expect(isHostToWebview({ ...base })).toBe(true)
+    expect(isHostToWebview({ ...base, action: 'export-svg' })).toBe(true)
+    expect(isHostToWebview({ ...base, action: 'export-png' })).toBe(true)
+    expect(isHostToWebview({ ...base, action: 'export-tiff' })).toBe(false)
+    expect(isHostToWebview({ kind: 'graphic.test.popup', view: 'both', index: 0 })).toBe(false)
   })
 })

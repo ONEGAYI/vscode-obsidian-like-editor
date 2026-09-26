@@ -78,6 +78,17 @@ export type HostToWebview =
   /** 测试钩子（#81）：按序号点击卡片头部复制按钮（驱动与用户点击相同的
    *  处理器链路：effect → codeblock.copy 出站 → 宿主剪贴板写入） */
   | { kind: 'codecard.test.copy'; index: number }
+  /** 测试钩子（#111）：按序号点击图形化代码块的 popup 按钮（驱动与用户
+   *  点击相同的处理器链路：打开图表弹窗）。宿主测试无法向 webview 派发
+   *  真实鼠标事件，以此通道验证真实宿主内的弹窗打开；action 存在时改为
+   *  点击弹窗工具条的导出按钮（集成回归驱动导出链路的消息形态——宿主
+   *  测试钩子模式下短路真实另存为对话框） */
+  | {
+      kind: 'graphic.test.popup'
+      view: 'live' | 'reading'
+      index: number
+      action?: 'export-svg' | 'export-png'
+    }
   /** 测试钩子（#82）：按序号点击卡片头部折叠 chevron（驱动与用户点击相同
    *  的处理器链路：effect → codeCardFoldField 视图态切换） */
   | { kind: 'codecard.test.fold'; index: number }
@@ -124,6 +135,12 @@ export type HostToWebview =
    *  处理器（纯视图状态翻转，零写回）。宿主测试无法向 webview 派发真实鼠标
    *  事件，以此通道验证真实宿主内的布局切换与绘制 */
   | { kind: 'sidebar.test.click' }
+  /** 测试钩子：向真实拖宽句柄派发 pointer 事件序列（pointerdown → 超阈值
+   *  move 进入拖拽态 → 左移 delta px 的 move → pointerup 落定），驱动与
+   *  用户拖拽同一处理器链。delta 为水平位移（正=向左=增宽，负=向右=收窄，
+   *  均受钳制）。宿主测试无法向 webview 派发真实鼠标事件，以此通道验证
+   *  真实宿主内的拖宽链路 */
+  | { kind: 'sidebar.test.resize'; delta: number }
   /** #89 测试钩子：点击真实快速操作控件，走用户同一路径。 */
   | { kind: 'quick.test.click'; action: 'toggle' | 'heading' | 'bold' | 'heading1' | 'headingNone' }
   /** 测试钩子（#54）：点击侧栏顶栏的大纲按钮，驱动与用户点击同一处理器
@@ -178,6 +195,9 @@ export type HostToWebview =
   /** 设置快照（#33）：当前生效设置的全量键值对。两个消费方向——设置页
    *  ready 后请求-响应回填（settings.get）；编辑器面板 init 后主动拉取。
    *  values 整体下发而非逐项布尔：#34 起新增设置项不需要改协议形态 */
+  /** 图表导出结果（#111）：ok=false 时 reason 区分用户取消（cancelled）、
+   *  载荷校验失败（invalid）与写盘失败（writeFailed） */
+  | { kind: 'diagram.export.result'; reqId: number; ok: boolean; reason?: 'cancelled' | 'invalid' | 'writeFailed' }
   | { kind: 'settings.snapshot'; values: SettingsPayload }
   /** 设置变更通知（#33）：任一设置项保存成功后广播到全部已打开 Vsidian
    *  编辑器面板与设置页（含变更发起页面）。values 仍为全量快照；消费方按
@@ -364,6 +384,10 @@ export type WebviewToHost =
    *  LF（CM6 LF 模型）；宿主按文档 EOL 归一后写剪贴板（webview 不触碰
    *  剪贴板权限） */
   | { kind: 'codeblock.copy'; sessionId: string; docUri: string; text: string }
+  /** 图表导出（#111）：图表弹窗工具条 → 宿主另存为对话框落盘。content：
+   *  SVG 为文档文本，PNG 为 dataURL 去前缀的 base64；宿主按上限校验后
+   *  showSaveDialog + writeFile，结果经 diagram.export.result 回报来源面板 */
+  | { kind: 'diagram.export'; sessionId: string; docUri: string; reqId: number; format: 'svg' | 'png'; fileName: string; content: string }
   /** 打开 Vsidian 设置页（#33）：编辑器工具栏「设置」按钮 → 宿主
    *  createWebviewPanel。无 sessionId/docUri——打开设置页不依赖任何文档
    *  会话（无文档打开时同样可用） */
@@ -611,6 +635,24 @@ export interface PaintProbe {
     /** live 态：视口内源文 == 已被隐藏装饰移除（false = 光标触及显形中） */
     delimitersHidden: boolean | null
   }
+  /** #111 图形化代码块按钮组与图表弹窗绘制：当前激活视图内 frame/按钮
+   *  计数与浮层状态（按钮显隐由 CSS 悬停承担，此处观测 DOM 在场与
+   *  渲染成功态联动；浮层覆盖为真实绘制断言依据）。无图形块时缺省。 */
+  graphic?: {
+    /** 当前激活视图内 .vsidian-graphic-frame 数 */
+    frames: number
+    /** edit 按钮数（仅 live 视图发射；阅读恒 0） */
+    editButtons: number
+    /** popup 按钮数（两视图均发射） */
+    popupButtons: number
+    /** 图表弹窗浮层在场（document 级单例） */
+    overlay: boolean
+    /** 浮层实际遮蔽正文：backdrop 几何中心被浮层子树占据且可见（jsdom
+     *  无布局恒 false，真宿主集成断言依据，与 mermaid.visible 同口径） */
+    overlayVisible: boolean
+    /** 浮层内 SVG 已装载 */
+    overlaySvg: boolean
+  }
   /** #89 快速操作条的真实绘制、流内布局与已应用态。 */
   quickActions?: {
     open: boolean
@@ -773,6 +815,8 @@ export interface SidebarProbe {
   mainWidthPx: number | null
   /** 侧栏宽度 px（收起时元素不占位为 0）；无布局为 null */
   sidebarWidthPx: number | null
+  /** 拖宽句柄中心点命中自身（左缘热区真实可见可拖；收起态被裁切时命中失败） */
+  resizerPainted: boolean
   /** 切换按钮可访问名称（状态一致性观测：随收起/展开变化） */
   toggleAriaLabel: string | null
   /** 齿轮设置按钮可访问名称 */
@@ -1169,6 +1213,15 @@ function isPaintProbe(v: unknown): v is PaintProbe {
       (v.highlight.delimitersHidden === undefined || v.highlight.delimitersHidden === null ||
         typeof v.highlight.delimitersHidden === 'boolean')
     )) &&
+    (v.graphic === undefined || (
+      isObject(v.graphic) &&
+      isNonNegativeInt(v.graphic.frames) &&
+      isNonNegativeInt(v.graphic.editButtons) &&
+      isNonNegativeInt(v.graphic.popupButtons) &&
+      typeof v.graphic.overlay === 'boolean' &&
+      typeof v.graphic.overlayVisible === 'boolean' &&
+      typeof v.graphic.overlaySvg === 'boolean'
+    )) &&
     (v.mermaid === undefined || (
       isObject(v.mermaid) &&
       typeof v.mermaid.visible === 'boolean' &&
@@ -1382,6 +1435,12 @@ function isReadingPerfSnapshot(v: unknown): v is ReadingPerfSnapshot {
 }
 
 /** 宿主侧校验 webview 消息；非法消息必须整体丢弃，不部分读取字段 */
+/** #111 图表导出请求载荷（宿主侧消费的子集形态） */
+export type DiagramExportPayload = Extract<WebviewToHost, { kind: 'diagram.export' }>
+
+/** #111 图表导出失败原因（cancelled=用户取消另存为对话框） */
+export type DiagramExportFailReason = 'cancelled' | 'invalid' | 'writeFailed'
+
 export function isWebviewToHost(v: unknown): v is WebviewToHost {
   if (!isObject(v)) {
     return false
@@ -1534,6 +1593,15 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         isString(v.docUri) &&
         isString(v.text)
       )
+    case 'diagram.export':
+      return (
+        isString(v.sessionId) &&
+        isString(v.docUri) &&
+        isPositiveInt(v.reqId) &&
+        (v.format === 'svg' || v.format === 'png') &&
+        isString(v.fileName) &&
+        isString(v.content)
+      )
     case 'image.request':
       return (
         isString(v.sessionId) &&
@@ -1576,6 +1644,9 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
     return false
   }
   switch (v.kind) {
+    case 'diagram.export.result':
+      return isPositiveInt(v.reqId) && typeof v.ok === 'boolean' &&
+        (v.reason === undefined || v.reason === 'cancelled' || v.reason === 'invalid' || v.reason === 'writeFailed')
     case 'keybindings.snapshot':
     case 'keybindings.changed':
       return isObject(v.overrides) && Object.values(v.overrides).every((value) =>
@@ -1642,6 +1713,12 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       )
     case 'codecard.test.copy':
       return isNonNegativeInt(v.index)
+    case 'graphic.test.popup':
+      return (
+        (v.view === 'live' || v.view === 'reading') &&
+        isNonNegativeInt(v.index) &&
+        (v.action === undefined || v.action === 'export-svg' || v.action === 'export-png')
+      )
     case 'codecard.test.fold':
       return isNonNegativeInt(v.index)
     case 'image.result':
@@ -1692,6 +1769,8 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return isNonNegativeInt(v.sourceIndex) && isNonNegativeInt(v.targetSlot)
     case 'sidebar.test.click':
       return true
+    case 'sidebar.test.resize':
+      return typeof v.delta === 'number' && Number.isFinite(v.delta)
     case 'quick.test.click':
       return v.action === 'toggle' || v.action === 'heading' || v.action === 'bold' ||
         v.action === 'heading1' || v.action === 'headingNone'
