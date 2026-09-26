@@ -498,6 +498,51 @@ describe('折叠滑块装配（#67）', () => {
     expect(state.outline?.visibleIndices).toEqual([0, 1, 2, 3, 4, 5])
   })
 
+  it('能量条状态（#99）：0..当前档 filled 类 + 行容器填充比例变量随档位更新', () => {
+    const h = makeBridge()
+    const { c: controller, parent } = mountOutline(h, COLLAPSE_DOC)
+    openSidebar(controller)
+    const filledFlags = (parent: HTMLElement) =>
+      collapseDom(parent).dots().map((el) => el.classList.contains('vsidian-outline-slider-filled'))
+    const fillVar = (parent: HTMLElement) =>
+      collapseDom(parent).slider!.style.getPropertyValue('--vsidian-outline-slider-fill')
+    // 默认档 5：六珠全实心、填充比例 1（能量满格）
+    expect(filledFlags(parent)).toEqual([true, true, true, true, true, true])
+    expect(fillVar(parent)).toBe('1')
+    // 档 1：沿途珠 0/1 实心，其余空心；比例 0.2
+    controller.handleHostMessage({ kind: 'outline.test.expandClick', level: 1 })
+    expect(filledFlags(parent)).toEqual([true, true, false, false, false, false])
+    expect(fillVar(parent)).toBe('0.2')
+    // 档 0：仅首珠实心、填充归零（无能量段）
+    controller.handleHostMessage({ kind: 'outline.test.expandClick', level: 0 })
+    expect(filledFlags(parent)).toEqual([true, false, false, false, false, false])
+    expect(fillVar(parent)).toBe('0')
+  })
+
+  it('层级对齐引导线（#99）：每真实祖先一条 span，left 对齐祖先 chevron 中心', () => {
+    const h = makeBridge()
+    const { c: controller, parent } = mountOutline(h, COLLAPSE_DOC)
+    openSidebar(controller)
+    const d = collapseDom(parent)
+    // COLLAPSE_DOC 条目：A(H1) B(H2) C(H3) D(H2) E(H4) F(H1)
+    // guide 口径：跨级只画真实祖先——E(H4) 的祖先是 A(H1) 与 D(H2)，
+    // 不为不存在的 H3 槽位画幽灵线
+    const guideLefts = (el: HTMLElement) =>
+      [...el.querySelectorAll<HTMLElement>('.vsidian-outline-guide')].map((g) => g.style.left)
+    expect(d.itemEls().map(guideLefts)).toEqual([
+      [],                    // A H1：顶层无引导线
+      ['9px'],               // B H2：祖先 A(H1) chevron 中心
+      ['9px', '19px'],       // C H3：祖先 A(H1)、B(H2)
+      ['9px'],               // D H2：祖先 A(H1)
+      ['9px', '19px'],       // E H4：祖先 A(H1)、D(H2)——跳过不存在的 H3 槽位
+      [],                    // F H1
+    ])
+    // 纯装饰不入可访问树；不携带语义文本
+    const guide = d.itemEls()[1]!.querySelector('.vsidian-outline-guide')!
+    expect(guide.getAttribute('aria-hidden')).toBe('true')
+    expect(guide.textContent).toBe('')
+  })
+
   it('outline.test.expandClick 点击真实圆点选档：档 1 下深层标题折叠隐藏', () => {
     const h = makeBridge()
     const { c: controller, parent } = mountOutline(h, COLLAPSE_DOC)

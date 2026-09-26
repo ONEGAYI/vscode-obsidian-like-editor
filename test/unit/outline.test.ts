@@ -9,7 +9,7 @@
 //   免去去抖定时器内全量 parse 的正确性前提
 import { describe, it, expect } from 'vitest'
 import { EditorState, Text } from '@codemirror/state'
-import { extractOutline, outlineItemsEqual } from '../../src/webview/outline'
+import { extractOutline, outlineGuideLefts, outlineItemsEqual } from '../../src/webview/outline'
 import { liveDecorationsField } from '../../src/webview/liveDecorations'
 
 const text = (s: string): Text => Text.of(s.split('\n'))
@@ -460,5 +460,48 @@ describe('extractOutline：增量树复用的正确性对照（P1-3）', () => {
       state = state.update({ changes: { from: l.from, insert: chunk } }).state
     }
     assertIncrementalMatchesFull(state)
+  })
+})
+
+describe('outlineGuideLefts：层级对齐引导线（#99 视效）', () => {
+  /** 父级 K 的 chevron 中心 x = (K-1)×10 + 9（缩进 10px/级、chevron 18px 宽） */
+  const x = (level: number) => (level - 1) * 10 + 9
+  const leftsOf = (lines: string[]) =>
+    outlineGuideLefts(extractOutline(Text.of(lines))).map((lefts) => [...lefts])
+
+  it('逐级链：level-N 条目对每个真实祖先各一条线（left = 祖先 chevron 中心）', () => {
+    expect(leftsOf(['# 甲', '## 乙', '### 丙', '#### 丁', ''])).toEqual([
+      [],
+      [x(1)],
+      [x(1), x(2)],
+      [x(1), x(2), x(3)],
+    ])
+  })
+
+  it('跨级标题只画真实祖先：H1 直接跟 H3 时无 H2 幽灵槽位线', () => {
+    expect(leftsOf(['# 甲', '### 跨级子', ''])).toEqual([
+      [],
+      [x(1)],
+    ])
+  })
+
+  it('同级与回退重置祖先栈：前一支子树的层级不泄入后续条目', () => {
+    expect(leftsOf(['# 甲', '## 乙', '### 丙', '# 丁', '### 戊', ''])).toEqual([
+      [],
+      [x(1)],
+      [x(1), x(2)],
+      [],
+      [x(1)],
+    ])
+    // 同级兄弟（有共同父）：各画同一祖先线；无前置低层的根级兄弟无线
+    expect(leftsOf(['# 根', '## 甲', '## 乙', ''])).toEqual([
+      [],
+      [x(1)],
+      [x(1)],
+    ])
+    expect(leftsOf(['## 甲', '## 乙', ''])).toEqual([
+      [],
+      [],
+    ])
   })
 })

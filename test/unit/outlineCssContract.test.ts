@@ -182,6 +182,51 @@ describe('常驻高亮横条（#66）', () => {
   })
 })
 
+// ---- #99 悬停指针与悬停高亮：整行可点语义与 located 浅一档 ----
+
+describe('条目悬停指针与悬停高亮（#99）', () => {
+  it('条目整行指针形态：cursor: pointer（光标语义与整行点击命中区一致）', () => {
+    // 条目整行是点击跳转命中区（事件委托 closest 命中条目元素），光标
+    // 须预告可点；折叠箭头等子元素已有各自 pointer 规则
+    expect(rule('.vsidian-sidebar .vsidian-outline-item')).toMatch(/cursor:\s*pointer/)
+  })
+
+  it('悬停高亮为 located 浅一档：:not 排除重合（located 优先）、color-mix 半量混合、圆角同 located', () => {
+    // 用户看到的东西（AGENTS 视觉层断言）：悬停行浅同色底。color-mix 对
+    // located 变量取 50% 透明度——主题改变悬停背景色时浅一档自动跟随；
+    // :not(.located) 使悬停行恰为 located 行时不叠加（最多两条、最少一条）
+    const hover = rule(
+      '.vsidian-sidebar .vsidian-outline-item:not(.vsidian-outline-located):hover',
+    )
+    expect(hover).toMatch(
+      /background:\s*color-mix\(in srgb, var\(--vscode-list-hoverBackground,\s*rgba\(/,
+    )
+    expect(hover).toMatch(/50%,\s*transparent\)/)
+    expect(hover).toMatch(/border-radius:\s*4px/)
+  })
+})
+
+// ---- #99 层级对齐引导线：父 chevron 中心的竖线包住子树 ----
+
+describe('层级对齐引导线（#99 视效）', () => {
+  it('条目为定位锚（position:relative）——guide 线绝对定位的前提', () => {
+    // guide span 挂在条目内、left 对齐祖先 chevron 中心；条目须为
+    // 定位上下文（相对面板内容左缘的 x 换算才成立）
+    expect(rule('.vsidian-sidebar .vsidian-outline-item')).toMatch(/position:\s*relative/)
+  })
+
+  it('guide 线：1px 竖线贯穿条目行、缩进引导变量配色、不挡指针', () => {
+    // 用户看到的东西：浅色竖线（Obsidian 规格约 12% 黑，亮色主题下浅
+    // 灰）；颜色跟随 VSCode 缩进引导变量（暗色主题自动适配），样式失效
+    // 时无线可被 computed 断言捕获。pointer-events:none 保证线不吞点击
+    const guide = rule('.vsidian-sidebar .vsidian-outline-item .vsidian-outline-guide')
+    expect(guide).toMatch(/position:\s*absolute/)
+    expect(guide).toMatch(/width:\s*1px/)
+    expect(guide).toMatch(/background:\s*var\(--vscode-editorIndentGuide-background/)
+    expect(guide).toMatch(/pointer-events:\s*none/)
+  })
+})
+
 // ---- #67 折叠滑块与手动折叠：滑块行、圆点串珠、箭头与折叠隐藏 ----
 
 describe('折叠滑块行（#67：结绳记事）', () => {
@@ -192,22 +237,45 @@ describe('折叠滑块行（#67：结绳记事）', () => {
     expect(shown).toMatch(/display:\s*flex/)
   })
 
-  it('圆点按钮为正圆小点：border-radius 50% + 固定宽高 + 空心面（透明回退）', () => {
+  it('圆点按钮为正圆：border-radius 50% + 12px 视觉尺寸 + 空心面（透明回退）', () => {
     const dot = rule('.vsidian-sidebar .vsidian-outline-slider-dot')
     expect(dot).toMatch(/border-radius:\s*50%/)
-    expect(dot).toMatch(/width:\s*8px/)
-    expect(dot).toMatch(/height:\s*8px/)
-    // 空闲珠空心（侧栏背景遮线、透明主题回退穿珠可见）——当前档与空闲档
-    // 的用户可见差异唯一来源是 active 类规则（实心填充 + 描边跟随）
+    // #99 可点性加粗：视觉珠 8→12px（轨道 3px 同步加粗，珠径/线高 4:1）
+    expect(dot).toMatch(/width:\s*12px/)
+    expect(dot).toMatch(/height:\s*12px/)
+    // 空闲珠空心（侧栏背景遮线、透明主题回退穿珠可见）——空闲（既非
+    // active 也非 filled）与实心珠的用户可见差异唯一来源是 #99 的
+    // 实心组类规则（填充段沿途珠与当前档珠同态实心）
     expect(dot).toMatch(/background:\s*var\(--vscode-sideBar-background,\s*transparent\)/)
     expect(dot).toMatch(/border:\s*1px solid/)
   })
 
-  it('当前档圆点实心高亮：active 类规则是唯一差异来源（颜色跟随 VSCode 变量）', () => {
-    const active = rule(
-      '.vsidian-sidebar .vsidian-outline-slider-dot.vsidian-outline-slider-active',
+  it('热区放大（#99 可点性）：透明伪元素外扩命中区至 22px（不占布局）', () => {
+    // 视觉 12px 珠点击目标过小（用户反馈不好点击）——::before 透明外扩
+    // 5px 出 22×22 圆形热区（约满 22px 行高），absolute 不影响布局与
+    // space-between 珠距
+    const hit = rule('.vsidian-sidebar .vsidian-outline-slider-dot::before')
+    expect(hit).toMatch(/position:\s*absolute/)
+    expect(hit).toMatch(/inset:\s*-5px/)
+    expect(hit).toMatch(/border-radius:\s*50%/)
+  })
+
+  it('实心珠规则（#99 能量条口径）：active + filled 两类同态，颜色跟随 VSCode 变量', () => {
+    // 沿途珠（0..当前档）与当前档珠同为实心——"充到哪、珠实到哪"；
+    // 契约自 #67 的"active 类唯一来源"扩为两类共同承担
+    const solid = rule(
+      '.vsidian-sidebar .vsidian-outline-slider-dot:is(.vsidian-outline-slider-active, .vsidian-outline-slider-filled)',
     )
-    expect(active).toMatch(/background:\s*var\(--vscode-button-background/)
+    expect(solid).toMatch(/background:\s*var\(--vscode-button-background/)
+  })
+
+  it('能量条填充条（#99）：滑块行 ::after 从左端铺到当前档，宽度由 CSS 变量驱动', () => {
+    // ::before 已被灰轨道占用，填充条走 ::after（声明序在后，同层绘制
+    // 在上）；width = 轨道全长 × 填充比例（level/5，TS 侧同步写变量）。
+    // 轨道两端让位 30px = 容器 padding 24px + 珠半径 6px（12px 珠心对齐）
+    const fill = rule('.vsidian-sidebar .vsidian-outline-slider::after')
+    expect(fill).toMatch(/width:\s*calc\(\(100% - 60px\) \* var\(--vsidian-outline-slider-fill/)
+    expect(fill).toMatch(/background:\s*var\(--vscode-button-background/)
   })
 
   it('横线串联（结绳意象）：滑块行 ::before 贯穿横线规则存在', () => {

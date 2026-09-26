@@ -82,12 +82,16 @@ export const OUTLINE_CLASS_NAMES = {
   } as const,
   /** #66 当前控制域条目的常驻高亮类（半透明横条的唯一差异来源） */
   located: 'vsidian-outline-located',
+  /** #99 层级对齐引导线 span（条目内绝对定位竖线，left 对齐祖先 chevron 中心） */
+  guide: 'vsidian-outline-guide',
   /** #67 折叠滑块行（侧栏顶栏与条目面板之间；显隐跟随 outline-active 类） */
   slider: 'vsidian-outline-slider',
   /** 滑块圆点按钮（六档：No-Expand、H1–H5；结绳串珠意象） */
   sliderDot: 'vsidian-outline-slider-dot',
   /** 当前档圆点（实心高亮）：两态差异唯一来源的类切换 */
   sliderActive: 'vsidian-outline-slider-active',
+  /** #99 能量条沿途珠（0..当前档与当前珠同态实心，"充到哪、珠实到哪"） */
+  sliderFilled: 'vsidian-outline-slider-filled',
   /** #67 折叠箭头按钮（有子项条目专属；点击折叠/展开，点文字跳转） */
   chevron: 'vsidian-outline-chevron',
   /** 无子项条目的箭头占位（与 chevron 同宽，文字左缘对齐） */
@@ -496,6 +500,27 @@ const OUTLINE_SPAN_ELEMENTS: Record<OutlineSpanKind, { tag: string; cls: string 
 }
 
 /**
+ * 每个条目的层级对齐引导线 left 坐标（#99 视效，与 items 同序）。
+ * 口径：**真实祖先**各一条线——栈扫描维护当前条目的祖先层级链（跨级
+ * 标题如 H1 直接跟 H3 时只为 H1 画线，不为不存在的层级槽位画幽灵线）；
+ * 线的 x 与祖先级 chevron 中心对齐 = (level-1)×10 + 9（缩进 10px/级、
+ * chevron 宽 18px——两常量由 CSS 契约测试钉住）。线段渲染于每个子孙
+ * 行内（顶到底），相邻行视觉连成整条"包住子树"；折叠 display:none
+ * 时随行断开，无需在此感知折叠状态。
+ */
+export function outlineGuideLefts(items: readonly OutlineItem[]): readonly (readonly number[])[] {
+  const stack: number[] = []
+  return items.map((item) => {
+    while (stack.length > 0 && stack[stack.length - 1]! >= item.level) {
+      stack.pop()
+    }
+    const lefts = stack.map((level) => (level - 1) * 10 + 9)
+    stack.push(item.level)
+    return lefts
+  })
+}
+
+/**
  * 重建面板条目（数据变化时全量替换：条目是无状态纯展示节点，重建成本
  * 与标题数线性且仅在序列变化时发生；正文编辑不触发）。无标题时渲染
  * 空态占位（保持面板有可读内容与高度语义）。#65 起条目内容按标记结构
@@ -504,8 +529,9 @@ const OUTLINE_SPAN_ELEMENTS: Record<OutlineSpanKind, { tag: string; cls: string 
  * 区分：箭头折叠/展开、文字跳转）；无子项条目渲染同宽占位保持文字对齐。
  * #68 起 hits（与 items 同序的命中区间）在文本层切分出命中子串包 mark
  * （片段级高亮与语义元素正交：mark 只落在文本节点内，不包裹语义元素
- * 外层）；缺省为无高亮。hidden/collapsed/located 等状态类不在此施加
- * （控制器随折叠状态机维护）。
+ * 外层）；缺省为无高亮。#99 起每条目按真实祖先链渲染层级对齐引导线
+ * span（见 outlineGuideLefts）。hidden/collapsed/located 等状态类不在
+ * 此施加（控制器随折叠状态机维护）。
  */
 export function renderOutlineItems(
   panel: HTMLElement,
@@ -520,12 +546,22 @@ export function renderOutlineItems(
     panel.replaceChildren(empty)
     return
   }
+  const guideLefts = outlineGuideLefts(items)
   const nodes: HTMLElement[] = []
   for (let i = 0; i < items.length; i++) {
     const item = items[i]!
     const el = document.createElement('div')
     el.className = `${OUTLINE_CLASS_NAMES.item} ${OUTLINE_CLASS_NAMES.level(item.level)}`
     el.dataset['vsidianLevel'] = String(item.level)
+    // #99 层级对齐引导线：每条真实祖先一条竖线段（渲染于本行内，相邻
+    // 子孙行的线段视觉连成整条；折叠 display:none 时随行断开）
+    for (const left of guideLefts[i]!) {
+      const guide = document.createElement('span')
+      guide.className = OUTLINE_CLASS_NAMES.guide
+      guide.style.left = `${left}px`
+      guide.setAttribute('aria-hidden', 'true')
+      el.appendChild(guide)
+    }
     if (hasChildren?.[i]) {
       const chevron = document.createElement('button')
       chevron.type = 'button'
@@ -690,9 +726,10 @@ export interface OutlineSliderDom {
 /**
  * #67 折叠滑块行（结绳记事：六个圆点 + 横线串联）。可访问口径采用
  * role=group + 六按钮组（每个圆点是独立按钮，Tab 逐个可达、Enter/空格
- * 原生激活；当前档以 aria-pressed + active 类双重表达——类是视觉差异
- * 唯一来源，契约测试钉住）。点击选档由按钮 click 天然承载；拖拽由
- * 调用方在 row 上挂 pointer 事件（outlineSliderLevelAt 换算最近档）。
+ * 原生激活；当前档以 aria-pressed + active 类双重表达；#99 起沿途珠
+ * 另有 filled 类与 ::after 填充条的能量条呈现，见 applyOutlineSliderState）。
+ * 点击选档由按钮 click 天然承载；拖拽由调用方在 row 上挂 pointer 事件
+ * （outlineSliderLevelAt 换算最近档）。
  */
 export function buildOutlineSlider(
   level: number,
@@ -718,13 +755,20 @@ export function buildOutlineSlider(
   return { row, dots }
 }
 
-/** 滑块档位落 DOM：active 类与 aria-pressed 是两态差异唯一来源（幂等） */
+/** 滑块档位落 DOM：active/filled 类与 aria-pressed 是全部态差异来源（幂等）。
+ *  #99 能量条口径：0..当前档的珠带 filled 类（与 active 珠同态实心），
+ *  行容器同步写填充比例 CSS 变量（::after 填充条宽度 = 轨道全长 × 比例） */
 export function applyOutlineSliderState(slider: OutlineSliderDom, level: number): void {
   slider.dots.forEach((dot, n) => {
     const active = n === level
     dot.classList.toggle(OUTLINE_CLASS_NAMES.sliderActive, active)
     dot.setAttribute('aria-pressed', String(active))
+    dot.classList.toggle(OUTLINE_CLASS_NAMES.sliderFilled, n <= level)
   })
+  slider.row.style.setProperty(
+    '--vsidian-outline-slider-fill',
+    String(level / (slider.dots.length - 1)),
+  )
 }
 
 /** 拖拽换算：指针 X 坐标 → 最近圆点的档位（拖拽经过任意位置可选档；
