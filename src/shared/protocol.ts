@@ -116,6 +116,46 @@ export type HostToWebview =
   /** 测试钩子（#54）：点击侧栏顶栏的大纲按钮，驱动与用户点击同一处理器
    *  （纯视图状态翻转，零写回）。与 sidebar.test.click 同通道形态 */
   | { kind: 'outline.test.click' }
+  /** 测试钩子（#66）：点击第 index 个真实大纲条目，驱动与用户点击同一
+   *  委托处理器（纯视图跳转：live 落光标居中 / reading 滚动到块，零写回） */
+  | { kind: 'outline.test.itemClick'; index: number }
+  /** 测试钩子（#67）：点击第 level 档（0–5）的真实滑块圆点，驱动与用户
+   *  点击同一处理器（档位整体替换展开集，纯视图状态零写回） */
+  | { kind: 'outline.test.expandClick'; level: number }
+  /** 测试钩子（#67）：点击第 index 个真实条目的折叠箭头，驱动与用户点击
+   *  同一委托处理器（单条折叠/展开，不触发跳转） */
+  | { kind: 'outline.test.chevronClick'; index: number }
+  /** 测试钩子（#68）：向真实搜索输入框设值并派发 input 事件，驱动与用户
+   *  输入同一处理器（搜索过滤与片段高亮即时重算，纯视图零写回） */
+  | { kind: 'outline.test.searchInput'; text: string }
+  /** 测试钩子（#68）：点击工具条真实按钮（跳转到末尾 / 重置），驱动与
+   *  用户点击同一处理器（纯视图滚动 / 三合一重置，零写回） */
+  | { kind: 'outline.test.toolbarClick'; action: 'jump-bottom' | 'reset' }
+  /** 测试钩子（#69）：对第 index 个真实条目派发 contextmenu（与用户右键
+   *  同一面板委托处理器，弹出右键菜单）；宿主测试无法向 webview 派发真实
+   *  鼠标事件，以此通道验证真实宿主内的菜单装配 */
+  | { kind: 'outline.test.contextMenu'; index: number }
+  /** 测试钩子（#69）：点击菜单中 command 对应的真实按钮（与用户点击同一
+   *  处理器；command 取 outlineMenu 的 OutlineMenuCommand） */
+  | { kind: 'outline.test.menuClick'; command: string }
+  /** 测试钩子（#69）：关闭当前右键菜单（等价 Esc/外点关闭路径） */
+  | { kind: 'outline.test.menuClose' }
+  /** 测试钩子（#69）：向重命名输入框注入文本并以 Enter/Esc 收尾（真实
+   *  keydown 链路；须先经 menuClick command='rename' 进入重命名态） */
+  | { kind: 'outline.test.renameKey'; text: string; key: 'enter' | 'escape' }
+  /** 测试钩子（#70）：向真实大纲条目派发 pointer 事件序列（pointerdown →
+   *  超阈值 pointermove 进入拖拽态 → pointermove 到目标条目的三态落点区
+   *  域），驱动与用户拖拽同一处理器链。action=hover 停在悬停态（供 probe
+   *  观测拖拽态与落点指示），drop 以 pointerup 收尾执行写回，escape 悬停
+   *  后按 Esc 取消（零写回）。宿主测试无法向 webview 派发真实鼠标事件，
+   *  以此通道验证真实宿主内的拖拽链路 */
+  | {
+      kind: 'outline.test.drag'
+      from: number
+      to: number
+      position: 'before' | 'after' | 'inside'
+      action: 'hover' | 'drop' | 'escape'
+    }
   /** 测试钩子（#21）：在真实 webview 的 CM6 中输入，验证暂停态即时留存。 */
   | { kind: 'sync.test.edit'; offset: number; text: string; closeAfter?: boolean }
   /** 测试钩子：组合候选写入首行 DOM，经过 CM6 MutationObserver 的真实输入链。 */
@@ -303,6 +343,14 @@ export type WebviewToHost =
    *  校验：通过才持久化并广播 settings.changed；拒绝时向来源设置页回
    *  settings.snapshot 以权威值恢复显示 */
   | { kind: 'settings.set'; values: SettingsPayload }
+  /** #69 剪贴板写（直写）：webview 环境无 navigator.clipboard 权限面，
+   *  经宿主 env.clipboard.writeText。只读交互，暂停态同样放行 */
+  | { kind: 'clipboard.write'; text: string }
+  /** #69 剪贴板写（标题链接）：`[[笔记名#标题]]` 的拼接在宿主侧——
+   *  webview 只上报 docUri（宿主取笔记名 = 文件名去扩展名）与标题原文
+   *  （含行内标记，与宿主 findHeadingOffset 的字面匹配同源；剥标记可见
+   *  文本只用于 text 直写变体的「复制标题」纯文本场景） */
+  | { kind: 'clipboard.write'; linkHeading: { docUri: string; heading: string } }
   /** 性能探针回报（#5）：快照为 DOM 计数，输入延迟含 rAF 稳定等待 */
   | {
       kind: 'perf.report'
@@ -623,13 +671,27 @@ export interface SidebarProbe {
   settingsAriaLabel: string | null
 }
 
+/** #65 大纲条目行内标记类型（白名单 = 正文已支持的行内标记子集；
+ *  高亮/公式/行内颜色待正文支持后按同一机制接入，此处不预留松散类型） */
+export type OutlineSpanKind = 'strong' | 'emphasis' | 'code' | 'strike'
+
+/** #65 大纲条目行内标记区间：kind + plainText 内偏移（start 含、end 不含） */
+export interface OutlineSpanInfo {
+  kind: OutlineSpanKind
+  start: number
+  end: number
+}
+
 /**
  * 大纲观测（#54）：面板态与绘制层证据。命中类字段（*Painted）走
  * elementFromPoint——面板只有真实绘制（侧栏展开 + 面板 active + 样式表
  * 显隐规则生效）时才可能命中，样式失效（如 CSP 拦截注入）时 DOM 存在但
  * 命中失败。items 是全文标题序列（数据源 = CM6 全文解析，含未保存编辑；
- * 与视口渲染和 live/reading 模式无关）。jsdom 无布局与 CSS 引擎：命中恒
- * false，名称容错为 null（probe 未装配时字段缺省），真宿主断言见集成。
+ * 与视口渲染和 live/reading 模式无关）。#65 起 items 携带行内样式透传
+ * 信息（plainText 剥标记可见文本 + spans 白名单标记区间），style 为
+ * 条目与标记 span 的 computed 字重/字体族/颜色（绘制层证据；jsdom 无
+ * CSS 引擎时字段为 null，真宿主断言见集成）。jsdom 无布局与 CSS 引擎：
+ * 命中恒 false，名称容错为 null（probe 未装配时字段缺省）。
  */
 export interface OutlineProbe {
   /** 大纲面板 active 态（状态机实值；侧栏收起时面板同样不可见） */
@@ -646,12 +708,100 @@ export interface OutlineProbe {
   /** 大纲面板 clientHeight px（可视高；scrollHeight > clientHeight 即
    *  面板高度被宿主约束且内容溢出——overflow-y:auto 由此激活滚动） */
   panelClientHeightPx: number | null
-  /** 全文标题序列（级别 1–6 / 文字 / 起始行 1 基） */
-  items: Array<{ level: number; text: string; line: number }>
+  /** 全文标题序列（级别 1–6 / 原文 / 剥标记可见文本 / 标记区间 / 起始行 1 基） */
+  items: Array<{
+    level: number
+    text: string
+    plainText: string
+    spans: OutlineSpanInfo[]
+    line: number
+  }>
   /** 大纲按钮可访问名称 */
   toggleAriaLabel: string | null
   /** 大纲面板可访问名称（role=region + aria-label） */
   panelAriaLabel: string | null
+  /** #65 样式透传绘制证据（computed）：条目常规字重与显式标记加重的对照、
+   *  行内代码等宽字体族、条目层级色与正文标题层级色的同源对照 */
+  style?: {
+    itemFontWeight: string | null
+    strongFontWeight: string | null
+    codeFontFamily: string | null
+    itemFontFamily: string | null
+    itemColor: string | null
+    headingColor: string | null
+  }
+  /** #66 当前控制域条目索引（items 下标；null = 无标题、首标题之前或
+   *  无布局环境）。以视口顶部行向上最近标题为准（locateOutlineIndex）。
+   *  #67 起条目可能被折叠遮蔽：本字段仍回报真实控制域索引，高亮实际
+   *  施加在可见代表上（被遮蔽时为第一个可见祖先） */
+  locatedItemIndex: number | null
+  /** located 条目的文字（locatedItemIndex 的冗余可读形态；null 同上） */
+  locatedText: string | null
+  /** 高亮横条绘制证据（#66）：located 条目中心点 elementFromPoint 命中
+   *  自身且 computed background-color 非全透明（半透明横条真实绘制；
+   *  条目在面板可视区外或 jsdom 无布局时为 false） */
+  locatedPainted: boolean
+  /** #67 展开档位实值（0=No-Expand、1–5=展开到 H1–H5；经 bridge state
+   *  全局记忆，跨文档共享） */
+  expandLevel: number
+  /** #67 当前可见条目索引序列（折叠遮蔽后的用户实际可见集；空文档为空
+   *  数组——折叠可见性断言的权威口径） */
+  visibleIndices: number[]
+  /** #67 滑块行绘制证据：elementFromPoint 命中滑块容器（侧栏展开 +
+   *  面板 active + 样式表显隐规则生效；jsdom 无布局恒 false） */
+  sliderPainted: boolean
+  /** #67 当前档圆点绘制证据：命中 active 圆点且 computed 背景非全透明
+   *  （实心珠真实绘制——串珠两态差异来源的绘制层验证） */
+  sliderActiveDotPainted: boolean
+  /** #67 折叠箭头绘制证据：首个箭头中心点命中自身（有子项条目的箭头
+   *  真实绘制；无标题/无子项文档或 jsdom 无布局时为 false） */
+  chevronPainted: boolean
+  /** #68 当前搜索词（工具条输入框实值；空串 = 无过滤） */
+  searchQuery: string
+  /** #68 搜索态（searchQuery 非空；搜索关闭时过滤口径为恒真） */
+  searchActive: boolean
+  /** #68 组合可见口径的条目索引序列（折叠可见 ∩ 搜索保留；搜索关闭时
+   *  与 visibleIndices 同值——用户实际可见集的权威口径） */
+  filteredVisibleIndices: number[]
+  /** #68 工具条行绘制证据：elementFromPoint 命中工具条容器（侧栏展开 +
+   *  面板 active + 样式表显隐规则生效；jsdom 无布局恒 false） */
+  toolbarPainted: boolean
+  /** #68 跳转到末尾按钮可访问名称 */
+  jumpBottomAriaLabel: string | null
+  /** #68 重置按钮可访问名称 */
+  resetAriaLabel: string | null
+  /** #68 搜索框 placeholder 文案（「输入以搜索」） */
+  searchPlaceholder: string | null
+  /** #68 命中片段绘制证据：首个可见条目内的 mark 中心点命中自身且
+   *  computed 背景非全透明（片段高亮真实绘制；无搜索/无命中或 jsdom
+   *  无布局时为 false） */
+  searchHitPainted: boolean
+  /** #68 无匹配占位绘制证据：占位元素中心点命中自身（有词条零命中的
+   *  「无匹配」真实可见；无占位或 jsdom 无布局时为 false） */
+  nomatchPainted: boolean
+  /** #69 右键菜单打开态（菜单容器在侧栏内挂载） */
+  menuOpen: boolean
+  /** #69 菜单目标条目索引（items 下标；未打开为 null） */
+  menuTargetIndex: number | null
+  /** #69 菜单容器中心点 elementFromPoint 命中自身（菜单真实绘制；
+   *  jsdom 无布局恒 false，真宿主断言见集成） */
+  menuPainted: boolean
+  /** #69 级联子菜单可见证据：任一子菜单 computed display 非 none
+   *  （hover/focus-within 展开；未展开或 jsdom 恒 false） */
+  submenuVisible: boolean
+  /** #69 重命名编辑态：正在行内编辑的条目索引（null = 无编辑态） */
+  renamingIndex: number | null
+  /** #70 拖拽态：正在拖拽的源条目索引（null = 无拖拽） */
+  draggingIndex: number | null
+  /** #70 当前有效落点目标索引（null = 未悬停在条目上或落点无效——
+   *  拖入自身控制域内部不显示落点） */
+  dropTargetIndex: number | null
+  /** #70 落点三态（dropTargetIndex 非空时的位置语义；null = 无有效落点） */
+  dropPosition: 'before' | 'after' | 'inside' | null
+  /** #70 落点指示绘制证据：带指示类的条目中心点命中自身且 computed
+   *  插入线（box-shadow）或包裹高亮（outline/背景）可读（真实绘制；
+   *  无拖拽或 jsdom 无布局时 false，真宿主断言见集成） */
+  dropHintPainted: boolean
 }
 
 /** 表格结构操作码校验（#13） */
@@ -738,7 +888,19 @@ function isSidebarProbe(v: unknown): v is SidebarProbe {
   )
 }
 
-/** #54 大纲条目序列校验：level 1–6 整数、text 字符串（可为空）、line 正整数 */
+/** #65 大纲标记区间校验：白名单 kind + 非负整数偏移 + 区间不倒置 */
+function isOutlineSpan(v: unknown): v is OutlineSpanInfo {
+  return (
+    isObject(v) &&
+    (v.kind === 'strong' || v.kind === 'emphasis' || v.kind === 'code' || v.kind === 'strike') &&
+    isNonNegativeInt(v.start) &&
+    isNonNegativeInt(v.end) &&
+    (v.start as number) <= (v.end as number)
+  )
+}
+
+/** #54/#65 大纲条目序列校验：level 1–6 整数、text/plainText 字符串（可为
+ *  空）、spans 白名单区间数组、line 正整数 */
 function isOutlineItems(v: unknown): v is OutlineProbe['items'] {
   return (
     Array.isArray(v) &&
@@ -748,13 +910,22 @@ function isOutlineItems(v: unknown): v is OutlineProbe['items'] {
         typeof item.level === 'number' && Number.isInteger(item.level) &&
         item.level >= 1 && item.level <= 6 &&
         isString(item.text) &&
+        isString(item.plainText) &&
+        Array.isArray(item.spans) && item.spans.every(isOutlineSpan) &&
         typeof item.line === 'number' && Number.isInteger(item.line) && item.line >= 1,
     )
   )
 }
 
-/** #54 大纲观测校验：active/命中布尔、图标尺寸与滚动几何（null 或非负数）、
- *  items 序列、名称字符串或 null */
+/** #54/#65/#66/#67/#68/#69/#70 大纲观测校验：active/命中布尔、图标尺寸与滚动几何（null 或
+ *  非负数）、items 序列、名称字符串或 null、style 绘制证据（缺省或字段字符
+ *  串或 null）、located 索引（null 或非负整数）/文字（字符串或 null）/绘制
+ *  命中布尔、#67 档位（0–5 整数）/可见索引序列（非负整数数组）/滑块与箭头
+ *  绘制命中布尔、#68 搜索词（字符串）/搜索态布尔/组合可见索引序列/工具条
+ *  绘制命中布尔/按钮与占位文案（字符串或 null）/命中片段与占位绘制命中布
+ *  尔、#69 菜单开合布尔/目标索引（null 或非负整数）/菜单与子菜单绘制布尔/
+ *  重命名索引（null 或非负整数）、#70 拖拽源索引与落点目标索引（null 或
+ *  非负整数）/落点三态（null 或 before/after/inside）/落点指示绘制布尔 */
 function isOutlineProbe(v: unknown): v is OutlineProbe {
   return (
     isObject(v) &&
@@ -766,7 +937,73 @@ function isOutlineProbe(v: unknown): v is OutlineProbe {
     (v.panelClientHeightPx === null || isNonNegativeNumber(v.panelClientHeightPx)) &&
     isOutlineItems(v.items) &&
     isNullOrString(v.toggleAriaLabel) &&
-    isNullOrString(v.panelAriaLabel)
+    isNullOrString(v.panelAriaLabel) &&
+    (v.style === undefined || (
+      isObject(v.style) &&
+      isNullOrString(v.style.itemFontWeight) &&
+      isNullOrString(v.style.strongFontWeight) &&
+      isNullOrString(v.style.codeFontFamily) &&
+      isNullOrString(v.style.itemFontFamily) &&
+      isNullOrString(v.style.itemColor) &&
+      isNullOrString(v.style.headingColor)
+    )) &&
+    (v.locatedItemIndex === null || isNonNegativeInt(v.locatedItemIndex)) &&
+    isNullOrString(v.locatedText) &&
+    typeof v.locatedPainted === 'boolean' &&
+    typeof v.expandLevel === 'number' && Number.isInteger(v.expandLevel) &&
+    v.expandLevel >= 0 && v.expandLevel <= 5 &&
+    Array.isArray(v.visibleIndices) && v.visibleIndices.every(isNonNegativeInt) &&
+    typeof v.sliderPainted === 'boolean' &&
+    typeof v.sliderActiveDotPainted === 'boolean' &&
+    typeof v.chevronPainted === 'boolean' &&
+    isString(v.searchQuery) &&
+    typeof v.searchActive === 'boolean' &&
+    Array.isArray(v.filteredVisibleIndices) && v.filteredVisibleIndices.every(isNonNegativeInt) &&
+    typeof v.toolbarPainted === 'boolean' &&
+    isNullOrString(v.jumpBottomAriaLabel) &&
+    isNullOrString(v.resetAriaLabel) &&
+    isNullOrString(v.searchPlaceholder) &&
+    typeof v.searchHitPainted === 'boolean' &&
+    typeof v.nomatchPainted === 'boolean' &&
+    typeof v.menuOpen === 'boolean' &&
+    (v.menuTargetIndex === null || isNonNegativeInt(v.menuTargetIndex)) &&
+    typeof v.menuPainted === 'boolean' &&
+    typeof v.submenuVisible === 'boolean' &&
+    (v.renamingIndex === null || isNonNegativeInt(v.renamingIndex)) &&
+    (v.draggingIndex === null || isNonNegativeInt(v.draggingIndex)) &&
+    (v.dropTargetIndex === null || isNonNegativeInt(v.dropTargetIndex)) &&
+    (v.dropPosition === null || v.dropPosition === 'before' || v.dropPosition === 'after' || v.dropPosition === 'inside') &&
+    typeof v.dropHintPainted === 'boolean'
+  )
+}
+
+/** #69 大纲菜单命令码（菜单结构单一清单：结构命令三/复制五/调级四/
+ *  重命名/删除；父项容器 id 不进此列）。webview 的 outlineMenu 与宿主
+ *  校验器共用——命令码两边一致性的单一事实源 */
+export type OutlineMenuCommand =
+  | 'expandRecursively'
+  | 'collapseSiblings'
+  | 'expandSiblings'
+  | 'copyHeading'
+  | 'copySiblings'
+  | 'copyChildren'
+  | 'copyLink'
+  | 'copySection'
+  | 'levelUp'
+  | 'levelUpRecursive'
+  | 'levelDown'
+  | 'levelDownRecursive'
+  | 'rename'
+  | 'delete'
+
+/** #69 菜单命令码校验（outline.test.menuClick 只转发合法命令） */
+export function isOutlineMenuCommand(v: unknown): v is OutlineMenuCommand {
+  return (
+    v === 'expandRecursively' || v === 'collapseSiblings' || v === 'expandSiblings' ||
+    v === 'copyHeading' || v === 'copySiblings' || v === 'copyChildren' ||
+    v === 'copyLink' || v === 'copySection' ||
+    v === 'levelUp' || v === 'levelUpRecursive' || v === 'levelDown' || v === 'levelDownRecursive' ||
+    v === 'rename' || v === 'delete'
   )
 }
 
@@ -1032,6 +1269,17 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
       return true
     case 'settings.set':
       return isSettingsPayload(v.values)
+    case 'clipboard.write':
+      // #69 两变体：text 直写 / linkHeading 由宿主拼标题链接
+      if (isString(v.text) && v.linkHeading === undefined) {
+        return true
+      }
+      return (
+        v.text === undefined &&
+        isObject(v.linkHeading) &&
+        isString(v.linkHeading.docUri) &&
+        isString(v.linkHeading.heading)
+      )
     case 'conflict.action':
       return (
         isString(v.sessionId) &&
@@ -1258,6 +1506,29 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return true
     case 'outline.test.click':
       return true
+    case 'outline.test.itemClick':
+      return isNonNegativeInt(v.index)
+    case 'outline.test.expandClick':
+      return typeof v.level === 'number' && Number.isInteger(v.level) &&
+        v.level >= 0 && v.level <= 5
+    case 'outline.test.chevronClick':
+      return isNonNegativeInt(v.index)
+    case 'outline.test.searchInput':
+      return isString(v.text)
+    case 'outline.test.toolbarClick':
+      return v.action === 'jump-bottom' || v.action === 'reset'
+    case 'outline.test.contextMenu':
+      return isNonNegativeInt(v.index)
+    case 'outline.test.menuClick':
+      return isOutlineMenuCommand(v.command)
+    case 'outline.test.menuClose':
+      return true
+    case 'outline.test.renameKey':
+      return isString(v.text) && (v.key === 'enter' || v.key === 'escape')
+    case 'outline.test.drag':
+      return isNonNegativeInt(v.from) && isNonNegativeInt(v.to) &&
+        (v.position === 'before' || v.position === 'after' || v.position === 'inside') &&
+        (v.action === 'hover' || v.action === 'drop' || v.action === 'escape')
     case 'sync.test.edit':
       return isNonNegativeInt(v.offset) && isString(v.text) &&
         (v.closeAfter === undefined || typeof v.closeAfter === 'boolean')

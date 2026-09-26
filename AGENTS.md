@@ -2,13 +2,14 @@
 
 VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 
-> 当前状态：**MVP 主要功能已实施，整体验收未结**。一期双视图编辑、增量写回、任务、链接图片、双链、表格、查找、三态切换、独立设置页与源文件行号，二期公式渲染、Mermaid 图表与表格交互重做（[#72 规格](docs/specs/table-interaction-rework.md)）均已落地；自动化通过不等于真实 IME、物理鼠标与视觉观感已由用户验收。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；待验项与历轮执行记录见 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)；用户可见变更见 [CHANGELOG.md](CHANGELOG.md)。本文件是项目级 agent 规则的**单一事实源**。
+> 当前状态：**MVP 主要功能已实施，整体验收未结**。一期双视图编辑、增量写回、任务、链接图片、双链、表格、查找、三态切换、独立设置页与源文件行号，二期公式渲染、Mermaid 图表、表格交互重做（[#72 规格](docs/specs/table-interaction-rework.md)）与大纲面板二期（#65–#70，样式透传、跳转高亮、折叠滑块、工具条搜索、右键菜单、拖拽排序）均已落地；自动化通过不等于真实 IME、物理鼠标与视觉观感已由用户验收。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；待验项与历轮执行记录见 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)；用户可见变更见 [CHANGELOG.md](CHANGELOG.md)。本文件是项目级 agent 规则的**单一事实源**。
 
 ## 约定
 
 - 通用工程规范（提交规范、TDD、文件树维护）遵循工程根 `D:\CODE\Project\AGENTS.md`，此处不重复展开。
 - **插件设置入口**：Vsidian 面向用户的设置统一在扩展自己的设置页面展示与修改，不复用 VSCode 统一设置中心作为设置界面。后续新增设置项时，同步纳入该页面，并验证设置持久化、重新打开后的回显及变更生效。
 - **视觉层断言（评审必查）**：webview/样式/渲染类变更，评审必须核对断言对象是"用户看到的东西"（可见性、对齐、颜色）而非 DOM 存在性或几何坐标——样式注入失效时后者照样通过（PR #37 P0 实证：CSP 拦截 CM6 注入样式后 74 集成用例仍全绿，正文实际不可见）。涉及呈现的新特性至少一条集成断言落在绘制层（现有 `view.state.paint` 探针），CSS 关键规则由契约测试钉住。
+- **大纲样式设计哲学（#65 落档）**：大纲条目的呈现遵循三条原则，后续大纲呈现类变更不得违背。其一，**结构装饰与正文主题同源**——层级颜色等主题性装饰不复制读值，而是与正文标题引用同一 CSS 变量族（`--vsidian-heading-color-1..6`，定义于 `#app`，live 标题行级、阅读标题块级、大纲条目级三侧同引），主题分级着色一处定义多处生效。其二，**强调语义只认显式标记**——条目一律常规字重（400），不继承标题级别的结构性加粗；仅显式 `**粗体**` 段加重，斜体/行内代码/删除线同理只由标记触发。其三，**透传集合 = 正文已支持的行内标记子集**——当前白名单为粗体/斜体/行内代码/删除线（`OutlineSpanKind`，提取与校验同源），高亮/公式/行内颜色待正文支持后按同一白名单机制接入（提取处 `SPAN_KIND_BY_NODE` 加映射即可），大纲侧零额外设计；双链/链接显示别名/链接文字的纯文本，不可点。
 
 ## 技术栈与构建（工单 #2 确立）
 
@@ -141,6 +142,12 @@ vsidian/
 │       ├── mermaidEntry.ts         # Mermaid 独立产物入口（#60）
 │       ├── mermaidRender.ts        # Mermaid 渲染管线（#60）
 │       ├── outline.ts              # 大纲全文解析与面板装配
+│       ├── outlineCollapse.ts      # 大纲折叠状态机纯函数
+│       ├── outlineDrag.ts          # 大纲拖拽移动计划纯函数
+│       ├── outlineLocate.ts        # 大纲定位纯函数
+│       ├── outlineMenu.ts          # 大纲右键菜单模型纯逻辑
+│       ├── outlineSearch.ts        # 大纲标题搜索纯函数
+│       ├── outlineSection.ts       # 大纲控制域纯函数
 │       ├── perfProbe.ts            # webview 性能探针（#5）
 │       ├── readingBlocks.ts        # markdown-it 阅读块切分
 │       ├── readingMarkdown.ts      # markdown-it 安全渲染层

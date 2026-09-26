@@ -69,12 +69,61 @@ import { runReadingPerfProbe } from './readingProbe'
 import { createReadingContainer, prepareReadingImages } from './readingView'
 import { READING_MARKDOWN_CLASS_NAMES } from './readingMarkdown'
 import {
+  applyOutlineSliderState,
   buildOutlineDom,
+  buildOutlineSlider,
+  buildOutlineToolbar,
   extractOutline,
+  OUTLINE_CLASS_NAMES,
   type OutlineItem,
+  type OutlineSliderDom,
+  type OutlineToolbarDom,
   outlineItemsEqual,
+  outlineSliderLevelAt,
   renderOutlineItems,
 } from './outline'
+import {
+  migrateOutlineExpanded,
+  normalizeOutlineExpandLevel,
+  OUTLINE_EXPAND_LEVEL_DEFAULT,
+  outlineCollapseFacts,
+  type OutlineCollapseFacts,
+  outlineExpandAncestors,
+  outlineExpandLevelLabel,
+  outlineExpandSetForLevel,
+  outlineHiddenFlags,
+  outlineRepresentativeIndex,
+  outlineVisibleIndices,
+} from './outlineCollapse'
+import {
+  outlineFilteredVisibleIndices,
+  outlineSearchExpandSet,
+  outlineSearchFilter,
+  type OutlineSearchFilter,
+  outlineSearchRepresentativeIndex,
+} from './outlineSearch'
+import {
+  buildOutlineMenu,
+  type OutlineMenuCommand,
+  OUTLINE_MENU_CLASS_NAMES,
+  outlineMenuPosition,
+  outlineMenuSpec,
+  outlineStructuralExpand,
+} from './outlineMenu'
+import {
+  outlineChangesOrdered,
+  outlineCopyText,
+  outlineDeleteChange,
+  outlineLevelChanges,
+  outlineRenameChange,
+} from './outlineSection'
+import {
+  outlineDropAllowed,
+  outlineDropPositionAt,
+  outlineMovePlan,
+  type OutlineDropPosition,
+} from './outlineDrag'
+import { locateOutlineIndex } from './outlineLocate'
 import { resolveStaleTaskToggle } from './taskToggle'
 import { VirtualReadingView } from './readingVirtualView'
 import { blankRowInputPlan, runCreateTable, runTableEdit, tableEditing, tableRowsAt } from './tableEditing'
@@ -90,6 +139,14 @@ function scheduleFrame(fn: () => void): void {
     setTimeout(fn, 16)
   }
 }
+
+/** #66 高亮重算去抖（ms）：滚动事件驱动，轻于 250ms 数据刷新链路（只做
+ *  定位纯函数 + 一次类切换，不解析文档） */
+const OUTLINE_HIGHLIGHT_DEBOUNCE_MS = 100
+
+/** #66 防抖动护栏超时（ms）：跳转程序性滚动后一直无滚动事件到达时的
+ *  兜底释放（正常路径由首个滚动事件释放） */
+const OUTLINE_JUMP_GUARD_MS = 1000
 
 
 /** webview 与宿主的通信通道（由 acquireVsCodeApi 适配） */
@@ -113,6 +170,10 @@ interface PersistedState {
   sidebarOpen?: boolean
   /** #54 大纲面板 active 态（缺省激活：展开侧栏即见大纲，当前唯一面板） */
   outlineActive?: boolean
+  /** #67 大纲展开档位（0=No-Expand、1–5=展开到 H1–H5；缺省 5=全展开。
+   *  全局记忆（跨文档共享），与 sidebarOpen 同机制；手动折叠集合是
+   *  会话内内存态，不持久化（重载回到档位精确展开集） */
+  outlineExpandLevel?: number
 }
 
 /** 外部同步事务标记：updateListener 见到它即跳过（不回发）。
@@ -360,6 +421,80 @@ export class WebviewSyncController {
    *  连续输入只在停顿 250ms 后解析一次——节流（定时器不重置）会让连续
    *  输入每 250ms 解析一次，不是注释声称的语义） */
   private outlineTimer: ReturnType<typeof setTimeout> | undefined
+  /** #66 当前控制域条目索引（视口顶部行向上最近标题；null = 无标题、
+   *  首标题之前或无布局环境） */
+  private outlineLocatedIndex: number | null = null
+  /** 滚动驱动的高亮重算去抖句柄（100ms 尾随：只做定位 + 类切换，轻于
+   *  250ms 的数据解析链路） */
+  private outlineHighlightTimer: ReturnType<typeof setTimeout> | undefined
+  /** #66 防抖动护栏挂起中（跳转程序性滚动期间，滚动联动被吞） */
+  private outlineJumpGuarded = false
+  /** 护栏超时释放句柄（首个滚动事件先到则取消） */
+  private outlineJumpGuardTimer: ReturnType<typeof setTimeout> | undefined
+
+  // ---- 大纲折叠状态（#67）----
+  /** 展开档位（0=No-Expand、1–5=展开到 Hn；bridge state 全局记忆） */
+  private outlineExpandLevel: number
+  /** 展开集合（父节点索引集合）：折叠状态唯一载体——档位切换整体替换、
+   *  手动折叠/展开增删单键、滚动 only-expand 并入祖先链、编辑重建迁移 */
+  private outlineExpanded: ReadonlySet<number> = new Set()
+  /** 父子结构缓存（随 outlineItems 更新；箭头渲染与折叠推导消费） */
+  private outlineFacts: OutlineCollapseFacts = { parents: [], hasChildren: [] }
+  /** 折叠滑块 DOM（row + 六圆点；档位变化经 applyOutlineSliderState 落类） */
+  private outlineSlider: OutlineSliderDom | undefined
+  /** 上次高亮滚动落点（代表索引）：同索引不重复滚（用户手动滚面板不打扰） */
+  private outlineLastScrolledRep: number | null = null
+
+  // ---- 大纲工具条与标题搜索（#68）----
+  /** 工具条 DOM（跳末按钮 + 重置按钮 + 搜索输入框；行为装配在本类） */
+  private outlineToolbar: OutlineToolbarDom | undefined
+  /** 当前搜索词（工具条输入框实值；空串 = 无过滤。输入即时生效无去抖
+   *  ——标题序列量级小，QO 同款按键即时重算口径） */
+  private outlineSearchQuery = ''
+  /** 进入搜索前的展开集快照（空→非空时机取、清空时原样回放；编辑重建
+   *  时随展开集同款迁移；搜索态切档时基准同步为档位精确集） */
+  private outlineExpandedBeforeSearch: ReadonlySet<number> | null = null
+  /** 搜索过滤缓存（kept/ranges/matchedIndices/noMatch；null = 无搜索态）。
+   *  序列重建与词条变化时经 applyOutlineSearch 重算 */
+  private outlineSearchState: OutlineSearchFilter | null = null
+
+  // ---- 大纲右键菜单与重命名状态（#69）----
+  /** 当前打开的菜单容器（挂侧栏内 absolute；undefined = 未打开） */
+  private outlineMenuEl: HTMLElement | undefined
+  /** 菜单目标条目索引（items 下标；菜单打开期间的命令分派对象） */
+  private outlineMenuIndex: number | null = null
+  /** 菜单打开期间菜单数据对应的文档快照（命令执行时 doc 已变则放弃——锚点过期防御） */
+  private outlineMenuDoc: Text | null = null
+  /** 菜单外点关闭监听（document capture pointerdown；close 时摘除） */
+  private outlineMenuDismissPointer: ((e: PointerEvent) => void) | undefined
+  /** 菜单 Esc 关闭监听（document capture keydown；close 时摘除） */
+  private outlineMenuDismissKey: ((e: KeyboardEvent) => void) | undefined
+  /** 重命名编辑态的条目索引（null = 无编辑态；条目内容区被 input 替换） */
+  private outlineRenameIndex: number | null = null
+  /** 重命名打开时的 doc 快照（review-loops C1：提交前锚点防御——外部改写
+   *  使行号过期时放弃提交，与菜单/拖拽同口径，防错误行静默替换） */
+  private outlineRenameDoc: Text | null = null
+  /** #70 拖拽会话态：条目 pointerdown 时记录（源索引 + doc 锚点快照），
+   *  超阈值 pointermove 进入拖拽态（moved）并计算落点；pointerup 执行
+   *  移动计划写回。null = 无拖拽 */
+  private outlineDragState: {
+    fromIndex: number
+    /** 起始文档快照（终局写回前要求当前 doc 与它内容等价；条目坐标的
+     *  派生来源须等价于它，见 onOutlineDragEnd 的条目坐标防线） */
+    doc: Text
+    /** 起始指针 id（review-loops 第 2 轮：会话只由该指针的移动/释放驱动，
+     *  多指针与「窗口外按下后拖入」的异指针事件既不推进也不收尾） */
+    pointerId: number
+    startX: number
+    startY: number
+    moved: boolean
+    targetIndex: number | null
+    position: OutlineDropPosition | null
+    /** 当前带落点指示的条目（review-loops C4：增量清除，null = 无指示） */
+    hintEl: HTMLElement | null
+  } | null = null
+  /** #70 拖拽收尾后吞一次面板 click（位移超阈值的拖拽后补发 click 不触发跳转） */
+  private outlineSuppressClick = false
 
   // ---- 查找会话状态（#14）----
   /** 查找是纯只读视图状态：不写 TextDocument、不入撤销栈、零出站消息。
@@ -454,6 +589,7 @@ export class WebviewSyncController {
     this.modeAnchor = typeof saved?.anchor === 'number' && saved.anchor >= 0 ? Math.floor(saved.anchor) : null
     this.sidebarOpen = saved?.sidebarOpen === true
     this.outlineActive = saved?.outlineActive !== false
+    this.outlineExpandLevel = normalizeOutlineExpandLevel(saved?.outlineExpandLevel)
   }
 
   /** 创建编辑器视图并向宿主发送 ready（HTML 加载完成后调用一次） */
@@ -498,7 +634,7 @@ export class WebviewSyncController {
     })
     // 阅读滚动更新锚点（用户滚动即改变"当前位置"语义；短文档滚不动时
     // 锚点保持进入/定位时的值——视口读取无法表达目标，modeAnchor 是权威）。
-    // 同一事件驱动 #7 的窗口重算（rAF 合帧）
+    // 同一事件驱动 #7 的窗口重算（rAF 合帧）与 #66 的大纲高亮联动
     this.readingContainer.addEventListener('scroll', () => {
       const container = this.readingContainer
       const view = this.readingView
@@ -511,6 +647,7 @@ export class WebviewSyncController {
         }
       }
       view?.handleScroll()
+      this.onOutlineScrollSignal()
     })
     // 任务勾选（#9）：阅读模式除任务勾选外只读——checkbox 点击经容器事件
     // 委托处理（虚拟化下元素按需创建/回收，不做逐元素监听）。
@@ -617,6 +754,10 @@ export class WebviewSyncController {
       parent: this.liveWrapper,
       state: EditorState.create({ doc: '', extensions: this.extensions() }),
     })
+    // #66 大纲高亮联动：live 视口滚动（用户与程序性同源）驱动当前控制域
+    // 重算。监听器挂在 view 自身的 scrollDOM 上——dispose 时整棵 view.dom
+    // 随 destroy 移除，无需单独解绑
+    this.view.scrollDOM.addEventListener('scroll', () => this.onOutlineScrollSignal())
     this.hostDarkApplied = isVscodeDarkBody()
     this.applyModeDom(this.viewMode)
     this.bridge.postMessage({ kind: 'ready' })
@@ -632,6 +773,12 @@ export class WebviewSyncController {
       this.flushTimer = undefined
     }
     this.cancelOutlineRefresh()
+    this.cancelOutlineHighlightUpdate()
+    if (this.outlineJumpGuardTimer !== undefined) {
+      clearTimeout(this.outlineJumpGuardTimer)
+      this.outlineJumpGuardTimer = undefined
+    }
+    this.outlineJumpGuarded = false
     this.hostThemeObserver?.disconnect()
     this.hostThemeObserver = undefined
     if (this.docKeydown) {
@@ -657,6 +804,15 @@ export class WebviewSyncController {
     this.sidebarToggleBtn = undefined
     this.outlineToggleBtn = undefined
     this.outlinePanelEl = undefined
+    this.outlineSlider = undefined
+    this.outlineToolbar = undefined
+    // #69：菜单浮层与重命名编辑态随卸载退出（document 监听一并摘除）
+    this.closeOutlineMenu()
+    this.outlineRenameIndex = null
+    this.outlineRenameDoc = null
+    // #70：拖拽会话随卸载退出（document 监听一并摘除）
+    document.removeEventListener('pointerdown', this.outlinePointerdownEntry, true)
+    this.cancelOutlineDrag()
     this.sidebarEl?.remove()
     this.sidebarEl = undefined
     this.mainEl?.remove()
@@ -830,6 +986,98 @@ export class WebviewSyncController {
         this.outlineToggleBtn?.click()
         break
       }
+      case 'outline.test.itemClick': {
+        // 测试钩子（#66）：点击第 index 个真实大纲条目，驱动与用户点击
+        // 同一面板委托处理器（纯视图跳转，零写回）
+        const nodes = this.outlinePanelEl
+          ?.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)
+        nodes?.[message.index]?.click()
+        break
+      }
+      case 'outline.test.expandClick': {
+        // 测试钩子（#67）：点击第 level 档真实圆点（click 冒泡到滑块行
+        // 委托，与用户点击同一处理器；档位整体替换，纯视图状态零写回）
+        this.outlineSlider?.dots[message.level]?.click()
+        break
+      }
+      case 'outline.test.chevronClick': {
+        // 测试钩子（#67）：点击第 index 个真实条目的折叠箭头（面板委托
+        // 按目标分流：箭头折叠/展开，不触发跳转）
+        const itemEl = this.outlinePanelEl
+          ?.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)[message.index]
+        itemEl
+          ?.querySelector<HTMLButtonElement>(`.${OUTLINE_CLASS_NAMES.chevron}`)
+          ?.click()
+        break
+      }
+      case 'outline.test.searchInput': {
+        // 测试钩子（#68）：向真实搜索输入框设值并派发 input 事件（与用户
+        // 输入同一处理器；搜索过滤与片段高亮即时重算，纯视图零写回）
+        const input = this.outlineToolbar?.search
+        if (input) {
+          input.value = message.text
+          input.dispatchEvent(new Event('input', { bubbles: true }))
+        }
+        break
+      }
+      case 'outline.test.toolbarClick': {
+        // 测试钩子（#68）：点击工具条真实按钮（与用户点击同一处理器；
+        // 跳转到末尾 = 纯视图滚动，重置 = 三合一回到面板初始态）
+        if (message.action === 'jump-bottom') {
+          this.outlineToolbar?.jumpBottom.click()
+        } else if (message.action === 'reset') {
+          this.outlineToolbar?.reset.click()
+        }
+        break
+      }
+      case 'outline.test.contextMenu': {
+        // 测试钩子（#69）：对第 index 个真实条目派发 contextmenu（与用户
+        // 右键同一面板委托处理器，菜单弹出）
+        const itemEl = this.outlinePanelEl
+          ?.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)[message.index]
+        if (itemEl) {
+          const rect = itemEl.getBoundingClientRect()
+          itemEl.dispatchEvent(new MouseEvent('contextmenu', {
+            bubbles: true, cancelable: true,
+            clientX: rect.left + 20, clientY: rect.top + 10,
+          }))
+        }
+        break
+      }
+      case 'outline.test.menuClick': {
+        // 测试钩子（#69）：点击菜单中 command 对应的真实按钮（与用户点击
+        // 同一处理器；command 已由协议校验器限定为合法菜单命令）
+        this.outlineMenuEl
+          ?.querySelector<HTMLButtonElement>(`button[data-vsidian-command="${message.command}"]`)
+          ?.click()
+        break
+      }
+      case 'outline.test.menuClose': {
+        // 测试钩子（#69）：关闭当前菜单（等价 Esc/外点路径）
+        this.closeOutlineMenu()
+        break
+      }
+      case 'outline.test.renameKey': {
+        // 测试钩子（#69）：向重命名输入框注入文本并以 Enter/Esc 收尾
+        // （真实 keydown 链路）
+        const input = this.outlinePanelEl?.querySelector<HTMLInputElement>(
+          `.${OUTLINE_MENU_CLASS_NAMES.renameInput}`,
+        )
+        if (input) {
+          input.value = message.text
+          input.dispatchEvent(new KeyboardEvent('keydown', {
+            key: message.key === 'enter' ? 'Enter' : 'Escape',
+            bubbles: true, cancelable: true,
+          }))
+        }
+        break
+      }
+      case 'outline.test.drag': {
+        // 测试钩子（#70）：真实条目 pointer 事件序列驱动拖拽链路（与用户
+        // 拖拽同一处理器）；宿主测试无法向 webview 派发真实鼠标事件
+        this.runOutlineDragTest(message.from, message.to, message.position, message.action)
+        break
+      }
       case 'table.test.key': {
         // 测试钩子：向真实编辑器派发 keydown，走用户按键的同一 keymap 链路。
         if (this.view) {
@@ -989,23 +1237,7 @@ export class WebviewSyncController {
       case 'view.locate': {
         // 定位（#10 查找/跳转入口）：光标移到源 offset；reading 滚动到块。
         // 纯视图操作——事务不带 changes，不产生编辑历史
-        const pos = this.clampToDoc(message.offset)
-        if (this.viewMode === 'reading' && this.readingView) {
-          const start = this.readingView.anchorStartFor(pos) ?? pos
-          this.modeAnchor = start
-          this.readingView.scrollToSrcStart(start)
-          // 定位意图重申（#11 起，#14 findLocate 同款机制）：屏外定位的滚动
-          // 事件在挂载窗口重算（rAF）之前同步读取视口锚点，瞬态值不得覆盖
-          // 定位目标——帧+宏任务后重申（同一窗口内的用户滚动会被覆盖）
-          this.reassertReadingAnchor(start, 2)
-        } else {
-          this.modeAnchor = pos
-          if (this.view) selectTableRegion(this.view, null)
-          this.view?.dispatch({
-            selection: { anchor: pos },
-            effects: EditorView.scrollIntoView(pos, { y: 'center' }),
-          })
-        }
+        this.locateOffset(message.offset)
         break
       }
       case 'reading.perf': {
@@ -1370,6 +1602,9 @@ export class WebviewSyncController {
       this.persistState()
       return
     }
+    // review-loops B3：命令面板切模式不经鼠标路径（无 pointercancel），
+    // 拖拽会话若残留会跨模式存活（落点判定随视图重算漂移）——统一取消
+    this.cancelOutlineDrag()
     if (this.view) selectTableRegion(this.view, null)
     if (next === 'reading') {
       // 锚点 = live 光标主位（选区最小 from）；阅读视图按当前 CM6 文本渲染
@@ -1387,6 +1622,9 @@ export class WebviewSyncController {
         this.modeAnchor = start
         this.readingView.scrollToSrcStart(start)
       }
+      // #66：模式切换即时重算（reading 以视口顶块锚点换算；切换引发的
+      // 滚动属程序性但目标即当前锚点，重算结果稳定，去抖吸收余波）
+      this.updateOutlineLocated()
       // 查找会话跨模式保活（#14）：当前匹配位置经源位置锚点映射到新视图
       if (this.findOpen) {
         this.findEnsureFresh()
@@ -1410,6 +1648,8 @@ export class WebviewSyncController {
       selection: { anchor: pos },
       effects: EditorView.scrollIntoView(pos, { y: 'center' }),
     })
+    // #66：模式切换即时重算（live 以已渲染行的首可见行换算）
+    this.updateOutlineLocated()
     // 查找会话跨模式保活（#14）：选区恢复到当前匹配（非仅块首）
     if (this.findOpen) {
       this.findEnsureFresh()
@@ -1494,6 +1734,62 @@ export class WebviewSyncController {
 
   private clampToDoc(offset: number): number {
     return Math.max(0, Math.min(offset, this.view?.state.doc.length ?? 0))
+  }
+
+  /**
+   * 定位执行（#10 view.locate 宿主消息与 #66 大纲点击共用同一实现）：
+   * 光标移到源 offset；reading 滚动到锚点块。纯视图操作——事务不带
+   * changes，不产生编辑历史。#66 起：程序性滚动前置防抖动护栏（过渡期
+   * 中间态视口不参与高亮计算），并以目标位置所在行即时落位常驻高亮
+   * （不等滚动事件——被点击条目就是目标控制域）。
+   */
+  private locateOffset(offset: number): void {
+    const pos = this.clampToDoc(offset)
+    this.suspendOutlineLinking()
+    if (this.viewMode === 'reading' && this.readingView) {
+      const start = this.readingView.anchorStartFor(pos) ?? pos
+      this.modeAnchor = start
+      this.readingView.scrollToSrcStart(start)
+      // 定位意图重申（#11 起，#14 findLocate 同款机制）：屏外定位的滚动
+      // 事件在挂载窗口重算（rAF）之前同步读取视口锚点，瞬态值不得覆盖
+      // 定位目标——帧+宏任务后重申（同一窗口内的用户滚动会被覆盖）
+      this.reassertReadingAnchor(start, 2)
+    } else {
+      this.modeAnchor = pos
+      // #57：定位离开表格选区语境时清选区（view.locate 与大纲跳转共用）
+      if (this.view) selectTableRegion(this.view, null)
+      // 聚焦编辑器（#66，QO「jump + 聚焦」语义）：未聚焦时 CM6 不把选区
+      // 同步到 DOM Selection，用户看不到光标落位；点击大纲即完成导航，
+      // 焦点归还正文（继续输入/滚动）
+      this.view?.focus()
+      this.view?.dispatch({
+        selection: { anchor: pos },
+        effects: EditorView.scrollIntoView(pos, { y: 'center' }),
+      })
+    }
+    const doc = this.view?.state.doc
+    this.outlineLocatedIndex = doc
+      ? locateOutlineIndex(this.outlineItems, doc.lineAt(pos).number)
+      : null
+    // #67：跳转落位含 only-expand（目标被折叠遮蔽时展开祖先链——点击
+    // 折叠区条目或宿主 view.locate 落进折叠区时目标可见），高亮随代表落位
+    if (this.outlineLocatedIndex !== null) {
+      this.revealOutlineIndex(this.outlineLocatedIndex)
+    }
+    this.applyOutlineHighlight()
+  }
+
+  /** #66 大纲条目点击跳转：标题行号 → 源 offset（doc.line(n).from）后走
+   *  locateOffset 双模式路径。行号为条目渲染时刻的值（大纲 250ms 去抖
+   *  窗口内的编辑存在滞后可能，与点击时的可见条目一致） */
+  private outlineJumpToItem(index: number): void {
+    const view = this.view
+    const item = this.outlineItems[index]
+    if (!view || !item) {
+      return
+    }
+    const line = Math.min(Math.max(1, item.line), view.state.doc.lines)
+    this.locateOffset(view.state.doc.line(line).from)
   }
 
   /**
@@ -1748,7 +2044,8 @@ export class WebviewSyncController {
     }
   }
 
-  /** 持久化（合并写入）：seq、viewMode、anchor、sidebarOpen、outlineActive 共存互不覆盖 */
+  /** 持久化（合并写入）：seq、viewMode、anchor、sidebarOpen、outlineActive、
+   *  outlineExpandLevel（#67 档位全局记忆）共存互不覆盖 */
   private persistState(): void {
     const saved = this.bridge.getState<PersistedState>() ?? {}
     this.bridge.setState({
@@ -1759,6 +2056,7 @@ export class WebviewSyncController {
       anchor: this.modeAnchor ?? undefined,
       sidebarOpen: this.sidebarOpen,
       outlineActive: this.outlineActive,
+      outlineExpandLevel: this.outlineExpandLevel,
     })
   }
 
@@ -1788,9 +2086,10 @@ export class WebviewSyncController {
     return bar
   }
 
-  /** 右侧栏骨架（#53）：自有顶栏（#54 起含「大纲」按钮）+ 面板区域
-   *  （#54 起含大纲面板容器）。侧栏显隐由 vsidian-body 的 open 类经 CSS
-   *  控制；大纲面板显隐由侧栏容器的 outline-active 类经 CSS 控制 */
+  /** 右侧栏骨架（#53）：自有顶栏（#54 起含「大纲」按钮）+ 折叠滑块行
+   *  （#67，outline-active 时显示）+ 面板区域（#54 起含大纲面板容器）。
+   *  侧栏显隐由 vsidian-body 的 open 类经 CSS 控制；大纲面板与滑块行显隐
+   *  由侧栏容器的 outline-active 类经 CSS 控制 */
   private buildSidebar(): HTMLElement {
     const sidebar = document.createElement('div')
     sidebar.className = 'vsidian-sidebar'
@@ -1802,14 +2101,194 @@ export class WebviewSyncController {
     // #54 大纲按钮：侧栏顶栏当前唯一一项（点击切换对应面板的显隐）
     const { toggle, panel } = buildOutlineDom()
     toggle.addEventListener('click', () => this.toggleOutline())
+    // #66 条目点击跳转 + #67 箭头折叠：面板容器事件委托
+    // （renderOutlineItems 重建条目 DOM 不丢监听；条目 DOM 与 outlineItems
+    // 同序渲染，DOM 序号即数据索引）。点击按目标分流：箭头 = 单条折叠/
+    // 展开（纯视图），文字 = 纯视图定位跳转（零写回、零出站、不入撤销栈）
+    panel.addEventListener('click', (event) => {
+      // #70：拖拽收尾后浏览器补发的 click 不触发跳转/折叠（只吞一次）
+      if (this.outlineSuppressClick) {
+        this.outlineSuppressClick = false
+        event.stopPropagation()
+        return
+      }
+      const target = event.target as HTMLElement | null
+      const chevron = target?.closest?.(`.${OUTLINE_CLASS_NAMES.chevron}`)
+      if (chevron instanceof HTMLElement && panel.contains(chevron)) {
+        const itemEl = chevron.closest(`.${OUTLINE_CLASS_NAMES.item}`)
+        const index = itemEl instanceof HTMLElement
+          ? Array.from(
+            panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`),
+          ).indexOf(itemEl)
+          : -1
+        if (index >= 0) {
+          this.toggleOutlineItemCollapsed(index)
+        }
+        return
+      }
+      const item = target?.closest?.(`.${OUTLINE_CLASS_NAMES.item}`)
+      if (!(item instanceof HTMLElement) || !panel.contains(item)) {
+        return
+      }
+      const index = Array.from(
+        panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`),
+      ).indexOf(item)
+      if (index >= 0) {
+        this.outlineJumpToItem(index)
+      }
+    })
+    // #69 右键菜单：面板容器 contextmenu 委托（与 click 委托同模式——条目
+    // DOM 重建不丢监听）。preventDefault 阻断浏览器原生菜单；目标取最近
+    // 条目（箭头/文字/标记 span 上右键都算该条目）
+    panel.addEventListener('contextmenu', (event) => {
+      const target = event.target as HTMLElement | null
+      const item = target?.closest?.(`.${OUTLINE_CLASS_NAMES.item}`)
+      if (!(item instanceof HTMLElement) || !panel.contains(item)) {
+        return
+      }
+      event.preventDefault()
+      const index = Array.from(
+        panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`),
+      ).indexOf(item)
+      if (index >= 0) {
+        this.openOutlineMenu(index, event.clientX, event.clientY)
+      }
+    })
+    // #70 拖拽排序：条目 pointerdown 委托（与 click/contextmenu 同模式——
+    // 条目 DOM 重建不丢监听）。位移超 4px 才进入拖拽态（点击/箭头操作不受
+    // 扰动）；启动即记 doc 锚点快照并校准数据（条目索引与文档坐标对齐）。
+    // 命中隐藏条目不启动（折叠遮蔽/搜索过滤的条目不可拖）
+    // review-loops 第 2 轮：按下入口清理挂 document capture 层，而非本面板
+    // 委托。吞噬标志与残留会话的危害面都是整个 webview 文档——任何 pointerup
+    // 都会走到 onOutlineDragEnd 按残留落点写回，任何 click 都可能被残留的
+    // 吞噬标志吞掉；而新会话只可能由面板内 pointerdown 启动。capture 先于
+    // 本委托兑现，清理后本次按下照常启动新会话
+    document.addEventListener('pointerdown', this.outlinePointerdownEntry, true)
+    panel.addEventListener('pointerdown', (event) => {
+      if (this.view === undefined) {
+        return
+      }
+      // 次指针守卫：只针对**触屏多点**（第二指起 isPrimary=false）——次指针
+      // 落在条目上只作无效输入丢弃，否则会直接新建会话、覆盖起始指针的会话
+      // （与 document capture 层的残留清理同口径）。判据必须带 pointerType
+      // ==='touch' 前提（review-loops 第 4 轮）：`new PointerEvent('pointerdown',
+      // {…})` 未显式赋 isPrimary 时引擎默认 false、pointerType 默认空串，只按
+      // isPrimary 判会静默拒掉整个合成事件路径（真机鼠标/笔恒 isPrimary=true，
+      // 现网不受影响；但未来任何用 PointerEvent 构造拖拽钩子的代码会失效）
+      if (event.pointerType === 'touch' && event.isPrimary === false) {
+        return
+      }
+      // 启动判据只看按键位掩码、不限指针类型：触屏接触态 button=0（浏览器
+      // 回归实测），照常启动；鼠标右/中键与笔 eraser/barrel（button≥1，按
+      // W3C 位掩码）落不进拖拽入口——右键手势走 contextmenu
+      if (event.button !== 0) {
+        return
+      }
+      const target = event.target as HTMLElement | null
+      const itemEl = target?.closest?.(`.${OUTLINE_CLASS_NAMES.item}`)
+      if (!(itemEl instanceof HTMLElement) || !panel.contains(itemEl)) {
+        return
+      }
+      if (itemEl.classList.contains(OUTLINE_CLASS_NAMES.hidden)) {
+        return
+      }
+      const index = Array.from(
+        panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`),
+      ).indexOf(itemEl)
+      if (index < 0) {
+        return
+      }
+      this.outlineEnsureFresh() // 数据与条目 DOM 对齐（拖拽锚点前提）
+      if (!panel.contains(itemEl)) {
+        return // 校准触发了重建：按下时的元素已脱挂，放弃启动（防错位）
+      }
+      this.outlineDragState = {
+        fromIndex: index,
+        doc: this.view.state.doc,
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        moved: false,
+        targetIndex: null,
+        position: null,
+        hintEl: null,
+      }
+      document.addEventListener('pointermove', this.onOutlineDragMove)
+      document.addEventListener('pointerup', this.onOutlineDragEnd)
+      document.addEventListener('pointercancel', this.onOutlineDragCancel)
+      document.addEventListener('keydown', this.onOutlineDragEscape, true)
+      window.addEventListener('blur', this.onOutlineDragCancel)
+    })
     this.outlineToggleBtn = toggle
     this.outlinePanelEl = panel
     actions.appendChild(toggle)
     bar.appendChild(actions)
+    // #67 折叠滑块行：顶栏与面板之间（结绳记事六圆点）。点击走行级 click
+    // 委托（圆点冒泡；键盘激活圆点的 click 同路）；拖拽走 pointer 事件——
+    // 位移超阈值后捕获指针，逐档换算（outlineSliderLevelAt 最近圆点）。
+    // 捕获后 click 目标变为行自身（圆点落空），拖拽选档不会双发
+    const slider = buildOutlineSlider(this.outlineExpandLevel, outlineExpandLevelLabel)
+    slider.row.addEventListener('click', (event) => {
+      const dot = (event.target as HTMLElement | null)?.closest?.(
+        `.${OUTLINE_CLASS_NAMES.sliderDot}`,
+      )
+      if (dot instanceof HTMLButtonElement) {
+        const level = Number(dot.dataset['vsidianLevel'])
+        if (Number.isInteger(level)) {
+          this.setOutlineExpandLevel(level)
+        }
+      }
+    })
+    let dragStartX: number | null = null
+    let dragging = false
+    slider.row.addEventListener('pointerdown', (event) => {
+      // 启动判据与面板条目入口同口径（review-loops 第 4 轮对齐）：只看法定
+      // 按键（非主键不武装起始坐标），不设指针类型前提——旧判据带
+      // pointerType==='mouse' 前缀，笔 barrel（button=2/buttons=2）据此在滑块
+      // 行上会武装拖拽起点（实害有限：移动路径的 (buttons & 1) === 0 兜住
+      // 后续推进；对齐后连起点都不再武装，且与其余三处判据同一条不变式）
+      if (event.button !== 0) {
+        return
+      }
+      dragStartX = event.clientX
+      dragging = false
+    })
+    slider.row.addEventListener('pointermove', (event) => {
+      if (dragStartX === null || (event.buttons & 1) === 0) {
+        return
+      }
+      if (!dragging && Math.abs(event.clientX - dragStartX) > 4) {
+        dragging = true
+        slider.row.setPointerCapture(event.pointerId)
+      }
+      if (dragging) {
+        const level = outlineSliderLevelAt(slider, event.clientX, this.outlineExpandLevel)
+        if (level !== this.outlineExpandLevel) {
+          this.setOutlineExpandLevel(level)
+        }
+      }
+    })
+    const endSliderDrag = (): void => {
+      dragStartX = null
+      dragging = false
+    }
+    slider.row.addEventListener('pointerup', endSliderDrag)
+    slider.row.addEventListener('pointercancel', endSliderDrag)
+    this.outlineSlider = slider
+    // #68 工具条行：侧栏顶栏与滑块行之间（跳转到末尾、重置、搜索框）。
+    // 按钮与输入均为纯视图操作（零写回、零出站、不入撤销栈）；搜索输入
+    // 即时生效（input 事件直调，无去抖）
+    const toolbar = buildOutlineToolbar()
+    toolbar.jumpBottom.addEventListener('click', () => this.outlineJumpToBottom())
+    toolbar.reset.addEventListener('click', () => this.resetOutline())
+    toolbar.search.addEventListener('input', () => this.setOutlineSearch(toolbar.search.value))
+    this.outlineToolbar = toolbar
     const panelHost = document.createElement('div')
     panelHost.className = 'vsidian-sidebar-panel'
     panelHost.appendChild(panel)
     sidebar.appendChild(bar)
+    sidebar.appendChild(toolbar.row)
+    sidebar.appendChild(slider.row)
     sidebar.appendChild(panelHost)
     return sidebar
   }
@@ -1823,6 +2302,12 @@ export class WebviewSyncController {
       this.outlineEnsureFresh()
     } else if (!this.sidebarOpen) {
       this.cancelOutlineRefresh()
+      this.cancelOutlineHighlightUpdate()
+      // #69：侧栏收起时浮层（菜单）与重命名编辑态随之退出
+      this.closeOutlineMenu()
+      this.cancelOutlineRename()
+      // #70：拖拽会话随之退出（面板不可见，落点失去意义）
+      this.cancelOutlineDrag()
     }
   }
 
@@ -1855,6 +2340,12 @@ export class WebviewSyncController {
       this.outlineEnsureFresh()
     } else {
       this.cancelOutlineRefresh()
+      this.cancelOutlineHighlightUpdate()
+      // #69：面板关闭时浮层（菜单）与重命名编辑态随之退出
+      this.closeOutlineMenu()
+      this.cancelOutlineRename()
+      // #70：拖拽会话随之退出（面板不可见，落点失去意义）
+      this.cancelOutlineDrag()
     }
   }
 
@@ -1905,6 +2396,8 @@ export class WebviewSyncController {
    * livePreviewDecorations 装配（extensions 无条件注册），取不到时由
    * extractOutline 内部回退全量解析（防御路径）。序列（级别 + 文字）
    * 未变时只更新数据（行号），不重建条目 DOM——正文编辑不触碰大纲 DOM。
+   * #67 序列变化重建时展开集合经 diff 迁移（重命名不扰动、删除丢键、
+   * 新增/升格父自动展开——刷新存活，见 outlineCollapse 模块头）。
    */
   private outlineEnsureFresh(): void {
     const view = this.view
@@ -1917,11 +2410,971 @@ export class WebviewSyncController {
     const tree = view.state.field(liveDecorationsField, false)?.tree
     const items = extractOutline(doc, tree)
     const changed = firstRender || !outlineItemsEqual(items, this.outlineItems)
+    const prevItems = this.outlineItems
+    const prevExpanded = this.outlineExpanded
     this.outlineItems = items
+    this.outlineFacts = outlineCollapseFacts(items)
+    if (firstRender || prevItems.length === 0) {
+      // 首场或旧序列为空（空文档、或真实宿主装载期先在初始空 doc 上跑过
+      // 首场——重载恢复实测路径）：没有可迁移的折叠状态，按档位精确集
+      // 初始化（手动折叠是会话态，重载后从这里重置）
+      this.outlineExpanded = outlineExpandSetForLevel(items, this.outlineExpandLevel)
+      // #68：同场景没有可迁移的搜索快照，快照与档位精确集对齐（清空
+      // 回放与档位指示一致）
+      if (this.outlineExpandedBeforeSearch !== null) {
+        this.outlineExpandedBeforeSearch = outlineExpandSetForLevel(items, this.outlineExpandLevel)
+      }
+    } else {
+      // fallbackLevel 传当前档位（review-loops C2 熔断回退贴近用户意图）
+      this.outlineExpanded = migrateOutlineExpanded(
+        prevItems, items, prevExpanded, this.outlineExpandLevel,
+      )
+      // #68：搜索展开快照随编辑同款迁移（重命名/增删不扰动清空回放的
+      // 目标视图——快照与展开集是同一坐标系的两个视图）
+      if (this.outlineExpandedBeforeSearch !== null) {
+        this.outlineExpandedBeforeSearch = migrateOutlineExpanded(
+          prevItems,
+          items,
+          this.outlineExpandedBeforeSearch,
+          this.outlineExpandLevel,
+        )
+      }
+    }
     if (changed && this.outlinePanelEl) {
-      renderOutlineItems(this.outlinePanelEl, items)
+      // #69：条目 DOM 重建使菜单锚点与重命名编辑态过期——先关闭再重建
+      // （重命名提交路径已在 finishOutlineRename 先清状态，此处无重入）
+      this.closeOutlineMenu()
+      // review-loops 第 3 轮：编辑态被重建丢弃要留痕（与提交路径同口径）
+      // ——输入框随重建消失且零写回，无诊断时用户无从判断为何没生效
+      if (this.outlineRenameIndex !== null) {
+        console.warn('[vsidian] 大纲重命名放弃：文档外部改写，重命名编辑态随条目重建退出')
+      }
+      this.outlineRenameIndex = null
+      this.outlineRenameDoc = null
+      // #70：条目 DOM 重建使拖拽锚点与落点指示过期——取消拖拽（零写回；
+      // 写回路径自身即时 ensureFresh 时序列未变不进此分支，拖拽不被误杀）
+      this.cancelOutlineDrag()
+      // #68 搜索态：重建后按当前词条重算过滤（新序列的命中链并入展开集）
+      if (this.outlineSearchState !== null) {
+        this.applyOutlineSearch()
+      } else {
+        renderOutlineItems(this.outlinePanelEl, items, this.outlineFacts.hasChildren)
+        this.applyOutlineCollapseDom()
+      }
+    } else if (this.outlineExpanded !== prevExpanded) {
+      // 序列未变但展开集合被迁移修正（safeFilter 等）：状态类跟随
+      this.applyOutlineCollapseDom()
+    }
+    // #66：文档变化后行号随编辑漂移（序列未变也可能），统一重算并重施加
+    // 高亮——重建路径丢了类、未重建路径行号变了也要重定位控制域；
+    // #67：重算含 only-expand（located 被折叠遮蔽时展开祖先链）
+    this.updateOutlineLocated()
+  }
+
+  // ---- 大纲折叠状态机落 DOM（#67）----
+  // 状态载体是 outlineExpanded（父节点索引集合）+ outlineExpandLevel（档位，
+  // 持久化）；推导纯函数见 outlineCollapse.ts。DOM 上三类状态类：hidden
+  // （折叠遮蔽，display:none）、collapsed（折叠中的父节点，箭头旋转）、
+  // located（高亮，施加在可见代表上——被遮蔽时为第一个可见祖先）。
+
+  /** 滑块选档：档位记录 + 展开集整体替换为档位精确集（手动微调不保留），
+   *  圆点 active 类与可访问状态同步，高亮代表可能变化（重施加）。
+   *  #68 搜索态：档位精确集作为新基准（清空回放的快照同步替换——回放
+   *  后与档位指示一致），展开集再并入命中祖先链（命中路径保持可见） */
+  private setOutlineExpandLevel(level: number): void {
+    const next = Math.max(0, Math.min(5, Math.floor(level)))
+    this.outlineExpandLevel = next
+    const base = outlineExpandSetForLevel(this.outlineItems, next)
+    const search = this.outlineSearchState
+    if (search !== null) {
+      if (this.outlineExpandedBeforeSearch !== null) {
+        this.outlineExpandedBeforeSearch = base
+      }
+      this.outlineExpanded = new Set(
+        outlineSearchExpandSet(this.outlineItems, base, search.matchedIndices),
+      )
+    } else {
+      this.outlineExpanded = base
+    }
+    if (this.outlineSlider) {
+      applyOutlineSliderState(this.outlineSlider, next)
+    }
+    this.applyOutlineCollapseDom()
+    this.applyOutlineHighlight()
+    this.persistState()
+  }
+
+  /** 手动折叠/展开单条（箭头点击）：非父节点忽略；会话态不持久化 */
+  private toggleOutlineItemCollapsed(index: number): void {
+    if (this.outlineFacts.hasChildren[index] !== true) {
+      return
+    }
+    const next = new Set(this.outlineExpanded)
+    if (next.has(index)) {
+      next.delete(index)
+    } else {
+      next.add(index)
+    }
+    this.outlineExpanded = next
+    this.applyOutlineCollapseDom()
+    this.applyOutlineHighlight()
+  }
+
+  /** 折叠可见性落 DOM：hidden/collapsed 类与箭头 aria-expanded（条目 DOM
+   *  与 outlineItems 同序的不变式下按序 toggle；toggle 幂等）。
+   *  #68 搜索态下 hidden = 折叠遮蔽 ∨ 搜索过滤（组合可见口径，同一
+   *  display:none 类承载），无匹配时挂「无匹配」占位 */
+  private applyOutlineCollapseDom(): void {
+    const panel = this.outlinePanelEl
+    if (!panel) {
+      return
+    }
+    const hidden = outlineHiddenFlags(this.outlineItems, this.outlineExpanded)
+    const search = this.outlineSearchState
+    const nodes = panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)
+    for (let i = 0; i < nodes.length; i++) {
+      const el = nodes[i]!
+      const isParent = this.outlineFacts.hasChildren[i] === true
+      const collapsed = isParent && !this.outlineExpanded.has(i)
+      el.classList.toggle(OUTLINE_CLASS_NAMES.collapsed, collapsed)
+      el.classList.toggle(
+        OUTLINE_CLASS_NAMES.hidden,
+        hidden[i] === true || (search !== null && !search.kept[i]),
+      )
+      const chevron = el.querySelector<HTMLButtonElement>(`.${OUTLINE_CLASS_NAMES.chevron}`)
+      if (chevron) {
+        chevron.setAttribute('aria-expanded', String(!collapsed))
+      }
+    }
+    // 「无匹配」占位：有词条但零命中（空序列的「无标题」占位由
+    // renderOutlineItems 承担，两者互斥）；renderOutlineItems 重建会清掉
+    // 占位元素，此处在每条折叠落 DOM 路径上幂等补挂
+    const nomatch = search !== null && search.noMatch && this.outlineItems.length > 0
+    let placeholder = panel.querySelector<HTMLElement>(`.${OUTLINE_CLASS_NAMES.nomatch}`)
+    if (nomatch && !placeholder) {
+      placeholder = document.createElement('div')
+      placeholder.className = OUTLINE_CLASS_NAMES.nomatch
+      placeholder.textContent = '无匹配'
+      panel.appendChild(placeholder)
+    } else if (!nomatch && placeholder) {
+      placeholder.remove()
     }
   }
+
+  /** only-expand（滚动动态展开/跳转落位共用）：目标被折叠遮蔽时并入其
+   *  祖先链（只增不减，其他折叠区不动），展开集合变化才重施加状态类 */
+  private revealOutlineIndex(index: number): void {
+    const next = outlineExpandAncestors(this.outlineItems, this.outlineExpanded, index)
+    if (next !== this.outlineExpanded) {
+      this.outlineExpanded = next
+      this.applyOutlineCollapseDom()
+    }
+  }
+
+  // ---- 大纲右键菜单与重命名（#69）----
+  // 菜单是 webview 自绘浮层（挂侧栏内 absolute，不触 CM6）：结构命令消费
+  // 折叠状态机（纯视图）；复制经宿主剪贴板消息桥（clipboard.write）；调级/
+  // 重命名/删除是写操作——文本变换由 outlineSection 产出 SerChange，一次
+  // CM6 事务 dispatch（单笔 edit.request = 宿主撤销一次），写后即时校准
+  // 大纲（不等 250ms 去抖，票面「写回后大纲与正文即时一致」）。
+
+  /** 打开菜单（先关旧菜单与重命名态）。定位：挂载后量尺寸，侧栏坐标系
+   *  内 clamp + 点击点落在目标条目内时让位到条目下方（不遮挡目标） */
+  private openOutlineMenu(index: number, clientX: number, clientY: number): void {
+    const sidebar = this.sidebarEl
+    const panel = this.outlinePanelEl
+    const item = panel?.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)[index]
+    if (!sidebar || !panel || !item || !this.view) {
+      return
+    }
+    // review-loops B4：拖拽进行中右键可达此（contextmenu 委托不查拖拽态），
+    // 先取消拖拽防两会话并存的指示混乱（数据由锚点防御兜底）
+    this.cancelOutlineDrag()
+    this.closeOutlineMenu()
+    this.cancelOutlineRename()
+    const hasChildren = this.outlineFacts.hasChildren[index] === true
+    const menu = buildOutlineMenu(outlineMenuSpec(hasChildren), (command) => {
+      this.runOutlineMenuCommand(command)
+    })
+    this.outlineMenuEl = menu
+    this.outlineMenuIndex = index
+    this.outlineMenuDoc = this.view.state.doc
+    sidebar.appendChild(menu)
+    // 定位（jsdom 无布局时退化为左上角；真宿主见 outlineMenuPosition 契约）
+    const bounds = sidebar.getBoundingClientRect()
+    const targetRect = item.getBoundingClientRect()
+    const size = { w: menu.offsetWidth || 200, h: menu.offsetHeight || 260 }
+    const pos = outlineMenuPosition(
+      { x: clientX, y: clientY },
+      size,
+      { left: bounds.left, top: bounds.top, width: bounds.width || 280, height: bounds.height || 560 },
+      { top: targetRect.top, bottom: targetRect.bottom },
+    )
+    menu.style.left = `${Math.max(0, pos.left - bounds.left)}px`
+    menu.style.top = `${Math.max(0, pos.top - bounds.top)}px`
+    // 关闭通道：菜单外 pointerdown（capture，含其他面板区域）与 Esc
+    this.outlineMenuDismissPointer = (e) => {
+      if (menu.contains(e.target as Node)) {
+        return
+      }
+      this.closeOutlineMenu()
+    }
+    this.outlineMenuDismissKey = (e) => {
+      if (e.key === 'Escape') {
+        this.closeOutlineMenu()
+      }
+    }
+    document.addEventListener('pointerdown', this.outlineMenuDismissPointer, true)
+    document.addEventListener('keydown', this.outlineMenuDismissKey, true)
+  }
+
+  /** 关闭菜单（幂等；摘除 document 关闭监听） */
+  private closeOutlineMenu(): void {
+    if (this.outlineMenuDismissPointer) {
+      document.removeEventListener('pointerdown', this.outlineMenuDismissPointer, true)
+      this.outlineMenuDismissPointer = undefined
+    }
+    if (this.outlineMenuDismissKey) {
+      document.removeEventListener('keydown', this.outlineMenuDismissKey, true)
+      this.outlineMenuDismissKey = undefined
+    }
+    this.outlineMenuEl?.remove()
+    this.outlineMenuEl = undefined
+    this.outlineMenuIndex = null
+    this.outlineMenuDoc = null
+  }
+
+  /** 菜单命令分派：结构命令/复制/调级/删除/重命名（见模块头） */
+  private runOutlineMenuCommand(command: OutlineMenuCommand): void {
+    const index = this.outlineMenuIndex
+    const view = this.view
+    if (index === null || index >= this.outlineItems.length || !view) {
+      this.closeOutlineMenu()
+      return
+    }
+    // 锚点过期防御：菜单打开期间文档被外部变更改写（ensureFresh 会关菜单，
+    // 此处是竞态兜底）——坐标与行号失效，放弃执行
+    if (this.outlineMenuDoc !== view.state.doc) {
+      this.closeOutlineMenu()
+      return
+    }
+    if (command === 'rename') {
+      const target = index
+      this.closeOutlineMenu()
+      this.startOutlineRename(target)
+      return
+    }
+    this.closeOutlineMenu()
+    const doc = view.state.doc
+    if (command === 'expandRecursively' || command === 'collapseSiblings' || command === 'expandSiblings') {
+      const next = outlineStructuralExpand(command, this.outlineItems, this.outlineExpanded, index)
+      if (next !== this.outlineExpanded) {
+        this.outlineExpanded = next
+        this.applyOutlineCollapseDom()
+        this.applyOutlineHighlight()
+      }
+      return
+    }
+    if (command === 'copyHeading' || command === 'copySiblings' || command === 'copyChildren' || command === 'copySection') {
+      const kind = command === 'copyHeading' ? 'heading'
+        : command === 'copySiblings' ? 'siblings'
+          : command === 'copyChildren' ? 'children' : 'section'
+      const text = outlineCopyText(kind, doc, this.outlineItems, index)
+      if (text !== null) {
+        this.bridge.postMessage({ kind: 'clipboard.write', text })
+      }
+      return
+    }
+    if (command === 'copyLink') {
+      // `[[笔记名#标题]]` 的拼接在宿主侧（docUri 取笔记名）。标题取条目原文
+      // （OutlineItem.text，含行内标记）——宿主 findHeadingOffset 按标题行
+      // 字面文本比较，两侧口径同源才能定位回原标题；剥标记可见文本只用于
+      // 「复制标题」（copyHeading，纯文本场景）
+      this.bridge.postMessage({
+        kind: 'clipboard.write',
+        linkHeading: { docUri: this.docUri, heading: this.outlineItems[index]!.text },
+      })
+      return
+    }
+    if (command === 'levelUp' || command === 'levelUpRecursive' || command === 'levelDown' || command === 'levelDownRecursive') {
+      const delta: -1 | 1 = command.startsWith('levelUp') ? 1 : -1
+      const recursive = command.endsWith('Recursive')
+      this.applyOutlineEdits(outlineLevelChanges(doc, this.outlineItems, index, delta, recursive))
+      return
+    }
+    if (command === 'delete') {
+      const change = outlineDeleteChange(doc, this.outlineItems, index)
+      this.applyOutlineEdits(change ? [change] : null)
+    }
+  }
+
+  /** 写操作落 CM6（单事务 = 单笔 edit.request = 撤销一次）；写后即时校准
+   *  大纲（折叠状态经 #67 迁移机制存活）。null/空变更静默忽略（钳制等） */
+  private applyOutlineEdits(changes: ReadonlyArray<{ offset: number; length: number; text: string }> | null): void {
+    const view = this.view
+    if (!view || !changes || changes.length === 0) {
+      return
+    }
+    // review-loops C3：「升序互不重叠」是全部大纲写计划生成端的约定，但
+    // CM6 ChangeSet 对乱序/重叠段不报错而是 flush 合成（静默错位写入权威
+    // 文档）——运行时断言兜底：违例放弃并留诊断（与 confirmSentTxn 的
+    // 显式排序同根约束）。判据抽成纯函数以便直接单测（review-loops 第 2 轮）
+    if (!outlineChangesOrdered(changes)) {
+      console.error(
+        `[vsidian] 大纲写回变更段违例（升序互不重叠）：${JSON.stringify(changes)}，放弃写回`,
+      )
+      // 放弃路径也要回到展示态：调用方（重命名提交）已清编辑态状态，
+      // 条目 DOM 里的 input 若不重建会卡在编辑态（review-loops 第 2 轮）
+      this.rebuildOutlineItemsDom()
+      return
+    }
+    try {
+      view.dispatch({
+        changes: changes.map((c) => ({ from: c.offset, to: c.offset + c.length, insert: c.text })),
+      })
+    } catch (error) {
+      // review-loops C6：越界坐标等异常若逃逸只在监听器里静默吞掉——
+      // 留诊断线索（大纲与正文不同步时可定位）
+      console.error('[vsidian] 大纲写回 dispatch 失败（变更段与当前文档不匹配）', error)
+      this.rebuildOutlineItemsDom()
+      return
+    }
+    this.outlineEnsureFresh()
+  }
+
+  /** 条目行内重命名编辑态：条目内容区替换为 input（值 = 原文 text——行内
+   *  标记是资产，编辑原文不剥标记）。Enter 提交 / Esc 取消 / 失焦提交；
+   *  input 上的 click 与 keydown 不外冒（不触发跳转与正文快捷键） */
+  private startOutlineRename(index: number): void {
+    const panel = this.outlinePanelEl
+    const item = this.outlineItems[index]
+    const el = panel?.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)[index]
+    if (!panel || !item || !el) {
+      return
+    }
+    this.cancelOutlineRename()
+    this.outlineRenameIndex = index
+    this.outlineRenameDoc = this.view?.state.doc ?? null
+    const input = document.createElement('input')
+    input.type = 'text'
+    input.className = OUTLINE_MENU_CLASS_NAMES.renameInput
+    input.value = item.text
+    input.setAttribute('aria-label', '重命名标题')
+    input.addEventListener('keydown', (event) => {
+      event.stopPropagation()
+      if (event.key === 'Enter') {
+        this.finishOutlineRename(true)
+      } else if (event.key === 'Escape') {
+        this.finishOutlineRename(false)
+      }
+    })
+    input.addEventListener('click', (event) => event.stopPropagation())
+    input.addEventListener('pointerdown', (event) => event.stopPropagation())
+    input.addEventListener('contextmenu', (event) => event.stopPropagation())
+    input.addEventListener('focusout', () => this.finishOutlineRename(true))
+    // 内容区替换：保留 chevron/spacer（文字对齐锚），其余（含文本节点）移除
+    const keep = el.querySelector(`.${OUTLINE_CLASS_NAMES.chevron}, .${OUTLINE_CLASS_NAMES.chevronSpacer}`)
+    el.replaceChildren(...(keep ? [keep] : []), input)
+    input.focus()
+    input.select()
+  }
+
+  /** 结束重命名编辑态：commit=true 整标题行替换写回（Setext → ATX 单行）；
+   *  false 取消（零写回）。状态先清空（focusout/Enter 双路径防重入） */
+  private finishOutlineRename(commit: boolean): void {
+    const index = this.outlineRenameIndex
+    if (index === null) {
+      return
+    }
+    this.outlineRenameIndex = null
+    const input = this.outlinePanelEl?.querySelector<HTMLInputElement>(
+      `.${OUTLINE_MENU_CLASS_NAMES.renameInput}`,
+    )
+    const newText = input?.value ?? ''
+    const item = this.outlineItems[index]
+    const view = this.view
+    // 锚点防御（review-loops C1，与菜单/拖拽同口径）：重命名打开期间文档
+    // 被改写（同文件多面板/git checkout 等）则行号过期，提交会改写错误
+    // 行——放弃提交视作取消（零写回）。第 2 轮：**内容等价**（doc.eq）的
+    // 全文重置（宿主 resync/init 重发同一文本）行号并不过期，不得误放弃
+    const docAnchored = view !== undefined && this.outlineRenameDoc !== null &&
+      (view.state.doc === this.outlineRenameDoc || view.state.doc.eq(this.outlineRenameDoc))
+    // 放弃要留痕：输入被丢弃且零写回，无诊断时用户无从判断为何没生效
+    if (commit && item && newText !== item.text && !docAnchored) {
+      console.warn('[vsidian] 大纲重命名放弃：编辑期间文档已被改写（行号锚点过期）')
+    }
+    this.outlineRenameDoc = null
+    if (commit && input && item && view && newText !== item.text && docAnchored) {
+      const change = outlineRenameChange(view.state.doc, this.outlineItems, index, newText)
+      if (change) {
+        this.applyOutlineEdits([change]) // 内部 ensureFresh 重建条目（input 随之消失）
+        return
+      }
+    }
+    this.rebuildOutlineItemsDom()
+  }
+
+  /** 取消重命名编辑态（外部交互转移焦点时的兜底；不写回） */
+  private cancelOutlineRename(): void {
+    if (this.outlineRenameIndex === null) {
+      return
+    }
+    this.finishOutlineRename(false)
+  }
+
+  /** 重建条目 DOM（重命名取消后恢复展示态；与 ensureFresh 的重建同构）。
+   *  review-loops 第 2 轮：重建即取消拖拽会话——条目 DOM 被替换后 dragging
+   *  提示与 hintEl 都指向脱挂节点，会话继续存活会留下「指示消失但拖拽仍在」
+   *  的失同步态（与 ensureFresh changed 分支同口径）
+   *  review-loops 第 3 轮：搜索态下重建必须重放命中高亮——命中区间取自
+   *  outlineSearchState 缓存（与条目序列同一次计算、同长对齐），只是把
+   *  同一次渲染补上 hits 参数：不追加第二次重建，也不走 applyOutlineSearch
+   *  （那里会重算过滤并再渲染一遍），无递归风险 */
+  private rebuildOutlineItemsDom(): void {
+    const panel = this.outlinePanelEl
+    if (!panel) {
+      return
+    }
+    this.cancelOutlineDrag()
+    renderOutlineItems(panel, this.outlineItems, this.outlineFacts.hasChildren,
+      this.outlineSearchState?.ranges)
+    this.applyOutlineCollapseDom()
+    this.applyOutlineHighlight()
+  }
+
+  // ---- 大纲拖拽排序（#70）----
+  // 移动原子 = 控制域（outlineDrag.ts 的移动计划纯函数单一事实源）；一次
+  // 拖拽 = 一次 CM6 事务 dispatch（applyOutlineEdits，单笔 edit.request =
+  // 宿主撤销一次），写后即时 ensureFresh（折叠/搜索/高亮随 #67 迁移与
+  // #68 重算自动存活）。交互链路：条目 pointerdown 记锚点 → 超阈值
+  // pointermove 进入拖拽态并逐次计算落点（三态命中 + 有效性）→ pointerup
+  // 写回 / Esc·pointercancel 取消。落点指示是纯类切换（dragging 源条目
+  // 弱化 + drop-before/after 插入线 + drop-inside 包裹高亮），拖拽期间
+  // 条目 DOM 不重建（锚点防御兜底）。不可见条目（折叠遮蔽/搜索过滤）
+  // 不构成合法落点——用户看不到的位置不构成拖拽意图。
+
+  /** 拖拽 pointermove：超阈值进入拖拽态；计算落点并施加指示类。
+   *  命中目标优先取事件目标链（合成事件路径），真实布局回退
+   *  elementFromPoint（指针物理位置）。
+   *  review-loops 第 2 轮：只认起始指针（pointerId 不符即忽略），且按键已
+   *  释放（buttons=0）说明手势在 webview 之外结束——立即取消，避免纯悬停
+   *  继续推进会话、画出落点指示，或让随后的释放被当作 drop 写回
+   *  review-loops 第 2 轮补（和弦按键）：非主键按下即结束会话。和弦按键
+   *  （左键按住时再按右键）不投递 pointerdown——浏览器只在首个按键按下时
+   *  报 pointerdown，第二个按键只报 pointermove(button=2, buttons=3)，其
+   *  释放也不是 pointerup。若左键先松，右键抬起会成为最后一个按键的真实
+   *  pointerup（button=2, buttons=0，且 pointerId 与起始指针相同），残留会话
+   *  即按残留落点写出 drop（实测一次误写回）。故该判据只能落在移动路径上；
+   *  不变式：仅主键（左键）释放执行落点写回
+   *  review-loops 第 3 轮：判据只按 buttons 位掩码、不限指针类型——按 W3C
+   *  位掩码，笔的 barrel 键是 bit1（按下 button=2/buttons=2，接触期间按下则
+   *  buttons=3），旧判据以 pointerType==='mouse' 为前提，笔据此绕过守卫
+   *  （同第 2 轮鼠标和弦的失效模式换输入类别）。接触态的 buttons 只含 bit0
+   *  （触屏实测 pointermove buttons=1；笔接触态按 W3C 同为 1），按掩码换算
+   *  不进此分支 */
+  private readonly onOutlineDragMove = (event: PointerEvent): void => {
+    const drag = this.outlineDragState
+    const panel = this.outlinePanelEl
+    if (!drag || !panel || event.pointerId !== drag.pointerId) {
+      return
+    }
+    // bit0（接触/左键）之外的任一位落下（鼠标右/中键、笔 barrel）即证明
+    // 手势意图已变：结束会话（与面板 pointerdown 的启动判据同口径）
+    if ((event.buttons & ~1) !== 0) {
+      this.cancelOutlineDrag()
+      return
+    }
+    if (event.buttons === 0) {
+      this.cancelOutlineDrag()
+      return
+    }
+    if (!drag.moved) {
+      if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 4) {
+        return
+      }
+      drag.moved = true
+      // review-loops C4：源条目提示只在进入拖拽态时施加一次（原先每 move
+      // 全量循环 toggle/removeClassList，数千条目 × 60-120Hz 掉帧）
+      const src = panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)[drag.fromIndex]
+      src?.classList.add(OUTLINE_CLASS_NAMES.dragging)
+    }
+    // 落点指示增量化：只清上一个指示元素（全量清除留给收尾兜底）
+    drag.hintEl?.classList.remove(
+      OUTLINE_CLASS_NAMES.dropBefore,
+      OUTLINE_CLASS_NAMES.dropAfter,
+      OUTLINE_CLASS_NAMES.dropInside,
+    )
+    drag.hintEl = null
+    drag.targetIndex = null
+    drag.position = null
+    const nodes = panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)
+    const hit = (event.target as Element | null)?.closest?.(`.${OUTLINE_CLASS_NAMES.item}`)
+      ?? document.elementFromPoint?.(event.clientX, event.clientY)?.closest(`.${OUTLINE_CLASS_NAMES.item}`)
+    if (!(hit instanceof HTMLElement) || !panel.contains(hit)) {
+      return
+    }
+    if (hit.classList.contains(OUTLINE_CLASS_NAMES.hidden)) {
+      return // 不可见条目不作为落点（口径见区块头）
+    }
+    const index = Array.from(nodes).indexOf(hit)
+    if (index < 0 || !outlineDropAllowed(this.outlineItems, drag.fromIndex, index)) {
+      return // 拖入自身控制域内部：无有效落点（不显示指示、drop 无写回）
+    }
+    const rect = hit.getBoundingClientRect()
+    if (rect.height <= 0) {
+      return // 无布局环境（防御）：几何不可知，不构成落点
+    }
+    const position = outlineDropPositionAt(rect.top, rect.height, event.clientY)
+    drag.targetIndex = index
+    drag.position = position
+    drag.hintEl = hit
+    hit.classList.add(
+      position === 'before' ? OUTLINE_CLASS_NAMES.dropBefore
+        : position === 'after' ? OUTLINE_CLASS_NAMES.dropAfter
+          : OUTLINE_CLASS_NAMES.dropInside,
+    )
+  }
+
+  /** 拖拽 pointerup：有效落点执行移动计划写回（一次编辑事务）；锚点过期
+   *  （拖拽期间文档被改写）放弃。收尾后吞一次补发 click。
+   *  review-loops 第 2 轮：只认起始指针的释放（other pointer 的 up 不收尾，
+   *  避免「窗口外按下后拖入 webview」的异指针手势误判为 drop）
+   *  review-loops 第 2 轮补（和弦按键）：纵深防线——仅主键（左键）释放执行
+   *  drop。和弦路径下右键抬起会以起始指针的 pointerId 送来真实 pointerup
+   *  （button=2, buttons=0，见 onOutlineDragMove 的和弦守卫）；合成事件或
+   *  其他路径送来非主键释放时同样不得按残留落点写回，会话留给主键释放收尾
+   *  review-loops 第 3 轮：判据只按 button、不限指针类型——笔的 barrel 键
+   *  释放同样是 button=2（同上，旧判据的 mouse 前提会放它过闸） */
+  private readonly onOutlineDragEnd = (event: PointerEvent): void => {
+    const drag = this.outlineDragState
+    if (!drag || event.pointerId !== drag.pointerId) {
+      return
+    }
+    // 仅主键（button=0）释放收尾：非主键释放（鼠标右/中键、笔 barrel）既不
+    // 收尾也不写回（与移动路径守卫同口径）
+    if (event.button !== 0) {
+      return
+    }
+    const perform = drag.moved && drag.targetIndex !== null && drag.position !== null
+    const { fromIndex, targetIndex, position, doc: snapshot } = drag
+    this.cancelOutlineDrag()
+    if (!perform) {
+      return
+    }
+    this.outlineSuppressClick = true
+    // 锚点防御（#69 菜单同思路；第 3 轮与重命名提交路径同口径）：拖拽期间
+    // doc 被改写则索引与坐标失效；但**内容等价**的全文重置（宿主 resync/init
+    // 重发同一文本）只是换了 Text 实例、行号并未过期，不得误放弃。放弃留痕
+    // （与重命名同口径），否则用户只看到「拖了没反应」
+    const doc = this.view?.state.doc
+    if (!doc || (doc !== snapshot && !doc.eq(snapshot))) {
+      console.warn('[vsidian] 大纲拖拽放弃：编辑期间文档已被改写（锚点过期）')
+      return
+    }
+    // 条目坐标防线（review-loops 第 4 轮，P2 实测）：写回计划按**条目序列**
+    // 的行号算搬移范围，而序列的行号由 outlineItems 承载——它可能在拖拽期间
+    // 被去抖刷新换成中间态的行号：outlineEnsureFresh 只在序列变化（级别/原文/
+    // 可见文本/标记不同）时才 cancelOutlineDrag，序列逐字相同而行号平移
+    // （外部插入/删除正文行）时它照常把 items 换成新行号的序列，会话存活。
+    // 此时若上面那条判据放行（文档回到原文：实例换代但内容等价、eq 通过），
+    // 写回就变成「行号取自中间态 items、改动范围取自起始快照」，把错坐标写进
+    // 权威文档（实测：`#### 丁` 段与 `## 丙` 段被切走，文档错位且丢内容）。
+    // 故判据补上「items 是快照内容的派生物」这一半：items 的派生来源
+    // （outlineDoc，outlineItems 的唯一赋值点即 outlineEnsureFresh，二者恒同源）
+    // 必须仍与起始快照**内容等价**。doc.eq 只比内容不比坐标——它证明当前内容
+    // 等于起始内容，不证明手上的 items 行号还对应这份内容；而派生来源等价即
+    // items 的行号来自等价内容（内容相同 ⇒ 行号相同），可与当前 doc 直接对齐。
+    // 只比实例不比内容会误伤：正常 resync 只换 Text 实例（items 未换，或换过但
+    // 仍从等价内容派生），那两类坐标都仍然有效，照常写回（第 3 轮容错不回退）。
+    const itemsDoc = this.outlineDoc
+    if (itemsDoc === null || (itemsDoc !== snapshot && !itemsDoc.eq(snapshot))) {
+      console.warn('[vsidian] 大纲拖拽放弃：大纲条目坐标已随外部改写刷新（非起始快照派生）')
+      return
+    }
+    const plan = outlineMovePlan(doc, this.outlineItems, fromIndex, targetIndex!, position!)
+    if (plan) {
+      this.applyOutlineEdits(plan.changes) // 内部 ensureFresh 即时刷新大纲
+    }
+  }
+
+  /** pointercancel（系统手势接管等）：视作取消，零写回 */
+  private readonly onOutlineDragCancel = (): void => {
+    this.cancelOutlineDrag()
+  }
+
+  /** 大纲按下入口清理（document capture pointerdown）：
+   *  - 复位拖拽吞噬标志：drop 收尾置位的「吞一次浏览器补发 click」标志只在
+   *    补发 click 抵达时解除，而写回会在 pointerup 处理内同步重建条目 DOM
+   *    ——补发 click 不送达时标志残留，会吞掉用户下一次真实点击（review-loops
+   *    第 2 轮：真实鼠标实测 drop 后 flag 仍为 true 且下一次点击被吞）。任何
+   *    按下都先复位；补发 click 恒在本次按下之后，故「只吞一次」口径不变
+   *  - 清理残留拖拽会话：越界释放（up 不送达 webview，如释放在窗口原生
+   *    chrome／另一窗口）留下的会话，任意一次新按下都证明该手势已结束
+   *  次指针（触屏多点第二指）跳过第二条，不误杀进行中的拖拽；判据带
+   *  pointerType==='touch' 前提（review-loops 第 4 轮）——合成 PointerEvent
+   *  的 isPrimary 默认为 false，只按它判会让残留清理在合成事件路径上整体失效 */
+  private readonly outlinePointerdownEntry = (event: PointerEvent): void => {
+    this.outlineSuppressClick = false
+    if (event.pointerType === 'touch' && event.isPrimary === false) {
+      return
+    }
+    if (!this.outlineDragState) {
+      return
+    }
+    this.cancelOutlineDrag()
+  }
+
+  /** Esc 取消拖拽（拖拽期间 document capture keydown）：零写回 */
+  private readonly onOutlineDragEscape = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape') {
+      this.cancelOutlineDrag()
+    }
+  }
+
+  /** 结束拖拽会话（幂等）：摘除 document/window 监听、清指示类与状态
+   *  （指针捕获只用于折叠滑块行，拖拽链路不经 capture——setPointerCapture
+   *  会劫走条目内折叠箭头的 click，浏览器回归实证后已回退） */
+  private cancelOutlineDrag(): void {
+    const drag = this.outlineDragState
+    if (!drag) {
+      return
+    }
+    this.outlineDragState = null
+    document.removeEventListener('pointermove', this.onOutlineDragMove)
+    document.removeEventListener('pointerup', this.onOutlineDragEnd)
+    document.removeEventListener('pointercancel', this.onOutlineDragCancel)
+    document.removeEventListener('keydown', this.onOutlineDragEscape, true)
+    window.removeEventListener('blur', this.onOutlineDragCancel)
+    this.clearOutlineDragDom()
+  }
+
+  /** 清拖拽指示类（条目 DOM 全量幂等清除） */
+  private clearOutlineDragDom(): void {
+    const panel = this.outlinePanelEl
+    panel?.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`).forEach((el) => {
+      el.classList.remove(
+        OUTLINE_CLASS_NAMES.dragging,
+        OUTLINE_CLASS_NAMES.dropBefore,
+        OUTLINE_CLASS_NAMES.dropAfter,
+        OUTLINE_CLASS_NAMES.dropInside,
+      )
+    })
+  }
+
+  /** #70 测试钩子驱动真实拖拽链路：向真实条目派发 pointer 事件序列
+   *  （pointerdown → 超阈值 move → 目标三态区域 move），action 决定收尾
+   *  （hover 留悬停态供 probe 观测 / drop 补 pointerup 写回 / escape 按
+   *  Esc 取消）。落点 Y 取目标条目的 12%/50%/88% 分位（25% 容差内稳定
+   *  命中 before/inside/after） */
+  private runOutlineDragTest(
+    from: number,
+    to: number,
+    position: OutlineDropPosition,
+    action: 'hover' | 'drop' | 'escape',
+  ): void {
+    const panel = this.outlinePanelEl
+    if (!panel) {
+      return
+    }
+    // 会话卫生：上一轮 hover 留下的悬停会话先取消（否则 pointerdown 守卫
+    // 拒绝新会话——集成用例连续驱动时必需）
+    if (this.outlineDragState) {
+      this.cancelOutlineDrag()
+    }
+    const nodes = panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)
+    const fromEl = nodes[from]
+    const toEl = nodes[to]
+    if (!fromEl || !toEl) {
+      return
+    }
+    const fromRect = fromEl.getBoundingClientRect()
+    const toRect = toEl.getBoundingClientRect()
+    const yRatio = position === 'before' ? 0.12 : position === 'after' ? 0.88 : 0.5
+    const y = toRect.top + toRect.height * yRatio
+    const fire = (type: string, target: Element, x: number, yy: number): void => {
+      // 会话校验（review-loops 第 2 轮）读 pointerId 与 buttons：合成事件按
+      // 真实指针形态构造——同一指针 id，移动期间按键为按下态、释放为 0
+      target.dispatchEvent(new MouseEvent(type, {
+        bubbles: true, cancelable: true, clientX: x, clientY: yy,
+        buttons: type === 'pointerup' ? 0 : 1,
+      }))
+    }
+    fire('pointerdown', fromEl, fromRect.left + 20, fromRect.top + fromRect.height / 2)
+    // 超阈值 move（起点右下偏移 > 4px，目标链路外先进入拖拽态）
+    fire('pointermove', panel, fromRect.left + 60, fromRect.top + fromRect.height / 2 + 12)
+    fire('pointermove', toEl, toRect.left + 40, y)
+    if (action === 'hover') {
+      return
+    }
+    if (action === 'escape') {
+      document.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Escape', bubbles: true, cancelable: true,
+      }))
+      return
+    }
+    fire('pointerup', toEl, toRect.left + 40, y)
+  }
+
+  // ---- 大纲定位与常驻高亮（#66）----
+  // 当前控制域 = 视口顶部行向上最近的标题（locateOutlineIndex 单一事实源）。
+  // 高亮是常亮位置指示器（半透明横条），不是滚动瞬时反馈：跳转即时落位、
+  // 滚动去抖重算（100ms，轻于 250ms 数据链路）、模式切换即时重算；跳转的
+  // 程序性滚动经防抖动护栏挂起联动（QO startJumping 同款语义：首个滚动
+  // 事件被吞并释放，或超时释放），过渡期中间态不反向改写高亮。
+
+  /** 滚动信号入口（live scrollDOM 与 reading 容器共用）：护栏挂起时吞掉
+   *  首个滚动事件并释放（跳转程序性滚动的产物不触发重算）；否则去抖调度 */
+  private onOutlineScrollSignal(): void {
+    if (this.outlineJumpGuarded) {
+      this.outlineJumpGuarded = false
+      if (this.outlineJumpGuardTimer !== undefined) {
+        clearTimeout(this.outlineJumpGuardTimer)
+        this.outlineJumpGuardTimer = undefined
+      }
+      return
+    }
+    this.scheduleOutlineHighlightUpdate()
+  }
+
+  /** 程序性滚动（跳转/定位）前挂起滚动联动：1 秒超时兜底释放（正常路径
+   *  由首个滚动事件释放——被吞的那次就是程序性滚动本身） */
+  private suspendOutlineLinking(): void {
+    this.outlineJumpGuarded = true
+    if (this.outlineJumpGuardTimer !== undefined) {
+      clearTimeout(this.outlineJumpGuardTimer)
+    }
+    this.outlineJumpGuardTimer = setTimeout(() => {
+      this.outlineJumpGuardTimer = undefined
+      this.outlineJumpGuarded = false
+    }, OUTLINE_JUMP_GUARD_MS)
+  }
+
+  /** 取消未决的高亮去抖回调（面板不可见/销毁路径；迟到回调只在隐藏面板
+   *  上做无谓重算——重开有 ensureFresh 校准兜底） */
+  private cancelOutlineHighlightUpdate(): void {
+    if (this.outlineHighlightTimer !== undefined) {
+      clearTimeout(this.outlineHighlightTimer)
+      this.outlineHighlightTimer = undefined
+    }
+  }
+
+  /** 滚动驱动的高亮重算调度：仅面板可见时开启（不可见面板不伴随滚动
+   *  做无谓计算），100ms 尾随去抖（定时器随事件重置，连续滚动只在
+   *  停顿后重算一次） */
+  private scheduleOutlineHighlightUpdate(): void {
+    if (!this.outlineVisible()) {
+      return
+    }
+    if (this.outlineHighlightTimer !== undefined) {
+      clearTimeout(this.outlineHighlightTimer)
+    }
+    this.outlineHighlightTimer = setTimeout(() => {
+      this.outlineHighlightTimer = undefined
+      if (this.outlineJumpGuarded) {
+        return // 护栏挂起：迟到回调不重算（挂起期间的高亮由跳转直接落位）
+      }
+      this.updateOutlineLocated()
+    }, OUTLINE_HIGHLIGHT_DEBOUNCE_MS)
+  }
+
+  /** 重算当前控制域并施加高亮（同步即时路径：模式切换、文档校准、跳转）。
+   *  #67：重算含 only-expand——located 被折叠遮蔽时展开其祖先链（滚动
+   *  联动的动态展开语义），再按可见代表施加高亮 */
+  private updateOutlineLocated(): void {
+    const line = this.outlineViewportTopLine()
+    this.outlineLocatedIndex = line === null ? null : locateOutlineIndex(this.outlineItems, line)
+    if (this.outlineLocatedIndex !== null) {
+      this.revealOutlineIndex(this.outlineLocatedIndex)
+    }
+    this.applyOutlineHighlight()
+  }
+
+  /** 视口顶部行（1 基）按模式分流：live 在已渲染行 DOM 里找首个底边越过
+   *  视口顶的行，经 posAtDOM（文档结构映射，不依赖 viewState 的视口元
+   *  数据——其更新依赖 IntersectionObserver 驱动的 measure 循环）换算
+   *  行号；reading 以视口顶块锚点（源 start）换算行号（与 reading 自身
+   *  滚动锚点同源）。无布局环境（jsdom，矩形全 0）或无已渲染行返回 null */
+  private outlineViewportTopLine(): number | null {
+    const view = this.view
+    if (!view) {
+      return null
+    }
+    if (this.viewMode === 'reading') {
+      const anchor = this.readingView?.currentAnchor() ?? null
+      if (anchor === null) {
+        return null
+      }
+      return view.state.doc.lineAt(this.clampToDoc(anchor)).number
+    }
+    const scrollerTop = view.scrollDOM.getBoundingClientRect().top
+    const lines = view.contentDOM.querySelectorAll('.cm-line')
+    for (const line of lines) {
+      const rect = line.getBoundingClientRect()
+      if (rect.height > 0 && rect.bottom > scrollerTop + 0.5) {
+        try {
+          return view.state.doc.lineAt(view.posAtDOM(line, 0)).number
+        } catch {
+          return null
+        }
+      }
+    }
+    return null
+  }
+
+  /** 把 located 施加到面板条目（DOM 与 outlineItems 同序渲染的不变式下按
+   *  序号 toggle；toggle 幂等，未变化条目零 DOM 写入）。#67 起高亮施加在
+   *  「可见代表」上：located 条目被折叠遮蔽时为第一个可见祖先
+   *  （outlineRepresentativeIndex；only-expand 已尽量让自身可见，回退
+   *  仅在手动折叠/档位切换遮蔽路径生效）。#68 搜索态下代表口径加上过滤
+   *  （折叠可见 ∧ 搜索保留，outlineSearchRepresentativeIndex；链上无
+   *  可见代表则高亮消失——不强加到无关条目）。代表变化时高亮行滚进面板
+   *  可视区（scrollIntoView nearest——已可见零滚动，同代表不重复滚） */
+  private applyOutlineHighlight(): void {
+    const panel = this.outlinePanelEl
+    if (!panel) {
+      return
+    }
+    const search = this.outlineSearchState
+    const rep = this.outlineLocatedIndex === null
+      ? null
+      : search === null
+        ? outlineRepresentativeIndex(this.outlineItems, this.outlineExpanded, this.outlineLocatedIndex)
+        : outlineSearchRepresentativeIndex(
+          this.outlineItems,
+          this.outlineExpanded,
+          search.kept,
+          this.outlineLocatedIndex,
+        )
+    let index = 0
+    for (const el of panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)) {
+      el.classList.toggle(OUTLINE_CLASS_NAMES.located, index === rep)
+      index += 1
+    }
+    if (rep === null || rep === this.outlineLastScrolledRep || !this.outlineVisible()) {
+      return
+    }
+    const el = panel.querySelectorAll<HTMLElement>(`.${OUTLINE_CLASS_NAMES.item}`)[rep]
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ block: 'nearest' })
+      this.outlineLastScrolledRep = rep
+    }
+  }
+
+  // ---- 大纲工具条与标题搜索（#68）----
+  // 纯视图状态（零写回、零出站、不入撤销栈）：搜索词是会话内内存态（不
+  // 持久化、不跨文档保留）。语义见 outlineSearch.ts 模块头；可见口径 =
+  // 折叠可见 ∩ 搜索过滤；进入搜索时快照展开集、清空时原样回放（QO 同款）。
+
+  /** 搜索态判定（词条非空即活跃；空输入等于无过滤） */
+  private outlineSearchActive(): boolean {
+    return this.outlineSearchQuery !== ''
+  }
+
+  /** 搜索词变更入口（工具条输入框 input 事件；输入即时生效无去抖）：
+   *  空→非空取展开快照；非空→空回放快照并清除；词条变化重算过滤并把
+   *  命中祖先链并入当前展开集（只增不减——搜索态手动折叠不被覆盖） */
+  private setOutlineSearch(query: string): void {
+    const wasActive = this.outlineSearchActive()
+    const nextActive = query !== ''
+    if (!wasActive && nextActive) {
+      this.outlineExpandedBeforeSearch = new Set(this.outlineExpanded)
+    }
+    if (wasActive && !nextActive) {
+      const snapshot = this.outlineExpandedBeforeSearch
+      this.outlineExpandedBeforeSearch = null
+      if (snapshot) {
+        this.outlineExpanded = new Set(snapshot)
+      }
+    }
+    this.outlineSearchQuery = query
+    this.applyOutlineSearch()
+  }
+
+  /** 搜索态全量落 DOM：重算过滤缓存 → 展开集并入命中祖先链 → 条目重渲染
+   *  （带片段高亮；mark 生命周期 = 渲染级，词条或序列变化即随重建消失）
+   *  → 折叠/过滤 hidden 类与「无匹配」占位 → 高亮代表重施加。
+   *  搜索关闭时清缓存并重渲染（去掉 mark），回放的展开集已就位 */
+  private applyOutlineSearch(): void {
+    // review-loops 第 2 轮：条目 DOM 重建即取消拖拽会话（同 ensureFresh
+    // changed 分支口径）——重建后 dragging 提示与 hintEl 均指向脱挂节点
+    this.cancelOutlineDrag()
+    if (!this.outlineSearchActive()) {
+      this.outlineSearchState = null
+      if (this.outlinePanelEl) {
+        renderOutlineItems(this.outlinePanelEl, this.outlineItems, this.outlineFacts.hasChildren)
+      }
+      this.applyOutlineCollapseDom()
+      this.applyOutlineHighlight()
+      return
+    }
+    const filter = outlineSearchFilter(this.outlineItems, this.outlineSearchQuery)
+    this.outlineSearchState = filter
+    this.outlineExpanded = new Set(
+      outlineSearchExpandSet(this.outlineItems, this.outlineExpanded, filter.matchedIndices),
+    )
+    if (this.outlinePanelEl) {
+      renderOutlineItems(
+        this.outlinePanelEl,
+        this.outlineItems,
+        this.outlineFacts.hasChildren,
+        filter.ranges,
+      )
+    }
+    this.applyOutlineCollapseDom()
+    this.applyOutlineHighlight()
+  }
+
+  /** #68 跳转到笔记末尾：滚动正文到文档末尾（live = 末尾滚进视口下缘、
+   *  reading = 滚动到末尾锚点块），不落光标（live 选区不动、不聚焦——
+   *  纯滚动语义），零写回；高亮即时落位末尾控制域（不等滚动事件） */
+  private outlineJumpToBottom(): void {
+    const view = this.view
+    const doc = view?.state.doc
+    if (!view || !doc) {
+      return
+    }
+    this.suspendOutlineLinking()
+    if (this.viewMode === 'reading' && this.readingView) {
+      const start = this.readingView.anchorStartFor(doc.length) ?? doc.length
+      this.modeAnchor = start
+      this.readingView.scrollToSrcStart(start)
+      this.reassertReadingAnchor(start, 2)
+    } else {
+      this.modeAnchor = doc.length
+      // 双滚（QO To Bottom 同款）：第一滚走 CM6 标准路径（scrollIntoView
+      // 以高度模型定位），虚拟行高估算误差下可能停在「估算底部」；帧+宏
+      // 任务后按真实 scrollHeight 补滚（视口渲染挂载、docHeight 收敛后）
+      view.dispatch({ effects: EditorView.scrollIntoView(doc.length, { y: 'end' }) })
+      scheduleFrame(() => {
+        setTimeout(() => {
+          if (this.view === view && this.viewMode !== 'reading') {
+            const scroller = view.scrollDOM
+            scroller.scrollTop = scroller.scrollHeight
+          }
+        }, 0)
+      })
+    }
+    this.outlineLocatedIndex = locateOutlineIndex(this.outlineItems, doc.lines)
+    if (this.outlineLocatedIndex !== null) {
+      this.revealOutlineIndex(this.outlineLocatedIndex)
+    }
+    this.applyOutlineHighlight()
+  }
+
+  /** #68 重置三合一：清空搜索词（快照作废，不回放——重置即回初始态）、
+   *  档位回默认 5（展开集整体替换为档位精确集，手动折叠随之清空）、
+   *  输入框同步清空。全程纯视图零写回 */
+  private resetOutline(): void {
+    if (this.outlineExpandedBeforeSearch !== null) {
+      this.outlineExpandedBeforeSearch = null
+    }
+    this.setOutlineSearch('')
+    if (this.outlineToolbar) {
+      this.outlineToolbar.search.value = ''
+    }
+    this.setOutlineExpandLevel(OUTLINE_EXPAND_LEVEL_DEFAULT)
+  }
+
   // ---- 查找会话（#14）----
   // UI 形态：webview 内浮动层（custom editor webview 不可用 VSCode 原生
   // find 控件）。入口：Mod-F 拦截、宿主 view.find.open（命令面板共用）、
@@ -3063,6 +4516,37 @@ export class WebviewSyncController {
         return null
       }
     }
+    /** #65 样式透传绘制证据：computed 字重/字体族/颜色。条目 400 与显式
+     *  粗体段 700 的对照是「字重只认显式标记」的用户可见差异；条目与正文
+     *  标题的颜色对照是主题色同源证据（同变量族解析同值）。目标元素不在
+     *  （无条目/无标记/无标题行）或取值失败时为 null（jsdom 无 CSS 引擎） */
+    const outlineStyle = () => {
+      const read = (el: Element | null, prop: 'fontWeight' | 'fontFamily' | 'color'): string | null => {
+        if (!el) {
+          return null
+        }
+        try {
+          const value = getComputedStyle(el)[prop]
+          return typeof value === 'string' && value !== '' ? value : null
+        } catch {
+          return null
+        }
+      }
+      const panel = this.outlinePanelEl ?? null
+      const item = panel?.querySelector(`.${OUTLINE_CLASS_NAMES.item}`) ?? null
+      const strong = panel?.querySelector(`.${OUTLINE_CLASS_NAMES.item} .${OUTLINE_CLASS_NAMES.span.strong}`) ?? null
+      const code = panel?.querySelector(`.${OUTLINE_CLASS_NAMES.item} .${OUTLINE_CLASS_NAMES.span.code}`) ?? null
+      const heading = this.liveWrapper?.querySelector('.vsidian-heading-line') ?? null
+      return {
+        itemFontWeight: read(item, 'fontWeight'),
+        strongFontWeight: read(strong, 'fontWeight'),
+        codeFontFamily: read(code, 'fontFamily'),
+        itemFontFamily: read(item, 'fontFamily'),
+        itemColor: read(item, 'color'),
+        headingColor: read(heading, 'color'),
+      }
+    }
+    const visibleIndices = outlineVisibleIndices(this.outlineItems, this.outlineExpanded)
     return {
       active: this.outlineActive,
       togglePainted: hitPaintedElement(this.outlineToggleBtn),
@@ -3070,10 +4554,160 @@ export class WebviewSyncController {
       toggleIconSizePx: iconSizeOf(this.outlineToggleBtn),
       panelScrollHeightPx: dimensionOf(panel, 'scrollHeight'),
       panelClientHeightPx: dimensionOf(panel, 'clientHeight'),
-      items: this.outlineItems.map((item) => ({ ...item })),
+      items: this.outlineItems.map((item) => ({
+        ...item,
+        spans: item.spans.map((span) => ({ ...span })),
+      })),
       toggleAriaLabel: this.outlineToggleBtn?.getAttribute('aria-label') ?? null,
       panelAriaLabel: this.outlinePanelEl?.getAttribute('aria-label') ?? null,
+      style: outlineStyle(),
+      // #66 常驻高亮观测：located 索引/文字 + 绘制层证据（中心点命中 +
+      // computed 背景非全透明；jsdom 无布局恒 false，真宿主断言见集成）
+      locatedItemIndex: this.outlineLocatedIndex,
+      locatedText: this.outlineLocatedIndex !== null
+        ? this.outlineItems[this.outlineLocatedIndex]?.text ?? null
+        : null,
+      locatedPainted: this.collectOutlineLocatedPainted(),
+      // #67 折叠观测：档位实值 + 可见索引序列（折叠可见性断言权威口径）+
+      // 滑块行/当前档圆点/折叠箭头的绘制层证据
+      expandLevel: this.outlineExpandLevel,
+      visibleIndices: visibleIndices,
+      sliderPainted: hitPaintedElement(this.outlineSlider?.row, this.outlineSlider?.row),
+      sliderActiveDotPainted: this.collectOutlineSliderActiveDotPainted(),
+      chevronPainted: hitPaintedElement(
+        this.outlinePanelEl?.querySelector<HTMLElement>(`.${OUTLINE_CLASS_NAMES.chevron}`) ?? null,
+        this.outlinePanelEl,
+      ),
+      // #68 搜索与工具条观测：词条实值/组合可见口径（搜索关闭时与
+      // visibleIndices 同值）+ 工具条行、命中片段、无匹配占位的绘制证据
+      // 与控件可访问名称（jsdom 无布局：命中恒 false，真宿主断言见集成）
+      searchQuery: this.outlineSearchQuery,
+      searchActive: this.outlineSearchActive(),
+      filteredVisibleIndices: this.outlineSearchState === null
+        ? visibleIndices
+        : outlineFilteredVisibleIndices(
+          this.outlineItems,
+          this.outlineExpanded,
+          this.outlineSearchState.kept,
+        ),
+      toolbarPainted: hitPaintedElement(this.outlineToolbar?.row, this.outlineToolbar?.row),
+      jumpBottomAriaLabel: this.outlineToolbar?.jumpBottom.getAttribute('aria-label') ?? null,
+      resetAriaLabel: this.outlineToolbar?.reset.getAttribute('aria-label') ?? null,
+      searchPlaceholder: this.outlineToolbar?.search.getAttribute('placeholder') ?? null,
+      searchHitPainted: this.collectOutlineSearchHitPainted(),
+      nomatchPainted: hitPaintedElement(
+        this.outlinePanelEl?.querySelector<HTMLElement>(`.${OUTLINE_CLASS_NAMES.nomatch}`) ?? null,
+        this.outlinePanelEl,
+      ),
+      // #69 菜单观测：打开态（容器挂载于侧栏）、目标索引、绘制证据（中心点
+      // elementFromPoint 命中——侧栏展开 + 样式表浮层规则生效）、级联子菜单
+      // 可见（hover/focus 展开：computed display 非 none 且非空）
+      menuOpen: this.outlineMenuEl !== undefined,
+      menuTargetIndex: this.outlineMenuEl !== undefined ? this.outlineMenuIndex : null,
+      menuPainted: hitPaintedElement(this.outlineMenuEl, this.outlineMenuEl),
+      submenuVisible: this.collectOutlineSubmenuVisible(),
+      renamingIndex: this.outlineRenameIndex,
+      // #70 拖拽观测：源/落点索引与三态实值（悬停态经 outline.test.drag
+      // action=hover 驱动后采集）+ 落点指示绘制证据
+      draggingIndex: this.outlineDragState?.moved ? this.outlineDragState.fromIndex : null,
+      dropTargetIndex: this.outlineDragState?.targetIndex ?? null,
+      dropPosition: this.outlineDragState?.position ?? null,
+      dropHintPainted: this.collectOutlineDropHintPainted(),
     }
+  }
+
+  /** #70 落点指示绘制证据：带指示类的条目中心点命中自身（真实布局）且
+   *  computed 插入线（box-shadow）或包裹高亮（outline 非虚线宽 > 0 /
+   *  背景非全透明）任一可读——样式失效时类在而视觉差异不在，此处捕获。
+   *  jsdom 无布局恒 false，真宿主断言见集成 */
+  private collectOutlineDropHintPainted(): boolean {
+    const panel = this.outlinePanelEl
+    if (!panel) {
+      return false
+    }
+    const el = panel.querySelector<HTMLElement>(
+      `.${OUTLINE_CLASS_NAMES.dropBefore}, .${OUTLINE_CLASS_NAMES.dropAfter}, ` +
+      `.${OUTLINE_CLASS_NAMES.dropInside}`,
+    )
+    if (!el || !hitPaintedElement(el, el)) {
+      return false
+    }
+    try {
+      const cs = getComputedStyle(el)
+      if (cs.boxShadow !== '' && cs.boxShadow !== 'none') {
+        return true
+      }
+      const outlineWidth = Number.parseFloat(cs.outlineWidth)
+      if (cs.outlineStyle !== 'none' && cs.outlineStyle !== '' &&
+          Number.isFinite(outlineWidth) && outlineWidth > 0) {
+        return true
+      }
+      return paintedWithVisibleBackground(el)
+    } catch {
+      return false
+    }
+  }
+
+  /** #69 级联子菜单可见证据：任一子菜单 computed display 非 none 且非空串
+   *  （CSS 未加载/未 hover 时 display 为 none 或空——jsdom 恒 false） */
+  private collectOutlineSubmenuVisible(): boolean {
+    const menu = this.outlineMenuEl
+    if (!menu) {
+      return false
+    }
+    for (const el of Array.from(menu.querySelectorAll<HTMLElement>(`.${OUTLINE_MENU_CLASS_NAMES.submenu}`))) {
+      try {
+        const display = getComputedStyle(el).display
+        if (display !== '' && display !== 'none') {
+          return true
+        }
+      } catch {
+        // 计算失败保守视为不可见
+      }
+    }
+    return false
+  }
+
+  /** #66 located 条目的绘制层证据：施加了 located 类的元素（#67 起为
+   *  可见代表——被折叠遮蔽时是第一个可见祖先）中心点 elementFromPoint
+   *  命中自身（真实布局与显隐规则生效）且 computed background-color 非
+   *  全透明（半透明横条规则生效——样式失效时无背景可读）。代表元素在
+   *  面板滚动区可视范围外时命中失败；#67 的高亮行滚进可视区使常态下
+   *  命中成立（跳转/滚动落位即滚，probe 采集时已就位） */
+  private collectOutlineLocatedPainted(): boolean {
+    const panel = this.outlinePanelEl
+    if (!panel) {
+      return false
+    }
+    const el = panel.querySelector<HTMLElement>(`.${OUTLINE_CLASS_NAMES.located}`)
+    return !!el && paintedWithVisibleBackground(el)
+  }
+
+  /** #67 当前档圆点绘制证据：active 圆点中心点命中（真实布局 + active
+   *  类规则生效——选择器写错时圆点无类可命中）且 computed 背景非全透明
+   *  （实心珠真实绘制；jsdom 无布局恒 false，真宿主断言见集成） */
+  private collectOutlineSliderActiveDotPainted(): boolean {
+    const dot = this.outlineSlider?.dots[this.outlineExpandLevel]
+    if (!dot || !dot.classList.contains(OUTLINE_CLASS_NAMES.sliderActive)) {
+      return false
+    }
+    return paintedWithVisibleBackground(dot)
+  }
+
+  /** #68 命中片段绘制证据：首个非隐藏条目内的 mark 中心点命中自身且
+   *  computed 背景非全透明（片段高亮规则真实绘制——mark 无背景规则时
+   *  视觉上不可区分，computed 捕获；无搜索/无命中或 jsdom 无布局恒
+   *  false，真宿主断言见集成） */
+  private collectOutlineSearchHitPainted(): boolean {
+    const panel = this.outlinePanelEl
+    if (!panel) {
+      return false
+    }
+    const mark = panel.querySelector<HTMLElement>(
+      `.${OUTLINE_CLASS_NAMES.item}:not(.${OUTLINE_CLASS_NAMES.hidden}) ` +
+      `mark.${OUTLINE_CLASS_NAMES.searchHit}`,
+    )
+    return !!mark && paintedWithVisibleBackground(mark)
   }
 
   /** 暂停提示横幅：说明输入已保留、写回已暂停，提供取回与恢复按钮 */
@@ -3278,6 +4912,28 @@ function hitPaintedElement(
     const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
     const within = scope ?? el
     return !!hit && within.contains(hit)
+  } catch {
+    return false
+  }
+}
+
+/** #66/#67 绘制层证据共用口径：中心点 elementFromPoint 命中自身（真实
+ *  布局与显隐规则生效）且 computed background-color 非全透明（背景规则
+ *  生效——located 横条与滑块实心圆点共用；样式失效时任一失守即 false） */
+function paintedWithVisibleBackground(el: HTMLElement): boolean {
+  if (!hitPaintedElement(el, el)) {
+    return false
+  }
+  try {
+    const bg = getComputedStyle(el).backgroundColor
+    if (bg === '' || bg === 'transparent') {
+      return false
+    }
+    const rgb = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)/.exec(bg)
+    if (!rgb) {
+      return false // 异常形态保守视为未绘制
+    }
+    return rgb[4] === undefined || Number.parseFloat(rgb[4]!) > 0
   } catch {
     return false
   }

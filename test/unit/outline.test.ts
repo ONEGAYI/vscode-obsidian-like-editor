@@ -228,6 +228,149 @@ describe('outlineItemsEqual：DOM 重建判据', () => {
   })
 })
 
+// ---- #65 行内样式透传：plainText 与标记结构 ----
+
+describe('extractOutline：行内标记结构（#65 白名单透传）', () => {
+  it('粗体/斜体/行内代码/删除线各自产出 span，plainText 剥标记', () => {
+    const doc = text(['# **粗** 与 *斜*', '## `代码` 与 ~~删除~~', ''].join('\n'))
+    const items = extractOutline(doc)
+    expect(items[0]!.text, '原文保留行内标记字符（编辑场景资产不丢失）').toBe('**粗** 与 *斜*')
+    expect(items[0]!.plainText).toBe('粗 与 斜')
+    expect(items[0]!.spans).toEqual([
+      { kind: 'strong', start: 0, end: 1 },
+      { kind: 'emphasis', start: 4, end: 5 },
+    ])
+    expect(items[1]!.plainText).toBe('代码 与 删除')
+    expect(items[1]!.spans).toEqual([
+      { kind: 'code', start: 0, end: 2 },
+      { kind: 'strike', start: 5, end: 7 },
+    ])
+  })
+
+  it('无标记标题：plainText 与 text 一致、spans 为空', () => {
+    const items = extractOutline(text('# 普通标题\n正文\n'))
+    expect(items[0]!.plainText).toBe('普通标题')
+    expect(items[0]!.spans).toEqual([])
+  })
+
+  it('嵌套标记（***粗斜体***）产出同区间两种类型的嵌套 span', () => {
+    const items = extractOutline(text('# ***粗斜体*** 尾\n'))
+    expect(items[0]!.plainText).toBe('粗斜体 尾')
+    expect(items[0]!.spans).toEqual([
+      { kind: 'emphasis', start: 0, end: 3 },
+      { kind: 'strong', start: 0, end: 3 },
+    ])
+  })
+
+  it('span 偏移随前文标记剥除平移（多段混排）', () => {
+    const items = extractOutline(text('# 前缀 **中段** 后缀 *尾段*\n'))
+    expect(items[0]!.plainText).toBe('前缀 中段 后缀 尾段')
+    expect(items[0]!.spans).toEqual([
+      { kind: 'strong', start: 3, end: 5 },
+      { kind: 'emphasis', start: 9, end: 11 },
+    ])
+  })
+
+  it('未闭合标记保持字面文本（不产 span）', () => {
+    const items = extractOutline(text('# 未闭合 ** 粗\n'))
+    expect(items[0]!.plainText).toBe('未闭合 ** 粗')
+    expect(items[0]!.spans).toEqual([])
+  })
+
+  it('行内代码内的星号是字面内容（不产 span、不被双链替换）', () => {
+    const items = extractOutline(text('# `代码含*星*号与[[双链]]` 尾\n'))
+    expect(items[0]!.plainText).toBe('代码含*星*号与[[双链]] 尾')
+    expect(items[0]!.spans).toEqual([{ kind: 'code', start: 0, end: 14 }])
+  })
+
+  it('ATX 关闭序列剥除后标记结构仍正确', () => {
+    const items = extractOutline(text('# **粗** ##\n'))
+    expect(items[0]!.text).toBe('**粗**')
+    expect(items[0]!.plainText).toBe('粗')
+    expect(items[0]!.spans).toEqual([{ kind: 'strong', start: 0, end: 1 }])
+  })
+
+  it('空标题：plainText 空串、无 span', () => {
+    const items = extractOutline(text('# 有内容\n##\n'))
+    expect(items[1]!.plainText).toBe('')
+    expect(items[1]!.spans).toEqual([])
+  })
+
+  it('Setext 多行标题：换行归一为空格，标记结构保留', () => {
+    const items = extractOutline(text('首行 **粗** 内容\n次行\n===\n'))
+    expect(items[0]!.text).toBe('首行 **粗** 内容 次行')
+    expect(items[0]!.plainText).toBe('首行 粗 内容 次行')
+    expect(items[0]!.spans).toEqual([{ kind: 'strong', start: 3, end: 4 }])
+  })
+})
+
+describe('extractOutline：双链与链接（#65 纯文本降级）', () => {
+  it('标题内 wikilink 显示别名纯文本（无别名显示路径或路径#标题）', () => {
+    const items = extractOutline(text('# [[笔记|别名]] 双链\n'))
+    expect(items[0]!.text).toBe('[[笔记|别名]] 双链')
+    expect(items[0]!.plainText).toBe('别名 双链')
+    expect(items[0]!.spans).toEqual([])
+    expect(extractOutline(text('# [[目录/笔记#标题]]\n'))[0]!.plainText).toBe('目录/笔记#标题')
+  })
+
+  it('非法 wikilink（块引用/未闭合）按原文保留', () => {
+    const items = extractOutline(text('# [[笔记^块]] 与 [[未闭合\n'))
+    expect(items[0]!.plainText).toBe('[笔记^块] 与 [[未闭合')
+    expect(items[0]!.spans).toEqual([])
+  })
+
+  it('标题内链接显示链接文字纯文本（URL 部分不透出）', () => {
+    const items = extractOutline(text('# [链接文字](https://example.com) 尾注\n'))
+    expect(items[0]!.plainText).toBe('链接文字 尾注')
+    expect(items[0]!.spans).toEqual([])
+  })
+
+  it('链接文字内的行内标记仍解析（与 live 呈现一致）', () => {
+    const items = extractOutline(text('# [**粗链接**](https://e.com) 尾\n'))
+    expect(items[0]!.plainText).toBe('粗链接 尾')
+    expect(items[0]!.spans).toEqual([{ kind: 'strong', start: 0, end: 3 }])
+  })
+
+  it('引用式链接按原文呈现（live 不解析引用定义，两侧一致）', () => {
+    const items = extractOutline(text('# [文字][ref] 乙\n\n[ref]: https://e.com\n'))
+    expect(items[0]!.plainText).toBe('[文字][ref] 乙')
+    expect(items[0]!.spans).toEqual([])
+  })
+
+  it('wikilink 与标记交错：span 裁剪到字面部分（替换文本不带标记）', () => {
+    const items = extractOutline(text('# **前 [[a|别名]] 后** 尾\n'))
+    expect(items[0]!.plainText).toBe('前 别名 后 尾')
+    expect(items[0]!.spans).toEqual([
+      { kind: 'strong', start: 0, end: 2 },
+      { kind: 'strong', start: 4, end: 6 },
+    ])
+  })
+})
+
+describe('outlineItemsEqual：标记结构判据（#65）', () => {
+  it('文字相同、标记结构不同即不等（触发 DOM 重建）', () => {
+    const a = [
+      { level: 1, text: '*甲*', plainText: '甲', spans: [{ kind: 'emphasis' as const, start: 0, end: 1 }], line: 1 },
+    ]
+    const b = [
+      { level: 1, text: '甲', plainText: '甲', spans: [], line: 1 },
+    ]
+    expect(outlineItemsEqual(a, b)).toBe(false)
+  })
+
+  it('plainText 不同即不等', () => {
+    const a = [{ level: 1, text: '甲', plainText: '甲', spans: [], line: 1 }]
+    const b = [{ level: 1, text: '甲', plainText: '乙', spans: [], line: 1 }]
+    expect(outlineItemsEqual(a, b)).toBe(false)
+  })
+
+  it('标记结构一致、行号偏移仍相等', () => {
+    const a = extractOutline(text('# *甲*\n'))
+    const b = extractOutline(text('\n\n# *甲*\n'))
+    expect(outlineItemsEqual(a, b)).toBe(true)
+  })
+})
+
 describe('extractOutline：增量树复用的正确性对照（P1-3）', () => {
   /** 增量树（liveDecorationsField 随事务维护）与全量解析的大纲对拍 */
   function assertIncrementalMatchesFull(state: EditorState): void {

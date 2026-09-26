@@ -1,6 +1,6 @@
 # Obsidian 选择器映射表（一期稳定样式契约）
 
-状态：工单 #6 交付物，2026-09-23；#8 补 span 级映射与阅读语义标签结构（2026-09-24）；#9 补任务勾选交互类（2026-09-24）；#10 补链接/图片映射（2026-09-24）；#12 补表格映射（2026-09-24）；#11 补双链映射（2026-09-24）；#42 补实时预览表格网格入口（2026-09-24）；#55 移除 live 标题行左缘竖线及其强调色变量（2026-09-25）；#59 补公式映射（2026-09-25）；#60 补 Mermaid 图表映射（2026-09-25）。依据 [ADR-0004](../adr/0004-stable-styling-contract.md)。
+状态：工单 #6 交付物，2026-09-23；#8 补 span 级映射与阅读语义标签结构（2026-09-24）；#9 补任务勾选交互类（2026-09-24）；#10 补链接/图片映射（2026-09-24）；#12 补表格映射（2026-09-24）；#11 补双链映射（2026-09-24）；#42 补实时预览表格网格入口（2026-09-24）；#55 移除 live 标题行左缘竖线及其强调色变量（2026-09-25）；#59 补公式映射（2026-09-25）；#60 补 Mermaid 图表映射（2026-09-25）。依据 [ADR-0004](../adr/0004-stable-styling-contract.md)。；#65 补大纲面板条目与行内透传入口、标题层级色变量族（2026-09-25）；#67 补大纲折叠滑块/箭头/折叠状态类，并补登 #66 的常驻高亮类（2026-09-25）。依据 [ADR-0004](../adr/0004-stable-styling-contract.md)。
 
 本文记录一期已建立的稳定类名/CSS 变量入口与 Obsidian 同款选择器的核对结果，供二期自定义 CSS 片段兼容使用。**边界声明**：
 
@@ -149,6 +149,53 @@
 - SVG 经 DOM API 插入专用容器，**不经过** sanitizeReadingDom（净化层剥 `<style>` 会毁配色）——安全边界由 mermaid 自产 SVG + `securityLevel:'strict'` + webview CSP 三层兜底。
 - live 跨行 replace 装饰走 StateField（CM6 约束），围栏表增量重建以变更前最后一个已闭合围栏为顶层锚点；无锚点回溯以文末开放围栏开启行（trailingOpenStart）为窗口下界（幻影围栏防护），尾部开放按批增量续扫并在 8192 行熔断。
 
+## 大纲面板（#54 面板，#65 样式透传，#66 高亮，#67 折叠）
+
+右侧栏大纲面板为本项目自有 UI（Obsidian 的大纲属应用级 DOM，不参与兼容承诺）。#65 起条目按白名单行内标记结构渲染（语义元素 + 稳定类名双入口），层级颜色与正文标题引用同一变量族（见「公开 CSS 变量」的 `--vsidian-heading-color-*` 族）；设计哲学（结构装饰与正文主题同源、强调语义只认显式标记、透传集合 = 正文已支持的行内标记子集）已落档仓库 `AGENTS.md`「约定」。#67 起顶栏与条目列表之间有折叠滑块行（结绳记事：六圆点 + `::before` 横线串联；六档 0=No-Expand、1–5=展开到 Hn）。
+
+| 本项目稳定类名 | 本项目用途 | Obsidian 对应选择器 | 核对结果 |
+| --- | --- | --- | --- |
+| `.vsidian-outline-item`（+ `.vsidian-outline-level-{1..6}`） | 大纲条目（级别类兼作缩进与层级色入口） | 无（Obsidian 大纲为应用级 DOM） | 本项目自有；条目钉常规字重 400（不继承标题级别加粗） |
+| `.vsidian-outline-strong` / `.vsidian-outline-emphasis` / `.vsidian-outline-code` / `.vsidian-outline-strike` | 行内标记透传（语义元素 `strong`/`em`/`code`/`del` 上的第二类名入口） | 无（Obsidian 侧大纲插件私有 DOM） | 本项目自有；字重/斜体/等宽/删除线只由显式标记触发；双链/链接为纯文本（无 `a`，不可点） |
+| `.vsidian-outline-located` | #66 常驻高亮横条（当前控制域条目的半透明背景；类切换是两态差异唯一来源） | 无 | 本项目自有；#67 起施加在「可见代表」上（目标被折叠遮蔽时为第一个可见祖先） |
+| `.vsidian-outline-slider`（+ `::before`） | #67 折叠滑块行（显隐唯一开关是侧栏容器的 `outline-active` 类；`::before` 画贯穿横线） | 无（Quiet Outline 类插件为私有 DOM） | 本项目自有；`role=group` 六按钮组（键盘 Tab 逐点可达） |
+| `.vsidian-outline-slider-dot`（+ `.vsidian-outline-slider-active`） | 六档圆点（结绳串珠）：空闲珠空心（透明面 + 描边圆环）、当前珠实心——两态差异唯一来源是 `active` 类规则 | 无 | 本项目自有；实心色跟随 `--vscode-button-background` |
+| `.vsidian-outline-chevron` / `.vsidian-outline-chevron-spacer` | #67 折叠箭头按钮（有子项条目）/ 无子项条目的同宽占位（文字左缘对齐） | 无 | 本项目自有；线宽不写在 SVG 属性上（与侧栏图标同口径）；点箭头折叠/展开、点文字仍跳转 |
+| `.vsidian-outline-collapsed` | 折叠中的父节点条目（箭头旋转 -90° 朝右是两态差异唯一来源） | 无 | 本项目自有 |
+| `.vsidian-outline-hidden` | 折叠遮蔽的条目（`display:none`，类切换是唯一显隐开关；DOM 保留维持索引序） | 无 | 本项目自有；#68 起搜索过滤隐藏同用此类（可见口径 = 折叠可见 ∩ 搜索保留） |
+| `.vsidian-outline-toolbar` | #68 工具条行（侧栏顶栏与滑块行之间：跳转到末尾、重置、搜索框；显隐唯一开关是 `outline-active` 类） | 无（Quiet Outline 的 function-bar 为插件私有 DOM） | 本项目自有 |
+| `.vsidian-outline-jump-bottom` / `.vsidian-outline-reset` | #68 工具条图标按钮（跳转到笔记末尾 / 重置三合一），与侧栏顶栏按钮同形态 | 无 | 本项目自有；线宽不写在 SVG 属性上（与侧栏图标同口径） |
+| `.vsidian-outline-search`（+ `::placeholder`） | #68 标题搜索输入框（flex 占余宽；配色走 `--vscode-input-*` 变量族） | 无 | 本项目自有 |
+| `mark.vsidian-outline-search-hit` | #68 命中片段高亮（只包命中子串；背景跟随 `--vscode-editor-findMatchHighlightBackground`，与正文查找命中同族视觉语言） | 无 | 本项目自有；文本层切分，与 #65 语义元素正交（mark 不包裹语义元素外层） |
+| `.vsidian-outline-nomatch` | #68 无匹配占位（有词条零命中的可读反馈，与「无标题」空态同口径弱化） | 无 | 本项目自有 |
+| `.vsidian-outline-menu`（+ `-item` / `-host` / `-submenu` / `-danger` / `-cue`） | #69 右键菜单浮层（挂侧栏内 absolute；菜单项为 button 键盘可达；子菜单显隐唯一开关是父项宿主的 `:hover`/`:focus-within`；danger 红字标删除） | 无（VSCode 原生上下文菜单为宿主级） | 本项目自有；颜色跟随 `--vscode-menu-*` 变量族 |
+| `.vsidian-outline-rename-input` | #69 重命名行内编辑态输入框（条目内容区被 input 替换，编辑原文含行内标记） | 无 | 本项目自有；VSCode 输入框三变量（前景/背景/边框） |
+| `.vsidian-outline-dragging` | #70 拖动中的源条目（整体半透明弱化，类切换是两态差异唯一来源） | 无 | 本项目自有 |
+| `.vsidian-outline-drop-before` / `.vsidian-outline-drop-after` | #70 目标上/下缘插入线（inset box-shadow 不占布局、不与 located 背景冲突；颜色跟随 `--vscode-focusBorder`） | 无 | 本项目自有 |
+| `.vsidian-outline-drop-inside` | #70 目标包裹高亮（outline 内缩一圈 + 半透明背景，与 located 同变量族——「放入成为子标题」的视觉区分） | 无 | 本项目自有 |
+
+行为边界（非样式映射，随 #65 记录）：
+
+- 透传白名单 = 正文已支持的行内标记子集（粗体/斜体/行内代码/删除线）；高亮 `==…==`、公式 `$…$`、行内颜色待正文能力落地后按同一机制接入（提取处 `SPAN_KIND_BY_NODE` 加映射），大纲侧零额外设计。
+- 双链 `[[…]]` 显示别名/路径（形态学与 live/阅读共用 `src/shared/wikilink.ts`），行内链接显示链接文字（URL 不透出）；引用式链接按原文呈现（与 live 不解析引用定义一致）；行内代码内不做双链替换。
+- `OutlineItem.plainText`（剥标记可见文本）与 `spans`（标记区间）经 `view.state` 的 `outline.items` 观测（协议单一事实源 `src/shared/protocol.ts`），搜索等后续能力按 plainText 口径匹配。
+
+行为边界（非样式映射，随 #67 记录）：
+
+- 折叠状态机纯函数单一事实源在 `src/webview/outlineCollapse.ts`：「展开到 Hn」= 展开所有 `level≤n` 且有子项的父节点（非只显示 level≤n 的标题）；跨级标题自然挂靠（H1 直跟 H3 时 H3 挂 H1 下）；滑块切换 = 整体替换展开集（手动微调不保留）；滚动/跳转动态展开 = only-expand（只展开当前路径祖先链，不折叠其他）。
+- 档位（0–5）经 bridge state 全局记忆（跨文档共享）；手动折叠集合是会话内内存态（webview 重载后回到档位精确展开集）；编辑触发的条目重建经 diff 迁移保持折叠状态（重命名不扰动，规则见模块头注释）。
+
+行为边界（非样式映射，随 #68 记录）：
+
+- 搜索纯函数单一事实源在 `src/webview/outlineSearch.ts`：大小写不敏感子串匹配 plainText（剥标记口径，`**粗体**` 输「粗体」命中），不做正则；命中条目与匹配路径祖先保留，其余隐藏（hidden 类与折叠遮蔽共用）；命中链自动并入展开集（只增不减，搜索态手动折叠优先）；进入搜索时快照展开集、清空时原样回放（QO 同款语义），编辑重建时快照随展开集同款迁移，搜索态切档时快照基准同步为档位精确集。
+- 片段级高亮在文本层切分（命中子串跨语义 span 边界时各文本节点内各自成段），mark 生命周期 = 条目渲染级（词条或序列变化随重建消失）；输入即时生效无去抖；located 常驻高亮在搜索态下回退到「折叠可见 ∧ 搜索保留」的最近祖先（链上无可见代表则高亮消失）；跳转到末尾不落光标（live 选区不动、不聚焦，reading 滚到末尾锚点块），双模式零写回；重置三合一 = 清搜索词 + 档位回默认 5 + 清手动折叠。
+
+行为边界（非样式映射，随 #70 记录）：
+
+- 拖拽排序移动计划纯函数单一事实源在 `src/webview/outlineDrag.ts`：移动原子 = 控制域（段尾空行属该域随段搬移，目标接缝可能从空行分隔退化为单换行分隔——Markdown 语义不变）；before/after 对齐目标层级、inside = 目标 level+1（插入点同 after 的段尾，层级差一）；子树递归同步调级逐条 clamp 1..6；一次拖拽 = 一次 CM6 事务（单笔 edit.request = 撤销一次）。
+- 落点三态判定：目标条目内上缘 25% before、下缘 25% after、中部 50% inside；拖入自身控制域内部（含自身、跨级挂靠后代）三态同拒（无指示、零写回）；不可见条目（折叠遮蔽/搜索过滤）不可拖也不构成落点。
+- 交互载体为 pointer 事件（非 HTML5 DnD——Playwright 真实鼠标可直接驱动、Esc 取消可控、与 #43 表格行拖拽同模式）；拖拽实现细节（pointerdown 委托 + document 级监听 + 拖拽后补发 click 吞噬 + 锚点快照防御）在 `syncController` 的 #70 区块。
+
 ## 悬浮提示等既有稳定类（沿用 #4/#5，与 Obsidian 无对应）
 
 `.vsidian-suspend-banner`（冲突暂停横幅）、`.vsidian-toolbar` 与 `.vsidian-mode-toggle`（模式切换工具栏）：本项目自有 UI，无 Obsidian 对应物，不参与兼容承诺。
@@ -160,6 +207,7 @@
 | 变量 | 默认值 | 用途 | Obsidian 对应变量 |
 | --- | --- | --- | --- |
 | ~~`--vsidian-heading-accent`~~ | — | ~~live 视口内标题左缘强调色~~（#55 随左缘竖线一并移除，不再公开） | — |
+| `--vsidian-heading-color-{1..6}` | `var(--vscode-editor-foreground)`（#65） | 标题层级色变量族：live 标题行级、阅读标题块级与大纲条目级三侧同引（主题分级着色仅改族定义，一处生效） | `--h1-color`…（语义对应，名称不同；Obsidian 分色变量族方向） |
 | `--vsidian-reading-font-size` | `15px` | 阅读正文字号 | `--font-text-size`（语义对应，名称不同） |
 | `--vsidian-reading-max-width` | `760px` | 阅读块最大宽度 | `--file-line-width`（语义对应，名称不同） |
 | `--vsidian-reading-line-height` | `1.6` | 阅读正文行高 | `--line-height-normal`（语义对应，名称不同） |
