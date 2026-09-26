@@ -31,7 +31,7 @@ import { createQuickActionStateReader } from './quickActionState'
 import { FORMAT_OPERATIONS, type FormatOperationId } from '../shared/formatOperations'
 import { getEffectiveBindings } from '../shared/keybindings'
 import { KeybindingRouter } from './keybindingRouter'
-import { liveLineNumbers, paintedLineNumbers } from './liveLineNumbers'
+import { LINE_NUMBER_GUTTER_SELECTOR, liveLineNumbers, paintedLineNumbers } from './liveLineNumbers'
 import { CODE_CARD_CLASS_NAMES, codeCardConfigFacet, codeCardCopyRequest, codeCardFoldField, liveCodeCard, type CodeCardConfig } from './liveCodeCard'
 import { decorateReadingCodeCard, isReadingCodeBlock } from './readingCodeCard'
 import {
@@ -4970,7 +4970,7 @@ export class WebviewSyncController {
       return { on: this.lineNumbersOn, count: 0, first: null, last: null, alignment: null }
     }
     const texts = Array.from(
-      view.dom.querySelectorAll('.cm-lineNumbers .cm-gutterElement'),
+      view.dom.querySelectorAll(LINE_NUMBER_GUTTER_SELECTOR),
     )
       .filter((el) => (el as HTMLElement).style.visibility !== 'hidden')
       .map((el) => el.textContent ?? '')
@@ -4993,7 +4993,7 @@ export class WebviewSyncController {
     if (!view) return null
     const out: LineGutterAlignment[] = []
     try {
-      const elements = view.dom.querySelectorAll<HTMLElement>('.cm-lineNumbers .cm-gutterElement')
+      const elements = view.dom.querySelectorAll<HTMLElement>(LINE_NUMBER_GUTTER_SELECTOR)
       for (const element of Array.from(elements)) {
         if (element.style.visibility === 'hidden') continue
         const text = element.textContent ?? ''
