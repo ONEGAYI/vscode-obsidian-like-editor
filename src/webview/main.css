@@ -1085,16 +1085,22 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='horizontalRule
 }
 
 /* #106 分割线渲染态：未触及该行时源文被 replace 隐藏，本元素呈现真横线。
-   块级撑满行宽，border-top 是唯一落笔通道（颜色与阅读 <hr> 同源变量，
-   契约测试钉住）。对齐：CM6 行号锚定行盒顶部，故 margin-top 归零、
-   线贴行盒顶与行号同行（视觉实测对称 margin 会把线推到行号下方约
-   一行）；占空全部交给 margin-bottom（2px + 0.8em ≈ 一行，对齐
-   Obsidian 紧凑观感），line-height 0 收矮行槽 */
+   块级撑满行宽、显式撑满一个正文行高（字号×行高取 .cm-scroller 同源
+   变量的同一公式），分割线行不改变行号间距（用户验收：压矮行槽会让
+   行号间距不均）；横线以居中渐变画在行的正中（Obsidian 观感），
+   颜色与阅读 <hr> 同源变量，契约测试钉住 */
 #app .cm-editor .cm-scroller .vsidian-hr {
   display: block;
-  border-top: 2px solid var(--vsidian-hr-color);
-  line-height: 0;
-  margin: 0 0 0.8em 0;
+  height: calc(var(--vsidian-content-font-size) * var(--vsidian-content-line-height));
+  box-sizing: border-box;
+  background-image: linear-gradient(
+    to bottom,
+    transparent calc(50% - 1px),
+    var(--vsidian-hr-color) calc(50% - 1px),
+    var(--vsidian-hr-color) calc(50% + 1px),
+    transparent calc(50% + 1px)
+  );
+  margin: 0;
 }
 
 #app .cm-editor .cm-scroller .vsidian-frontmatter-line {

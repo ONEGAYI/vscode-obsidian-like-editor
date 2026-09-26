@@ -4963,10 +4963,14 @@ export class WebviewSyncController {
     const hrEl = firstPaintedOf(hrEls)
     let hrVisible = false
     let hrDisplay: string | null = null
+    let hrBackgroundImage: string | null = null
     let hrBorderTopWidth: string | null = null
     if (hrEl) {
       const hrStyle = getComputedStyle(hrEl)
       hrDisplay = hrStyle.display
+      // live 态横线以居中渐变落笔、reading 态原生 <hr> 以 border-top
+      // 落笔，两种形态都采集供集成断言区分
+      hrBackgroundImage = hrStyle.backgroundImage
       hrBorderTopWidth = hrStyle.borderTopWidth
       // 可见性口径统一走 hitPaintedElement（rect 有面积 + elementFromPoint
       // 命中自身；jsdom 无布局恒 false，只作真宿主集成断言依据）
@@ -4976,6 +4980,7 @@ export class WebviewSyncController {
       ? {
           visible: hrVisible,
           display: hrDisplay,
+          backgroundImage: hrBackgroundImage,
           borderTopWidth: hrBorderTopWidth,
           count: hrEls.length,
         }

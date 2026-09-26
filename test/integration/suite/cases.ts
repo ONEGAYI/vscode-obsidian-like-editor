@@ -462,6 +462,7 @@ interface ViewState {
     hr?: {
       visible: boolean
       display: string | null
+      backgroundImage: string | null
       borderTopWidth: string | null
       count: number
     }
@@ -6259,13 +6260,13 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const state = await waitViewState('hr.md', (v) =>
       v.selectionOffset === tailAnchor && v.paint?.hr?.count === 3)
     // 绘制层断言（AGENTS 视觉层断言约定）：横线真的画出来（rect 有面积 +
-    // elementFromPoint 命中）且以 border-top 落笔
+    // elementFromPoint 命中）且以居中渐变落笔（live 态横线绘制通道）
     assert(state.paint?.hr?.visible === true,
       `分割线应真实绘制（paint.hr.visible=${String(state.paint?.hr?.visible)}，` +
         `display=${String(state.paint?.hr?.display)}）`)
     assert(state.paint?.hr?.display !== 'none', '分割线元素不得 display:none')
-    assert(Number.parseFloat(state.paint?.hr?.borderTopWidth ?? '') > 0,
-      `分割线须以 border-top 实际落笔：${String(state.paint?.hr?.borderTopWidth)}`)
+    assert((state.paint?.hr?.backgroundImage ?? '').includes('linear-gradient'),
+      `live 分割线须以居中渐变实际落笔：${String(state.paint?.hr?.backgroundImage)}`)
     assert(state.text === diskBefore, '渲染不得改写源文')
   }],
 

@@ -574,17 +574,19 @@ export interface PaintProbe {
   }
   /** #106 分割线绘制：当前激活视图内渲染态横线的实际可见性与计数。可见性
    *  口径 = 任一候选命中（首个候选可能滚出视口，取首条会把「新分割线已
-   *  绘制」误判为不可见，hr.md 插入用例实测；display/borderTopWidth 取
-   *  该命中元素，全不命中时取首条供字段观测）。jsdom 无布局（rect 恒 0），
-   *  visible 恒 false，只作真宿主集成断言依据；live 态探渲染 widget
-   *  .vsidian-hr（光标触及该行时源码显形、计数归零），reading 态探阅读
-   *  容器内原生 <hr>。无分割线时整个字段缺省。 */
+   *  绘制」误判为不可见，hr.md 插入用例实测）；display/backgroundImage/
+   *  borderTopWidth 取该命中元素，全不命中时取首条供字段观测。jsdom 无
+   *  布局（rect 恒 0），visible 恒 false，只作真宿主集成断言依据；live
+   *  态探渲染 widget .vsidian-hr（光标触及该行时源码显形、计数归零），
+   *  reading 态探阅读容器内原生 <hr>。无分割线时整个字段缺省。 */
   hr?: {
     /** 任一横线元素的 rect 有面积且 elementFromPoint 命中 */
     visible: boolean
     /** 该横线元素 computed display（'none' = 未绘制） */
     display: string | null
-    /** computed border-top-width（'1px' 级 = 横线实际落笔） */
+    /** computed background-image（live 态横线以居中渐变落笔，'none' = 未绘制） */
+    backgroundImage: string | null
+    /** computed border-top-width（reading 态原生 <hr> 以 border-top 落笔） */
     borderTopWidth: string | null
     /** 当前激活视图内横线元素总数 */
     count: number
@@ -1179,6 +1181,7 @@ function isPaintProbe(v: unknown): v is PaintProbe {
       isObject(v.hr) &&
       typeof v.hr.visible === 'boolean' &&
       isNullOrString(v.hr.display) &&
+      isNullOrString(v.hr.backgroundImage) &&
       isNullOrString(v.hr.borderTopWidth) &&
       isNonNegativeInt(v.hr.count)
     )) &&
