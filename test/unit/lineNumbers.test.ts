@@ -10,7 +10,9 @@
 // - 裸 \r 行尾不在支持范围（newline.ts 只处理 \r\n 与 \n，契约声明见
 //   test/unit/newline.test.ts）
 import { describe, it, expect } from 'vitest'
+import { gutterLineClass } from '@codemirror/view'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
+import { getLineNumberGutterStats } from '../../src/webview/liveLineNumbers'
 import { SHOW_LINE_NUMBERS_DEFAULT, SHOW_LINE_NUMBERS_KEY } from '../../src/shared/settings'
 import type { WebviewToHost } from '../../src/shared/protocol'
 
@@ -263,5 +265,69 @@ describe('大文档与列宽自适应', () => {
     expect(texts.length).toBeGreaterThan(0)
     expect(texts.length).toBeLessThan(200)
     expect(texts[0]).toBe('1')
+  })
+})
+
+describe('行格分类扫描收窄（#116 性能）', () => {
+  // liveDecorationsField 每次事务（含纯选区移动）都产生新装饰集，行格
+  // 分类 facet 随之重算；收窄前 compute 对全文 decos.between 逐条回调，
+  // 无表格文档也全额遍历。收窄契约：无表格零遍历（快速路径）、表外事务
+  // memo 复用（结果引用稳定）、触及表段才重扫且只扫表段跨度。
+  const tableDoc = (tailLines: number): string =>
+    ['前文', '', '| A | B |', '| --- | --- |', '| 甲 | 乙 |', '',
+      ...Array.from({ length: tailLines }, (_, i) => `第${i + 1}行尾部文字`)].join('\n')
+
+  it('无表格文档：纯选区移动不再触发装饰扫描（零遍历快速路径）', () => {
+    const { bridge } = makeBridge()
+    const c = mount(bridge)
+    init(c, Array.from({ length: 60 }, (_, i) => `第${i + 1}行普通文字`).join('\n'))
+    const view = c.getView()!
+    const before = getLineNumberGutterStats()
+    view.dispatch({ selection: { anchor: view.state.doc.line(20).from } })
+    view.dispatch({ selection: { anchor: view.state.doc.line(40).from } })
+    const after = getLineNumberGutterStats()
+    expect(after.scannedChars - before.scannedChars).toBe(0)
+    c.dispose()
+  })
+
+  it('无表格文档：纯选区移动后行格 facet 元素引用稳定（共享空集单例）', () => {
+    const { bridge } = makeBridge()
+    const c = mount(bridge)
+    init(c, '甲\n\n乙\n')
+    const view = c.getView()!
+    const before = view.state.facet(gutterLineClass)
+    view.dispatch({ selection: { anchor: view.state.doc.line(3).from } })
+    const after = view.state.facet(gutterLineClass)
+    expect(after[0]).toBe(before[0])
+    c.dispose()
+  })
+
+  it('有表格文档：表外纯选区移动命中 memo，结果引用稳定且不重扫', () => {
+    const { bridge } = makeBridge()
+    const c = mount(bridge)
+    init(c, tableDoc(60))
+    const view = c.getView()!
+    const first = view.state.facet(gutterLineClass)
+    const before = getLineNumberGutterStats()
+    view.dispatch({ selection: { anchor: view.state.doc.line(50).from } })
+    const second = view.state.facet(gutterLineClass)
+    const after = getLineNumberGutterStats()
+    expect(second[0]).toBe(first[0])
+    expect(after.scannedChars - before.scannedChars).toBe(0)
+    c.dispose()
+  })
+
+  it('有表格文档：光标进分隔行触发重扫，但扫描跨度收敛在表段内', () => {
+    const { bridge } = makeBridge()
+    const c = mount(bridge)
+    init(c, tableDoc(60))
+    const view = c.getView()!
+    const before = getLineNumberGutterStats()
+    view.dispatch({ selection: { anchor: view.state.doc.line(4).from + 2 } })
+    const after = getLineNumberGutterStats()
+    const delta = after.scannedChars - before.scannedChars
+    expect(delta).toBeGreaterThan(0)
+    expect(delta).toBeLessThan(view.state.doc.length)
+    c.dispose()
   })
 })

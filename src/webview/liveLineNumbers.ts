@@ -1,6 +1,6 @@
-import { RangeSet, type EditorState } from '@codemirror/state'
+import { RangeSet, type EditorState, type Text } from '@codemirror/state'
 import { lineNumbers, gutterLineClass, GutterMarker, type EditorView } from '@codemirror/view'
-import { liveDecorationsField, LIVE_CLASS_NAMES } from './liveDecorations'
+import { liveDecorationsField, LIVE_CLASS_NAMES, type GridTableSegment } from './liveDecorations'
 
 /** 表格行行首装饰分类（#116 收敛）：'delimiter'（分隔行）/ 'header'（表头
  *  行）/ 'data'（数据行）/ null（非表格行装饰）。deco.spec.class 字符串解析
@@ -57,12 +57,50 @@ const headerGutterMarker = new class extends GutterMarker {
   elementClass = LINE_NUMBER_GUTTER_CLASS_NAMES.tableHeader
 }()
 
+/** 行格分类扫描观测（#116 性能）：computes = 实际执行扫描的计算次数，
+ *  memoHits = memo 命中直接复用结果的次数，scannedChars = between 扫描
+ *  的累计字符跨度（收窄前每次计算都全文 doc.length，收窄后为 0 或表段
+ *  跨度）。测试据此断言「无表格文档零遍历」「表外事务不重扫」。 */
+const gutterClassStats = {
+  computes: 0,
+  memoHits: 0,
+  scannedChars: 0,
+}
+
+export function getLineNumberGutterStats(): Readonly<typeof gutterClassStats> {
+  return { ...gutterClassStats }
+}
+
+/** 行格分类结果 memo（#116 性能双保险）：键为 (doc 引用, 段数组引用)。
+ *  正确性依赖 liveDecorations 的不变量——任何可能改动段内装饰的更新
+ *  路径都会产生新的段数组引用（见 updateGridSegments 注释），键不变即
+ *  结果必然未变；doc 变更则文档引用同步变化。不以 memo 替代收窄：
+ *  memo 未命中时扫描仍只落在表段内。 */
+let gutterResultMemo: {
+  doc: Text
+  segments: readonly GridTableSegment[]
+  result: RangeSet<GutterMarker>
+} | null = null
+
 /** 表格行号格分类与行号显隐同源（liveDecorationsField 行首装饰，判定式
  *  收敛在 tableLineNumberKind）：光标进入分隔行时装饰撤下，
- *  分类与行号显隐同步变化。 */
+ *  分类与行号显隐同步变化。扫描按 liveDecorationsField 维护的网格表段
+ *  收窄（#116 性能）：无表格零遍历返回共享空集（RangeSet.empty 单例，
+ *  引用稳定）；有表格只扫表段；段内装饰未变的后续事务（如表外纯选区
+ *  移动）由 memo 直接复用结果。分类事实源仍是行装饰，段只是索引。 */
 const tableLineNumberGutterClasses = gutterLineClass.compute([liveDecorationsField], (state) => {
   const live = state.field(liveDecorationsField, false)
   if (!live) return RangeSet.empty as RangeSet<GutterMarker>
+  if (live.gridSegments.length === 0) {
+    return RangeSet.empty as RangeSet<GutterMarker>
+  }
+  const memo = gutterResultMemo
+  if (memo && memo.doc === state.doc && memo.segments === live.gridSegments) {
+    gutterClassStats.memoHits += 1
+    return memo.result
+  }
+  gutterClassStats.computes += 1
+  let scannedChars = 0
   const ranges: ReturnType<GutterMarker['range']>[] = []
   let pendingFrom = -1
   let pendingDelimiter = false
@@ -77,18 +115,24 @@ const tableLineNumberGutterClasses = gutterLineClass.compute([liveDecorationsFie
     pendingDelimiter = false
     pendingHeader = false
   }
-  live.decos.between(0, state.doc.length, (from, to, deco) => {
-    if (to !== from) return // 行装饰为行首点区间，与行号显隐判定同口径
-    if (from !== pendingFrom) {
-      flush()
-      pendingFrom = from
-    }
-    const kind = tableLineNumberKind(deco.spec.class)
-    if (kind === 'delimiter') pendingDelimiter = true
-    else if (kind === 'header') pendingHeader = true
-  })
+  for (const segment of live.gridSegments) {
+    scannedChars += segment.to - segment.from
+    live.decos.between(segment.from, segment.to, (from, to, deco) => {
+      if (to !== from) return // 行装饰为行首点区间，与行号显隐判定同口径
+      if (from !== pendingFrom) {
+        flush()
+        pendingFrom = from
+      }
+      const kind = tableLineNumberKind(deco.spec.class)
+      if (kind === 'delimiter') pendingDelimiter = true
+      else if (kind === 'header') pendingHeader = true
+    })
+  }
   flush()
-  return ranges.length ? RangeSet.of(ranges) : (RangeSet.empty as RangeSet<GutterMarker>)
+  gutterClassStats.scannedChars += scannedChars
+  const result = ranges.length ? RangeSet.of(ranges) : (RangeSet.empty as RangeSet<GutterMarker>)
+  gutterResultMemo = { doc: state.doc, segments: live.gridSegments, result }
+  return result
 })
 
 /** 行号格选择器：绘制探针（paintedLineNumbers）与 syncController 的
