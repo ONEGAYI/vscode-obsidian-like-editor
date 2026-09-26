@@ -29,6 +29,7 @@ import { mermaidFencesField } from './liveMermaid'
 import { RENDERED_FENCE_LABELS, type FenceSpan } from '../shared/mermaid'
 import { resolveCodeLanguage } from '../shared/codeLangs'
 import { hasHighlightEngine, highlightCodeRanges, splitRangeAtLineBreaks } from './codeHighlight'
+import { t } from '../shared/i18n'
 import {
   codeCardConfigFacet,
   codeCardCopyRequest,
@@ -202,8 +203,8 @@ export function buildCopyButton(code: string, onCopy: (code: string) => void): H
   const btn = document.createElement('button')
   btn.type = 'button'
   btn.className = CODE_CARD_CLASS_NAMES.copy
-  btn.setAttribute('aria-label', '复制代码')
-  btn.title = '复制代码'
+  btn.setAttribute('aria-label', t('codeblock.copy'))
+  btn.title = t('codeblock.copy')
   const copyIcon = document.createElement('span')
   copyIcon.className = CODE_CARD_CLASS_NAMES.copyIconCopy
   copyIcon.setAttribute('aria-hidden', 'true')
@@ -246,9 +247,9 @@ export function buildFoldButton(folded: boolean, onToggle: () => void): HTMLButt
   btn.className = folded
     ? `${CODE_CARD_CLASS_NAMES.fold} ${CODE_CARD_CLASS_NAMES.foldCollapsed}`
     : CODE_CARD_CLASS_NAMES.fold
-  btn.setAttribute('aria-label', folded ? '展开代码块' : '折叠代码块')
+  btn.setAttribute('aria-label', folded ? t('codeblock.expand') : t('codeblock.collapse'))
   btn.setAttribute('aria-expanded', folded ? 'false' : 'true')
-  btn.title = folded ? '展开代码块' : '折叠代码块'
+  btn.title = folded ? t('codeblock.expand') : t('codeblock.collapse')
   btn.innerHTML =
     '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" ' +
     'stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"></path></svg>'

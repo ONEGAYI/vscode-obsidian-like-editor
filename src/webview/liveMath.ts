@@ -30,6 +30,7 @@ import { chainAt, visitRange, type SourceRange } from './markdownDoc'
 import { liveDecorationsField, selectionTouchesRange } from './liveDecorations'
 import { MATH_CLASS_NAMES, opensMathBlockLine, scanMathInLine, scanMathRanges, type MathOccurrence } from '../shared/math'
 import { MATH_RENDER_CACHE_LIMIT, mathRenderStats, renderMathHtml } from './mathRenderCache'
+import { t } from '../shared/i18n'
 
 export { MATH_RENDER_CACHE_LIMIT, mathRenderStats, renderMathHtml }
 
@@ -78,7 +79,7 @@ export class LiveMathWidget extends WidgetType {
     const html = renderMathHtml(this.tex, this.displayMode)
     if (html === null) {
       span.className = MATH_CLASS_NAMES.mathError
-      span.title = '公式解析失败：显示原文，移动光标进入可编辑'
+      span.title = t('decor.mathError')
       span.textContent = this.displayMode ? `$$${this.tex}$$` : `$${this.tex}$`
       return span
     }

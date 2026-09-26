@@ -10,6 +10,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
 import { findStateField } from '../../src/webview/findSession'
+import { installLocale } from '../../src/shared/i18n'
+import { zhCn } from '../../src/shared/locales/zh-cn'
+
+// #94 起文案经 t() 取词：装配生产中文包，断言与字典同源
+installLocale('zh-cn', zhCn)
 import type { WebviewToHost } from '../../src/shared/protocol'
 
 if (typeof Range !== 'undefined' && Range.prototype.getClientRects === undefined) {
@@ -224,7 +229,7 @@ describe('匹配计算与反馈（基于文本模型，含中文与 emoji）', (
     expect(viewState(c, h).find?.total).toBe(1)
     const btn = parent!.querySelector<HTMLButtonElement>('.vsidian-find-case')!
     // 按钮语义为「忽略大小写」开关：默认区分（未激活、未按下）
-    expect(btn.textContent).toBe('忽略大小写')
+    expect(btn.textContent).toBe(zhCn['find.caseToggle'])
     expect(btn.classList.contains('vsidian-find-case-active')).toBe(false)
     expect(btn.getAttribute('aria-pressed')).toBe('false')
     btn.click()

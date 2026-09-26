@@ -7,6 +7,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { chromium } from 'playwright'
+import { buildZhLocaleIsland } from './localeIsland.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const bundle = path.join(root, 'out/test/browser/outlineMenu.js')
@@ -30,6 +31,8 @@ const DOC = [
   '内容',
 ].join('\n')
 
+// #94：菜单文案经 t() 取词（无岛回退键名会改变菜单测宽与定位）——注入岛
+const { islandHtml } = await buildZhLocaleIsland(root)
 const browser = await chromium.launch({ headless: true,
   channel: process.env.VSIDIAN_TEST_BROWSER_CHANNEL || undefined })
 let passed = 0
@@ -37,7 +40,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1000, height: 560 } })
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
-  await page.setContent('<div id="app"></div>')
+  await page.setContent(`${islandHtml}<div id="app"></div>`)
   await page.addStyleTag({ content: 'html, body { margin: 0; height: 100%; }' })
   await page.addStyleTag({ path: bundle.replace(/\.js$/, '.css') })
   await page.addScriptTag({ path: bundle })

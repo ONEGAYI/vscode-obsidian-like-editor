@@ -2,6 +2,11 @@
 import { describe, expect, it } from 'vitest'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
 import { selectTableRegion } from '../../src/webview/tableRegionSelection'
+import { installLocale } from '../../src/shared/i18n'
+import { zhCn } from '../../src/shared/locales/zh-cn'
+
+// #94 起文案经 t() 取词：装配生产中文包，断言与字典同源
+installLocale('zh-cn', zhCn)
 
 if (Range.prototype.getClientRects === undefined) {
   Range.prototype.getClientRects = () => [] as unknown as DOMRectList
@@ -72,8 +77,8 @@ describe('快速操作条', () => {
     const bar = h.parent.querySelector<HTMLElement>('.vsidian-quick-actions')!
     const inlineMath = bar.querySelector<HTMLButtonElement>('[data-op="inlineMath"]')!
     const blockMath = bar.querySelector<HTMLButtonElement>('[data-op="blockMath"]')!
-    expect(inlineMath.getAttribute('aria-label')).toBe('插入行内公式')
-    expect(blockMath.getAttribute('aria-label')).toBe('插入块级公式')
+    expect(inlineMath.getAttribute('aria-label')).toBe(zhCn['format.inlineMath'])
+    expect(blockMath.getAttribute('aria-label')).toBe(zhCn['format.blockMath'])
     h.view.dispatch({ selection: { anchor: 0, head: 2 } })
     inlineMath.click()
     expect(h.view.state.doc.toString()).toBe('$公式$文字')
@@ -116,7 +121,7 @@ describe('快速操作条', () => {
     expect(bold.title).toContain('Ctrl+Shift+B')
     expect(bold.getAttribute('aria-description')).toContain('Ctrl+Shift+B')
     h.controller.setQuickActionBindingHints(() => [])
-    expect(bold.title).toBe('粗体')
+    expect(bold.title).toBe(zhCn['format.bold'])
     expect(bold.hasAttribute('aria-description')).toBe(false)
     h.controller.handleHostMessage({ kind: 'view.mode.set', mode: 'reading' })
     expect(bold.disabled).toBe(true)
@@ -153,7 +158,7 @@ describe('快速操作条', () => {
     expect(dispatched()).toBe(2)
 
     h.controller.handleHostMessage({ kind: 'keybindings.changed', overrides: { bold: [] } })
-    expect(bold.title).toBe('粗体')
+    expect(bold.title).toBe(zhCn['format.bold'])
     expect(bold.hasAttribute('aria-description')).toBe(false)
     press(true)
     expect(dispatched()).toBe(2)

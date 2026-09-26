@@ -7,6 +7,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { chromium } from 'playwright'
+import { buildZhLocaleIsland } from './localeIsland.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const bundle = path.join(root, 'out/test/browser/outlineSearch.js')
@@ -40,6 +41,8 @@ const DOC = [
 ].join('\n')
 const HEADING_TEXTS = ['Alpha', 'Bold 标题', 'Gamma', 'Delta', 'Epsilon', 'Zeta']
 
+// #94：大纲文案经 t() 取词——注入生产同款 zh-cn 数据岛（fixture 入口 boot）
+const { islandHtml, zhCnMessages } = await buildZhLocaleIsland(root)
 const browser = await chromium.launch({ headless: true,
   channel: process.env.VSIDIAN_TEST_BROWSER_CHANNEL || undefined })
 let passed = 0
@@ -47,7 +50,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1000, height: 560 } })
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
-  await page.setContent('<div id="app"></div>')
+  await page.setContent(`${islandHtml}<div id="app"></div>`)
   await page.addStyleTag({ content: 'html, body { margin: 0; height: 100%; }' })
   await page.addStyleTag({ path: bundle.replace(/\.js$/, '.css') })
   await page.addScriptTag({ path: bundle })
@@ -60,9 +63,9 @@ try {
   let s = await page.evaluate(() => window.readSearch())
   assert.equal(s.toolbarDisplay, 'flex', `工具条行应绘制为 flex（实际 ${s.toolbarDisplay}）`)
   assert.ok(s.toolbarHeightPx >= 24, `工具条行应有可见高度（实际 ${s.toolbarHeightPx}）`)
-  assert.equal(s.placeholder, '输入以搜索', '搜索框 placeholder 应为「输入以搜索」')
-  assert.equal(s.jumpBottomAria, '跳转到笔记末尾')
-  assert.equal(s.resetAria, '重置')
+  assert.equal(s.placeholder, zhCnMessages['outline.searchPlaceholder'], '搜索框 placeholder 应为「输入以搜索」')
+  assert.equal(s.jumpBottomAria, zhCnMessages['outline.jumpBottom'])
+  assert.equal(s.resetAria, zhCnMessages['outline.reset'])
   passed++
   console.log('[搜索回归][PASS] 工具条行绘制 + 三控件可访问名称与占位文案')
 
@@ -93,7 +96,8 @@ try {
   // ---- 场景 D：无匹配占位；清空恢复（快照回放 + mark 消失 + 占位消失）----
   await page.locator('.vsidian-outline-search').fill('不存在词条')
   s = await page.evaluate(() => window.readSearch())
-  assert.equal((await page.evaluate(() => window.readSearchMarks())).nomatchText, '无匹配', '无匹配应显示「无匹配」占位')
+  assert.equal((await page.evaluate(() => window.readSearchMarks())).nomatchText,
+    zhCnMessages['outline.noMatch'], '无匹配应显示「无匹配」占位')
   // 前置折叠（档 1：Gamma/Epsilon 折叠遮蔽）再清空——回放进入搜索前的快照
   await page.evaluate(() => window.post({ kind: 'outline.test.expandClick', level: 1 }))
   await page.locator('.vsidian-outline-search').fill('')

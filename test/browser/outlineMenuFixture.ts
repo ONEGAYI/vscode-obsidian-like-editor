@@ -5,7 +5,11 @@
 import { WebviewSyncController } from '../../src/webview/syncController'
 import { keymap } from '@codemirror/view'
 import { defaultKeymap } from '@codemirror/commands'
+import { bootLocaleFromDocument } from '../../src/webview/localeBoot'
 import '../../src/webview/main.css'
+
+// #94：harness 页面注入语言数据岛，boot 与生产首帧同路径
+bootLocaleFromDocument()
 
 const controller = new WebviewSyncController({
   postMessage(msg: unknown) {

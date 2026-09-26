@@ -1,8 +1,11 @@
 import { keymap } from '@codemirror/view'
 import { defaultKeymap } from '@codemirror/commands'
 import { WebviewSyncController } from '../../src/webview/syncController'
+import { bootLocaleFromDocument } from '../../src/webview/localeBoot'
 import '../../src/webview/main.css'
 
+// #94：harness 页面注入语言数据岛，boot 与生产首帧同路径（无岛取词回退键名）
+bootLocaleFromDocument()
 let saved: unknown
 const sent: unknown[] = []
 const controller = new WebviewSyncController({

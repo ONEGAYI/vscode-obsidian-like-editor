@@ -7,6 +7,7 @@ import { liveDecorationsField } from './liveDecorations'
 import { splitTableRowCells } from './tableCells'
 import type { TableRowInfo } from './tableStructure'
 import { selectTableRegion, setTableRegion, tableRegionField } from './tableRegionSelection'
+import { t } from '../shared/i18n'
 
 interface TableControlActions {
   tableRowsAt(state: EditorState, pos: number, tree: Tree): TableRowInfo[] | null
@@ -55,7 +56,7 @@ class TableControlsView {
   constructor(private readonly view: EditorView, private readonly actions: TableControlActions) {
     this.layer = document.createElement('div')
     this.layer.className = 'vsidian-table-controls'
-    this.layer.setAttribute('aria-label', '表格操作控件')
+    this.layer.setAttribute('aria-label', t('table.controls'))
     view.dom.appendChild(this.layer)
     view.scrollDOM.addEventListener('scroll', this.onScroll)
     view.contentDOM.addEventListener('pointermove', this.onHover)
@@ -170,6 +171,8 @@ class TableControlsView {
   }
 
   private render(): void {
+    // 语言切换后控件按钮随本渲染自然取新词；层可访问名称常驻，就地重刷
+    this.layer.setAttribute('aria-label', t('table.controls'))
     for (const item of this.visible) {
       item.element.classList.remove('vsidian-table-row-selected', 'vsidian-table-dragging',
         'vsidian-table-drop-before', 'vsidian-table-drop-after')
@@ -211,7 +214,7 @@ class TableControlsView {
       const rect = element.getBoundingClientRect()
       const top = rect.top - editorRect.top
       const handleLeft = rect.left - editorRect.left - 9
-      const handle = this.makeButton('vsidian-table-row-handle', `选择或拖动第 ${index + 1} 行`,
+        const handle = this.makeButton('vsidian-table-row-handle', t('table.selectRow', { n: index + 1 }),
         handleLeft, top + rect.height / 2, () => {
           if (this.suppressNextClick) { this.suppressNextClick = false; return }
           const columns = splitTableRowCells(this.view.state.doc.lineAt(rows[0]!.lineFrom).text,
@@ -246,7 +249,7 @@ class TableControlsView {
         const cells = [...anchor.element.querySelectorAll<HTMLElement>(':scope > .vsidian-table-grid-cell')]
         cells.forEach((cell, column) => {
           const cellRect = cell.getBoundingClientRect()
-          const button = this.makeButton('vsidian-table-column-handle', `选择或拖动第 ${column + 1} 列`,
+          const button = this.makeButton('vsidian-table-column-handle', t('table.selectColumn', { n: column + 1 }),
             cellRect.left - editorRect.left + cellRect.width / 2, rect.top - editorRect.top - 9,
             () => {
               if (this.suppressNextClick) { this.suppressNextClick = false; return }
@@ -266,7 +269,7 @@ class TableControlsView {
           })
         })
         const lastVisible = group[group.length - 1]!.element.getBoundingClientRect()
-        const insertCol = this.makeButton('vsidian-table-insert-column', '在右侧新增列',
+        const insertCol = this.makeButton('vsidian-table-insert-column', t('table.insertColumnRight'),
           rect.right - editorRect.left + 6, (rect.top + lastVisible.bottom) / 2 - editorRect.top, () => {
             // 可见锚点只负责几何定位；结构命令始终取真实表头末列。
             const line = this.view.state.doc.lineAt(anchor.rows[0]!.lineFrom)
@@ -282,7 +285,7 @@ class TableControlsView {
       const last = group.find((item) => item.lineFrom === lastLineFrom)
       if (last) {
         const rect = last.element.getBoundingClientRect()
-        const addRow = this.makeButton('vsidian-table-insert-row', '在表格底部新增行',
+        const addRow = this.makeButton('vsidian-table-insert-row', t('table.insertRowBelow'),
           rect.left - editorRect.left + rect.width / 2, rect.bottom - editorRect.top + 6,
           () => { this.actions.runTableEditAt(this.view, last.lineFrom, 'insertRowBelow') })
         addRow.textContent = '+'

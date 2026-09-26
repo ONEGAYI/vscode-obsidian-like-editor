@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { mkdir } from 'node:fs/promises'
 import { build } from 'esbuild'
 import { chromium } from 'playwright'
+import { buildZhLocaleIsland } from './localeIsland.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const output = path.join(root, 'out/test/browser/quickActions.js')
@@ -12,6 +13,8 @@ await build({ entryPoints: [path.join(root, 'test/browser/quickActionsFixture.ts
   loader: { '.svg': 'file' }, assetNames: 'assets/[name]' })
 const artifacts = path.join(root, 'out/task89')
 await mkdir(artifacts, { recursive: true })
+// #94：操作条文案经 t() 取词——注入生产同款 zh-cn 数据岛（fixture 入口 boot）
+const { islandHtml, zhCnMessages } = await buildZhLocaleIsland(root)
 const iconPaint = async (page, key) => {
   const png = await page.locator(`[data-icon="${key}"]`).screenshot()
   return page.evaluate(async (base64) => {
@@ -52,7 +55,7 @@ try {
       await route.fulfill({ path: path.join(root, 'out/test/browser/assets', name),
         contentType: 'image/svg+xml' })
     })
-    await page.setContent(`<html><head><base href="http://quick.test/"></head><body class="vscode-${theme}"><div id="app"></div></body></html>`)
+    await page.setContent(`<html><head><base href="http://quick.test/"></head><body class="vscode-${theme}">${islandHtml}<div id="app"></div></body></html>`)
     await page.addStyleTag({ content: `:root { --vscode-font-family: sans-serif; --vscode-editor-background: ${theme === 'light' ? '#fff' : '#1e1e1e'}; --vscode-editor-foreground: ${theme === 'light' ? '#222' : '#ddd'}; --vscode-button-background: ${theme === 'light' ? '#075fae' : '#1476bd'}; --vscode-button-foreground: #fff; --vscode-focusBorder: #4fc1ff; }` })
     await page.addStyleTag({ path: output.replace(/\.js$/, '.css') })
     await page.addScriptTag({ path: output })
@@ -60,7 +63,8 @@ try {
     await page.locator('.vsidian-quick-toggle').click()
     const bar = page.locator('.vsidian-quick-actions')
     assert.deepEqual(await bar.locator('[role="group"]').evaluateAll((nodes) =>
-      nodes.map((node) => node.getAttribute('aria-label'))), ['文字', '段落', '插入'])
+      nodes.map((node) => node.getAttribute('aria-label'))),
+    [zhCnMessages['format.groupText'], zhCnMessages['format.groupParagraph'], zhCnMessages['format.groupInsert']])
     await page.waitForFunction(() => [...document.querySelectorAll('.vsidian-quick-action-group')]
       .every((node) => node.dataset.separated === 'false'))
     const barBox = await bar.boundingBox()

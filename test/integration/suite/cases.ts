@@ -4,6 +4,10 @@
 import * as vscode from 'vscode'
 import { LOCALE_MESSAGES, resolveLocale } from '../../../src/shared/locales'
 
+/** #94 起编辑器 webview 文案随生效语言取词（auto 按宿主显示语言解析）——
+ *  期望值与扩展装配同源计算，不再复制字面量 */
+const editorMessages = () => LOCALE_MESSAGES[resolveLocale(undefined, vscode.env.language)]
+
 const VIEW_TYPE = 'onegayi.vsidian.editor'
 const EXT_ID = 'onegayi.vsidian'
 const CMD = {
@@ -4427,10 +4431,10 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(collapsed.sidebar!.settingsPainted === true,
       `齿轮设置按钮应真实可见（命中测试失败：${JSON.stringify(collapsed.sidebar)}）`)
     assert(collapsed.sidebar!.sidebarToolbarPainted === false, '收起时侧栏顶栏不得可见（命中应失败）')
-    assert(collapsed.sidebar!.settingsAriaLabel === '打开 Vsidian 设置',
-      `齿轮可访问名称应为「打开 Vsidian 设置」，实际 ${String(collapsed.sidebar!.settingsAriaLabel)}`)
-    assert(collapsed.sidebar!.toggleAriaLabel === '展开右侧栏',
-      `收起态切换按钮名称应为「展开右侧栏」，实际 ${String(collapsed.sidebar!.toggleAriaLabel)}`)
+    assert(collapsed.sidebar!.settingsAriaLabel === editorMessages()['sidebar.settings'],
+      `齿轮可访问名称应为「${editorMessages()['sidebar.settings']}」，实际 ${String(collapsed.sidebar!.settingsAriaLabel)}`)
+    assert(collapsed.sidebar!.toggleAriaLabel === editorMessages()['sidebar.expand'],
+      `收起态切换按钮名称应为「${editorMessages()['sidebar.expand']}」，实际 ${String(collapsed.sidebar!.toggleAriaLabel)}`)
     assert(Math.abs(parseFloat(collapsed.sidebar!.toggleBarStrokeWidth ?? 'x') - 1.5) < 0.01,
       `收起态图标竖线应为细线 1.5px，实际 ${String(collapsed.sidebar!.toggleBarStrokeWidth)}`)
     assert(collapsed.paint?.textVisible === true, '收起态正文应可见')
@@ -4450,8 +4454,8 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(Math.abs(parseFloat(opened.sidebar!.toggleFrameStrokeWidth ?? 'x') -
       parseFloat(collapsed.sidebar!.toggleFrameStrokeWidth ?? 'x')) < 0.01,
       '图标外框线宽两态应恒定（差异只应在竖线）')
-    assert(opened.sidebar!.toggleAriaLabel === '收起右侧栏',
-      `展开态切换按钮名称应为「收起右侧栏」，实际 ${String(opened.sidebar!.toggleAriaLabel)}`)
+    assert(opened.sidebar!.toggleAriaLabel === editorMessages()['sidebar.collapse'],
+      `展开态切换按钮名称应为「${editorMessages()['sidebar.collapse']}」，实际 ${String(opened.sidebar!.toggleAriaLabel)}`)
     assert((opened.sidebar!.sidebarWidthPx ?? 0) > 200,
       `侧栏应占出宽度（约 280px），实际 ${String(opened.sidebar!.sidebarWidthPx)}`)
     assert((opened.sidebar!.mainWidthPx ?? 0) < collapsedMainWidth - 200,
@@ -4475,8 +4479,8 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(recollapsed.sidebar!.sidebarToolbarPainted === false, '收起后侧栏顶栏应不可见')
     assert(Math.abs(parseFloat(recollapsed.sidebar!.toggleBarStrokeWidth ?? 'x') - 1.5) < 0.01,
       `收起回归后图标竖线应回细线 1.5px，实际 ${String(recollapsed.sidebar!.toggleBarStrokeWidth)}`)
-    assert(recollapsed.sidebar!.toggleAriaLabel === '展开右侧栏',
-      `收起回归后名称应回「展开右侧栏」，实际 ${String(recollapsed.sidebar!.toggleAriaLabel)}`)
+    assert(recollapsed.sidebar!.toggleAriaLabel === editorMessages()['sidebar.expand'],
+      `收起回归后名称应回「${editorMessages()['sidebar.expand']}」，实际 ${String(recollapsed.sidebar!.toggleAriaLabel)}`)
     assert(Math.abs((recollapsed.sidebar!.mainWidthPx ?? 0) - collapsedMainWidth) < 2,
       `收起回归后主编辑区宽度应复原（${collapsedMainWidth} → ${String(recollapsed.sidebar!.mainWidthPx)}）`)
   }],
@@ -4555,8 +4559,8 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const collapsed = await waitViewState('outline.md', (v) => v.outline !== undefined)
     assert(collapsed.outline!.active === true, '大纲面板默认 active（展开侧栏即见大纲）')
     assert(collapsed.outline!.togglePainted === false, '侧栏收起时大纲按钮不得可见')
-    assert(collapsed.outline!.toggleAriaLabel === '大纲',
-      `大纲按钮可访问名称应为「大纲」，实际 ${String(collapsed.outline!.toggleAriaLabel)}`)
+    assert(collapsed.outline!.toggleAriaLabel === editorMessages()['outline.label'],
+      `大纲按钮可访问名称应为「${editorMessages()['outline.label']}」，实际 ${String(collapsed.outline!.toggleAriaLabel)}`)
 
     // 展开：按钮与面板真实绘制（elementFromPoint 命中），可访问名称齐备
     // （谓词等待展开动画终态：过渡期间面板中心点可能未入视口）
@@ -4573,8 +4577,8 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(Math.abs((opened.outline!.toggleIconSizePx ?? -1) - 16) < 0.01,
       `大纲按钮图标应为 16px（选择器命中与规则生效的 computed 证据），` +
         `实际 ${String(opened.outline!.toggleIconSizePx)}`)
-    assert(opened.outline!.panelAriaLabel === '大纲',
-      `大纲面板可访问名称应为「大纲」，实际 ${String(opened.outline!.panelAriaLabel)}`)
+    assert(opened.outline!.panelAriaLabel === editorMessages()['outline.label'],
+      `大纲面板可访问名称应为「${editorMessages()['outline.label']}」，实际 ${String(opened.outline!.panelAriaLabel)}`)
     assert(opened.paint?.textVisible === true, '展开态正文应仍可见')
 
     // 内容一致：大纲 = 源文本文档标题的级别/文字/起始行序列（跨级、同名、
@@ -5035,11 +5039,11 @@ export const cases: Array<[string, () => Promise<void>]> = [
       (v) => v.sidebar?.open === true && v.outline?.panelPainted === true && v.outline.items.length === 101)
     assert(initial.outline!.toolbarPainted === true,
       `工具条行应真实绘制（命中失败：${JSON.stringify(initial.outline)}）`)
-    assert(initial.outline!.jumpBottomAriaLabel === '跳转到笔记末尾',
+    assert(initial.outline!.jumpBottomAriaLabel === editorMessages()['outline.jumpBottom'],
       `跳末按钮可访问名称（实际 ${String(initial.outline!.jumpBottomAriaLabel)}）`)
-    assert(initial.outline!.resetAriaLabel === '重置',
+    assert(initial.outline!.resetAriaLabel === editorMessages()['outline.reset'],
       `重置按钮可访问名称（实际 ${String(initial.outline!.resetAriaLabel)}）`)
-    assert(initial.outline!.searchPlaceholder === '输入以搜索',
+    assert(initial.outline!.searchPlaceholder === editorMessages()['outline.searchPlaceholder'],
       `搜索框 placeholder（实际 ${String(initial.outline!.searchPlaceholder)}）`)
     assert(initial.outline!.searchActive === false, '初始应无搜索过滤')
     assert(initial.outline!.filteredVisibleIndices.length === 101,

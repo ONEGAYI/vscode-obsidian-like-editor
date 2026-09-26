@@ -5,6 +5,16 @@ import {
 import type { SettingsPageBridge, SettingsPageSection } from './settingsPageView'
 import { keyStep } from './keybindingRouter'
 import { isHostToWebview } from '../shared/protocol'
+import { t } from '../shared/i18n'
+
+/** #94 迁移期：format 源条目的 title 持字典消息键（t() 缺键回退原串，
+ *  extra/UI 源的存量字面量照常显示）；#95 键化 KEYBINDING_OPERATIONS 后
+ *  本助手语义即「取操作标题」不变 */
+const opTitle = (op: { title: string }): string => t(op.title)
+const titleOfId = (id: string): string => {
+  const op = KEYBINDING_OPERATIONS.find((item) => item.id === id)
+  return op ? opTitle(op) : id
+}
 
 function el(tag: string, cls: string, text = ''): HTMLElement {
   const node = document.createElement(tag)
@@ -18,7 +28,7 @@ export class KeybindingSettingsSection implements SettingsPageSection {
   readonly title = '快捷键'
   readonly description = '管理 Vsidian 操作的快捷键。冲突检查覆盖 Vsidian 内部；VS Code 和其他扩展的有效键位无法完整查询。'
   readonly icon = 'keyboard'
-  readonly entries = KEYBINDING_OPERATIONS.map((op) => ({ id: op.id, title: op.title,
+  readonly entries = KEYBINDING_OPERATIONS.map((op) => ({ id: op.id, title: opTitle(op),
     description: `${op.mode === 'both' ? '实时预览、阅读' : op.mode === 'live' ? '实时预览' : '阅读'} · ${op.command}` }))
 
   private overrides: KeybindingOverrides = {}
@@ -60,7 +70,7 @@ export class KeybindingSettingsSection implements SettingsPageSection {
       this.status = payload.ok ? '快捷键已保存并立即生效。'
         : payload.reason === 'storage' ? '保存失败，已恢复当前生效绑定。'
           : payload.reason === 'conflict' ? `Vsidian 内部冲突：${(payload.conflicts ?? []).map((id) =>
-            KEYBINDING_OPERATIONS.find((op) => op.id === id)?.title ?? id).join('、')}`
+            titleOfId(id)).join('、')}`
             : '快捷键无效，未保存。'
       if (payload.ok) this.conflict = undefined
     }
@@ -81,7 +91,7 @@ export class KeybindingSettingsSection implements SettingsPageSection {
       if (check.reason === 'conflict') {
         this.conflict = { id, bindings, ids: check.conflicts }
         this.status = `Vsidian 内部冲突：${check.conflicts.map((item) =>
-          KEYBINDING_OPERATIONS.find((op) => op.id === item)?.title ?? item).join('、')}。可选择替换原绑定。`
+          titleOfId(item)).join('、')}。可选择替换原绑定。`
       } else this.status = '快捷键无效，未保存。'
       this.updateStatus()
       this.renderRows()
@@ -99,7 +109,7 @@ export class KeybindingSettingsSection implements SettingsPageSection {
       if (check.reason === 'conflict') {
         this.conflict = { id, bindings: defaults, ids: check.conflicts, reset: true }
         this.status = `恢复默认与 ${check.conflicts.map((item) =>
-          KEYBINDING_OPERATIONS.find((op) => op.id === item)?.title ?? item).join('、')} 冲突。可选择替换原绑定。`
+          titleOfId(item)).join('、')} 冲突。可选择替换原绑定。`
       } else this.status = '恢复默认失败。'
       this.updateStatus()
       this.renderRows()
@@ -182,7 +192,7 @@ export class KeybindingSettingsSection implements SettingsPageSection {
     if (!parent) return
     parent.replaceChildren()
     let locatedRow: HTMLElement | undefined
-    const filtered = KEYBINDING_OPERATIONS.filter((op) => op.title.toLocaleLowerCase().includes(this.query.toLocaleLowerCase()) &&
+    const filtered = KEYBINDING_OPERATIONS.filter((op) => opTitle(op).toLocaleLowerCase().includes(this.query.toLocaleLowerCase()) &&
       (!this.keyQuery || getEffectiveBindings(this.overrides, op.id).some((binding) =>
         binding === this.keyQuery || binding.startsWith(`${this.keyQuery} `))))
     if (!filtered.length) parent.append(el('p', 'vsidian-settings-empty', '没有匹配的操作。'))
@@ -194,7 +204,7 @@ export class KeybindingSettingsSection implements SettingsPageSection {
         locatedRow = row
       }
       const heading = el('div', 'vsidian-keybindings-row-heading')
-      heading.append(el('strong', '', op.title),
+      heading.append(el('strong', '', opTitle(op)),
         el('span', 'vsidian-keybindings-mode', op.mode === 'both' ? '实时预览 · 阅读' : op.mode === 'live' ? '实时预览' : '阅读'))
       row.append(heading)
       const bindings = getEffectiveBindings(this.overrides, op.id)
@@ -225,7 +235,7 @@ export class KeybindingSettingsSection implements SettingsPageSection {
       }
       if (this.conflict?.id === op.id) {
         const warning = el('div', 'vsidian-keybindings-conflict',
-          `与 ${this.conflict.ids.map((id) => KEYBINDING_OPERATIONS.find((item) => item.id === id)?.title ?? id).join('、')} 冲突。`)
+          `与 ${this.conflict.ids.map((id) => titleOfId(id)).join('、')} 冲突。`)
         warning.setAttribute('role', 'alert')
         warning.append(this.button('替换原绑定', () => this.conflict!.reset
           ? this.resetOne(op.id, true) : this.save(op.id, this.conflict!.bindings, true)))

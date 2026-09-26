@@ -5,18 +5,21 @@ import { fileURLToPath } from 'node:url'
 import { mkdir } from 'node:fs/promises'
 import { build } from 'esbuild'
 import { chromium } from 'playwright'
+import { buildZhLocaleIsland } from './localeIsland.mjs'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const output = path.join(root, 'out/test/browser/settingsPage.js')
 await build({ entryPoints: [path.join(root, 'src/webview/settingsMain.ts')], bundle: true, outfile: output, format: 'iife' })
 const artifacts = path.join(root, 'out/task90')
 await mkdir(artifacts, { recursive: true })
+// #94：页面标题等文案经 t() 取词（settingsMain 首帧 boot 需要数据岛）
+const { islandHtml } = await buildZhLocaleIsland(root)
 const browser = await chromium.launch({ headless: true, channel: process.env.VSIDIAN_TEST_BROWSER_CHANNEL || undefined })
 try {
   for (const theme of ['light', 'dark']) {
     const page = await browser.newPage({ viewport: { width: 1100, height: 720 } })
     const errors = []
     page.on('pageerror', (err) => errors.push(err.message))
-    await page.setContent('<html lang="zh-CN"><body><div id="app"></div></body></html>')
+    await page.setContent(`<html lang="zh-CN"><body>${islandHtml}<div id="app"></div></body></html>`)
     const palette = theme === 'light' ? ['#ffffff','#30343b','#f5f6f8','#59616d','#e0e4eb','#26313e','#ffffff','#d7dce3'] : ['#1e1e1e','#dddddd','#252526','#aaaaaa','#373d49','#ffffff','#313136','#474750']
     await page.addStyleTag({ content: `:root { --vscode-font-family: "Segoe UI", "Microsoft YaHei", sans-serif; --vscode-editor-background:${palette[0]}; --vscode-editor-foreground:${palette[1]}; --vscode-sideBar-background:${palette[2]}; --vscode-descriptionForeground:${palette[3]}; --vscode-list-activeSelectionBackground:${palette[4]}; --vscode-list-activeSelectionForeground:${palette[5]}; --vscode-input-background:${palette[6]}; --vscode-input-foreground:${palette[1]}; --vscode-panel-border:${palette[7]}; --vscode-focusBorder:#2687d4; }` })
     await page.addStyleTag({ path: output.replace(/\.js$/, '.css') })

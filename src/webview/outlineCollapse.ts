@@ -32,19 +32,29 @@
 // 展开集合并负责落 DOM（hidden/collapsed 类）与持久化（档位经 bridge
 // state 全局记忆；展开集合是会话内内存态，重载后回到档位精确集）。
 
+import { t } from '../shared/i18n'
+
 /** 档位数（0=No-Expand、1..5=展开到 H1..H5） */
 export type OutlineExpandLevel = 0 | 1 | 2 | 3 | 4 | 5
 
 /** 默认档位：H5 全展开 */
 export const OUTLINE_EXPAND_LEVEL_DEFAULT: OutlineExpandLevel = 5
 
+/** 档位 → 字典键（zh「展开到N级标题」用中文数字、en 用阿拉伯数字，
+ *  形态随语言各异，逐档成键不做插值） */
+const EXPAND_LEVEL_KEYS = [
+  'outline.collapseAll',
+  'outline.expandLevel1',
+  'outline.expandLevel2',
+  'outline.expandLevel3',
+  'outline.expandLevel4',
+  'outline.expandLevel5',
+] as const
+
 /** 档位 → 滑块圆点的可访问名称（aria-label 与 title 共用） */
 export function outlineExpandLevelLabel(level: number): string {
-  if (level === 0) {
-    return '全部折叠'
-  }
-  const names = ['', '一', '二', '三', '四', '五']
-  return `展开到${names[level] ?? ''}级标题`
+  const key = EXPAND_LEVEL_KEYS[level]
+  return key === undefined ? '' : t(key)
 }
 
 /** 校验持久化恢复的档位值（脏 state 防御：越界/非整数回退默认） */

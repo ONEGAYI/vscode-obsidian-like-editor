@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { mkdir } from 'node:fs/promises'
 import { build } from 'esbuild'
 import { chromium } from 'playwright'
+import { buildZhLocaleIsland } from './localeIsland.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const output = path.join(root, 'out/test/browser/keybindings.js')
@@ -12,6 +13,9 @@ await build({ entryPoints: [path.join(root, 'src/webview/settingsMain.ts')], bun
   outfile: output, format: 'iife' })
 const artifacts = path.join(root, 'out/task91')
 await mkdir(artifacts, { recursive: true })
+// #94：format 操作标题经 t() 取词（keybindingSettings 渲染层），设置页
+// 首帧 boot 需要数据岛——与宿主生成点同源
+const { islandHtml, zhCnMessages } = await buildZhLocaleIsland(root)
 const browser = await chromium.launch({ headless: true,
   channel: process.env.VSIDIAN_TEST_BROWSER_CHANNEL || undefined })
 try {
@@ -19,7 +23,7 @@ try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 720 } })
     const errors = []
     page.on('pageerror', error => errors.push(error.message))
-    await page.setContent('<html lang="zh-CN"><body><div id="app"></div></body></html>')
+    await page.setContent(`<html lang="zh-CN"><body>${islandHtml}<div id="app"></div></body></html>`)
     const palette = theme === 'light' ? ['#fff', '#30343b', '#f5f6f8', '#d7dce3', '#f2f4f7']
       : ['#1e1e1e', '#ddd', '#252526', '#474750', '#313136']
     await page.addStyleTag({ content: `:root { --vscode-editor-background:${palette[0]}; --vscode-editor-foreground:${palette[1]}; --vscode-sideBar-background:${palette[2]}; --vscode-panel-border:${palette[3]}; --vscode-editorWidget-background:${palette[4]}; --vscode-input-background:${palette[0]}; --vscode-input-foreground:${palette[1]}; --vscode-descriptionForeground:${palette[1]}; --vscode-focusBorder:#2687d4; }` })
@@ -45,7 +49,8 @@ try {
     await page.addScriptTag({ path: output })
     const globalSearch = page.getByRole('searchbox', { name: '搜索全部设置' })
     await globalSearch.fill('双链')
-    await page.locator('.vsidian-settings-result').filter({ hasText: '插入双链' }).click()
+    await page.locator('.vsidian-settings-result')
+      .filter({ hasText: zhCnMessages['format.wikilink'] }).click()
     const located = await page.locator('[data-operation-id="wikilink"]').evaluate((row) => {
       const bounds = row.getBoundingClientRect()
       return { visible: bounds.top >= 0 && bounds.bottom <= innerHeight,

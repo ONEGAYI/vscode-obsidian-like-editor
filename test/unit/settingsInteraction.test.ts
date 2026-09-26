@@ -11,6 +11,11 @@ import { describe, it, expect } from 'vitest'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
 import { DocumentSession, type HostDocumentPort, type PanelPort } from '../../src/host/documentSession'
 import type { HostToWebview, SettingsPayload, WebviewToHost } from '../../src/shared/protocol'
+import { installLocale } from '../../src/shared/i18n'
+import { zhCn } from '../../src/shared/locales/zh-cn'
+
+// #94 起文案经 t() 取词：装配生产中文包，断言与字典同源
+installLocale('zh-cn', zhCn)
 
 const DOC_URI = 'file:///d%3A/notes/a.md'
 
@@ -96,8 +101,8 @@ describe('工具栏设置入口（#33；#53 图标化）', () => {
     // #53 起设置入口图标化为齿轮：无文字、有内联 SVG 与可访问名称
     expect(btn!.querySelector('svg'), '设置按钮应为内联 SVG 齿轮图标').toBeTruthy()
     expect(btn!.textContent).not.toContain('设置')
-    expect(btn!.getAttribute('aria-label')).toBe('打开 Vsidian 设置')
-    expect(btn!.getAttribute('title')).toBe('打开 Vsidian 设置')
+    expect(btn!.getAttribute('aria-label')).toBe(zhCn['sidebar.settings'])
+    expect(btn!.getAttribute('title')).toBe(zhCn['sidebar.settings'])
     btn!.click()
     expect(sent).toContainEqual({ kind: 'settings.open' })
   })
