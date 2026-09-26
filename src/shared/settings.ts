@@ -42,8 +42,40 @@ export const SHOW_LINE_NUMBERS_KEY = 'editor.lineNumbers'
 export const SHOW_LINE_NUMBERS_DEFAULT = true
 
 /**
+ * #79「代码块卡片」总开关：围栏代码块呈现态收起为卡片（隐藏围栏标记、
+ * 头部横带 + 语言标签；行号/复制按钮子开关见 #80/#81 的
+ * codeblock.lineNumbers / codeblock.copyButton，语法高亮见 #83 的
+ * codeblock.highlight）。关闭后回到朴素源码围栏外观。键与消费方
+ * （syncController 的 codeCardCompartment）成对导出。
+ */
+export const CODEBLOCK_CARD_KEY = 'codeblock.card'
+export const CODEBLOCK_CARD_DEFAULT = true
+
+/**
+ * #80「卡内行号」子开关：卡片内代码行行首的块内行号（每块从 1 起、围栏
+ * 行不占号）。依附卡片总开关——卡片关闭时本项无效。
+ */
+export const CODEBLOCK_LINE_NUMBERS_KEY = 'codeblock.lineNumbers'
+export const CODEBLOCK_LINE_NUMBERS_DEFAULT = true
+
+/**
+ * #81「复制按钮」子开关：卡片头部悬停显现的复制按钮（点击经宿主剪贴板
+ * API 复制代码体）。依附卡片总开关；编辑态同样常驻，收起态不发射。
+ */
+export const CODEBLOCK_COPY_BUTTON_KEY = 'codeblock.copyButton'
+export const CODEBLOCK_COPY_BUTTON_DEFAULT = true
+
+/**
+ * #83「语法高亮」独立开关：tok-* token 着色（Lezer 语言包 + legacy-modes，
+ * 两视图共用同一词表与色板）。独立于卡片——卡片关闭时朴素围栏仍可着色。
+ */
+export const CODEBLOCK_HIGHLIGHT_KEY = 'codeblock.highlight'
+export const CODEBLOCK_HIGHLIGHT_DEFAULT = true
+
+/**
  * 生产设置定义注册表：#33 交付空状态页面与完整数据链路，#34 加入首个
- * 实际设置项「显示行号」（设置页自此渲染真实开关）。
+ * 实际设置项「显示行号」（设置页自此渲染真实开关），#79 加入「代码块卡片」，
+ * #80 加入「卡内行号」，#81 加入「复制按钮」，#83 加入「语法高亮」。
  */
 export const PRODUCTION_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
   {
@@ -52,6 +84,34 @@ export const PRODUCTION_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     default: SHOW_LINE_NUMBERS_DEFAULT,
     title: '显示行号',
     description: '在实时预览左侧留白带内显示源文件行号（阅读模式不显示）。',
+  },
+  {
+    key: CODEBLOCK_CARD_KEY,
+    type: 'boolean',
+    default: CODEBLOCK_CARD_DEFAULT,
+    title: '代码块卡片',
+    description: '围栏代码块在光标离开时收起为卡片：隐藏围栏标记，显示语言头部横带。关闭后回到朴素源码围栏外观。',
+  },
+  {
+    key: CODEBLOCK_LINE_NUMBERS_KEY,
+    type: 'boolean',
+    default: CODEBLOCK_LINE_NUMBERS_DEFAULT,
+    title: '卡内行号',
+    description: '卡片内代码行行首显示块内行号（每块从 1 起，围栏行不占号）。需开启「代码块卡片」。',
+  },
+  {
+    key: CODEBLOCK_COPY_BUTTON_KEY,
+    type: 'boolean',
+    default: CODEBLOCK_COPY_BUTTON_DEFAULT,
+    title: '复制按钮',
+    description: '卡片头部悬停显示复制按钮，点击复制整块代码（不含围栏行）。需开启「代码块卡片」。',
+  },
+  {
+    key: CODEBLOCK_HIGHLIGHT_KEY,
+    type: 'boolean',
+    default: CODEBLOCK_HIGHLIGHT_DEFAULT,
+    title: '语法高亮',
+    description: '代码块内容按语言着色（卡片关闭时朴素围栏同样生效；未识别语言回退纯文本）。',
   },
 ]
 

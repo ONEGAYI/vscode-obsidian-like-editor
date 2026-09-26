@@ -73,6 +73,12 @@ export type HostToWebview =
    *  完全相同的处理器链路（校验 → 出站 edit.request）。宿主测试无法向
    *  webview 派发真实鼠标事件，以此通道验证真实宿主内的勾选写回 */
   | { kind: 'task.test.click'; view: 'live' | 'reading'; index: number }
+  /** 测试钩子（#81）：按序号点击卡片头部复制按钮（驱动与用户点击相同的
+   *  处理器链路：effect → codeblock.copy 出站 → 宿主剪贴板写入） */
+  | { kind: 'codecard.test.copy'; index: number }
+  /** 测试钩子（#82）：按序号点击卡片头部折叠 chevron（驱动与用户点击相同
+   *  的处理器链路：effect → codeCardFoldField 视图态切换） */
+  | { kind: 'codecard.test.fold'; index: number }
   /** 图片解析结果（#10）：reqId 对应 image.request。ok 时 src 为可直接作
    *  img.src 的地址——工作区文件经 asWebviewUri 的 webview 资源 URI
    *  （本地与远程工作区同通道）；失败附原因码供错误态与重试呈现 */
@@ -332,6 +338,11 @@ export type WebviewToHost =
   /** 图片资源解析请求（#10）：非 http(s) 直连的工作区图源经宿主解析为
    *  webview 可加载地址（reqId 会话面板内自增，对应 image.result） */
   | { kind: 'image.request'; sessionId: string; docUri: string; reqId: number; src: string }
+  /** 代码块复制请求（#81）：卡片头部复制按钮点击 → 宿主剪贴板 API 写入。
+   *  text 为代码体原文（两条围栏行之间，不含围栏与 info string），恒为
+   *  LF（CM6 LF 模型）；宿主按文档 EOL 归一后写剪贴板（webview 不触碰
+   *  剪贴板权限） */
+  | { kind: 'codeblock.copy'; sessionId: string; docUri: string; text: string }
   /** 打开 Vsidian 设置页（#33）：编辑器工具栏「设置」按钮 → 宿主
    *  createWebviewPanel。无 sessionId/docUri——打开设置页不依赖任何文档
    *  会话（无文档打开时同样可用） */
@@ -539,6 +550,32 @@ export interface PaintProbe {
     error: number
     /** 当前激活视图内 .vsidian-mermaid 容器总数 */
     count: number
+  }
+  /** #79 代码块卡片绘制：当前激活视图内卡片头部横带的实际可见性与计数。
+   *  jsdom 无布局（rect 恒 0），visible 恒 false，只作真宿主集成断言依据；
+   *  live 态探 live 侧头部 widget，reading 态探阅读容器（#84 起同源类名）。
+   *  无卡片（设置关闭/无围栏）时整个字段缺省。 */
+  code?: {
+    /** 首个头部横带的 rect 有面积且 elementFromPoint 命中 */
+    visible: boolean
+    /** 首个头部横带 computed display（'none' = 未绘制） */
+    display: string | null
+    /** 首个头部语言标签文本（如 'JavaScript'；无头部时 null） */
+    label: string | null
+    /** 当前激活视图内 .vsidian-code-card-header 头部数 */
+    headerCount: number
+    /** 当前激活视图内 .vsidian-code-card-line 行数（含被清空的围栏行） */
+    cardLineCount: number
+    /** #80 视口内卡内行号文本序列（如 ['1','2','3']；关闭或无行为 null） */
+    lineNumberTexts?: string[] | null
+    /** #81 呈现态复制按钮在场数（编辑态同样常驻，收起态不发射） */
+    copyCount?: number
+    /** #82 视口内收起态头部数（chevron -collapsed 计数） */
+    foldedCount?: number
+    /** #83 视口内 tok-* token 元素数（高亮关闭或无引擎语言为 0） */
+    tokenCount?: number
+    /** 全部头部语言标签序列（DOM 顺序；渲染型围栏接入后断言 Mermaid 标签在场） */
+    labels?: string[]
   }
   /** #55 标题行绘制观测：视口内已挂载的 .vsidian-heading-inview 行的
    *  distinct 计算值（box-shadow 应为 'none'、border-left-width 应为
@@ -1059,6 +1096,21 @@ function isPaintProbe(v: unknown): v is PaintProbe {
       isNonNegativeInt(v.mermaid.error) &&
       isNonNegativeInt(v.mermaid.count)
     )) &&
+    (v.code === undefined || (
+      isObject(v.code) &&
+      typeof v.code.visible === 'boolean' &&
+      isNullOrString(v.code.display) &&
+      (v.code.label === undefined || v.code.label === null || isString(v.code.label)) &&
+      isNonNegativeInt(v.code.headerCount) &&
+      isNonNegativeInt(v.code.cardLineCount) &&
+      (v.code.lineNumberTexts === undefined || v.code.lineNumberTexts === null ||
+        (Array.isArray(v.code.lineNumberTexts) && v.code.lineNumberTexts.every(isString))) &&
+      (v.code.copyCount === undefined || isNonNegativeInt(v.code.copyCount)) &&
+      (v.code.foldedCount === undefined || isNonNegativeInt(v.code.foldedCount)) &&
+      (v.code.tokenCount === undefined || isNonNegativeInt(v.code.tokenCount)) &&
+      (v.code.labels === undefined ||
+        (Array.isArray(v.code.labels) && v.code.labels.every(isString)))
+    )) &&
     (v.heading === undefined || v.heading === null || (
       isObject(v.heading) &&
       isNonNegativeInt(v.heading.inviewCount) &&
@@ -1362,6 +1414,12 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         isNonNegativeInt(v.srcStart) &&
         isNonNegativeInt(v.srcEnd)
       )
+    case 'codeblock.copy':
+      return (
+        isString(v.sessionId) &&
+        isString(v.docUri) &&
+        isString(v.text)
+      )
     case 'image.request':
       return (
         isString(v.sessionId) &&
@@ -1460,6 +1518,10 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
         (v.view === 'live' || v.view === 'reading') &&
         isNonNegativeInt(v.index)
       )
+    case 'codecard.test.copy':
+      return isNonNegativeInt(v.index)
+    case 'codecard.test.fold':
+      return isNonNegativeInt(v.index)
     case 'image.result':
       if (!isPositiveInt(v.reqId)) {
         return false

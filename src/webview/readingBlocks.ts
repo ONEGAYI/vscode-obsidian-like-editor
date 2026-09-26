@@ -20,6 +20,7 @@
 import { frontmatterRange } from './markdownDoc'
 import { maskCodeSpanPipes } from './tableCells'
 import { isMermaidInfo } from '../shared/mermaid'
+import { codeInfoFirstWord } from '../shared/codeLangs'
 import {
   buildLineBounds,
   createMarkdownRenderer,
@@ -111,11 +112,28 @@ function headingLevelOfTag(tag: string): 1 | 2 | 3 | 4 | 5 | 6 | null {
   return m ? (Number(m[1]) as 1 | 2 | 3 | 4 | 5 | 6) : null
 }
 
-/** 围栏 chunk 的内部 HTML（转义源码 + 语言类） */
-function fenceChunkHtml(text: string, from: number, to: number, info: string): string {
-  const lang = /^[\w-]+/.exec(info.trim())?.[0]
+/**
+ * 围栏 chunk 的内部 HTML（转义源码 + 语言类 + 跨片行号契约 data 属性）。
+ * 语言类取 info 首词（codeInfoFirstWord——与 resolveCodeLanguage 同语义，
+ * 两视图同路由：```js title=x → language-js），再剔除类名不安全字符
+ * （保持 readingCodeCard 的 language-([\w#+.-]+) 正则可提取，如 c++）。
+ * startLine/totalLines 供 readingCodeCard 跨片连续编号（片首行在围栏体内
+ * 的 0 基行号 / 整块内容行数）。
+ */
+function fenceChunkHtml(
+  text: string,
+  from: number,
+  to: number,
+  info: string,
+  startLine: number,
+  totalLines: number,
+): string {
+  const lang = codeInfoFirstWord(info).replace(/[^\w#+.-]/g, '')
   const cls = lang ? ` class="language-${lang}"` : ''
-  return `<pre><code${cls}>${escapeHtml(text.slice(from, to))}</code></pre>`
+  return (
+    `<pre data-vsidian-code-start="${startLine}" data-vsidian-code-total="${totalLines}">` +
+    `<code${cls}>${escapeHtml(text.slice(from, to))}</code></pre>`
+  )
 }
 
 /**
@@ -234,7 +252,8 @@ function pushBlock(
       // 按行细分：每片 ≤ FENCE_CHUNK_LINES 行；首片含开围栏行、末片含闭围栏行
       const info = opener.info ?? ''
       const hasClose = text.slice(env.lineStarts[endLine] ?? 0, end).trimStart().startsWith(opener.markup)
-      let idx = 0
+      // 跨片行号契约：整块内容行数（围栏体 = 开闭围栏行之间；未闭合无尾行）
+      const totalContentLines = fenceLines - 1 - (hasClose ? 1 : 0)
       for (let l = startLine; l <= endLine; l += FENCE_CHUNK_LINES) {
         const chunkEnd = Math.min(l + FENCE_CHUNK_LINES - 1, endLine)
         const cs = env.lineStarts[l] ?? start
@@ -242,14 +261,14 @@ function pushBlock(
         // 内容行去掉围栏标记行（首片去首行、末片去尾行）
         const contentFrom = l === startLine ? (env.lineEnds[l] ?? cs) + 1 : cs
         const contentTo = chunkEnd === endLine && hasClose ? (env.lineStarts[chunkEnd] ?? ce) : ce
+        // 片首内容行在围栏体内的 0 基行号（首片跳过开围栏行 → 从 0 起）
+        const chunkStartLine = l === startLine ? 0 : l - startLine - 1
         blocks.push({
           kind: 'code-block',
           start: cs,
           end: ce,
-          html: fenceChunkHtml(text, contentFrom, contentTo, info),
+          html: fenceChunkHtml(text, contentFrom, contentTo, info, chunkStartLine, totalContentLines),
         })
-        idx += 1
-        void idx
       }
       return
     }

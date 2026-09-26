@@ -91,8 +91,9 @@ test('unzip -l 解析：只提取"长度 日期 时间 路径"形态的文件行
 test('VSIX 检查：完整合法集合通过且零警告（#60 后单文件警告线 3MB，main.js 829KB 与 mermaid.js 2.62MB 均在线内）', () => {
   const result = inspectVsixEntries(makeEntries(), { iconPath: 'media/vsidian-icon-256.png' })
   assert.equal(result.ok, true)
-  // #60 阈值调整后：总量约 4.08MB < 4.5MB 警告线，全部单文件 < 3MB——
-  // 合法基线不再有预期警告（#59 期 main.js 超 700KB 警告线的口径作废）
+  // #85 后总量两线上调 1MB：fixture 基线约 3.86MB 远低于警告线，全部
+  // 单文件 < 3MB——合法基线不再有预期警告（#59 期 main.js 超 700KB
+  // 警告线的口径作废）
   assert.deepEqual(result.warnings, [])
 })
 
@@ -183,15 +184,22 @@ test('VSIX 检查：缺少 mermaid.js 报错（#60 图表渲染器懒加载产�
 })
 
 test('VSIX 检查：解压总体积与单文件双阈值（警告线与失败线）', () => {
-  // 总量恰过警告线：放大最大条目 mermaid.js（增量后仍 < 4MB 单文件上限，
-  // 只触发总量警告不触发失败；#60 基线总量约 4.08MB，直接构造不再可靠）
+  // 总量恰过警告线：增量摊到 mermaid.js 与 main.js 两个条目（各约一半，
+  // 增量后均 < 4MB 单文件上限，只触发总量警告不触发失败）。#85 后总量
+  // 两线上调 1MB，增量已大于任一单文件距 4MB 上限的余量——全压单个
+  // 条目会先触发单文件失败，断言语义就变了。
   const base = makeEntries()
   const baseTotal = base.reduce((sum, e) => sum + e.size, 0)
-  const warnEntries = base.map((e) =>
-    e.name === 'extension/out/webview/mermaid.js'
-      ? { ...e, size: e.size + (Math.floor(SIZE_LIMITS.totalWarnBytes) - baseTotal) + 1 }
-      : e,
-  )
+  const overflow = Math.floor(SIZE_LIMITS.totalWarnBytes) - baseTotal + 1
+  const warnEntries = base.map((e) => {
+    if (e.name === 'extension/out/webview/mermaid.js') {
+      return { ...e, size: e.size + Math.ceil(overflow / 2) }
+    }
+    if (e.name === 'extension/out/webview/main.js') {
+      return { ...e, size: e.size + Math.floor(overflow / 2) }
+    }
+    return e
+  })
   const warn = inspectVsixEntries(warnEntries)
   assert.equal(warn.ok, true)
   assert.ok(warn.warnings.some((w) => w.includes('警告线')), '总量过警告线应有警告不失败')

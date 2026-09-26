@@ -27,6 +27,8 @@
 import { Annotation, ChangeSet, Compartment, EditorSelection, EditorState, Prec, type Extension, type Text } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { liveLineNumbers, paintedLineNumbers } from './liveLineNumbers'
+import { CODE_CARD_CLASS_NAMES, codeCardConfigFacet, codeCardCopyRequest, codeCardFoldField, liveCodeCard, type CodeCardConfig } from './liveCodeCard'
+import { decorateReadingCodeCard, isReadingCodeBlock } from './readingCodeCard'
 import {
   isHostToWebview,
   type CssProbeReport,
@@ -44,6 +46,14 @@ import {
   type WebviewToHost,
 } from '../shared/protocol'
 import {
+  CODEBLOCK_CARD_DEFAULT,
+  CODEBLOCK_CARD_KEY,
+  CODEBLOCK_COPY_BUTTON_DEFAULT,
+  CODEBLOCK_COPY_BUTTON_KEY,
+  CODEBLOCK_HIGHLIGHT_DEFAULT,
+  CODEBLOCK_HIGHLIGHT_KEY,
+  CODEBLOCK_LINE_NUMBERS_DEFAULT,
+  CODEBLOCK_LINE_NUMBERS_KEY,
   SHOW_LINE_NUMBERS_DEFAULT,
   SHOW_LINE_NUMBERS_KEY,
   type SettingsPayload,
@@ -528,6 +538,23 @@ export class WebviewSyncController {
   /** 行号扩展的运行时开关通道（extensions 装配点） */
   private readonly lineNumbersCompartment = new Compartment()
 
+  // ---- 代码块卡片状态（#79）----
+  /** 卡片配置生效态（card/lineNumbers/copyButton/highlight；lineNumbers
+   *  与 copyButton 子项 #80/#81 接线，highlight #83——未接线键暂按默认开）；
+   *  设置快照/变更到达后经 Compartment 热重配 facet，不重建 EditorView */
+  private codeCardConfig: CodeCardConfig = {
+    card: CODEBLOCK_CARD_DEFAULT,
+    lineNumbers: true,
+    copyButton: true,
+    highlight: true,
+  }
+  /** 卡片扩展的运行时配置通道（extensions 装配点） */
+  private readonly codeCardCompartment = new Compartment()
+
+  /** #84 阅读侧折叠集合：键 = 块 data-vsidian-src-start（视图态，不持久化；
+   *  块卸载重挂载后经此恢复收起形态） */
+  private readonly readingCodeFold = new Set<number>()
+
   // ---- 宿主主题明暗自适应（不硬编码 dark，也不硬编码颜色）----
   /** CM6 明暗声明通道：跟随 webview body 的主题 class（vscode-dark 等），
    *  激活 baseTheme 内建变体（light: caret black / dark: caret white 等），
@@ -629,6 +656,8 @@ export class WebviewSyncController {
           prepareReadingImages(el, this.images)
         }
         renderMermaidIn(el)
+        // #84 阅读代码块卡片：挂载即增强（幂等；mermaid 块类不同不命中）
+        this.decorateReadingCodeCardBlock(el)
       },
       onBlockUnmounted: (el) => this.images?.detachWithin(el),
     })
@@ -851,6 +880,7 @@ export class WebviewSyncController {
         // 热重配，缺键回默认、非法形态忽略）
         this.settings = message.values
         this.applyLineNumbersSetting()
+        this.applyCodeCardSetting()
         break
       case 'edit.ack': {
         if (this.suspended) {
@@ -1294,6 +1324,26 @@ export class WebviewSyncController {
         boxes?.[message.index]?.click()
         break
       }
+      case 'codecard.test.copy': {
+        // 测试钩子（#81）：按序号点击卡片头部复制按钮（驱动与用户点击相同
+        // 的处理器链路：effect → codeblock.copy 出站 → 宿主剪贴板写入）
+        const scope = this.viewMode === 'reading' ? this.readingContainer : this.view?.contentDOM
+        const buttons = scope?.querySelectorAll<HTMLButtonElement>(
+          `.${CODE_CARD_CLASS_NAMES.copy}`,
+        )
+        buttons?.[message.index]?.click()
+        break
+      }
+      case 'codecard.test.fold': {
+        // 测试钩子（#82）：按序号点击卡片头部折叠 chevron（驱动与用户点击
+        // 相同的处理器链路：effect → codeCardFoldField 视图态切换）
+        const scope = this.viewMode === 'reading' ? this.readingContainer : this.view?.contentDOM
+        const buttons = scope?.querySelectorAll<HTMLButtonElement>(
+          `.${CODE_CARD_CLASS_NAMES.fold}`,
+        )
+        buttons?.[message.index]?.click()
+        break
+      }
       case 'image.result':
         // #10 图片解析结果路由（只读显示通道：暂停态同样可用）
         this.images?.handleResult(message)
@@ -1607,6 +1657,8 @@ export class WebviewSyncController {
     this.cancelOutlineDrag()
     if (this.view) selectTableRegion(this.view, null)
     if (next === 'reading') {
+      // #84 切回阅读模式：已挂载块补卡片增强（常驻块不经挂载钩子）
+      this.decorateMountedReadingCodeCards()
       // 锚点 = live 光标主位（选区最小 from）；阅读视图按当前 CM6 文本渲染
       // （含未确认输入），不依赖宿主权威。锚点随即规范化为块 start——
       // 短文档滚动无法表达目标时 modeAnchor 仍是权威锚点
@@ -4095,6 +4147,98 @@ export class WebviewSyncController {
     })
   }
 
+  /**
+   * 应用代码块卡片设置（#79–#81；settings.snapshot / settings.changed 到达时）：
+   * card 总开关、行号/复制子开关分别读 codeblock.* 键（缺键回定义默认、
+   * 非布尔忽略——与行号同口径）；highlight 由 #83 接入，暂保持默认开。
+   * 经 Compartment.reconfigure 热重配 codeCardConfigFacet（卡片装饰
+   * StateField 检测到 facet 变化时对围栏表全量重建），EditorView 不重建
+   */
+  private applyCodeCardSetting(): void {
+    const bool = (raw: unknown, fallback: boolean): boolean =>
+      typeof raw === 'boolean' ? raw : fallback
+    const next: CodeCardConfig = {
+      card: bool(this.settings?.[CODEBLOCK_CARD_KEY], CODEBLOCK_CARD_DEFAULT),
+      lineNumbers: bool(this.settings?.[CODEBLOCK_LINE_NUMBERS_KEY], CODEBLOCK_LINE_NUMBERS_DEFAULT),
+      copyButton: bool(this.settings?.[CODEBLOCK_COPY_BUTTON_KEY], CODEBLOCK_COPY_BUTTON_DEFAULT),
+      highlight: bool(this.settings?.[CODEBLOCK_HIGHLIGHT_KEY], CODEBLOCK_HIGHLIGHT_DEFAULT),
+    }
+    if (
+      next.card === this.codeCardConfig.card &&
+      next.lineNumbers === this.codeCardConfig.lineNumbers &&
+      next.copyButton === this.codeCardConfig.copyButton &&
+      next.highlight === this.codeCardConfig.highlight
+    ) {
+      return
+    }
+    this.codeCardConfig = next
+    this.view?.dispatch({
+      effects: this.codeCardCompartment.reconfigure(this.codeCardExtension()),
+    })
+    // #84 阅读侧同步刷新已挂载的代码块卡片（Live 侧经 facet 热重配）
+    if (this.viewMode === 'reading') {
+      this.decorateMountedReadingCodeCards()
+    }
+  }
+
+  /** #84 增强单个阅读代码块（挂载钩子与重装饰共用入口） */
+  private decorateReadingCodeCardBlock(block: HTMLElement): void {
+    if (!isReadingCodeBlock(block)) {
+      return
+    }
+    const srcStart = Number(block.dataset['vsidianSrcStart'] ?? '-1')
+    decorateReadingCodeCard(block, {
+      config: this.codeCardConfig,
+      folded: this.readingCodeFold.has(srcStart),
+      onCopy: (code) => this.postCodeCopy(code),
+      onFoldToggle: () => {
+        if (!this.readingCodeFold.delete(srcStart)) {
+          this.readingCodeFold.add(srcStart)
+        }
+        this.decorateReadingCodeCardBlock(block)
+      },
+    })
+  }
+
+  /** #84 刷新全部已挂载阅读块的卡片形态（设置变更/切回阅读模式） */
+  private decorateMountedReadingCodeCards(): void {
+    this.readingContainer
+      ?.querySelectorAll<HTMLElement>('.vsidian-reading-block')
+      .forEach((el) => this.decorateReadingCodeCardBlock(el))
+  }
+
+  /** #81/#84 复制出站（Live effect 转发与阅读直连共用） */
+  private postCodeCopy(text: string): void {
+    if (this.sessionId) {
+      this.bridge.postMessage({
+        kind: 'codeblock.copy',
+        sessionId: this.sessionId,
+        docUri: this.docUri,
+        text,
+      })
+    }
+  }
+
+  /** 卡片扩展装配（#79–#82）：facet + 折叠状态 + 装饰 StateField + 复制
+   *  请求转发监听。初次装配与设置热重配共用，保证监听器在默认配置下同样在场 */
+  private codeCardExtension() {
+    return [
+      codeCardConfigFacet.of(this.codeCardConfig),
+      codeCardFoldField,
+      liveCodeCard,
+      // #81 复制请求转发：零写回事务携带 effect → codeblock.copy 出站
+      EditorView.updateListener.of((update) => {
+        for (const tr of update.transactions) {
+          for (const eff of tr.effects) {
+            if (eff.is(codeCardCopyRequest)) {
+              this.postCodeCopy(eff.value)
+            }
+          }
+        }
+      }),
+    ]
+  }
+
   /** 行号栏观测（#34 view.state 扩展字段）。过滤 CM6 的隐藏测量探针
    *  单元格（visibility:hidden、用于测量 gutter 文本宽度的 dummy——真实
    *  宿主与 jsdom 均存在，不是行号） */
@@ -4385,6 +4529,78 @@ export class WebviewSyncController {
     const mermaid = mermaidEl
       ? { visible: mermaidVisible, display: mermaidDisplay, ...mermaidCounts }
       : undefined
+    // #79 代码块卡片绘制探针：当前激活视图取头部横带。CM6 挂载缓冲内的
+    // 头部可能滚出可视裁剪区（rect 在视口外，elementFromPoint 不命中），
+    // 故遍历取首个「rect 有面积 + 在视口内 + elementFromPoint 命中」的
+    // 头部；全部未命中时回落首个（display 探针仍可用）
+    const codeScope = this.viewMode === 'reading' ? this.readingContainer : view.contentDOM
+    const cardHeaders = codeScope
+      ? [...codeScope.querySelectorAll<HTMLElement>(`.${CODE_CARD_CLASS_NAMES.header}`)]
+      : []
+    let cardHeader: HTMLElement | null = null
+    let codeCardVisible = false
+    for (const header of cardHeaders) {
+      try {
+        const rect = header.getBoundingClientRect()
+        if (
+          rect.width > 0 && rect.height > 0 &&
+          rect.bottom > 0 && rect.top < window.innerHeight
+        ) {
+          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+          if (hit && header.contains(hit)) {
+            cardHeader = header
+            codeCardVisible = true
+            break
+          }
+        }
+      } catch {
+        // jsdom 无布局与 elementFromPoint；真宿主才能证明实际可见。
+      }
+      if (!cardHeader) {
+        cardHeader = header
+      }
+    }
+    const codeCardDisplay = cardHeader ? getComputedStyle(cardHeader).display : null
+    // #83 tok-* token 元素计数（卡片关闭仅高亮时 code 节由 token 驱动存在）
+    const tokenCount = codeScope
+      ? codeScope.querySelectorAll('[class*="tok-"]').length
+      : 0
+    const code = cardHeader || tokenCount > 0
+      ? {
+        visible: codeCardVisible,
+        display: codeCardDisplay,
+        label:
+          // #83 徽标在标签内：取标签的末文本节点（显示名），不含徽标字形
+          cardHeader?.querySelector(`.${CODE_CARD_CLASS_NAMES.headerLabel}`)?.lastChild?.textContent ?? null,
+        headerCount: codeScope
+          ? codeScope.querySelectorAll(`.${CODE_CARD_CLASS_NAMES.header}`).length
+          : 0,
+        cardLineCount: codeScope
+          ? codeScope.querySelectorAll(`.${CODE_CARD_CLASS_NAMES.line}`).length
+          : 0,
+        // #80 卡内行号文本序列（视口内；关闭行号子开关后为空数组）
+        lineNumberTexts: codeScope
+          ? [...codeScope.querySelectorAll(`.${CODE_CARD_CLASS_NAMES.linenumber}`)]
+            .map((el) => el.textContent ?? '')
+            .filter((t) => t !== '')
+          : [],
+        // #81 复制按钮在场数（编辑态同样发射、常驻在场；可见性由 CSS 悬停
+        // 承担，DOM 常驻才能被此计数与宿主点击钩子命中；收起态不发射）
+        copyCount: codeScope
+          ? codeScope.querySelectorAll(`.${CODE_CARD_CLASS_NAMES.copy}`).length
+          : 0,
+        // #82 收起态头部数（chevron -collapsed 计数）
+        foldedCount: codeScope
+          ? codeScope.querySelectorAll(`.${CODE_CARD_CLASS_NAMES.foldCollapsed}`).length
+          : 0,
+        // #83 视口内 tok-* token 元素数
+        tokenCount,
+        // 全部头部语言标签序列（DOM 顺序；断言渲染型围栏的 Mermaid 标签）
+        labels: cardHeaders
+          .map((h) => h.querySelector(`.${CODE_CARD_CLASS_NAMES.headerLabel}`)?.lastChild?.textContent ?? '')
+          .filter((t) => t !== ''),
+      }
+      : undefined
     return {
       textVisible,
       scrollerDisplay: view.scrollDOM ? getComputedStyle(view.scrollDOM).display : null,
@@ -4419,6 +4635,7 @@ export class WebviewSyncController {
       },
       math,
       mermaid,
+      code,
       heading: headingPaint,
     }
   }
@@ -4812,6 +5029,9 @@ export class WebviewSyncController {
       // #60 Mermaid：围栏表 + 跨行块 replace 装饰（光标进入围栏显源码、
       // 离开恢复渲染图；渲染容器与阅读侧共用 mermaidRender 管线）
       liveMermaid,
+      // #79 代码块卡片：呈现态围栏收起 + 头部横带 + 卡片行类（配置经
+      // Compartment 热重配，围栏表复用上方 mermaidFencesField）
+      this.codeCardCompartment.of(this.codeCardExtension()),
       // 表格单元格输入钩子（#12）：表格行内键入 | 转义写回 \|；
       // 编辑面即 CM6 源文本行，同步链路复用本控制器的标准出站路径
       tableEditing,

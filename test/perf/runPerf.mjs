@@ -18,6 +18,8 @@ import {
   generateImageDenseSample,
   generateMathDenseSample,
   generateMermaidDenseSample,
+  generateCodeDenseSample,
+  generateCodeGiantFenceSample,
 } from './gen-sample.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -52,6 +54,10 @@ try {
   // #60 图表密集档：中小 mermaid 围栏与段落交替（懒加载/串行渲染/缓存克隆
   // 改写/挂载回收的载体；量级默认 120 图，长档按需加大 blocks 参数）
   writeFileSync(path.join(wsDir, 'perf-mermaid.md'), generateMermaidDenseSample(), 'utf8')
+  // #85 代码块密集档：js/python 围栏与段落交替（卡片重建/高亮缓存/击键增量）
+  writeFileSync(path.join(wsDir, 'perf-code.md'), generateCodeDenseSample(), 'utf8')
+  // #85 超大代码围栏（>4096 行）：着色跳过降级与块内击键成本
+  writeFileSync(path.join(wsDir, 'perf-code-giant.md'), generateCodeGiantFenceSample(), 'utf8')
   for (let i = 0; i < 24; i++) {
     const width = 320 + (i % 4) * 80
     const height = 180 + (i % 6) * 60

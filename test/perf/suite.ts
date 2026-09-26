@@ -18,6 +18,8 @@ const CMD = {
   perfProbe: 'onegayi.vsidian._test.perfProbe',
   readingPerf: 'onegayi.vsidian._test.readingPerf',
   toggleViewMode: 'onegayi.vsidian.toggleViewMode',
+  modeToLive: 'onegayi.vsidian.mode.toLive',
+  modeToReading: 'onegayi.vsidian.mode.toReading',
 }
 
 const wsDir = process.env['WORKSPACE_DIR'] ?? ''
@@ -187,7 +189,7 @@ export async function run(): Promise<void> {
     // #15 模式切换档位：live → reading（细粒度轮询压缩计时量化误差）
     const switchPollMs = 25
     const tToReading = Date.now()
-    await vscode.commands.executeCommand(CMD.toggleViewMode)
+    await vscode.commands.executeCommand(CMD.modeToReading)
     const readingView = await poll(
       `阅读模式虚拟化 ${readingFile}`,
       async () => {
@@ -208,9 +210,13 @@ export async function run(): Promise<void> {
     if (!readingReport || readingReport.ok !== true) {
       throw new Error(`阅读探针无报告：${readingFile}`)
     }
-    // #15 模式切换档位：reading → live（CM6 重建完成判据：viewMode=live 且已渲染行）
+    // #15 模式切换档位：reading → live（CM6 重建完成判据：viewMode=live 且已渲染行）。
+    // #38 起 toggleViewMode 是三态循环（live→reading→source），reading 的下一步是
+    // 源码编辑器（会替换面板）——改用显式 toLive：面板内切换（switch-panel-mode）
+    // 且宿主写全局模式记忆。不能用面板内 view.mode.set：不写记忆会让下一档
+    // openWith 按 restore-reading 异步回放成 reading，再 toggle 就翻去 source
     const tToLive = Date.now()
-    await vscode.commands.executeCommand(CMD.toggleViewMode)
+    await vscode.commands.executeCommand(CMD.modeToLive, readingUri)
     await poll(
       `切回 live ${readingFile}`,
       async () => {
@@ -245,7 +251,7 @@ export async function run(): Promise<void> {
   {
     const file = 'reading-giant.md'
     const { uri } = await openWithTiming(file) // 打开等待统一走计时辅助（耗时字段本段不采用）
-    await vscode.commands.executeCommand(CMD.toggleViewMode)
+    await vscode.commands.executeCommand(CMD.modeToReading)
     const t0 = Date.now()
     const giantView = await poll(`阅读模式虚拟化 ${file}`, async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri.toString())) as
@@ -275,6 +281,10 @@ export async function run(): Promise<void> {
     ['mathDense', 'perf-math.md'],
     // #60 图表密集档：懒加载/串行渲染/缓存克隆与挂载回收的宿主车道数据
     ['mermaidDense', 'perf-mermaid.md'],
+    // #85 代码块密集档：卡片重建/高亮缓存/击键增量的宿主车道数据
+    ['codeDense', 'perf-code.md'],
+    // #85 超大代码围栏（>4096 行）：着色跳过降级与块内击键成本
+    ['codeGiantFence', 'perf-code-giant.md'],
   ]) {
     const { uri, view, byteSize, openToReadyMs, openToEditableMs, openToFirstInputMs, pollIntervalMs } = await openWithTiming(file)
     const liveReport = (await vscode.commands.executeCommand(CMD.perfProbe, uri.toString(),
@@ -283,7 +293,7 @@ export async function run(): Promise<void> {
       throw new Error(`边界形态 live 探针无报告：${file}`)
     }
     const toReadingStart = Date.now()
-    await vscode.commands.executeCommand(CMD.toggleViewMode)
+    await vscode.commands.executeCommand(CMD.modeToReading)
     const readingView = await poll(`边界形态阅读装载 ${file}`, async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri.toString())) as
         | (ViewState & ReadingViewState) | undefined
@@ -303,7 +313,7 @@ export async function run(): Promise<void> {
       throw new Error(`边界形态 reading 探针无报告：${file}`)
     }
     const toLiveStart = Date.now()
-    await vscode.commands.executeCommand(CMD.toggleViewMode)
+    await vscode.commands.executeCommand(CMD.modeToLive, uri)
     await poll(`边界形态返回 live ${file}`, async () => {
       const v = (await vscode.commands.executeCommand(CMD.viewState, uri.toString())) as ViewState | undefined
       return v?.viewMode === 'live' && v.renderedLines > 0 ? v : undefined

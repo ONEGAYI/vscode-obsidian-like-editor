@@ -419,6 +419,8 @@ export function createTextEditorProvider(
       get version() {
         return doc.version
       },
+      // #81 复制产物按权威文档行尾归一（documentSession 消费）
+      eol: doc.eol as 1 | 2,
       getText: () => doc.getText(),
       applyChanges: async (changes: SerChange[]) => {
         const edit = new vscode.WorkspaceEdit()
@@ -730,7 +732,8 @@ export function createTextEditorProvider(
         // #69 剪贴板端口：webview 无 navigator.clipboard 权限面，经宿主
         // env.clipboard.writeText。标题链接变体在此拼 `[[笔记名#标题]]`——
         // 笔记名 = docUri 文件名去扩展名（Obsidian 语义），标题为 webview
-        // 上报的条目原文（含行内标记，与 findHeadingOffset 的字面比较同源）
+        // 上报的条目原文（含行内标记，与 findHeadingOffset 的字面比较同源）。
+        // #81 代码块复制同走 writeClipboard（text 已由会话按文档 EOL 归一）
         writeClipboard: (text: string) => {
           void vscode.env.clipboard.writeText(text)
         },
