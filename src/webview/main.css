@@ -48,6 +48,11 @@ body {
   --vsidian-heading-color-4: var(--vscode-editor-foreground);
   --vsidian-heading-color-5: var(--vscode-editor-foreground);
   --vsidian-heading-color-6: var(--vscode-editor-foreground);
+  /* ---- #105 高亮底色变量：live 正文 span / 阅读 mark / 大纲条目共用同一
+     变量（三侧同源，选择器映射表登记）。跟随 VSCode 主题的词高亮色
+     （明暗主题由宿主各自给值，即「主题自适应、不固定黄」的实现）；宿主
+     变量缺失时的半透明 fallback 在明暗底上都可读 */
+  --vsidian-highlight-background: var(--vscode-editorWordHighlightBackground, rgba(234, 179, 8, 0.25));
 }
 
 #app .cm-editor {
@@ -318,6 +323,7 @@ body {
 #app .vsidian-quick-actions [data-icon='bold'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-bold.svg'); }
 #app .vsidian-quick-actions [data-icon='italic'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-italic.svg'); }
 #app .vsidian-quick-actions [data-icon='strikethrough'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-strikethrough.svg'); }
+#app .vsidian-quick-actions [data-icon='highlight'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-highlight.svg'); }
 #app .vsidian-quick-actions [data-icon='inlineCode'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-inlineCode.svg'); }
 #app .vsidian-quick-actions [data-icon='heading'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-heading.svg'); }
 #app .vsidian-quick-actions [data-icon='bulletList'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-bulletList.svg'); }
@@ -337,6 +343,8 @@ body.vscode-dark #app .vsidian-quick-actions [data-icon='italic'],
 body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='italic'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-italic.svg'); }
 body.vscode-dark #app .vsidian-quick-actions [data-icon='strikethrough'],
 body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='strikethrough'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-strikethrough.svg'); }
+body.vscode-dark #app .vsidian-quick-actions [data-icon='highlight'],
+body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='highlight'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-highlight.svg'); }
 body.vscode-dark #app .vsidian-quick-actions [data-icon='inlineCode'],
 body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='inlineCode'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-inlineCode.svg'); }
 body.vscode-dark #app .vsidian-quick-actions [data-icon='heading'],
@@ -564,6 +572,12 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='blockMath'] { 
 
 .vsidian-sidebar .vsidian-outline-item .vsidian-outline-strike {
   text-decoration: line-through;
+}
+
+/* #105 高亮透传：底色与正文同源变量（强调语义只认显式 == 标记） */
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-highlight {
+  background-color: var(--vsidian-highlight-background);
+  border-radius: 2px;
 }
 
 /* 空态占位：无标题文档的弱化反馈（保持面板可读内容与高度语义） */
@@ -1219,6 +1233,13 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='blockMath'] { 
   padding: 0 2px;
 }
 
+/* #105 高亮内容 span：常显主题色高亮底（== 定界符显隐由装饰控制，见
+   liveDecorations 的 HighlightMark；Obsidian 对应 .cm-highlight） */
+#app .cm-editor .cm-scroller .vsidian-highlight {
+  background-color: var(--vsidian-highlight-background);
+  border-radius: 2px;
+}
+
 /* 任务 checkbox（#9 可交互：input[type=checkbox] 替换 [ ]/[x] 标记）。
    appearance 关闭原生形态，沿用 #8 字形绘制语义（颜色跟随 VSCode 变量）；
    .vsidian-task-checked 为稳定修饰类（与 :checked 伪类双入口） */
@@ -1674,6 +1695,15 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='blockMath'] { 
   background-color: var(--vsidian-reading-code-background);
   border-radius: 3px;
   padding: 0 3px;
+}
+
+/* #105 高亮 mark：重置浏览器默认黄底黑字，底色与 live 侧 .vsidian-highlight
+   同源变量（观感两模式一致；色彩本身没有语义，颜色继承正文） */
+#app .vsidian-view-reading .vsidian-reading-block mark {
+  background-color: var(--vsidian-highlight-background);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0;
 }
 
 #app .vsidian-view-reading .vsidian-reading-block blockquote {

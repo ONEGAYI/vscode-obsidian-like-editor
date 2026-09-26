@@ -158,6 +158,48 @@ function vsidianWikilinkInlineRule(state: StateInline, silent: boolean): boolean
   return true
 }
 
+/**
+ * 高亮 inline 规则（#105）：成对 `==` 渲染为 mark 语义元素（html:false 下
+ * 输出语义标签）。形态学与 lezer 侧（markdownDoc 的 Highlight 扩展）对齐：
+ * 定界符紧贴空白拒绝（flanking 同判）、残缺不匹配（普通文本降级，源文
+ * 保真）；段内跨行可配对。规则挂 emphasis 之前——backticks 已先消费，
+ * 行内代码内容字面呈现不受影响；内容区间经 tokenize 递归，嵌套行内标记
+ * 照常解析。
+ */
+function vsidianHighlightInlineRule(state: StateInline, silent: boolean): boolean {
+  const src = state.src
+  const start = state.pos
+  if (start + 2 >= state.posMax ||
+      src.charCodeAt(start) !== 0x3d /* '=' */ || src.charCodeAt(start + 1) !== 0x3d) {
+    return false
+  }
+  const after = src.charAt(start + 2)
+  if (after === '' || /\s/u.test(after)) {
+    return false
+  }
+  const close = src.indexOf('==', start + 2)
+  if (close < 0 || close + 2 > state.posMax) {
+    return false
+  }
+  const before = close > 0 ? src.charAt(close - 1) : ''
+  if (before === '' || /\s/u.test(before)) {
+    return false
+  }
+  if (!silent) {
+    const oldMax = state.posMax
+    state.push('mark_open', 'mark', 1)
+    state.pos = start + 2
+    state.posMax = close
+    state.md.inline.tokenize(state)
+    state.push('mark_close', 'mark', -1)
+    state.pos = close + 2
+    state.posMax = oldMax
+  } else {
+    state.pos = close + 2
+  }
+  return true
+}
+
 /** 创建阅读渲染器（安全配置锁定；渲染规则一次性装配，实例应复用） */
 export function createMarkdownRenderer(): InstanceType<typeof MarkdownIt> {
   const md = new MarkdownIt({
@@ -169,6 +211,8 @@ export function createMarkdownRenderer(): InstanceType<typeof MarkdownIt> {
   // #11 双链规则先于 link（[t](u)）：`[[…]]` 在 CommonMark 中只是普通文本，
   // 必须在文本规则消费前拦截
   md.inline.ruler.before('link', 'vsidian_wikilink', vsidianWikilinkInlineRule)
+  // #105 高亮：挂 emphasis 之前（backticks 已消费，行内代码内不转换）
+  md.inline.ruler.before('emphasis', 'vsidian_highlight', vsidianHighlightInlineRule)
   // #59 公式：@vscode/markdown-it-katex 的解析规则（$…$ / $$…$$ 判定与
   // shared/math.ts 对齐）；渲染规则覆盖为带稳定类名 + 原文降级
   md.use(katexPlugin, { throwOnError: true })

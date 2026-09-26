@@ -377,6 +377,73 @@ describe('mark 作用域显形', () => {
   })
 })
 
+describe('高亮 ==text==（#105）：#29 行内标记组语义', () => {
+  it('光标离开：内容 span 常显高亮底色类、两端 == 定界符隐藏', () => {
+    const doc = '正文 ==高亮== 文本'
+    const set = build(doc, { anchor: doc.indexOf('文本') })
+    expect(coveredTexts(set, 'vsidian-highlight', doc)).toEqual(['高亮'])
+    const first = doc.indexOf('==')
+    const second = doc.indexOf('==', first + 2)
+    const hidden = hiddenRanges(set)
+    expect(hidden).toContainEqual([first, first + 2])
+    expect(hidden).toContainEqual([second, second + 2])
+  })
+
+  it('光标触及高亮范围（含两端边界）时 == 显形可编辑', () => {
+    const doc = '正文 ==高亮== 文本'
+    const first = doc.indexOf('==')
+    const second = doc.indexOf('==', first + 2)
+    // 控制域 = 高亮范围含两端边界：内容、开 mark 前（from）、闭 mark 后（to）
+    for (const pos of [first, doc.indexOf('高亮'), second + 2]) {
+      const hidden = hiddenRanges(build(doc, { anchor: pos }))
+      expect(hidden, `光标在 ${pos}`).not.toContainEqual([first, first + 2])
+      expect(hidden, `光标在 ${pos}`).not.toContainEqual([second, second + 2])
+    }
+  })
+
+  it('同一行不同标记互不连带：高亮显形不影响粗体隐藏，反之亦然', () => {
+    const doc = '**粗体** 与 ==高亮== 共行'
+    const strong = doc.indexOf('**')
+    const hl = doc.indexOf('==')
+    const inHighlight = hiddenRanges(build(doc, { anchor: doc.indexOf('高亮') }))
+    expect(inHighlight).toContainEqual([strong, strong + 2])
+    expect(inHighlight).not.toContainEqual([hl, hl + 2])
+    const inStrong = hiddenRanges(build(doc, { anchor: doc.indexOf('粗体') }))
+    expect(inStrong).not.toContainEqual([strong, strong + 2])
+    expect(inStrong).toContainEqual([hl, hl + 2])
+  })
+
+  it('残缺与空格紧贴形态：无装饰无隐藏（源码降级，源文不丢）', () => {
+    for (const doc of ['a == b == c', '==未闭合']) {
+      const set = build(doc, { anchor: 0 })
+      expect(coveredTexts(set, 'vsidian-highlight', doc)).toEqual([])
+      expect(hiddenRanges(set)).toEqual([])
+    }
+  })
+
+  it('空内容 ==== 不隐藏定界符（无字面内容的形态按源码呈现）', () => {
+    const doc = 'a ===='
+    const set = build(doc, { anchor: 0 })
+    expect(hiddenRanges(set)).toEqual([])
+    expect(coveredTexts(set, 'vsidian-highlight', doc)).toEqual([])
+  })
+
+  it('行内代码内的 == 不产高亮装饰；表格单元格内照常装饰', () => {
+    expect(coveredTexts(build('`==x==`', { anchor: 0 }), 'vsidian-highlight', '`==x==`')).toEqual([])
+    const table = '| A | B |\n| --- | --- |\n| ==x== | y |'
+    expect(coveredTexts(build(table, { anchor: 0 }), 'vsidian-highlight', table)).toEqual(['x'])
+  })
+
+  it('光标移动切换显隐：增量装饰与全量对拍一致（零写回）', () => {
+    const doc = '- 正文 ==强调== 和 `代码`'
+    let state = stateWithDoc(doc, { anchor: doc.indexOf('正文') })
+    for (const pos of [doc.indexOf('强调'), doc.indexOf('=='), doc.length, 0]) {
+      state = state.update({ selection: EditorSelection.single(pos) }).state
+      expect(setsEqual(state, buildLivePreviewDecorations(state.doc, state.selection))).toBe(true)
+    }
+  })
+})
+
 describe('边界输入：转义、未闭合、嵌套', () => {
   it('转义标记不产生粗斜体装饰', () => {
     const doc = '转义 \\*不斜体\\* 文本\n'

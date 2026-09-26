@@ -741,8 +741,8 @@ export interface SidebarProbe {
 }
 
 /** #65 大纲条目行内标记类型（白名单 = 正文已支持的行内标记子集；
- *  高亮/公式/行内颜色待正文支持后按同一机制接入，此处不预留松散类型） */
-export type OutlineSpanKind = 'strong' | 'emphasis' | 'code' | 'strike'
+ *  #105 起高亮接入；公式/行内颜色待正文支持后按同一机制接入） */
+export type OutlineSpanKind = 'strong' | 'emphasis' | 'code' | 'strike' | 'highlight'
 
 /** #65 大纲条目行内标记区间：kind + plainText 内偏移（start 含、end 不含） */
 export interface OutlineSpanInfo {

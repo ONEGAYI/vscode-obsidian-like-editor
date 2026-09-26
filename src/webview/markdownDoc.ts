@@ -7,7 +7,8 @@
 //   图语义一致的边界来源），frontmatter 本体按源码呈现（局部降级语义）
 // - markdownTreeParser：@codemirror/lang-markdown 的 markdownLanguage 解析
 //   器（GFM 默认启用：任务列表 TaskMarker / 表格 / 删除线），live 装饰的
-//   唯一语义来源（#5 行级正则判定由此取代，代码围栏内的伪标题不再误判）
+//   唯一语义来源（#5 行级正则判定由此取代，代码围栏内的伪标题不再误判）；
+//   #105 起追加 Highlight 扩展（`==高亮==`，lezer 默认不产该节点）
 // - docInput：CM6 Text → @lezer Input（lineChunks 形态）。解析直接读
 //   Text 的行结构，不为每次解析复制整篇字符串
 // - visitRange / chainAt：语法树区间查询，基于 childAfter（TreeBuffer 上
@@ -23,8 +24,59 @@ export interface SourceRange {
   end: number
 }
 
-/** live 装饰使用的 Markdown 解析器（markdownLanguage 已含 GFM 扩展） */
-export const markdownTreeParser = markdownLanguage.parser
+/** 高亮定界符（#105）：配对解析为 Highlight 节点、定界符转 HighlightMark。
+ *  形态为结构化字面量（DelimiterType 兼容），避免为本扩展引入未声明的
+ *  @lezer/markdown 直接依赖 */
+const HighlightDelim = { resolve: 'Highlight', mark: 'HighlightMark' }
+
+/** Unicode 标点类（CommonMark flanking 判定用；@lezer/markdown 内部同款） */
+const PUNCTUATION = (() => {
+  try {
+    return new RegExp('[\\p{S}|\\p{P}]', 'u')
+  } catch {
+    return /[!"#$%&'()*+,\-.\/:;<=>?@\[\\\]^_`{|}~\xA1\u2010-\u2027]/u
+  }
+})()
+
+/**
+ * live 装饰使用的 Markdown 解析器（#105）：markdownLanguage 已含 GFM 扩展
+ * （任务列表 / 表格 / 删除线），此处 configure 在既有扩展链上合并追加
+ * `==高亮==` 行内标记——照 GFM Strikethrough 的 delimiter 机制，连续两个
+ * `=` 按两侧紧贴空白/标点判定 open/close（flanking），配对产 Highlight
+ * 节点（首末 HighlightMark 夹内容区间）。残缺与空格紧贴形态不配对（普通
+ * 文本降级）；`=` 的块级语义（Setext 下划线）在块层先行解析，不受 inline
+ * 扩展影响；代码上下文（行内/围栏）内容为字面文本天然不产节点。live
+ * 装饰、大纲透传与 webview/formatOperations 的两态切换共用本语义来源
+ * （AGENTS.md「行内围栏扩展约定」的 node 登记）。
+ */
+export const markdownTreeParser = markdownLanguage.parser.configure({
+  defineNodes: [
+    { name: 'Highlight' },
+    { name: 'HighlightMark', noInline: true },
+  ],
+  parseInline: [
+    {
+      name: 'Highlight',
+      parse(cx, next, pos) {
+        if (next !== 61 /* '=' */ || cx.char(pos + 1) !== 61) {
+          return -1
+        }
+        // flanking 判定与 Strikethrough 同款：紧贴空白禁配，标点按
+        // 左右附着性放宽（CommonMark emphasis 的通用口径）
+        const before = cx.slice(pos - 1, pos)
+        const after = cx.slice(pos + 2, pos + 3)
+        const sBefore = before === '' || /\s/u.test(before)
+        const sAfter = after === '' || /\s/u.test(after)
+        const pBefore = PUNCTUATION.test(before)
+        const pAfter = PUNCTUATION.test(after)
+        return cx.addDelimiter(HighlightDelim, pos, pos + 2,
+          !sAfter && (!pAfter || sBefore || pBefore),
+          !sBefore && (!pBefore || sAfter || pAfter))
+      },
+      after: 'Emphasis',
+    },
+  ],
+})
 
 /** frontmatter 判定的有界扫描长度（B-3 截断口径单一事实源：live 装饰与
  *  阅读切块共用——结束行落在界限外时不识别，两视图一致降级为普通 Markdown） */

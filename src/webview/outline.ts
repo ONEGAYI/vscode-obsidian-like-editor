@@ -79,6 +79,7 @@ export const OUTLINE_CLASS_NAMES = {
     emphasis: 'vsidian-outline-emphasis',
     code: 'vsidian-outline-code',
     strike: 'vsidian-outline-strike',
+    highlight: 'vsidian-outline-highlight',
   } as const,
   /** #66 当前控制域条目的常驻高亮类（半透明横条的唯一差异来源） */
   located: 'vsidian-outline-located',
@@ -123,12 +124,14 @@ export const OUTLINE_CLASS_NAMES = {
 } as const
 
 /** 白名单节点名 → 标记类型（判定与 liveDecorations 的行内 span 同源；
- *  高亮/公式 GFM 解析器不产节点，正文支持后在此接入） */
+ *  #105 高亮经 markdownTreeParser 的 Highlight 扩展产节点，此处接入；
+ *  公式 GFM 解析器不产节点，正文支持后在此接入） */
 const SPAN_KIND_BY_NODE: Record<string, OutlineSpanKind> = {
   StrongEmphasis: 'strong',
   Emphasis: 'emphasis',
   InlineCode: 'code',
   Strikethrough: 'strike',
+  Highlight: 'highlight',
 }
 
 /** 双链替换出现（doc 坐标；display = 别名 ?? 路径(#标题)） */
@@ -260,7 +263,7 @@ class PlainTextCollector {
 }
 
 /** 白名单/链接节点的标记名集合（内容区间 = 首、末标记之间） */
-const MARK_NAMES = /^(EmphasisMark|CodeMark|StrikethroughMark)$/
+const MARK_NAMES = /^(EmphasisMark|CodeMark|StrikethroughMark|HighlightMark)$/
 
 /** 白名单节点（或 Link/Image）首末标记之间的内容区间，clamp 到 [from,to] */
 function markedContentRange(node: SyntaxNode, from: number, to: number): { from: number; to: number } {
@@ -497,6 +500,7 @@ const OUTLINE_SPAN_ELEMENTS: Record<OutlineSpanKind, { tag: string; cls: string 
   emphasis: { tag: 'em', cls: OUTLINE_CLASS_NAMES.span.emphasis },
   code: { tag: 'code', cls: OUTLINE_CLASS_NAMES.span.code },
   strike: { tag: 'del', cls: OUTLINE_CLASS_NAMES.span.strike },
+  highlight: { tag: 'mark', cls: OUTLINE_CLASS_NAMES.span.highlight },
 }
 
 /**
