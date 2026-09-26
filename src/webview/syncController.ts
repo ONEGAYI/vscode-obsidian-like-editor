@@ -4934,17 +4934,9 @@ export class WebviewSyncController {
     let mathDisplay: string | null = null
     if (mathEl) {
       mathDisplay = getComputedStyle(mathEl).display
-      try {
-        const rect = mathEl.getBoundingClientRect()
-        if (rect.width > 0 && rect.height > 0) {
-          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
-          if (hit && mathEl.contains(hit)) {
-            mathVisible = true
-          }
-        }
-      } catch {
-        // jsdom 无布局与 elementFromPoint；真宿主才能证明实际可见。
-      }
+      // 可见性口径统一走 hitPaintedElement（rect 有面积 + elementFromPoint
+      // 命中自身；jsdom 无布局恒 false，只作真宿主集成断言依据）
+      mathVisible = hitPaintedElement(mathEl)
     }
     const math = mathEl
       ? {
@@ -4971,17 +4963,9 @@ export class WebviewSyncController {
       const hrStyle = getComputedStyle(hrEl)
       hrDisplay = hrStyle.display
       hrBorderTopWidth = hrStyle.borderTopWidth
-      try {
-        const rect = hrEl.getBoundingClientRect()
-        if (rect.width > 0 && rect.height > 0) {
-          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
-          if (hit && hrEl.contains(hit)) {
-            hrVisible = true
-          }
-        }
-      } catch {
-        // jsdom 无布局与 elementFromPoint；真宿主才能证明实际可见。
-      }
+      // 可见性口径统一走 hitPaintedElement（rect 有面积 + elementFromPoint
+      // 命中自身；jsdom 无布局恒 false，只作真宿主集成断言依据）
+      hrVisible = hitPaintedElement(hrEl)
     }
     const hr = hrEl
       ? {
@@ -5041,17 +5025,9 @@ export class WebviewSyncController {
       const style = getComputedStyle(highlightEl)
       highlightBackgroundColor = style.backgroundColor
       highlightDisplay = style.display
-      try {
-        const rect = highlightEl.getBoundingClientRect()
-        if (rect.width > 0 && rect.height > 0) {
-          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
-          if (hit && highlightEl.contains(hit)) {
-            highlightVisible = true
-          }
-        }
-      } catch {
-        // jsdom 无布局与 elementFromPoint；真宿主才能证明实际可见。
-      }
+      // 可见性口径统一走 hitPaintedElement（rect 有面积 + elementFromPoint
+      // 命中自身；jsdom 无布局恒 false，只作真宿主集成断言依据）
+      highlightVisible = hitPaintedElement(highlightEl)
     }
     const highlightScopeEl = this.viewMode === 'reading' ? this.readingContainer : view.contentDOM
     const highlight = highlightEl

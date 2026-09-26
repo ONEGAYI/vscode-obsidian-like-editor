@@ -12,7 +12,10 @@ export interface FormatPlan {
 }
 export type FormatAction = 'toggle' | 'add' | 'remove'
 
-const INLINE: Partial<Record<FormatOperationId, { mark: string; node: string }>> = {
+/** 行内围栏单一登记表（#103 两处登记约定）：包裹规划在此消费，
+ *  quickActionState 的节点名、mark 字符与包裹判定也一律从本表派生——
+ *  新增围栏只登记此处 + shared 注册表，即自动继承全部行为 */
+export const INLINE: Partial<Record<FormatOperationId, { mark: string; node: string }>> = {
   bold: { mark: '**', node: 'StrongEmphasis' },
   italic: { mark: '*', node: 'Emphasis' },
   strikethrough: { mark: '~~', node: 'Strikethrough' },
