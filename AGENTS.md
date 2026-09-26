@@ -170,6 +170,7 @@ vsidian/
 │       ├── mathRenderCache.ts      # KaTeX 渲染 LRU 缓存共享模块
 │       ├── mermaidEntry.ts         # Mermaid 独立产物入口（#60）
 │       ├── mermaidRender.ts        # Mermaid 渲染管线（#60）
+│       ├── mermaidTheme.ts         # Mermaid 暗色主题装配
 │       ├── outline.ts              # 大纲全文解析与面板装配
 │       ├── outlineCollapse.ts      # 大纲折叠状态机纯函数
 │       ├── outlineDrag.ts          # 大纲拖拽移动计划纯函数
