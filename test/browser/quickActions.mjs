@@ -55,6 +55,36 @@ try {
     assert.deepEqual(errors, [], '页面不能有未捕获异常')
     await page.close()
   }
+  // 原生鼠标路径：先拖出表格矩形格区，再点击顶栏展开与粗体按钮。
+  const page = await browser.newPage({ viewport: { width: 620, height: 480 } })
+  await page.setContent('<html><body><div id="app"></div></body></html>')
+  await page.addStyleTag({ path: output.replace(/\.js$/, '.css') })
+  await page.addScriptTag({ path: output })
+  await page.evaluate(() => window.initQuick('| H | Q |\n| --- | --- |\n| A | B |\n| x | y |'))
+  const cell = (row, column) => page.locator('.vsidian-table-grid-row').nth(row)
+    .locator('.vsidian-table-grid-cell').nth(column)
+  const first = await cell(1, 0).boundingBox()
+  const second = await cell(2, 0).boundingBox()
+  assert.ok(first && second, '测试表格两格应绘制')
+  await page.mouse.move(first.x + 14, first.y + first.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(second.x + 26, second.y + second.height / 2)
+  await page.mouse.up()
+  assert.equal(await page.locator('.vsidian-table-region-cell').count(), 2,
+    '原生拖选应形成 A/x 两格矩形选区')
+  await page.locator('.vsidian-quick-toggle').click()
+  assert.equal(await page.locator('.vsidian-table-region-cell').count(), 2,
+    '鼠标点击展开按钮后必须保留矩形格区')
+  await page.locator('[data-op="bold"]').click()
+  assert.equal(await page.evaluate(() => window.quickText()),
+    '| H | Q |\n| --- | --- |\n| **A** | B |\n| **x** | y |', '粗体应逐格作用于保留的矩形选区')
+  assert.equal(await page.evaluate(() => window.quickSent().filter((m) => m.kind === 'edit.request').length), 1,
+    '矩形格区格式化应是一笔写回')
+  await page.locator('.vsidian-quick-toggle').focus()
+  await page.keyboard.press('Space')
+  assert.equal(await page.locator('.vsidian-quick-toggle').getAttribute('aria-expanded'), 'false',
+    '鼠标保焦处理不得损害键盘激活')
+  await page.close()
 } finally {
   await browser.close()
 }

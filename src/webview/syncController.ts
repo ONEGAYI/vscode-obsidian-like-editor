@@ -2297,6 +2297,9 @@ export class WebviewSyncController {
     quickBtn.setAttribute('aria-controls', 'vsidian-quick-actions')
     quickBtn.setAttribute('aria-expanded', 'false')
     quickBtn.textContent = '✎'
+    // 与操作条内按钮一致：鼠标展开时保留正文焦点及表格矩形格区。
+    // 只拦默认聚焦，不拦 click；Tab 聚焦后 Enter/Space 仍由原生按钮激活。
+    quickBtn.addEventListener('mousedown', (event) => event.preventDefault())
     quickBtn.addEventListener('click', () => {
       this.quickActionsOpen = !this.quickActionsOpen
       this.applyQuickActionsDom()
