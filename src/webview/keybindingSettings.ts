@@ -23,7 +23,10 @@ export class KeybindingSettingsSection implements SettingsPageSection {
 
   private overrides: KeybindingOverrides = {}
   private parent: HTMLElement | undefined
+  private resultsEl: HTMLElement | undefined
+  private statusEl: HTMLElement | undefined
   private selected: string | undefined
+  private focusEntry: string | undefined
   private query = ''
   private keyQuery = ''
   private status = ''
@@ -34,9 +37,18 @@ export class KeybindingSettingsSection implements SettingsPageSection {
 
   mount(parent: HTMLElement, focusEntry?: string): () => void {
     this.parent = parent
+    if (focusEntry) {
+      this.query = ''
+      this.keyQuery = ''
+      this.focusEntry = focusEntry
+    }
     this.selected = focusEntry ?? this.selected ?? KEYBINDING_OPERATIONS[0].id
     this.render()
-    return () => { this.parent = undefined }
+    return () => {
+      this.parent = undefined
+      this.resultsEl = undefined
+      this.statusEl = undefined
+    }
   }
 
   handleHostMessage(message: unknown): void {
@@ -52,13 +64,15 @@ export class KeybindingSettingsSection implements SettingsPageSection {
             : '快捷键无效，未保存。'
       if (payload.ok) this.conflict = undefined
     }
-    this.render()
+    this.updateStatus()
+    this.renderRows()
   }
 
   private send(message: object): void {
     this.status = '正在保存…'
     this.bridge.postMessage(message)
-    this.render()
+    this.updateStatus()
+    this.renderRows()
   }
 
   private save(id: string, bindings: string[], replaceConflicts = false): void {
@@ -69,7 +83,8 @@ export class KeybindingSettingsSection implements SettingsPageSection {
         this.status = `Vsidian 内部冲突：${check.conflicts.map((item) =>
           KEYBINDING_OPERATIONS.find((op) => op.id === item)?.title ?? item).join('、')}。可选择替换原绑定。`
       } else this.status = '快捷键无效，未保存。'
-      this.render()
+      this.updateStatus()
+      this.renderRows()
       return
     }
     this.conflict = undefined
@@ -86,7 +101,8 @@ export class KeybindingSettingsSection implements SettingsPageSection {
         this.status = `恢复默认与 ${check.conflicts.map((item) =>
           KEYBINDING_OPERATIONS.find((op) => op.id === item)?.title ?? item).join('、')} 冲突。可选择替换原绑定。`
       } else this.status = '恢复默认失败。'
-      this.render()
+      this.updateStatus()
+      this.renderRows()
       return
     }
     this.conflict = undefined
@@ -128,7 +144,6 @@ export class KeybindingSettingsSection implements SettingsPageSection {
   private render(): void {
     const parent = this.parent
     if (!parent) return
-    const focusClass = parent.contains(document.activeElement) ? document.activeElement?.className : undefined
     parent.replaceChildren()
     const toolbar = el('div', 'vsidian-keybindings-toolbar')
     const nameSearch = el('input', 'vsidian-keybindings-search') as HTMLInputElement
@@ -136,10 +151,10 @@ export class KeybindingSettingsSection implements SettingsPageSection {
     nameSearch.placeholder = '搜索操作名'
     nameSearch.setAttribute('aria-label', '搜索操作名')
     nameSearch.value = this.query
-    nameSearch.addEventListener('input', () => { this.query = nameSearch.value; this.render() })
+    nameSearch.addEventListener('input', () => { this.query = nameSearch.value; this.renderRows() })
     const keySearch = this.recorder('按键搜索绑定', (chord) => {
       this.keyQuery = chord
-      this.render()
+      this.renderRows()
     })
     keySearch.value = this.keyQuery ? formatBindingLabel(this.keyQuery) : ''
     keySearch.dataset.raw = this.keyQuery.includes(' ') ? '' : this.keyQuery
@@ -149,6 +164,22 @@ export class KeybindingSettingsSection implements SettingsPageSection {
     const status = el('p', 'vsidian-keybindings-status', this.status)
     status.setAttribute('role', 'status')
     parent.append(status)
+    this.statusEl = status
+    const results = el('div', 'vsidian-keybindings-results')
+    parent.append(results)
+    this.resultsEl = results
+    this.renderRows()
+  }
+
+  private updateStatus(): void {
+    if (this.statusEl) this.statusEl.textContent = this.status
+  }
+
+  private renderRows(): void {
+    const parent = this.resultsEl
+    if (!parent) return
+    parent.replaceChildren()
+    let locatedRow: HTMLElement | undefined
     const filtered = KEYBINDING_OPERATIONS.filter((op) => op.title.toLocaleLowerCase().includes(this.query.toLocaleLowerCase()) &&
       (!this.keyQuery || getEffectiveBindings(this.overrides, op.id).some((binding) =>
         binding === this.keyQuery || binding.startsWith(`${this.keyQuery} `))))
@@ -156,6 +187,10 @@ export class KeybindingSettingsSection implements SettingsPageSection {
     for (const op of filtered) {
       const row = el('section', 'vsidian-keybindings-row')
       row.dataset.operationId = op.id
+      if (this.focusEntry === op.id) {
+        row.classList.add('vsidian-settings-item-located')
+        locatedRow = row
+      }
       const heading = el('div', 'vsidian-keybindings-row-heading')
       heading.append(el('strong', '', op.title),
         el('span', 'vsidian-keybindings-mode', op.mode === 'both' ? '实时预览 · 阅读' : op.mode === 'live' ? '实时预览' : '阅读'))
@@ -173,7 +208,7 @@ export class KeybindingSettingsSection implements SettingsPageSection {
       const actions = el('div', 'vsidian-keybindings-actions')
       actions.append(this.button('添加绑定', () => {
         this.selected = this.selected === op.id ? undefined : op.id
-        this.render()
+        this.renderRows()
       }), this.button('清空绑定', () => this.save(op.id, [])),
       this.button('恢复默认', () => this.resetOne(op.id)))
       row.append(actions)
@@ -196,7 +231,10 @@ export class KeybindingSettingsSection implements SettingsPageSection {
       }
       parent.append(row)
     }
-    if (focusClass === 'vsidian-keybindings-search') nameSearch.focus()
-    if (focusClass === 'vsidian-keybindings-recorder') keySearch.focus()
+    if (locatedRow) {
+      locatedRow.querySelector<HTMLInputElement>('.vsidian-keybindings-editor input')?.focus()
+      locatedRow.scrollIntoView?.({ block: 'nearest' })
+      this.focusEntry = undefined
+    }
   }
 }
