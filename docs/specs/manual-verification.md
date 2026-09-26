@@ -32,6 +32,9 @@ review-loops 审查循环第 4 轮（2026-09-26，分支 `feature/65-70-outline-
 
 工单 #99 层级对齐引导线（2026-09-26，`ticket/99-outline-visual` 工作树，用户需求「参考 Obsidian：从展开父条目的三角中心向下延伸浅色竖线包住子标题」；Obsidian 截图经视觉子代理逐像素量测——逐级多线（level-N 条目 N-1 条）、线对齐父级 chevron 中心、1px 约 12% 黑、从父行底到末代行底、穿高亮行可见）：`outlineGuideLefts` 栈扫描算每条目**真实祖先**链（跨级标题不画幽灵槽位线，H1 直接跟 H3 时仅一条），每线一个 `span.vsidian-outline-guide` 绝对定位于条目行内（left = (祖先级-1)×10+9 对齐 chevron 中心），线段逐行渲染视觉连成整条、折叠 display:none 随行断开；颜色 `--vscode-editorIndentGuide-background`（暗色主题自动适配，回退 0.25 灰）。验证（TDD 先红后绿，6 项断言）：纯函数祖先链（逐级/跨级/兄弟重置）、DOM 结构（span 数量与 left）、CSS 契约（1px、变量配色、pointer-events:none、条目定位锚）、Chromium 绘制层（深层条目双线 computed 背景非透明、顶层无线、折叠后 offsetParent 为 null 断线）；全量 **1810 项 Vitest 单测（86 文件）**、**13 文件全链原生浏览器回归**、编译与类型检查通过。引导线颜色深浅与主题适配观感待人工验收（A26a）。
 
+工单 #103 无选区围栏切换幂等修复（2026-09-26，主工作树，用户报告 `|word` 加粗后光标停在 `**` 之前、再按叠加出 `******word**`）：`inlinePlan` 无选区经 `wordRange` 扩词包裹后原规划只含 `changes` 不带 `selection`，光标落在开围栏外侧，下一次按键既不命中 `matchingSpan` 取消分支（光标不在围栏节点内）又在星号处取不到词，落入「无词插空对」分支产生叠加；修复为扩词包裹附带 `selection`（anchor 落开围栏之后，inlineCode 按实际定界符与补位空格长度计偏移），`|word` → `**|word**`，再按命中取消分支，`word` ⇄ `**word**` 两态往返。bold / italic / strikethrough / inlineCode 共用该路径一次覆盖；有选区两态与空白空对插入不变。核验关联操作：link 无选区已是两态（`[word](|)` 再按取消）；wikilink / inlineMath 按设计插空结构不扩词，连按嵌套属插入语义（#103「关联行为」节，如需两态化另行开票）。验证（TDD 先红后绿，双层新用例确认暴露后转绿）：规划层 `formatOperations.test.ts`（四种围栏包裹后光标位置 + 再次切换还原）与生产链路层 `formatInteraction.test.ts`（jsdom 真 CM6 光标映射，按-取消-再按三连往返）；**1895 项 Vitest 单测（95 文件）**、**34 项 node --test 启动器与发布脚本契约**、**14 文件全链原生浏览器回归**（含快速操作条原生点击与绘制）、编译与类型检查全部通过，日志落盘 `.vscode-test/`（`unit-fence-fix.log`、`browser-fence-fix.log`）。真实键盘 Ctrl+B 连按的两态手感与光标观感待用户验收；CHANGELOG 条目随 PR／下版发布步骤补记。
+
+
 | 项目 | 状态 | 当前证据或缺失条件 |
 | --- | --- | --- |
 | A1 | 用户复验发现中文误暂停，已修复并补自动回归；待真实 IME 复验 | 2026-09-25，联合工作树 F5 中文确认后误报外部修改；已忽略 VSCode 无内容变更的脏状态事件。真实 DOM 候选经 WorkspaceEdit 保存回读在 1.86.2 与本机 1.139.0 定向验证通过；物理候选窗和 Esc 仍待复验 |
