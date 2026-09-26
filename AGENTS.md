@@ -120,16 +120,18 @@ vsidian/
 │   │   ├── viewCycle.ts          # 三态视图编排纯逻辑
 │   │   └── wikilinkTarget.ts     # 宿主侧双链目标解析纯逻辑（#11）
 │   ├── shared/      # 两端共享纯逻辑
-│   │   ├── changeMapping.ts # 变更重定位纯函数
-│   │   ├── math.ts          # 公式形态学纯函数（#59）
-│   │   ├── mermaid.ts       # Mermaid 围栏形态学（#60）
-│   │   ├── newline.ts       # CRLF/LF 换行协调器
-│   │   ├── protocol.ts      # 消息协议单一事实源
-│   │   ├── settings.ts      # 设置定义与读写纯逻辑
-│   │   └── wikilink.ts      # 双链形态学单一事实源（#11）
+│   │   ├── changeMapping.ts    # 变更重定位纯函数
+│   │   ├── formatOperations.ts # 格式操作注册清单
+│   │   ├── math.ts             # 公式形态学纯函数（#59）
+│   │   ├── mermaid.ts          # Mermaid 围栏形态学（#60）
+│   │   ├── newline.ts          # CRLF/LF 换行协调器
+│   │   ├── protocol.ts         # 消息协议单一事实源
+│   │   ├── settings.ts         # 设置定义与读写纯逻辑
+│   │   └── wikilink.ts         # 双链形态学单一事实源（#11）
 │   └── webview/     # webview 端实现
 │       ├── css.d.ts                # CSS 导入类型声明
 │       ├── findSession.ts          # 查找匹配纯函数（#14）
+│       ├── formatOperations.ts     # 格式文本变换规划
 │       ├── imageResource.ts        # 图片资源状态机（#10）
 │       ├── liveDecorations.ts      # 语法树驱动 Live 装饰（#8）
 │       ├── liveLineNumbers.ts      # 表格段首行号与绘制探针
