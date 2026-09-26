@@ -54,8 +54,10 @@ body {
   /* ---- #105 高亮底色变量：live 正文 span / 阅读 mark / 大纲条目共用同一
      变量（三侧同源，选择器映射表登记）。跟随 VSCode 主题的词高亮色
      （明暗主题由宿主各自给值，即「主题自适应、不固定黄」的实现）；宿主
-     变量缺失时的半透明 fallback 在明暗底上都可读 */
-  --vsidian-highlight-background: var(--vscode-editorWordHighlightBackground, rgba(234, 179, 8, 0.25));
+     变量缺失时回退仍随主题派生——按编辑器前景色 color-mix 半透明混出，
+     明暗底各自可读，不落固定色 */
+  --vsidian-highlight-background: var(--vscode-editorWordHighlightBackground,
+    color-mix(in srgb, var(--vscode-editor-foreground, currentColor) 18%, transparent));
 }
 
 #app .cm-editor {
@@ -1078,11 +1080,12 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='horizontalRule
 
 /* #106 分割线渲染态：未触及该行时源文被 replace 隐藏，本元素呈现真横线。
    块级撑满行宽，border-top 是唯一落笔通道（颜色与阅读 <hr> 同源变量，
-   契约测试钉住）；高度由 1px 边框 + 上下 margin 构成，不改变行高约束 */
+   契约测试钉住）；高度由 1px 边框 + 上下 margin 构成，不改变行高约束；
+   纵向节奏与阅读 <hr> 同值（0.8em，两模式观感同源） */
 #app .cm-editor .cm-scroller .vsidian-hr {
   display: block;
   border-top: 1px solid var(--vsidian-hr-color);
-  margin: 0.4em 0;
+  margin: 0.8em 0;
 }
 
 #app .cm-editor .cm-scroller .vsidian-frontmatter-line {
