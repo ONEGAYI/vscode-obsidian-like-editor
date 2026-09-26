@@ -446,7 +446,9 @@ function fencePlan(text: string, op: 'codeBlock' | 'blockMath', range: FormatSel
 
 /** 分割线插入（#106）：块级插入、无两态语义。光标所在行的左右文字各自
  *  成段，分割线前后各留一空行（已有空行不叠加，口径对齐 tableCreate）；
- *  光标落在分割线行尾——该行是控制域（触及显源码），插入后立即可续改。 */
+ *  选区折叠到起点——选区内容（含跨行选区的中间行）保留在分割线之后，
+ *  与 fencePlan 等兄弟插入操作的保留口径一致；光标落在分割线行尾——
+ *  该行是控制域（触及显源码），插入后立即可续改。 */
 function horizontalRulePlan(text: string, range: FormatSelection): FormatPlan {
   const lineStart = text.lastIndexOf('\n', range.from - 1) + 1
   const nextBreak = text.indexOf('\n', range.to)
@@ -454,7 +456,7 @@ function horizontalRulePlan(text: string, range: FormatSelection): FormatPlan {
   const before = text.slice(0, lineStart)
   const after = text.slice(lineEnd)
   const left = text.slice(lineStart, range.from)
-  const right = text.slice(range.to, lineEnd)
+  const right = text.slice(range.from, lineEnd)
   const leftText = left.trim() ? left : ''
   const rightText = right.trim() ? right : ''
   const previousLine = before.endsWith('\n') ? before.slice(0, -1).split('\n').at(-1) ?? '' : ''

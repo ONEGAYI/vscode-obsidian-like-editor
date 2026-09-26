@@ -159,12 +159,61 @@ function vsidianWikilinkInlineRule(state: StateInline, silent: boolean): boolean
 }
 
 /**
+ * 高亮 close 定界符扫描（#105）：从 from 起在 [from, posMax) 内找首个
+ * `==`，反引号 run（CommonMark code span：n 反引号开、等长 run 闭）区间
+ * 整体跳过——lezer 侧 InlineCode 先消费同样区间，裸 indexOf 会把 close
+ * 切进 code span（如 `==use \`a==b\` now==`），造成双视图渲染分叉。未
+ * 配对反引号不构成 code span，按普通文本继续扫；每个 run 的闭合搜索只
+ * 前进不回退，成本与行内片段长度同阶。
+ */
+function findHighlightClose(src: string, from: number, posMax: number): number {
+  let i = from
+  while (i + 1 < posMax) {
+    if (src.charCodeAt(i) === 0x60 /* ` */) {
+      let runEnd = i
+      while (runEnd < posMax && src.charCodeAt(runEnd) === 0x60) {
+        runEnd++
+      }
+      const runLen = runEnd - i
+      let scan = runEnd
+      let spanEnd = -1
+      while (scan < posMax) {
+        if (src.charCodeAt(scan) === 0x60) {
+          let scanEnd = scan
+          while (scanEnd < posMax && src.charCodeAt(scanEnd) === 0x60) {
+            scanEnd++
+          }
+          if (scanEnd - scan === runLen) {
+            spanEnd = scanEnd
+            break
+          }
+          scan = scanEnd
+        } else {
+          scan++
+        }
+      }
+      i = spanEnd >= 0 ? spanEnd : runEnd
+      continue
+    }
+    if (src.charCodeAt(i) === 0x3d /* = */ && src.charCodeAt(i + 1) === 0x3d) {
+      return i
+    }
+    i++
+  }
+  return -1
+}
+
+/**
  * 高亮 inline 规则（#105）：成对 `==` 渲染为 mark 语义元素（html:false 下
  * 输出语义标签）。形态学与 lezer 侧（markdownDoc 的 Highlight 扩展）对齐：
  * 定界符紧贴空白拒绝（flanking 同判）、残缺不匹配（普通文本降级，源文
- * 保真）；段内跨行可配对。规则挂 emphasis 之前——backticks 已先消费，
- * 行内代码内容字面呈现不受影响；内容区间经 tokenize 递归，嵌套行内标记
- * 照常解析。
+ * 保真）；段内跨行可配对。close 经 findHighlightClose 扫描（code span
+ * 区间不参与配对）；空内容（close 紧贴 open，如 `====`）整条拒绝——与
+ * live 侧「空区间不发射装饰」口径一致，不产空 mark。已知边界：连续等
+ * 号开头的形态（如 `====x====`）两侧仍有残余分歧（阅读按源码降级、live
+ * 产嵌套高亮），源码降级是安全侧。规则挂 emphasis 之前——backticks 已
+ * 先消费，行内代码内容字面呈现不受影响；内容区间经 tokenize 递归，嵌
+ * 套行内标记照常解析。
  */
 function vsidianHighlightInlineRule(state: StateInline, silent: boolean): boolean {
   const src = state.src
@@ -177,8 +226,11 @@ function vsidianHighlightInlineRule(state: StateInline, silent: boolean): boolea
   if (after === '' || /\s/u.test(after)) {
     return false
   }
-  const close = src.indexOf('==', start + 2)
+  const close = findHighlightClose(src, start + 2, state.posMax)
   if (close < 0 || close + 2 > state.posMax) {
+    return false
+  }
+  if (close === start + 2) {
     return false
   }
   const before = close > 0 ? src.charAt(close - 1) : ''

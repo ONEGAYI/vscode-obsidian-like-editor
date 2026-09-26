@@ -163,9 +163,12 @@ describe('格式操作的文本契约', () => {
     // 文档末尾：后无内容时不追加尾部空行
     expect(apply('上文', 'horizontalRule', 2))
       .toEqual({ text: '上文\n\n---', selection: { anchor: 7 } })
-    // 选区内容被替换为分割线（与建表口径一致）
+    // 选区内容保留在分割线之后（与 fencePlan 等兄弟插入操作口径一致）
     expect(apply('前文中段后文', 'horizontalRule', 2, 4))
-      .toEqual({ text: '前文\n\n---\n\n后文', selection: { anchor: 7 } })
+      .toEqual({ text: '前文\n\n---\n\n中段后文', selection: { anchor: 7 } })
+    // 跨行选区：选区整体（含中间行）保留在 --- 之后，不静默丢弃
+    expect(apply('第一段\n选中AA\n选中BB\n后续', 'horizontalRule', 6, 13))
+      .toEqual({ text: '第一段\n选中\n\n---\n\nAA\n选中BB\n后续', selection: { anchor: 11 } })
   })
 
   it('分割线插入：表格矩形选区内禁用（块级结构不入格）', () => {

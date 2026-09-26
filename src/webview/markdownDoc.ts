@@ -32,7 +32,7 @@ const HighlightDelim = { resolve: 'Highlight', mark: 'HighlightMark' }
 
 /** Unicode 标点类（CommonMark flanking 判定用；@lezer/markdown 内部同款）。
  *  \p{S}/\p{P} 属性转义自 ES2018 起受支持，宿主（node18/chrome118）恒可用 */
-const PUNCTUATION = /[\p{S}|\p{P}]/u
+const PUNCTUATION = /[\p{S}\p{P}]/u
 
 /**
  * live 装饰使用的 Markdown 解析器（#105）：markdownLanguage 已含 GFM 扩展
