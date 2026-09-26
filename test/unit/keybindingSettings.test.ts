@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
+// #95 i18n：分页文案经 t() 取词——装配生产 zh-cn 语言包，断言与字典同源
+// （操作名 op.title 仍为注册表存量文案，随编辑器 webview 迁移工单入字典）。
 import { describe, expect, it } from 'vitest'
 import { KeybindingSettingsSection } from '../../src/webview/keybindingSettings'
+import { installLocale } from '../../src/shared/i18n'
+import { zhCn } from '../../src/shared/locales/zh-cn'
+
+installLocale('zh-cn', zhCn)
 
 describe('快捷键设置页', () => {
   it('按键位搜索录入后仍保留可见名称', () => {
@@ -9,10 +15,11 @@ describe('快捷键设置页', () => {
     document.body.append(root)
     section.mount(root)
     const label = root.querySelector<HTMLLabelElement>('.vsidian-keybindings-key-search')
-    expect(label?.textContent).toContain('按键位搜索')
+    expect(label?.textContent).toContain(zhCn['keybindingSettings.searchKeyCaption'])
     const input = label!.querySelector<HTMLInputElement>('input')!
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', ctrlKey: true, bubbles: true }))
-    expect(root.querySelector('.vsidian-keybindings-key-search')?.textContent).toContain('按键位搜索')
+    expect(root.querySelector('.vsidian-keybindings-key-search')?.textContent)
+      .toContain(zhCn['keybindingSettings.searchKeyCaption'])
     expect(root.querySelector<HTMLInputElement>('.vsidian-keybindings-key-search input')?.value).toBe('Ctrl+B')
     root.remove()
   })
@@ -46,7 +53,8 @@ describe('快捷键设置页', () => {
     bold.querySelectorAll<HTMLButtonElement>('.vsidian-keybindings-actions button')[1].click()
     expect(sent[0]).toMatchObject({ kind: 'keybindings.set', id: 'bold', bindings: [] })
     section.handleHostMessage({ kind: 'keybindings.changed', overrides: { bold: [] }, requestId: 1, ok: true })
-    expect(root.querySelector('[data-operation-id="bold"] .vsidian-keybindings-unbound')?.textContent).toBe('未绑定')
+    expect(root.querySelector('[data-operation-id="bold"] .vsidian-keybindings-unbound')?.textContent)
+      .toBe(zhCn['keybindingSettings.unbound'])
     root.querySelector<HTMLElement>('[data-operation-id="bold"]')!
       .querySelectorAll<HTMLButtonElement>('.vsidian-keybindings-actions button')[2].click()
     expect(sent[1]).toMatchObject({ kind: 'keybindings.reset', id: 'bold' })

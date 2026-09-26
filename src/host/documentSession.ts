@@ -577,7 +577,9 @@ export class DocumentSession {
       const resolver = panel.port.resolveImage
       pending = resolver
         ? resolver(src).catch((): ImageResolution => ({ ok: false, reason: 'read-error' }))
-        : Promise.resolve({ ok: false, reason: 'read-error', detail: '未注入解析器' } as ImageResolution)
+        // 防御分支（resolver 未注入仅见于异常装配）：reason 码即全部反馈，
+        // detail 无 webview 消费方，不带文案（#95 i18n 清理）
+        : Promise.resolve({ ok: false, reason: 'read-error' } as ImageResolution)
       this.imageInFlight.set(src, pending)
       // 完成后清理在途表；成功结果进入小容量缓存（滚动回视口的重复请求
       // 直接命中，避免反复读盘；失败不缓存，保留重试语义）

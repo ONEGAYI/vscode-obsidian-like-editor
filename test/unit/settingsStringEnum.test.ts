@@ -24,7 +24,7 @@ const ENUM_DEFS: readonly SettingDefinition[] = [
     type: 'string',
     default: 'auto',
     enum: ['auto', 'zh-cn', 'en'],
-    title: '界面语言',
+    titleKey: 'setting.editorLineNumbers.title',
     optionLabels: { 'zh-cn': '简体中文', en: 'English' },
   },
 ]
@@ -171,7 +171,7 @@ describe('设置页下拉控件渲染与交互', () => {
   it('boolean 定义仍渲染复选框（schema 扩展不回归既有控件）', () => {
     const { parent } = mountView([
       ENUM_DEFS[0],
-      { key: 'editor.flag', type: 'boolean', default: true, title: '开关' },
+      { key: 'editor.flag', type: 'boolean', default: true, titleKey: 'setting.testFlag.title' },
     ])
     expect(
       parent.querySelectorAll(`input.${SETTINGS_PAGE_CLASS_NAMES.checkbox}`),

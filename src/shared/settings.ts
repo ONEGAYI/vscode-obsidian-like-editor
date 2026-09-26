@@ -23,10 +23,11 @@ export type SettingsPayload = Record<string, SettingsPayloadValue>
 interface SettingDefinitionBase {
   /** 稳定标识（点分层级，如 'editor.lineNumbers'；不得为空串） */
   key: string
-  /** 设置页展示名（非空语义由渲染层保证；#95 起更名为 titleKey 走 t() 取词） */
-  title: string
-  /** 可选说明（设置页副文案） */
-  description?: string
+  /** 展示名消息键（#95 起语义为 MessageKey，渲染层经 t() 取词；非空由
+   *  isSettingDefinition 保证，键存在性由语言包编译期 parity 保证） */
+  titleKey: string
+  /** 可选说明消息键（设置页副文案，同样经 t() 取词） */
+  descriptionKey?: string
 }
 
 /** 布尔设置项（开关；#34「显示源文件行号」同型） */
@@ -104,42 +105,44 @@ export const LANGUAGE_KEY = 'general.language'
  * 生产设置定义注册表：#33 交付空状态页面与完整数据链路，#34 加入首个
  * 实际设置项「显示行号」（设置页自此渲染真实开关），#79 加入「代码块卡片」，
  * #80 加入「卡内行号」，#81 加入「复制按钮」，#83 加入「语法高亮」。
+ * #95 i18n 起文案字段键化（titleKey/descriptionKey → 字典 setting.*），
+ * 注册表不再含用户可见字面量。
  */
 export const PRODUCTION_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
   {
     key: SHOW_LINE_NUMBERS_KEY,
     type: 'boolean',
     default: SHOW_LINE_NUMBERS_DEFAULT,
-    title: '显示行号',
-    description: '在实时预览左侧留白带内显示源文件行号（阅读模式不显示）。',
+    titleKey: 'setting.editorLineNumbers.title',
+    descriptionKey: 'setting.editorLineNumbers.description',
   },
   {
     key: CODEBLOCK_CARD_KEY,
     type: 'boolean',
     default: CODEBLOCK_CARD_DEFAULT,
-    title: '代码块卡片',
-    description: '围栏代码块在光标离开时收起为卡片：隐藏围栏标记，显示语言头部横带。关闭后回到朴素源码围栏外观。',
+    titleKey: 'setting.codeblockCard.title',
+    descriptionKey: 'setting.codeblockCard.description',
   },
   {
     key: CODEBLOCK_LINE_NUMBERS_KEY,
     type: 'boolean',
     default: CODEBLOCK_LINE_NUMBERS_DEFAULT,
-    title: '卡内行号',
-    description: '卡片内代码行行首显示块内行号（每块从 1 起，围栏行不占号）。需开启「代码块卡片」。',
+    titleKey: 'setting.codeblockLineNumbers.title',
+    descriptionKey: 'setting.codeblockLineNumbers.description',
   },
   {
     key: CODEBLOCK_COPY_BUTTON_KEY,
     type: 'boolean',
     default: CODEBLOCK_COPY_BUTTON_DEFAULT,
-    title: '复制按钮',
-    description: '卡片头部悬停显示复制按钮，点击复制整块代码（不含围栏行）。需开启「代码块卡片」。',
+    titleKey: 'setting.codeblockCopyButton.title',
+    descriptionKey: 'setting.codeblockCopyButton.description',
   },
   {
     key: CODEBLOCK_HIGHLIGHT_KEY,
     type: 'boolean',
     default: CODEBLOCK_HIGHLIGHT_DEFAULT,
-    title: '语法高亮',
-    description: '代码块内容按语言着色（卡片关闭时朴素围栏同样生效；未识别语言回退纯文本）。',
+    titleKey: 'setting.codeblockHighlight.title',
+    descriptionKey: 'setting.codeblockHighlight.description',
   },
 ]
 
@@ -147,14 +150,16 @@ function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
-/** 定义自校验（注册入口防线：非法定义整体拒绝） */
+/** 定义自校验（注册入口防线：非法定义整体拒绝）。titleKey/descriptionKey
+ *  只校验字符串形态（非空）；键是否存在于语言包由渲染层 t() 回退链兜底
+ *  （缺键显示键名本身），生产键的正确性由字典编译期 parity 保证 */
 export function isSettingDefinition(v: unknown): v is SettingDefinition {
   if (
     !isObject(v) ||
     typeof v.key !== 'string' ||
     v.key.length === 0 ||
-    typeof v.title !== 'string' ||
-    (v.description !== undefined && typeof v.description !== 'string')
+    typeof v.titleKey !== 'string' ||
+    (v.descriptionKey !== undefined && typeof v.descriptionKey !== 'string')
   ) {
     return false
   }

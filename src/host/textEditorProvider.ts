@@ -52,6 +52,7 @@ import type { SettingsPageHandle } from './settingsPage'
 import { LANGUAGE_KEY } from '../shared/settings'
 import { LOCALE_MESSAGES, resolveLocale, type LocaleCode } from '../shared/locales'
 import { buildLocaleIslandHtml } from '../shared/locales/island'
+import { t } from '../shared/i18n'
 
 export const VIEW_TYPE = 'onegayi.vsidian.editor'
 
@@ -246,9 +247,9 @@ export function createTextEditorProvider(
     const text = live ?? state?.webviewText ?? state?.fragments.join('\n') ?? ''
     if (text) {
       await vscode.env.clipboard.writeText(text)
-      void vscode.window.showInformationMessage('未确认输入已复制到剪贴板')
+      void vscode.window.showInformationMessage(t('host.conflictInputCopied'))
     } else {
-      void vscode.window.showWarningMessage('没有可复制的未确认输入')
+      void vscode.window.showWarningMessage(t('host.noConflictInputToCopy'))
     }
   }
 
@@ -259,11 +260,12 @@ export function createTextEditorProvider(
       return
     }
     const name = vscode.workspace.asRelativePath(entry.doc.uri)
+    const discardLabel = t('host.discardAndResync')
     const pick = await vscode.window.showWarningMessage(
-      `将放弃“${name}”编辑器中未确认的本地修改，并以磁盘/权威内容重新同步。建议先复制未确认输入。`,
-      '放弃本地修改并重新同步',
+      t('host.confirmResume', { name }),
+      discardLabel,
     )
-    if (pick === '放弃本地修改并重新同步') {
+    if (pick === discardLabel) {
       entry.session.resumePanel(sessionId)
     }
   }
@@ -272,17 +274,19 @@ export function createTextEditorProvider(
   const handleNotice = (uriStr: string, notice: SessionNotice): void => {
     const entry = sessions.get(uriStr)
     const name = entry ? vscode.workspace.asRelativePath(entry.doc.uri) : uriStr
+    const copyLabel = t('host.copyConflictInput')
+    const discardLabel = t('host.discardAndResync')
     if (notice.type === 'conflict') {
       void vscode.window
         .showWarningMessage(
-          `“${name}”的编辑已暂停：外部修改与未确认输入无法安全合并。未确认输入已保留，可随时取回。`,
-          '复制未确认输入',
-          '放弃本地修改并重新同步',
+          t('host.conflictPaused', { name }),
+          copyLabel,
+          discardLabel,
         )
         .then((pick) => {
-          if (pick === '复制未确认输入') {
+          if (pick === copyLabel) {
             void copyConflictInput(uriStr, notice.sessionId)
-          } else if (pick === '放弃本地修改并重新同步') {
+          } else if (pick === discardLabel) {
             void confirmResume(uriStr, notice.sessionId)
           }
         })
@@ -301,11 +305,11 @@ export function createTextEditorProvider(
     const closedText = notice.webviewText ?? notice.fragments.join('\n')
     void vscode.window
       .showWarningMessage(
-        `“${name}”的编辑器已关闭（或连接断开），存在未保存的未确认输入：${closedText.slice(0, 120)}`,
-        '复制未确认输入',
+        t('host.panelClosedWithInput', { name, text: closedText.slice(0, 120) }),
+        copyLabel,
       )
       .then((pick) => {
-        if (pick === '复制未确认输入') {
+        if (pick === copyLabel) {
           const state = sessions.get(uriStr)?.session.getConflictState(notice.sessionId)
           void vscode.env.clipboard.writeText(
             state?.webviewText ?? notice.webviewText ?? state?.fragments.join('\n') ?? notice.fragments.join('\n'),
@@ -546,7 +550,7 @@ export function createTextEditorProvider(
     if (!parsed) {
       pushLog({ kind: 'wikilink-unsupported', target: intent.target })
       void vscode.window.showWarningMessage(
-        `不支持的双链形态「[[${intent.target}]]」（块引用 ^、嵌入 ![[…]] 等属二期）：已按原文保留`,
+        t('host.wikilinkUnsupported', { target: intent.target }),
       )
       return
     }
@@ -561,15 +565,13 @@ export function createTextEditorProvider(
     const resolution = resolveWikilinkFile({ path: parsed.path }, ctx, mdFiles)
     if (resolution.kind === 'no-workspace') {
       pushLog({ kind: 'wikilink-no-workspace', target: parsed.path })
-      void vscode.window.showWarningMessage(
-        '当前文档不在任何工作区文件夹内：双链目标需要按工作区查找，未打开文件夹时无法跳转（链接文本保留）',
-      )
+      void vscode.window.showWarningMessage(t('host.wikilinkNoWorkspace'))
       return
     }
     if (resolution.kind === 'not-found') {
       pushLog({ kind: 'wikilink-not-found', target: parsed.path, heading: parsed.heading ?? undefined })
       void vscode.window.showWarningMessage(
-        `双链目标不存在：[[${parsed.path}]]（已按当前工作区按需查找；不会自动创建文件）`,
+        t('host.wikilinkNotFound', { target: parsed.path }),
       )
       return
     }
@@ -586,7 +588,7 @@ export function createTextEditorProvider(
         fsPath: p,
       }))
       const pick = await vscode.window.showQuickPick(items, {
-        placeHolder: `找到多个双链目标「${parsed.path}」，请选择要打开的笔记`,
+        placeHolder: t('host.wikilinkAmbiguousPick', { target: parsed.path }),
       })
       if (!pick) {
         pushLog({ kind: 'wikilink-cancelled', target: parsed.path, candidates })
@@ -645,7 +647,7 @@ export function createTextEditorProvider(
     }
     if (headingMissing) {
       void vscode.window.showWarningMessage(
-        `已在目标文档中打开${display}，但未找到标题「${parsed.heading}」（标题匹配：trim + 空白折叠 + 大小写不敏感的 ATX 标题）`,
+        t('host.wikilinkHeadingMissing', { link: display, heading: parsed.heading ?? '' }),
       )
     }
   }
@@ -1034,10 +1036,10 @@ export function createTextEditorProvider(
         // 不 resolve，await 会让命令调用方（键绑/测试/其他扩展）挂起
         void vscode.window.showWarningMessage(
           plan.reason === 'diff-context'
-            ? '对比视图不支持视图切换'
+            ? t('host.rejectDiffContext')
             : plan.reason === 'panel-not-ready'
-              ? 'Vsidian 面板尚未就绪，请稍后重试'
-              : '当前已在源码编辑器中',
+              ? t('host.rejectPanelNotReady')
+              : t('host.rejectAlreadySource'),
         )
         return false
       }
@@ -1064,9 +1066,7 @@ export function createTextEditorProvider(
     const active = deriveActiveTabMode()
     if (!active) {
       // 同 reject 分支：提示不阻塞命令返回
-      void vscode.window.showWarningMessage(
-        '请先聚焦一个 Markdown 文档（Vsidian 面板或 .md 源码编辑器）再切换视图模式',
-      )
+      void vscode.window.showWarningMessage(t('host.noActiveMarkdown'))
       return false
     }
     const target = explicitTarget ?? nextTriMode(active.mode)
@@ -1133,9 +1133,7 @@ export function createTextEditorProvider(
           return true
         }
       }
-      await vscode.window.showWarningMessage(
-        '请先聚焦一个 Vsidian 编辑器面板，再使用编辑区查找',
-      )
+      await vscode.window.showWarningMessage(t('host.noPanelForFind'))
       return false
     }),
   )
@@ -1180,9 +1178,7 @@ export function createTextEditorProvider(
               // 默认 live）。不 await：命令无需用户选择，通知停留即可
               const viewMode = entry.session.getViewState(sessionId)?.viewMode
               if (viewMode === 'reading') {
-                void vscode.window.showWarningMessage(
-                  '阅读模式为只读视图：切换到实时预览后再执行表格操作',
-                )
+                void vscode.window.showWarningMessage(t('host.readOnlyTableOp'))
                 return true
               }
               entry.session.postToPanel(sessionId, op === 'create'
@@ -1193,9 +1189,7 @@ export function createTextEditorProvider(
           }
         }
         await vscode.window.showWarningMessage(
-          op === 'create'
-            ? '请先聚焦一个 Vsidian 编辑器面板，再创建表格'
-            : '请先聚焦一个 Vsidian 编辑器面板（光标置于表格内），再执行表格操作',
+          op === 'create' ? t('host.noPanelForTableCreate') : t('host.noPanelForTableOp'),
         )
         return false
       }),
@@ -1440,9 +1434,9 @@ export function createTextEditorProvider(
       () =>
         settings
           ? settings.service.addDefinitions([
-              { key: 'test.flag', type: 'boolean', default: false, title: '测试开关' },
+              { key: 'test.flag', type: 'boolean', default: false, titleKey: 'setting.testFlag.title' },
             ])
-          : { ok: false, error: '设置链路未接线' },
+          : { ok: false, error: 'settings wiring unavailable' },
     ),
     vscode.commands.registerCommand('onegayi.vsidian._test.getSettings', () =>
       settings ? settings.service.getSnapshot() : {},
@@ -1488,13 +1482,13 @@ function blockedLinkMessage(
 ): string {
   switch (target.reason) {
     case 'empty':
-      return `链接目标为空（空白或仅锚点）：本期不支持页内锚点定位`
+      return t('host.blockedLinkEmpty')
     case 'scheme':
-      return `不允许打开的链接协议「${target.scheme || '//'}」：仅支持 http/https 与工作区内路径`
+      return t('host.blockedLinkScheme', { scheme: target.scheme || '//' })
     case 'escape':
-      return `链接指向工作区之外，已拦截：${target.detail ?? ''}`
+      return t('host.blockedLinkEscape', { detail: target.detail ?? '' })
     case 'windows-drive-on-posix':
-      return `远程（POSIX）工作区不支持 Windows 盘符路径链接`
+      return t('host.blockedLinkWindowsDrive')
   }
 }
 
@@ -1525,7 +1519,7 @@ async function executeLinkIntent(
     }
     const ok = await vscode.env.openExternal(vscode.Uri.parse(target.url))
     if (!ok) {
-      void vscode.window.showWarningMessage(`无法打开外部链接：${target.url}`)
+      void vscode.window.showWarningMessage(t('host.externalOpenFailed', { url: target.url }))
     }
     return
   }
@@ -1548,7 +1542,7 @@ async function executeLinkIntent(
   }
   pushLog({ kind: 'not-found', href: intent.href })
   void vscode.window.showWarningMessage(
-    `链接目标不存在：${intent.href}（已按相对当前文档目录解析）`,
+    t('host.linkNotFound', { href: intent.href }),
   )
   void document // 意图源自本文档；名称留给后续 #11 锚点定位使用
 }

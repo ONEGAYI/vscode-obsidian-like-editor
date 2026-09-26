@@ -1,7 +1,9 @@
 // 设置页分页容器：宿主快照为权威，全局搜索只负责设置入口定位。
-// #93 i18n 起：页面框架标题经 t() 取词（语言包由 localeBoot 首帧从数据岛
+// #93 i18n 起：框架文案经 t() 取词（语言包由 localeBoot 首帧从数据岛
 // 装配、locale.changed 换包，本视图订阅换包事件重渲染常驻文本）；string
-// 枚举定义渲染为下拉控件（boolean 仍为开关）。
+// 枚举定义渲染为下拉控件（boolean 仍为开关）。#95 起设置项定义文案同样
+// 键化（def.titleKey/descriptionKey → t() 取词），搜索按取词后的显示
+// 文本匹配。
 import { t, onLocaleChanged } from '../shared/i18n'
 import { isHostToWebview } from '../shared/protocol'
 import type { SettingDefinition, SettingsPayload, SettingsPayloadValue } from '../shared/settings'
@@ -70,16 +72,16 @@ export class SettingsPageView {
       const searchWrap = element('div', 'vsidian-settings-search-wrap')
       this.search = element('input', 'vsidian-settings-search')
       this.search.type = 'search'
-      this.search.placeholder = '搜索设置…'
-      this.search.setAttribute('aria-label', '搜索全部设置')
+      this.search.placeholder = t('settings.searchPlaceholder')
+      this.search.setAttribute('aria-label', t('settings.searchAriaLabel'))
       this.search.addEventListener('input', () => this.render())
       this.search.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') { this.search!.value = ''; this.render() }
       })
       searchWrap.append(icon('search'), this.search)
-      sidebar.append(searchWrap, element('p', 'vsidian-settings-nav-label', '选项'))
+      sidebar.append(searchWrap, element('p', 'vsidian-settings-nav-label', t('settings.navLabel')))
       this.nav = element('nav', 'vsidian-settings-nav')
-      this.nav.setAttribute('aria-label', '设置分类')
+      this.nav.setAttribute('aria-label', t('settings.navAriaLabel'))
       sidebar.append(this.nav)
     }
     const main = element('main', 'vsidian-settings-main')
@@ -120,7 +122,8 @@ export class SettingsPageView {
       if (this.pending > 0) {
         this.pending--
         this.saveFailed ||= message.kind === 'settings.snapshot'
-        if (this.status) this.status.textContent = this.pending ? '正在保存…' : this.saveFailed ? '未能保存设置，已恢复当前生效值。请重试。' : '设置已保存'
+        if (this.status) this.status.textContent = this.pending ? t('settings.saving')
+          : this.saveFailed ? t('settings.saveFailed') : t('settings.saveDone')
       }
       // 同步值不重建分页，也不夺走搜索框和开关的键盘焦点。
       for (const box of this.listEl?.querySelectorAll<HTMLInputElement>('input[data-setting-key]') ?? []) {
@@ -144,7 +147,7 @@ export class SettingsPageView {
     return typeof raw === 'string' && def.enum.includes(raw) ? raw : def.default
   }
   private categories() {
-    return [{ id: 'editor', title: '编辑器', icon: 'editor' as const }, ...this.sections]
+    return [{ id: 'editor', title: t('settings.editorCategory'), icon: 'editor' as const }, ...this.sections]
   }
   private render(focusEntry?: string): void {
     if (!this.listEl) return
@@ -168,8 +171,18 @@ export class SettingsPageView {
     const list = this.listEl
     list.replaceChildren()
     if (query) {
-      list.append(element('h2', 'vsidian-settings-heading', '搜索结果'))
-      const groups = [{ id: 'editor', title: '编辑器', entries: this.defs.map((d) => ({ id: d.key, ...d })) }, ...this.sections]
+      list.append(element('h2', 'vsidian-settings-heading', t('settings.searchResults')))
+      // 搜索按用户看到的显示文本匹配：设置项定义经 t() 取词后参与过滤
+      // （titleKey/descriptionKey → 当前语言文本，#95 键化迁移）
+      const groups = [{
+        id: 'editor',
+        title: t('settings.editorCategory'),
+        entries: this.defs.map((d) => ({
+          id: d.key,
+          title: t(d.titleKey),
+          ...(d.descriptionKey ? { description: t(d.descriptionKey) } : {}),
+        })),
+      }, ...this.sections]
       let count = 0
       for (const group of groups) for (const entry of group.entries) {
         if (!`${entry.title} ${entry.description ?? ''}`.toLocaleLowerCase().includes(query)) continue
@@ -185,14 +198,15 @@ export class SettingsPageView {
         })
         list.append(result)
       }
-      const summary = element('p', SETTINGS_PAGE_CLASS_NAMES.subtitle, count ? `找到 ${count} 项设置` : '未找到匹配的设置，请尝试其他关键词。')
+      const summary = element('p', SETTINGS_PAGE_CLASS_NAMES.subtitle,
+        count ? t('settings.searchCount', { count }) : t('settings.searchEmpty'))
       summary.setAttribute('role', 'status')
       list.insertBefore(summary, list.children[1] ?? null)
       return
     }
     const section = this.sections.find((s) => s.id === this.active)
-    list.append(element('h2', 'vsidian-settings-heading', section?.title ?? '编辑器'),
-      element('p', SETTINGS_PAGE_CLASS_NAMES.subtitle, section?.description ?? '调整实时预览的显示方式。更改会自动保存。'))
+    list.append(element('h2', 'vsidian-settings-heading', section?.title ?? t('settings.editorCategory')),
+      element('p', SETTINGS_PAGE_CLASS_NAMES.subtitle, section?.description ?? t('settings.editorSubtitle')))
     if (section) {
       const content = element('div', 'vsidian-settings-section-content')
       list.append(content)
@@ -200,28 +214,28 @@ export class SettingsPageView {
       return
     }
     if (!this.defs.length) {
-      list.append(element('p', SETTINGS_PAGE_CLASS_NAMES.empty, '暂无可配置项。'))
+      list.append(element('p', SETTINGS_PAGE_CLASS_NAMES.empty, t('settings.empty')))
       return
     }
-    list.append(element('h3', 'vsidian-settings-group-title', '显示'))
+    list.append(element('h3', 'vsidian-settings-group-title', t('settings.groupDisplay')))
     for (const def of this.defs) {
       const item = element('div', SETTINGS_PAGE_CLASS_NAMES.item)
       const label = element('label', 'vsidian-settings-item-label')
       const text = element('span', 'vsidian-settings-item-copy')
-      text.append(element('span', SETTINGS_PAGE_CLASS_NAMES.itemTitle, def.title))
+      text.append(element('span', SETTINGS_PAGE_CLASS_NAMES.itemTitle, t(def.titleKey)))
       // #93 控件分流：boolean → 复选开关；string 枚举 → 下拉（enum 顺序即
       // 选项顺序，optionLabels 缺省显示原值）
       const control: HTMLInputElement | HTMLSelectElement = def.type === 'string'
         ? this.buildSelect(def)
         : this.buildCheckbox(def)
-      if (def.description) {
-        const desc = element('span', SETTINGS_PAGE_CLASS_NAMES.itemDescription, def.description)
+      if (def.descriptionKey) {
+        const desc = element('span', SETTINGS_PAGE_CLASS_NAMES.itemDescription, t(def.descriptionKey))
         desc.id = `description-${def.key}`
         text.append(desc)
         control.setAttribute('aria-describedby', desc.id)
       }
       control.dataset.settingKey = def.key
-      control.setAttribute('aria-label', def.title)
+      control.setAttribute('aria-label', t(def.titleKey))
       label.append(text, control)
       item.append(label)
       list.append(item)
@@ -240,7 +254,7 @@ export class SettingsPageView {
     box.addEventListener('change', () => {
       if (!this.pending) this.saveFailed = false
       this.pending++
-      if (this.status) this.status.textContent = '正在保存…'
+      if (this.status) this.status.textContent = t('settings.saving')
       this.bridge.postMessage({ kind: 'settings.set', values: { [def.key]: box.checked } })
     })
     return box
@@ -261,7 +275,7 @@ export class SettingsPageView {
     select.addEventListener('change', () => {
       if (!this.pending) this.saveFailed = false
       this.pending++
-      if (this.status) this.status.textContent = '正在保存…'
+      if (this.status) this.status.textContent = t('settings.saving')
       this.bridge.postMessage({ kind: 'settings.set', values: { [def.key]: select.value } })
     })
     return select

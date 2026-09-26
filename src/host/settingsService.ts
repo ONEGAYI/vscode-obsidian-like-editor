@@ -7,7 +7,8 @@
 // 键值，默认值永远来自定义表（定义演进时不固化旧默认）。
 //
 // 本模块不依赖 vscode（SettingsStorage 抽象），可在单测注入假持久层；
-// 纯校验逻辑在 shared/settings（单一事实源）。
+// 纯校验逻辑在 shared/settings（单一事实源）。#95 i18n：注册拒绝原因经
+// t() 取词（shared/i18n 不引字典，宿主装配后即就绪；未装配回退键名）。
 import {
   applySettingsPatch,
   isSettingDefinition,
@@ -16,6 +17,7 @@ import {
   type SettingsPayload,
   type SettingsPayloadValue,
 } from '../shared/settings'
+import { t } from '../shared/i18n'
 
 /** 持久层抽象：vscode 层以 context.globalState 实现（Memento 子集） */
 export interface SettingsStorage {
@@ -60,10 +62,10 @@ export class SettingsService {
   addDefinitions(defs: readonly unknown[]): AddDefinitionsResult {
     for (const candidate of defs) {
       if (!isSettingDefinition(candidate)) {
-        return { ok: false, error: `非法定义：${JSON.stringify(candidate)}` }
+        return { ok: false, error: t('host.invalidSettingDefinition', { definition: JSON.stringify(candidate) }) }
       }
       if (this.defs.has(candidate.key)) {
-        return { ok: false, error: `设置键已存在：${candidate.key}` }
+        return { ok: false, error: t('host.duplicateSettingKey', { key: candidate.key }) }
       }
     }
     for (const def of defs as readonly SettingDefinition[]) {

@@ -2,17 +2,22 @@
 // 持久化 overlay）、变更通知。存储抽象为 SettingsStorage（vscode 层用
 // context.globalState 实现；globalState 按用户 profile 持久、重启保留，
 // 「重启后回读」在单测层以同一 storage 重建服务等价验证，真实重启见
-// 人工验证条目）。
+// 人工验证条目）。#95 i18n：注册拒绝原因经 t() 取词——装配 zh-cn 包，
+// 断言与字典同源。
 import { describe, it, expect } from 'vitest'
 import { SettingsService, type SettingsStorage } from '../../src/host/settingsService'
 import {
   PRODUCTION_SETTING_DEFINITIONS,
   type SettingDefinition,
 } from '../../src/shared/settings'
+import { installLocale } from '../../src/shared/i18n'
+import { zhCn } from '../../src/shared/locales/zh-cn'
+
+installLocale('zh-cn', zhCn)
 
 const FIXTURE_DEFS: readonly SettingDefinition[] = [
-  { key: 'editor.lineNumbers', type: 'boolean', default: false, title: '显示源文件行号' },
-  { key: 'editor.spellcheck', type: 'boolean', default: true, title: '拼写检查' },
+  { key: 'editor.lineNumbers', type: 'boolean', default: false, titleKey: 'setting.editorLineNumbers.title' },
+  { key: 'editor.spellcheck', type: 'boolean', default: true, titleKey: 'setting.testFlag.title' },
 ]
 
 /** 假持久层：记录写入，模拟 globalState 语义（update 完成后 get 可见新值） */
@@ -160,7 +165,8 @@ describe('运行时定义注册（addDefinitions）', () => {
     const result = svc.addDefinitions([FIXTURE_DEFS[0], FIXTURE_DEFS[1]])
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.error).toContain('editor.lineNumbers')
+      // 拒绝原因经 t() 取词：与字典 host.duplicateSettingKey 同源
+      expect(result.error).toBe(zhCn['host.duplicateSettingKey'].replace('{key}', FIXTURE_DEFS[0].key))
     }
     // 原子：第二批整体未并入
     expect(svc.getSnapshot()).toEqual({ 'editor.lineNumbers': false })
@@ -168,8 +174,8 @@ describe('运行时定义注册（addDefinitions）', () => {
 
   it('非法定义拒绝（缺字段/类型错误），快照不受影响', () => {
     const svc = new SettingsService(makeStorage(), [])
-    expect(svc.addDefinitions([{ key: '', type: 'boolean', default: false, title: 'x' }]).ok).toBe(false)
-    expect(svc.addDefinitions([{ key: 'a', type: 'number', default: 1, title: 'x' } as never]).ok).toBe(false)
+    expect(svc.addDefinitions([{ key: '', type: 'boolean', default: false, titleKey: 'x' }]).ok).toBe(false)
+    expect(svc.addDefinitions([{ key: 'a', type: 'number', default: 1, titleKey: 'x' } as never]).ok).toBe(false)
     expect(svc.getSnapshot()).toEqual({})
   })
 })
