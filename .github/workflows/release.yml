@@ -57,7 +57,7 @@ jobs:
     # push 场景等 release 成功；dispatch 补跑场景 release 被跳过（skipped），
     # 直接对指定标签的既有 Release 发布。注意 job 级 if 隐式带 success() &&
     # 前缀——上游 skipped 时会把整个条件判 false，故须以 !cancelled() 显式豁免
-    if: !cancelled() && ((github.event_name == 'push' && needs.release.result == 'success') || github.event_name == 'workflow_dispatch')
+    if: ${{ !cancelled() && ((github.event_name == 'push' && needs.release.result == 'success') || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

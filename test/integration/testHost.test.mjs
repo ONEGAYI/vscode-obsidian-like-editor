@@ -101,6 +101,63 @@ test('前台启动器原样传递真实进程输出和非零退出码', async ()
   assert.equal(output, 'launcher probe')
 })
 
+test('宿主运行按 reportPath 落盘完整报告：逐例输出与尾部退出码', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'vsidian-host-report-'))
+  // 嵌套路径：报告目录不存在时应自动创建（真实启动器把报告放进 .vscode-test/）
+  const reportPath = path.join(dir, 'nested', 'integration-dev.log')
+  try {
+    const code = await runTestHost({
+      executable: process.execPath,
+      args: ['-e', 'process.stdout.write("report probe out\\n"); process.stderr.write("report probe err\\n"); process.exit(9)'],
+      env: process.env,
+      mode: 'foreground',
+      reportPath,
+    })
+    assert.equal(code, 9)
+    const report = readFileSync(reportPath, 'utf8')
+    assert.match(report, /report probe out/, '报告应包含子进程 stdout')
+    assert.match(report, /report probe err/, '报告应包含子进程 stderr')
+    assert.match(report, /\[testHost\] 宿主退出码 9/, '报告尾部应有退出码摘要行')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('超时终止的运行同样落盘报告并记录超时退出码', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'vsidian-host-report-timeout-'))
+  const reportPath = path.join(dir, 'integration-timeout.log')
+  try {
+    const code = await runTestHost({
+      executable: process.execPath,
+      args: ['-e', 'setTimeout(() => process.exit(0), 8000)'],
+      env: process.env,
+      mode: 'foreground',
+      timeoutMs: 600,
+      reportPath,
+    })
+    assert.equal(code, 124)
+    assert.match(readFileSync(reportPath, 'utf8'), /\[testHost\] 宿主退出码 124/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('开发态、安装态与空窗口激活启动器都为宿主运行配置报告文件', () => {
+  const expected = {
+    'runTest.mjs': 'integration-dev.log',
+    'runInstalled.mjs': 'integration-installed.log',
+    'runSettingsActivation.mjs': 'settings-activation.log',
+  }
+  for (const [launcher, reportName] of Object.entries(expected)) {
+    const source = readFileSync(path.join(here, launcher), 'utf8')
+    assert.match(
+      source,
+      new RegExp(`reportPath:\\s*path\\.join\\(root,\\s*'\\.vscode-test',\\s*'${reportName}'\\)`),
+      `${launcher} 应把报告指到 .vscode-test/${reportName}`,
+    )
+  }
+})
+
 test('Windows 独立桌面启动器原样传递真实进程输出和非零退出码', { skip: skipDesktop }, async () => {
   let output = ''
   let diagnostics = ''
