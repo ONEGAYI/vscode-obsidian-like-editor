@@ -453,6 +453,8 @@ interface ViewState {
       foldedCount?: number
       /** #83 视口内 tok-* token 元素数 */
       tokenCount?: number
+      /** 全部头部语言标签序列（DOM 顺序；渲染型围栏的 Mermaid 标签断言） */
+      labels?: string[]
     }
     /** #55：标题行左缘绘制观测（distinct computed 值；无挂载标题行为 null） */
     heading?: {
@@ -5016,6 +5018,41 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await setCardSettings({ 'codeblock.highlight': true })
     await waitViewState('code-card.md', (v) =>
       v.paint?.code?.headerCount === 4 && (v.paint.code.tokenCount ?? 0) > 0)
+
+    // ---- 渲染型围栏（mermaid）接入卡片：编辑态外壳、呈现态让位（前段
+    // headerCount 4 + liveMermaidCount 1 已断言）、折叠收起接管 SVG。
+    // 呈现态 mermaid 无头部（让位 SVG）——折叠入口在编辑态：块内点
+    // chevron（临时展开语义，折叠集更新）→ 离开后呈现态收起
+    const mermaidBody = present.text.indexOf('graph TD')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: mermaidBody + 1,
+    })
+    const mEdit = await waitViewState('code-card.md', (v) =>
+      v.paint?.code?.headerCount === 5 && (v.liveMermaidCount ?? -1) === 0)
+    assert(mEdit.paint?.code?.labels?.includes('Mermaid') === true,
+      `编辑态应出现 Mermaid 标签头部，实际 ${JSON.stringify(mEdit.paint?.code?.labels)}`)
+    assert(mEdit.paint?.code?.cardLineCount === 19,
+      `编辑态卡片行 15+4=19，实际 ${mEdit.paint?.code?.cardLineCount}`)
+    assert(mEdit.paint?.code?.copyCount === 4,
+      `mermaid 编辑态块无复制按钮（其余四张呈现态共 4），实际 ${mEdit.paint?.code?.copyCount}`)
+    assert(await readDisk('code-card.md') === diskBefore, '渲染型围栏显隐交互不得改写源文')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'codecard.test.fold', index: 4,
+    })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: 0,
+    })
+    const mFolded = await waitViewState('code-card.md', (v) =>
+      v.paint?.code?.foldedCount === 1 && (v.liveMermaidCount ?? -1) === 0 && v.paint?.code?.headerCount === 5)
+    assert(mFolded.paint?.code?.cardLineCount === 15,
+      `收起后卡片行回到 15，实际 ${mFolded.paint?.code?.cardLineCount}`)
+    assert(mFolded.paint?.code?.copyCount === 4, '收起块不发射复制按钮，四张普通卡片保持 4')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'codecard.test.fold', index: 4,
+    })
+    await waitViewState('code-card.md', (v) =>
+      v.paint?.code?.foldedCount === 0 && (v.liveMermaidCount ?? -1) === 1 && v.paint?.code?.headerCount === 4)
+    assert(await readDisk('code-card.md') === diskBefore, '渲染型围栏折叠交互不得改写源文')
   }],
 
   ['阅读模式代码块卡片：卡片/行号/高亮/复制/折叠与观感契约（#84）', async () => {

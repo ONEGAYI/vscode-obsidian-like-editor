@@ -129,6 +129,7 @@ vsidian/
 │   │   ├── settings.ts      # 设置定义与读写纯逻辑
 │   │   └── wikilink.ts      # 双链形态学单一事实源（#11）
 │   └── webview/     # webview 端实现
+│       ├── codeCardState.ts        # 卡片共享状态中立模块
 │       ├── codeHighlight.ts        # 语法高亮引擎装配与缓存
 │       ├── css.d.ts                # CSS 导入类型声明
 │       ├── findSession.ts          # 查找匹配纯函数（#14）

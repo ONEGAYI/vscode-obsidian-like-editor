@@ -778,7 +778,7 @@ const MERMAID_DOC = [
 const mermaidFailures = []
 let mermaidPassed = 0
 try {
-  for (const scenario of ['live-render', 'edit-rerender', 'reading-mode', 'no-navigation', 'theme-rerender']) {
+  for (const scenario of ['live-render', 'edit-rerender', 'reading-mode', 'no-navigation', 'theme-rerender', 'card-in-out']) {
     const page = await mermaidBrowser.newPage()
     // 高视口：CM6 widget 只在可见区物化——图渲染后高度扩张会把后续围栏推出
     // 默认 720px 视口，widget 永不创建导致等待超时；拉高视口让全部图可见
@@ -935,6 +935,29 @@ try {
           const svg = document.querySelector('.cm-content .vsidian-mermaid svg')
           return svg && svg !== window.__firstMermaidSvg && svg !== window.__secondMermaidSvg
         }, null, { timeout: 20000 })
+      } else if (scenario === 'card-in-out') {
+        // 渲染型围栏接入卡片（点击 SVG → 编辑态卡片接管）。点击 widget
+        // 背景区（顶缘）→ CM6 光标落围栏起点（触及区间 → 该图退场、
+        // Mermaid 标签卡片接管）；点击围栏外退出 → 卡片退场、SVG 恢复。
+        // 注：点击落位依命中元素（SVG 背景区 vs 节点图形）而异，非稳定
+        // 契约——本场景只钉进入/退出两条主路径
+        await page.waitForFunction(() =>
+          document.querySelectorAll('.cm-content .vsidian-mermaid').length === 5, null, { timeout: 20000 })
+        await page.locator('.cm-content .vsidian-mermaid svg').first().click({ position: { x: 20, y: 6 } })
+        await page.waitForFunction(() => {
+          const cards = document.querySelectorAll('.cm-content .vsidian-code-card-header')
+          const mermaidCard = [...cards].some((h) =>
+            (h.querySelector('.vsidian-code-card-header-label')?.lastChild?.textContent ?? '') === 'Mermaid')
+          return document.querySelectorAll('.cm-content .vsidian-mermaid').length === 4 && mermaidCard
+        }, null, { timeout: 20000 })
+        assert.equal((await states()).text, MERMAID_DOC, '点击进入编辑态零写回')
+        // 点击围栏外（文档首行）退出 → 卡片退场、SVG 恢复渲染
+        await page.locator('.cm-line').first().click({ position: { x: 5, y: 8 } })
+        await page.waitForFunction(() =>
+          document.querySelectorAll('.cm-content .vsidian-mermaid[data-vsidian-mermaid-state="rendered"]').length === 4 &&
+          document.querySelectorAll('.cm-content .vsidian-code-card-header').length === 0,
+          null, { timeout: 20000 })
+        assert.equal((await states()).text, MERMAID_DOC, '点击退出后零写回且图恢复')
       }
       assert.deepEqual(errors, [], `页面异常: ${JSON.stringify(errors)}`)
       mermaidPassed++

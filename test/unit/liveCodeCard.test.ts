@@ -1,10 +1,11 @@
 // 实时预览代码块卡片装饰契约测试（工单 #79）：呈现态围栏收起（行内容
 // 清空、行槽保留）、头部横带、卡片行类与圆角边行、编辑态/选区相交时
-// 围栏源码显形且外壳保留、mermaid/frontmatter/伪围栏/未闭合排除、
-// 设置总开关关闭、语言标签映射（shared/codeLangs）、增量 == 全量对拍。
+// 围栏源码显形且外壳保留、frontmatter/伪围栏/未闭合排除、渲染型围栏
+// （mermaid）编辑态接入与呈现态让位、设置总开关关闭、语言标签映射
+// （shared/codeLangs）、增量 == 全量对拍。
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { EditorSelection, EditorState } from '@codemirror/state'
+import { Compartment, EditorSelection, EditorState } from '@codemirror/state'
 import {
   CODE_CARD_CLASS_NAMES,
   CodeCardHeaderWidget,
@@ -169,8 +170,9 @@ describe('代码块卡片：编辑态与选区', () => {
 })
 
 describe('代码块卡片：排除与降级', () => {
-  it('mermaid 围栏不产出卡片装饰（专属管线）', () => {
-    const text = '```mermaid\ngraph TD\nA-->B\n```'
+  it('mermaid 围栏呈现态不产出卡片装饰（SVG 专属管线接管，让位规则见渲染型围栏组）', () => {
+    // anchor 需在围栏区间外——折叠光标落在围栏端点即编辑态（卡片发射）
+    const text = 'intro\n\n```mermaid\ngraph TD\nA-->B\n```'
     expect(decos(text, 0)).toHaveLength(0)
   })
 
@@ -445,7 +447,7 @@ describe('折叠（#82）', () => {
     expect(itemsOf(state.field(codeCardDecorations)).find((i) => i.widget)!.widget!.folded).toBe(true)
   })
 
-  it('围栏被删除 → 折叠条目修剪（不自愈到后来者）', () => {
+  it('围栏被删除 → 无折叠残留误伤（消费以当前围栏起点查询，非围栏位置查不中）', () => {
     let state = EditorState.create({
       doc: DOC,
       extensions: [
@@ -459,7 +461,9 @@ describe('折叠（#82）', () => {
     // 删除整个围栏块（开围栏行行首到闭围栏行行尾 + 换行）
     const close = lineOf(DOC, CLOSE_LINE)
     state = state.update({ changes: { from: FENCE_FROM, to: Math.min(close.to + 1, DOC.length), insert: '' } }).state
-    expect(state.field(codeCardFoldField).size).toBe(0)
+    // 文档已无围栏：任何折叠形态都不应呈现（field 残留条目落在非围栏
+    // 起点位置，两个消费点均以当前围栏起点查询，天然查不中）
+    expect(itemsOf(state.field(codeCardDecorations))).toHaveLength(0)
   })
 
   it('折叠 chevron：toDOM 常驻按钮、收起态类与 aria', () => {
@@ -473,6 +477,77 @@ describe('折叠（#82）', () => {
     const expandedDom = expanded.toDOM()
     expect(expandedDom.querySelector(`.${CODE_CARD_CLASS_NAMES.fold}`)).not.toBeNull()
     expect(expandedDom.querySelector(`.${CODE_CARD_CLASS_NAMES.fold}`)!.classList.contains(CODE_CARD_CLASS_NAMES.foldCollapsed)).toBe(false)
+  })
+})
+
+describe('渲染型围栏（mermaid）接入卡片', () => {
+  const M_DOC = ['intro', '', '```mermaid', 'graph TD', 'A-->B', '```', '', 'outro'].join('\n')
+  const M_FENCE_FROM = M_DOC.indexOf('```mermaid')
+  const M_OPEN_LINE = 3 // ```mermaid
+  const M_CLOSE_LINE = 6 // ```
+  const M_BODY_FROM = M_DOC.indexOf('graph TD')
+
+  it('编辑态（光标在块内）→ 卡片外壳：Mermaid 标签、行类、行号；围栏行不清空且无语法高亮', () => {
+    const items = decos(M_DOC, M_BODY_FROM)
+    const header = items.find((i) => i.block && i.widget)
+    expect(header, '应有头部横带').toBeDefined()
+    expect(header!.from).toBe(M_FENCE_FROM)
+    expect(header!.widget!.label).toBe('Mermaid')
+    expect(header!.widget!.languageId).toBe(null)
+    // 编辑态围栏行显形（不清空）
+    expect(items.filter((i) => i.hide)).toHaveLength(0)
+    // 行类覆盖围栏内全部 4 行
+    const lineItems = items.filter((i) => typeof i.cls === 'string' && i.cls.includes(CODE_CARD_CLASS_NAMES.line))
+    expect(lineItems).toHaveLength(4)
+    // 行号 2 个（内容行，围栏行不占号）
+    const lns = items.filter((i) => i.ln)
+    expect(lns.map((i) => i.ln!.value)).toEqual([1, 2])
+    // mermaid 无语法高亮引擎：零 tok-* mark
+    expect(items.filter((i) => i.cls?.includes('tok-'))).toHaveLength(0)
+  })
+
+  it('呈现态（光标在块外）→ 卡片零发射（SVG 专属管线接管）', () => {
+    expect(decos(M_DOC, 0)).toHaveLength(0)
+  })
+
+  it('呈现态折叠 → 整块收起 + 头部收起态（卡片接管，SVG 让位）', () => {
+    const { items } = decosFolded(M_DOC, 0, M_FENCE_FROM)
+    const header = items.find((i) => i.block && i.widget)
+    expect(header?.widget?.folded).toBe(true)
+    const hides = items.filter((i) => i.hide)
+    expect(hides).toHaveLength(1)
+    const open = lineOf(M_DOC, M_OPEN_LINE)
+    const close = lineOf(M_DOC, M_CLOSE_LINE)
+    expect(hides[0]).toMatchObject({ from: open.from, to: Math.min(close.to + 1, M_DOC.length) })
+    // 收起态无复制按钮（规格与普通块一致）
+    expect(header!.widget!.copy).toBe(false)
+  })
+
+  it('编辑态折叠 → 临时展开（外壳与行结构发射、无整块收起）', () => {
+    const { items } = decosFolded(M_DOC, M_BODY_FROM, M_FENCE_FROM)
+    const header = items.find((i) => i.block && i.widget)
+    expect(header?.widget?.folded).toBe(false)
+    expect(items.filter((i) => i.hide)).toHaveLength(0)
+    expect(items.filter((i) => typeof i.cls === 'string' && i.cls.includes(CODE_CARD_CLASS_NAMES.line))).toHaveLength(4)
+  })
+
+  it('卡片总开关关闭 → 折叠集清空（渲染型围栏呈现态不残留「SVG 与收起同时缺席」的空白）', () => {
+    const compartment = new Compartment()
+    let state = EditorState.create({
+      doc: M_DOC,
+      extensions: [
+        liveDecorationsField, mermaidFencesField,
+        compartment.of(codeCardConfigFacet.of({ card: true, lineNumbers: true, copyButton: true, highlight: true })),
+        codeCardFoldField, codeCardDecorations,
+      ],
+      selection: EditorSelection.single(0),
+    })
+    state = state.update({ effects: codeCardFoldToggle.of(M_FENCE_FROM) }).state
+    expect(state.field(codeCardFoldField).size).toBe(1)
+    state = state.update({
+      effects: compartment.reconfigure(codeCardConfigFacet.of({ card: false, lineNumbers: true, copyButton: true, highlight: true })),
+    }).state
+    expect(state.field(codeCardFoldField).size).toBe(0)
   })
 })
 

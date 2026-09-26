@@ -3142,6 +3142,10 @@ export class WebviewSyncController {
           : 0,
         // #83 视口内 tok-* token 元素数
         tokenCount,
+        // 全部头部语言标签序列（DOM 顺序；断言渲染型围栏的 Mermaid 标签）
+        labels: cardHeaders
+          .map((h) => h.querySelector(`.${CODE_CARD_CLASS_NAMES.headerLabel}`)?.lastChild?.textContent ?? '')
+          .filter((t) => t !== ''),
       }
       : undefined
     return {

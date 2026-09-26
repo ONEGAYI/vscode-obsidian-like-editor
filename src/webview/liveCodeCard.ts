@@ -3,27 +3,48 @@
 // 架构（照 liveMermaid.ts 的双层模式）：
 // - 围栏表复用 mermaidFencesField（单一扫描事实源，含全部围栏与 info
 //   string，增量维护在 mermaid 侧）；本模块不另建扫描器
+// - 共享状态（配置 facet / 复制与折叠 effects / 折叠 field）在
+//   codeCardState（中立模块，经本模块 re-export 保持单一入口）
 // - codeCardDecorations（StateField）：对围栏表全量重建（成本 = 围栏数
 //   × 块行数发射，远低于全树扫描；CM6 约束：跨行 replace 必须来自
 //   StateField）。装饰实例全部缓存（同类名/同标签复用），RangeSet.eq 成立
 // - 呈现态（光标/选区不触及围栏区间）：两条围栏行内容清空（replace 覆盖
 //   行文本、不含换行——行槽保留， Decoration.replace 无 widget 即零宽）；
 //   块首行上方插头部横带（block widget，标签 + 按钮区）；全部块行（含
-//   围栏行）挂卡片行类（首/尾行圆角修饰——顶边圆角由头部承担）
+//   围栏行）挂卡片行类（首/尾行圆角修饰——顶边圆角由头部横带承担）
 // - 编辑态（触及围栏区间，含边界折叠光标）：不发射围栏清空 replace，
 //   源码显形可编辑；头部与卡片行类保留（规格「编辑态」表）
-// - 排除：mermaid 围栏（#60 专属管线）、frontmatter 内围栏（源码降级
-//   边界）、未闭合围栏（状态机不产出）；缩进代码块不是围栏，天然不参与
+// - 渲染型围栏（当前仅 mermaid，标签登记 shared/mermaid 的
+//   RENDERED_FENCE_LABELS）：编辑态与折叠收起态走卡片（mermaid 装饰
+//   不发射）；呈现态展开让位专属渲染管线（SVG replace）——卡片零发射
+// - 排除：frontmatter 内围栏（源码降级边界）、未闭合围栏（状态机不产
+//   出）；缩进代码块不是围栏，天然不参与
 // - 设置经 codeCardConfigFacet（syncController 的 Compartment 热重配，
 //   #79 仅 card 生效；lineNumbers/copyButton 见 #80/#81，highlight 见 #83）
-import { Facet, RangeSet, StateEffect, StateField, type Extension, type Range, type Text } from '@codemirror/state'
+import { RangeSet, StateField, type Extension, type Range, type Text } from '@codemirror/state'
 import type { EditorSelection } from '@codemirror/state'
 import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view'
 import { liveDecorationsField, selectionTouchesRange } from './liveDecorations'
 import { mermaidFencesField } from './liveMermaid'
-import type { FenceSpan } from '../shared/mermaid'
+import { RENDERED_FENCE_LABELS, type FenceSpan } from '../shared/mermaid'
 import { resolveCodeLanguage } from '../shared/codeLangs'
 import { hasHighlightEngine, highlightCodeRanges, splitRangeAtLineBreaks } from './codeHighlight'
+import {
+  codeCardConfigFacet,
+  codeCardCopyRequest,
+  codeCardFoldField,
+  codeCardFoldToggle,
+  type CodeCardConfig,
+} from './codeCardState'
+
+// 对外保持单一入口：syncController 与测试经本模块引用共享状态
+export {
+  codeCardConfigFacet,
+  codeCardCopyRequest,
+  codeCardFoldField,
+  codeCardFoldToggle,
+} from './codeCardState'
+export type { CodeCardConfig } from './codeCardState'
 
 /** #79 代码块卡片稳定类名（Obsidian/Code Styler 对应见选择器映射表） */
 export const CODE_CARD_CLASS_NAMES = {
@@ -84,83 +105,11 @@ const CODE_LANG_ICONS: Readonly<Record<string, { text: string; color: string }>>
 }
 
 /**
- * 复制请求 effect（#81）：按钮点击 → 零写回事务携带代码体原文，由
- * syncController 的 updateListener 转发 codeblock.copy 出站（宿主剪贴板）。
- * 不落文档、不产生撤销历史。
+ * 折叠切换 effect 与折叠状态 field、卡片配置 facet、复制请求 effect 已
+ * 拆至 codeCardState（中立模块，见文件头 re-export）。
  */
-export const codeCardCopyRequest = StateEffect.define<string>()
 
-/**
- * 折叠切换 effect（#82）：chevron 点击 → 零写回事务携带围栏起始位置，
- * 由 codeCardFoldField 消费（视图态，不写源文件、不跨会话持久化）。
- */
-export const codeCardFoldToggle = StateEffect.define<number>()
-
-/**
- * 折叠状态（#82）：已收起围栏的起始位置集合。视图态——重开文档后全展开。
- * 值按围栏起始位置标识，docChanged 时随 ChangeSet 映射；映射后不匹配任何
- * 当前围栏起始位置的条目修剪掉（围栏删除后残留不至于误伤后来者）。
- */
-export const codeCardFoldField = StateField.define<ReadonlySet<number>>({
-  create: () => new Set<number>(),
-  update(value, tr) {
-    let next = value
-    let changed = false
-    for (const eff of tr.effects) {
-      if (eff.is(codeCardFoldToggle)) {
-        const toggled = new Set(next)
-        if (!toggled.delete(eff.value)) {
-          toggled.add(eff.value)
-        }
-        next = toggled
-        changed = true
-      }
-    }
-    if (tr.docChanged) {
-      const mapped = new Set<number>()
-      for (const pos of next) {
-        mapped.add(tr.changes.mapPos(pos, 1))
-      }
-      next = mapped
-      changed = true
-    }
-    if (!changed) {
-      return value
-    }
-    // 修剪：不再是任何围栏起始位置的条目（围栏被删/改写后自愈）
-    const fences = tr.state.field(mermaidFencesField, false)
-    if (fences) {
-      const starts = new Set(fences.spans.map((s) => s.from))
-      const pruned = new Set<number>()
-      for (const pos of next) {
-        if (starts.has(pos)) {
-          pruned.add(pos)
-        }
-      }
-      next = pruned
-    }
-    return next
-  },
-})
-
-/** 卡片运行配置（设置驱动；#79 仅消费 card） */
-export interface CodeCardConfig {
-  /** 卡片总开关（codeblock.card）：关闭回到朴素围栏源码外观 */
-  card: boolean
-  /** 卡内行号（codeblock.lineNumbers，#80） */
-  lineNumbers: boolean
-  /** 复制按钮（codeblock.copyButton，#81） */
-  copyButton: boolean
-  /** 语法高亮（codeblock.highlight，#83；卡片关闭时朴素围栏仍可着色） */
-  highlight: boolean
-}
-
-const DEFAULT_CONFIG: CodeCardConfig = { card: false, lineNumbers: true, copyButton: true, highlight: true }
-
-/** 卡片配置通道（Compartment 内静态值；变更经 reconfigure 触发全量重建） */
-export const codeCardConfigFacet = Facet.define<CodeCardConfig, CodeCardConfig>({
-  combine: (inputs) => (inputs.length > 0 ? inputs[inputs.length - 1]! : DEFAULT_CONFIG),
-})
+/** 卡片运行配置消费见 codeCardState（本模块经 re-export 提供） */
 
 /**
  * 头部横带 widget：语言标签 + 右侧按钮区（复制按钮 #81；折叠 chevron #82）。
@@ -422,19 +371,22 @@ export function buildCodeCardDecorations(
 ): Array<Range<Decoration>> {
   const out: Array<Range<Decoration>> = []
   for (const fence of fences) {
-    if (fence.mermaid) {
+    if (fm && fence.from < fm.end) {
       continue
     }
-    if (fm && fence.from < fm.end) {
+    const editing = selectionTouchesRange(selection, fence.from, fence.to)
+    // 折叠收起（#82）：光标在块内时临时展开；收起态无复制按钮（规格）。
+    // 折叠只在卡片开启时呈现（朴素围栏无头部可挂 chevron）
+    const isFolded = config.card && folded.has(fence.from) && !editing
+    // 渲染型围栏（当前仅 mermaid，标签见 shared/mermaid 的
+    // RENDERED_FENCE_LABELS）：呈现态展开让位专属渲染管线（SVG replace），
+    // 卡片零发射；编辑态与折叠收起态走通用卡片路径
+    if (fence.mermaid && !editing && !isFolded) {
       continue
     }
     const openLine = doc.lineAt(fence.from)
     const closeLine = doc.lineAt(Math.min(fence.to, doc.length))
     const lang = resolveCodeLanguage(fence.info)
-    const editing = selectionTouchesRange(selection, fence.from, fence.to)
-    // 折叠收起（#82）：光标在块内时临时展开；收起态无复制按钮（规格）。
-    // 折叠只在卡片开启时呈现（朴素围栏无头部可挂 chevron）
-    const isFolded = config.card && folded.has(fence.from) && !editing
     // 语法高亮（#83）：卡片关闭时朴素围栏仍可着色；折叠块不可见跳过
     if (config.highlight && !isFolded && lang && hasHighlightEngine(lang.id)) {
       const contentStart = openLine.to + 1
@@ -452,7 +404,10 @@ export function buildCodeCardDecorations(
       continue
     }
     const trimmed = fence.info.trim()
-    const label = lang?.displayName ?? (trimmed === '' ? 'Plain text' : trimmed)
+    // 渲染型围栏（mermaid）不在 codeLangs 注册表（无语法高亮语义），
+    // 标签从 RENDERED_FENCE_LABELS 取；其余未知语言原样显示 info
+    const label = lang?.displayName
+      ?? (trimmed === '' ? 'Plain text' : RENDERED_FENCE_LABELS[trimmed] ?? trimmed)
     const copy = config.copyButton && !editing && !isFolded
     out.push(headerDeco(label, lang?.id ?? null, copy, fence.code, isFolded).range(fence.from, fence.from))
     if (isFolded) {

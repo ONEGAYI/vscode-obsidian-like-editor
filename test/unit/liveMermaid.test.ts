@@ -17,6 +17,7 @@ import {
   mermaidWidgetDeco,
 } from '../../src/webview/liveMermaid'
 import { liveDecorationsField } from '../../src/webview/liveDecorations'
+import { codeCardConfigFacet, codeCardFoldField, codeCardFoldToggle } from '../../src/webview/codeCardState'
 import { MERMAID_CLASS_NAMES } from '../../src/shared/mermaid'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
 import { DocumentSession, type HostDocumentPort } from '../../src/host/documentSession'
@@ -103,6 +104,23 @@ describe('live Mermaid 装饰：显隐切换', () => {
 
   it('未闭合围栏（EOF）不产出（稳定降级为源码）', () => {
     expect(buildBlocks('```mermaid\ngraph TD', 0)).toHaveLength(0)
+  })
+
+  it('呈现态折叠的围栏不发射 SVG（卡片收起接管），再切换恢复渲染', () => {
+    let state = EditorState.create({
+      doc: DOC,
+      extensions: [
+        liveDecorationsField, mermaidFencesField,
+        codeCardConfigFacet.of({ card: true, lineNumbers: true, copyButton: true, highlight: true }),
+        codeCardFoldField, mermaidDecorations,
+      ],
+      selection: EditorSelection.single(0),
+    })
+    expect(state.field(mermaidDecorations).size).toBe(1)
+    state = state.update({ effects: codeCardFoldToggle.of(FENCE_FROM) }).state
+    expect(state.field(mermaidDecorations).size).toBe(0)
+    state = state.update({ effects: codeCardFoldToggle.of(FENCE_FROM) }).state
+    expect(state.field(mermaidDecorations).size).toBe(1)
   })
 })
 
