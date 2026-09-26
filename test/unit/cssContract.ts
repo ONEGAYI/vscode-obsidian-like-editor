@@ -30,3 +30,11 @@ export function cssRule(css: string, selector: string): string {
   expect(found, `CSS 规则 ${selector} 应唯一存在`).toHaveLength(1)
   return found[0]!.body
 }
+
+/** 选择器全等唯一命中的规则块（后缀匹配会被「body.vscode-light #app」
+    这类更specific的覆盖规则干扰时使用），返回其声明体（含尾 `}`） */
+export function cssRuleExact(css: string, selector: string): string {
+  const found = cssRuleBlocks(css).filter((b) => b.selector === selector)
+  expect(found, `CSS 规则 ${selector} 应唯一存在`).toHaveLength(1)
+  return found[0]!.body
+}

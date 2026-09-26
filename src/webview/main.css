@@ -48,16 +48,22 @@ body {
   --vsidian-heading-color-4: var(--vscode-editor-foreground);
   --vsidian-heading-color-5: var(--vscode-editor-foreground);
   --vsidian-heading-color-6: var(--vscode-editor-foreground);
-  /* ---- #106 分割线颜色：Live 渲染态横线与阅读 <hr> 同一来源（主题变量
-     自适应，不写死颜色），两处规则共同消费本变量 */
-  --vsidian-hr-color: var(--vscode-panel-border, rgba(128, 128, 128, 0.45));
+  /* ---- #106 分割线颜色：Live 渲染态横线与阅读 <hr> 同一来源，两处规则
+     共同消费本变量。视觉实测 panel-border 在浅色主题仅约 1.14:1 近乎
+     不可见，改按编辑器前景色 35% 派生（明暗主题均为可辨识灰线） */
+  --vsidian-hr-color: color-mix(in srgb, var(--vscode-editor-foreground, #808080) 35%, transparent);
   /* ---- #105 高亮底色变量：live 正文 span / 阅读 mark / 大纲条目共用同一
-     变量（三侧同源，选择器映射表登记）。跟随 VSCode 主题的搜索命中高亮色
-     ——明暗主题下均为明显的橙黄系底（用户验收反馈：词高亮色
-     editorWordHighlightBackground 实测对比仅约 1.4:1 几乎不可见，改选
-     更明显的主题变量，明显性优先）；宿主变量缺失时回退明显琥珀半透明 */
-  --vsidian-highlight-background: var(--vscode-editor-findMatchHighlightBackground,
-    rgba(234, 179, 8, 0.4));
+     变量（三侧同源，选择器映射表登记）。两轮视觉验收实测主题变量
+     （editorWordHighlightBackground、findMatchHighlightBackground）在
+     用户主题下对比度均仅约 1.15–1.45:1 不可见——主题跟随路线证伪，
+     按用户决议切 Obsidian 式固定荧光黄，明暗主题各自调校（浅色由
+     body.vscode-light 分支覆盖为不透明黄） */
+  --vsidian-highlight-background: rgba(255, 208, 0, 0.35);
+}
+
+/* #105 浅色主题高亮覆盖：白底上提高浓度与饱和度保证目视可辨 */
+body.vscode-light #app {
+  --vsidian-highlight-background: #ffe066;
 }
 
 #app .cm-editor {
@@ -1080,14 +1086,15 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='horizontalRule
 
 /* #106 分割线渲染态：未触及该行时源文被 replace 隐藏，本元素呈现真横线。
    块级撑满行宽，border-top 是唯一落笔通道（颜色与阅读 <hr> 同源变量，
-   契约测试钉住）。用户验收：1px 过细、0.8em×2 上下留白占空超一行——
-   对齐 Obsidian 紧凑观感改为 2px 边框 + 0.45em×2 留白，line-height 0
-   收矮行槽，总占空约一行；纵向节奏与阅读 <hr> 同值（两模式观感同源） */
+   契约测试钉住）。对齐：CM6 行号锚定行盒顶部，故 margin-top 归零、
+   线贴行盒顶与行号同行（视觉实测对称 margin 会把线推到行号下方约
+   一行）；占空全部交给 margin-bottom（2px + 0.8em ≈ 一行，对齐
+   Obsidian 紧凑观感），line-height 0 收矮行槽 */
 #app .cm-editor .cm-scroller .vsidian-hr {
   display: block;
   border-top: 2px solid var(--vsidian-hr-color);
   line-height: 0;
-  margin: 0.45em 0;
+  margin: 0 0 0.8em 0;
 }
 
 #app .cm-editor .cm-scroller .vsidian-frontmatter-line {

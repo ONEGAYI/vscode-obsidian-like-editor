@@ -4,18 +4,20 @@
 // paint.highlight（本契约防样式表被误删或只剩类名——样式注入失效时
 // DOM 存在性照样通过，底色必须是 computed 可读的差异来源）。
 import { describe, expect, it } from 'vitest'
-import { cssRule, readMainCss } from './cssContract'
+import { cssRule, cssRuleExact, readMainCss } from './cssContract'
 
 const css = readMainCss()
 
 describe('高亮渲染 CSS 契约（#105）', () => {
-  it('底色变量定义于 #app：主题变量自适应（搜索命中高亮色）+ 明显琥珀回退', () => {
-    const app = cssRule(css, '#app')
-    // 用户验收：词高亮色 editorWordHighlightBackground 实测对比仅约
-    // 1.4:1 几乎不可见，改选更明显的主题变量（明显性优先于「不落黄」）
-    expect(app).toMatch(/--vsidian-highlight-background:\s*var\(--vscode-editor-findMatchHighlightBackground/u)
-    // 宿主变量缺失时回退明显琥珀半透明（0.4 浓度，可辨识的荧光笔观感）
-    expect(app).toMatch(/rgba\(234, 179, 8, 0\.4\)/u)
+  it('底色变量定义于 #app：Obsidian 式固定荧光黄，浅色主题分支覆盖', () => {
+    const app = cssRuleExact(css, '#app')
+    // 两轮视觉实测主题变量（词高亮/搜索命中色）在用户主题下对比均仅
+    // 约 1.15–1.45:1 不可见，主题跟随路线证伪，按用户决议切固定黄
+    expect(app).toMatch(/--vsidian-highlight-background:\s*rgba\(255, 208, 0, 0\.35\)/u)
+    // 浅色主题提高浓度与饱和度（body.vscode-light 为 VSCode webview
+    // 标准主题类注入），保证白底目视可辨
+    const light = cssRule(css, 'body.vscode-light #app')
+    expect(light).toMatch(/--vsidian-highlight-background:\s*#ffe066/u)
   })
 
   it('live 正文 span 常显高亮底（底色引用同源变量）', () => {

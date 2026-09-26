@@ -232,7 +232,7 @@
 | `--vsidian-reading-line-height` | `1.6` | 阅读正文行高 | `--line-height-normal`（语义对应，名称不同） |
 | `--vsidian-reading-code-background` | `var(--vscode-textCodeBlock-background, …)` | 代码块背景 | `--code-background`（语义对应，名称不同） |
 | `--vsidian-code-card-background` | `var(--vscode-textCodeBlock-background, …)` | 代码块卡片底色（#79 起，头部横带与代码区共用；阅读卡片同源） | `--code-background`（语义对应，名称不同） |
-| `--vsidian-highlight-background` | `var(--vscode-editorWordHighlightBackground, rgba(234, 179, 8, 0.25))` | 高亮底色（#105）：live 正文 span、阅读 mark、大纲条目三侧同引（跟随 VSCode 主题词高亮色，不固定黄） | `--text-highlight-bg`（语义对应，名称不同） |
+| `--vsidian-highlight-background` | 深色 `rgba(255, 208, 0, 0.35)`；浅色 `body.vscode-light` 覆盖 `#ffe066` | 高亮底色（#105）：live 正文 span、阅读 mark、大纲条目三侧同引（两轮视觉实测主题变量在用户主题下对比仅约 1.15–1.45:1 不可见，主题跟随证伪，切 Obsidian 式固定荧光黄双主题调校） | `--text-highlight-bg`（语义对应，名称不同） |
 | `--vsidian-table-background` | `rgba(128, 128, 128, 0.05)` | live 表格行背景 / 阅读表头背景（#12） | `--table-background`（语义对应，名称不同） |
 
 变量名**不与 Obsidian 原名对齐**（加 `vsidian-` 前缀避免与宿主 VSCode 变量冲突）；二期若需要按 Obsidian 变量名片段兼容，经映射垫片（alias）实现，不在一期承诺内。
