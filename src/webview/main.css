@@ -99,14 +99,23 @@ body {
    无降级机制（旧 24px 留白带内的 scaleX 压缩随带宽约束一并移除）。
    垂直锚定首个视觉行（CM6 原生行为）：单元格高度与源码行块同步（软换行
    时为多视觉行总高），垂直居中（flex + align-items: center）会把数字放到
-   折行块中心——折 2 行低半行、折 3 行低整行。改为顶部锚定 + 半差补偿
-   （数字行框与正文同用 1.5 行高比，补偿量 = (正文行高 − 行号行高) / 2）
-   使数字与首视觉行文字垂直居中；标题等高行会偏高数像素（补偿按常规行
-   计算），与 CM6 原生行号行为一致，取舍见 A23。 */
+   折行块中心——折 2 行低半行、折 3 行低整行。基线对齐用 position:
+   relative + top 纯视觉偏移（#116）：不可用 padding-top——CM6 行号
+   测量 dummy（height:0 内联）与表格隐藏行格会被 border-box 的 padding
+   撑开，把整列行号逐格下推（实测每格撑开量 = padding 值）；top 不参与
+   盒高计算，0 高记账格恒为 0，格布局与正文行一一对齐。偏移量 =
+   1.1 × (正文 − 行号字号)：数字锚在格顶（= 正文行盒顶），top=0 时
+   数字基线高于正文基线的差由两侧字体行内度量决定（half-leading 差
+   + ascent 差，同族字体随字号近似线性），#116 双环境实测 @14px 基准
+   Arial 4.0px、Segoe UI 3.67px，系数取中值 1.1，残差 <0.2px，集成
+   断言按基线差 ≤1px 钉住。标题等高行会偏高数像素（补偿按常规行计算），
+   与 CM6 原生行号行为一致，取舍见 A23。 */
 #app .cm-editor .cm-scroller .cm-lineNumbers .cm-gutterElement {
-  padding-top: calc(
-    (1.5 * var(--vsidian-content-font-size) - 1.5 * min(0.75 * var(--vsidian-content-font-size), 12px)) / 2
+  position: relative;
+  top: calc(
+    1.1 * (var(--vsidian-content-font-size) - min(0.75 * var(--vsidian-content-font-size), 12px))
   );
+  padding-top: 0;
   padding-right: 0;
   text-align: right;
   white-space: nowrap;
@@ -115,19 +124,21 @@ body {
 
 /* 表格行号格特化补偿（#116）：行号格高度/位置按 CM6 heightmap 记账内联
    写入，与表格行的 CSS 实际高度一致——错位源在补偿规则本身。
-   其一，分隔行源行 display:none，其行号格记账高 0：border-box 下盒高
-   不得小于 padding，通用半差补偿会把 0 高格撑到 2.625px，表后行号逐表
-   下移（实测每表 +2.625px 线性叠加）——分隔行格清零补偿恢复 0 高占位。
+   其一，分隔行与数据行源行 display:none，行号格记账高 0：任何来源的
+   垂直 padding 在 border-box 下都会把 0 高盒撑开、表后行号逐表下移
+   （#116 修复前实测每表 +2.625px 线性叠加）——通用规则已改为 top 偏移
+   （不参与盒高），分隔行格再钉 padding-top: 0 作防御，防未来 padding
+   回潮重蹈。
    其二，表头行文字因单元格 padding+border 自行顶下移
-   （--vsidian-table-cell-shift），行号锚定首个视觉行须同步补同量；
-   不改变单元格自身视觉。类由 liveLineNumbers 按表格行装饰挂接。 */
+   （--vsidian-table-cell-shift），行号锚定首个视觉行须在 top 上同步补
+   同量；不改变单元格自身视觉。类由 liveLineNumbers 按表格行装饰挂接。 */
 #app .cm-editor .cm-scroller .cm-lineNumbers .cm-gutterElement.vsidian-ln-table-delimiter {
   padding-top: 0;
 }
 
 #app .cm-editor .cm-scroller .cm-lineNumbers .cm-gutterElement.vsidian-ln-table-header {
-  padding-top: calc(
-    (1.5 * var(--vsidian-content-font-size) - 1.5 * min(0.75 * var(--vsidian-content-font-size), 12px)) / 2 +
+  top: calc(
+    1.1 * (var(--vsidian-content-font-size) - min(0.75 * var(--vsidian-content-font-size), 12px)) +
     var(--vsidian-table-cell-shift)
   );
 }
