@@ -15,11 +15,15 @@ describe('分割线绘制 CSS 契约（#106：Live 与阅读横线同源）', ()
     expect(app).toMatch(/--vsidian-hr-color:\s*color-mix\(in srgb, var\(--vscode-editor-foreground, #808080\) 35%, transparent\)/)
   })
 
-  it('Live 渲染态横线：居中渐变绘制、消费同一变量、行高恒等于正文行高', () => {
+  it('Live 渲染态横线：inline-block 居中渐变、行高恒等于正文行高', () => {
     const body = cssRule(css, '#app .cm-editor .cm-scroller .vsidian-hr')
-    expect(body).toMatch(/display:\s*block/)
-    // 行盒高 = 字号×行高（与 .cm-scroller 同源变量的同一公式），
-    // 分割线行不改变行号间距（用户验收：压矮行槽会让间距不均）
+    // 必须行内：CM6 在 replace widget 前后各插 img.cm-widgetBuffer（光标
+    // 停靠点），display:block 会截断行内流把行高撑到约两倍（真宿主实测
+    // 49px vs 21px）；inline-block 高度 = 字号×行高（与 .cm-scroller
+    // 同源变量的同一公式），行号间距不受影响
+    expect(body).toMatch(/display:\s*inline-block/)
+    expect(body).toMatch(/vertical-align:\s*top/)
+    expect(body).toMatch(/width:\s*100%/)
     expect(body).toMatch(/height:\s*calc\(var\(--vsidian-content-font-size\) \* var\(--vsidian-content-line-height\)\)/)
     // 2px 居中横线经 linear-gradient 落笔，色值出自同源变量
     expect(body).toMatch(/linear-gradient\(/)

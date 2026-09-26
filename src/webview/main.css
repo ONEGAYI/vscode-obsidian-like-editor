@@ -1085,12 +1085,16 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='horizontalRule
 }
 
 /* #106 分割线渲染态：未触及该行时源文被 replace 隐藏，本元素呈现真横线。
-   块级撑满行宽、显式撑满一个正文行高（字号×行高取 .cm-scroller 同源
-   变量的同一公式），分割线行不改变行号间距（用户验收：压矮行槽会让
-   行号间距不均）；横线以居中渐变画在行的正中（Obsidian 观感），
-   颜色与阅读 <hr> 同源变量，契约测试钉住 */
+   必须保持行内（inline-block）：CM6 在 replace widget 前后各插一个
+   img.cm-widgetBuffer（光标停靠点），display:block 会截断行内流、把
+   行高撑到约两倍（实测 49px vs 21px）。inline-block 高度恒等于正文
+   行高（字号×行高同源变量同一公式），行号间距不受影响；横线以居中
+   渐变画在行的正中（与行号中心对齐，Obsidian 观感），颜色与阅读
+   <hr> 同源变量，契约测试钉住 */
 #app .cm-editor .cm-scroller .vsidian-hr {
-  display: block;
+  display: inline-block;
+  vertical-align: top;
+  width: 100%;
   height: calc(var(--vsidian-content-font-size) * var(--vsidian-content-line-height));
   box-sizing: border-box;
   background-image: linear-gradient(
