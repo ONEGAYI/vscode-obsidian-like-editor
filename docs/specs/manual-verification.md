@@ -603,6 +603,7 @@ review-loops 审查循环第 4 轮（2026-09-26，分支 `feature/65-70-outline-
   2. **市场字段双语**：扩展列表中 displayName 与 description 按宿主语言显示（中文环境「类 Obsidian 的 Markdown 编辑体验：实时预览 + 阅读双视图」，英文环境 "Obsidian-like Markdown editing: live preview + reading views"）——原中英混排单串已拆分双语。
   3. **打开方式入口**：`.md` 的「打开方式…」列表中 customEditors 的 displayName 显示正常（Vsidian，不透出 `%manifest.displayName%` 原文——contributes 字段按 VSCode manifest nls 机制解析，仍以真实宿主目视为准）。
 - 操作入口评估：manifest 层由 VSCode 按宿主显示语言解析，不随扩展语言设置联动（两层语言模型），无扩展侧操作入口。
+
 ## #110 Mermaid 暗色主题可读性（2026-09-26）
 
 - 病根与修复：暗色环境打开文档时 webview 从未播种 mermaid 明暗态——MutationObserver 只在 body class 变化时触发，暗色起步 class 从不变，首渲染按浅色 default 主题出图，#333 墨水叠暗底对比度约 1.1:1（连线、箭头、时序图消息文字功能性不可见；用户截图实测复现）。修复：mount 时播种明暗态；暗色分支注入对齐正文的 themeVariables（取 `--vscode-editor-foreground` / `--vscode-editor-background` / `--vscode-editorWidget-background` / `--vscode-editorWidget-border` 计算值，缺失回退 Dark Modern 量级兜底），并直接覆写 `mainBkg` 防止 mermaid dark 基底把 primaryColor 压暗约 35% 造成节点与画布零色差。亮色分支维持 #60 现状不注入。
@@ -625,3 +626,14 @@ review-loops 审查循环第 4 轮（2026-09-26，分支 `feature/65-70-outline-
   5. **禁点击回归**：点击图形不进入编辑后，键盘方向键移入围栏仍可编辑（可达性保留）。
   6. **无效语法降级块**：错误态不显示按钮（CSS 渲染态联动），edit/popup 均不可触发。
 - 操作入口评估：弹窗内缩放/平移/关闭为局部键（+/-/0/方向/Esc，类比查找会话），不注册宿主快捷键绑定入口；edit/popup 为鼠标悬停按钮，无键位。
+
+## 侧栏拖拽调宽（2026-09-26）
+
+- 自动化已证实：钳制纯函数与恢复清洗（jsdom 单测 21 例：拖宽/收窄、上下界钳制、4px 阈值轻点不落状态、Escape/pointercancel 回滚不持久化、键盘 ±16px 微调、双击重置清键、重载恢复、与侧栏开合正交、`sidebar.test.resize` 钩子全链路）；CSS 契约钉住句柄热区（col-resize / touch-action:none / focus 轮廓）与拖拽期间禁用宽度过渡；1.86.2 真宿主集成经真实 pointer 事件序列验证宽度按 delta 变化、主编辑区相应收缩、720 上限钳制、收起再展开宽度保持、句柄 elementFromPoint 命中（resizerPainted）。
+- 人工待验：
+  1. **拖拽手感**：物理鼠标按住侧栏左缘拖动——宽度实时跟随（无 0.15s 过渡的滞后感）、拖拽中光标全程 col-resize、松手落定；Esc 取消回滚。
+  2. **触屏/触控板**：触控板双指或触屏按住左缘拖动是否正常（句柄 `touch-action: none` 只作用于左缘 10px 热区，不影响侧栏内容滚动）。
+  3. **键盘与双击**：Tab 聚焦句柄（聚焦轮廓可见）后 ArrowLeft/ArrowRight 微调；双击恢复默认 280px。
+  4. **宽度回显**：拖宽后重开文档 / 重载窗口，宽度保持；跨多个文档面板共享同一记忆。
+  5. **窄窗口边界**：窗口很窄时拖到上限 720，主编辑区被压缩但不破版、不横向滚动。
+- 操作入口评估：拖宽为直接交互操作（非命令型），不注册宿主快捷键；键盘可达性由句柄 Tab 聚焦 + 方向键微调覆盖（role=separator + aria 值域同步）。

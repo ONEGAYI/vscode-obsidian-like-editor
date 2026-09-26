@@ -301,6 +301,16 @@ describe('isWebviewToHost', () => {
     expect(isHostToWebview({ kind: 'sidebar.test.clickx' })).toBe(false)
   })
 
+  it('sidebar.test.resize 测试钩子只接受有限数位移（负值收窄合法）', () => {
+    expect(isHostToWebview({ kind: 'sidebar.test.resize', delta: 120 })).toBe(true)
+    expect(isHostToWebview({ kind: 'sidebar.test.resize', delta: -60 })).toBe(true)
+    expect(isHostToWebview({ kind: 'sidebar.test.resize', delta: 0 })).toBe(true)
+    expect(isHostToWebview({ kind: 'sidebar.test.resize', delta: Number.NaN })).toBe(false)
+    expect(isHostToWebview({ kind: 'sidebar.test.resize', delta: Number.POSITIVE_INFINITY })).toBe(false)
+    expect(isHostToWebview({ kind: 'sidebar.test.resize', delta: '120' })).toBe(false)
+    expect(isHostToWebview({ kind: 'sidebar.test.resize' })).toBe(false)
+  })
+
   it('quick.test.click 与快速操作绘制探针只接受契约字段（#89）', () => {
     expect(isHostToWebview({ kind: 'quick.test.click', action: 'toggle' })).toBe(true)
     expect(isHostToWebview({ kind: 'quick.test.click', action: 'heading1' })).toBe(true)
