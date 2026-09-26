@@ -94,13 +94,14 @@ vsidian/
 │   │   ├── obsidian-live-preview-editor.md # Obsidian 技术栈与选型调研
 │   │   └── obsidian-viewport-rendering.md  # 视口渲染性能补充调研
 │   └── specs/    # 产品规格
-│       ├── code-block-card.md          # 代码块卡片功能规格
-│       ├── i18n.md                     # 全局 i18n 适配规格
-│       ├── keybindings.md              # 快捷键清单与默认值
-│       ├── manual-verification.md      # 人工验证清单
-│       ├── mvp-issues.md               # MVP GitHub Issue 索引
-│       ├── mvp.md                      # MVP 规格主文档
-│       └── table-interaction-rework.md # 表格交互重做规格
+│       ├── code-block-card.md                # 代码块卡片功能规格
+│       ├── graphic-code-block-interaction.md # 图形化代码块交互规格
+│       ├── i18n.md                           # 全局 i18n 适配规格
+│       ├── keybindings.md                    # 快捷键清单与默认值
+│       ├── manual-verification.md            # 人工验证清单
+│       ├── mvp-issues.md                     # MVP GitHub Issue 索引
+│       ├── mvp.md                            # MVP 规格主文档
+│       └── table-interaction-rework.md       # 表格交互重做规格
 ├── esbuild.mjs            # esbuild 多产物构建脚本
 ├── LICENSE                # MIT 许可证全文
 ├── media/                 # 随扩展打包的静态资源
