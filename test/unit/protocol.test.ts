@@ -187,11 +187,46 @@ describe('isWebviewToHost', () => {
         lineGutter: { on: false, count: 0, first: null, last: null },
       }),
     ).toBe(true)
-    // 非法：on 非布尔 / count 负数或小数 / first 非字符串非 null
+    // #116 alignment 合法：null 或条目数组（num + deltaBaseline + deltaBottom 均必填）
+    expect(
+      isWebviewToHost({
+        ...base,
+        lineGutter: { on: true, count: 2, first: '1', last: '3', alignment: null },
+      }),
+    ).toBe(true)
+    expect(
+      isWebviewToHost({
+        ...base,
+        lineGutter: {
+          on: true, count: 2, first: '1', last: '3',
+          alignment: [{ num: '3', deltaBaseline: 0.4, deltaBottom: -0.6 }],
+        },
+      }),
+    ).toBe(true)
+    // 非法：on 非布尔 / count 负数或小数 / first 非字符串非 null /
+    // alignment 条目缺基线差或底边差（两口径都为必填数字）
     expect(isWebviewToHost({ ...base, lineGutter: { on: 1, count: 1, first: null, last: null } })).toBe(false)
     expect(isWebviewToHost({ ...base, lineGutter: { on: true, count: -1, first: null, last: null } })).toBe(false)
     expect(isWebviewToHost({ ...base, lineGutter: { on: true, count: 1.5, first: null, last: null } })).toBe(false)
     expect(isWebviewToHost({ ...base, lineGutter: { on: true, count: 1, first: 3, last: null } })).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        lineGutter: {
+          on: true, count: 1, first: '1', last: '1',
+          alignment: [{ num: '1', deltaBottom: 0 }],
+        },
+      }),
+    ).toBe(false)
+    expect(
+      isWebviewToHost({
+        ...base,
+        lineGutter: {
+          on: true, count: 1, first: '1', last: '1',
+          alignment: [{ num: '1', deltaBaseline: 0 }],
+        },
+      }),
+    ).toBe(false)
     // 缺省合法（向后兼容：行号扩展未装配的旧 webview）
     expect(isWebviewToHost(base)).toBe(true)
   })

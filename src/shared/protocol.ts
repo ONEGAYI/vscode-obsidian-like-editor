@@ -495,10 +495,10 @@ export interface LineGutterProbe {
   first: string | null
   /** 末个行号单元格文本（视口尾行号观测；栏未装配为 null） */
   last: string | null
-  /** #116 行号几何对齐采样：每条可见行号「数字文本底边 − 所属正文行首个
-   *  可见文本底边」的像素差（基线代理，|值| ≤ 1 视为对齐）。绘制稳定后
-   *  采集；无布局环境（jsdom）或视口内无可见文本行时为 null（旧 webview
-   *  缺省容忍）。 */
+  /** #116 行号几何对齐采样：每条可见行号与所属正文行首可见文本的偏差
+   *  采样，主口径为基线差 deltaBaseline（光学对齐看基线；绘制稳定后
+   *  采集）。无布局环境（jsdom，含无 canvas 2D 实现）或视口内无可见
+   *  文本行时为 null（旧 webview 缺省容忍）。 */
   alignment?: LineGutterAlignment[] | null
 }
 
@@ -506,7 +506,13 @@ export interface LineGutterProbe {
 export interface LineGutterAlignment {
   /** 行号文本（源行号） */
   num: string
-  /** 数字文本底边与所属正文行首可见文本底边的像素差（负 = 行号偏上） */
+  /** 基线差（主断言口径，|值| ≤ 1 视为对齐）：数字基线 − 正文行首可见
+   *  文本基线的像素差（负 = 行号偏上）。由底边差按两侧各自 computed
+   *  font 的 canvas measureText fontBoundingBox descent 换算——行号字号
+   *  小于正文（0.75×），两侧 descent 不同，底边重合 ≠ 基线重合。 */
+  deltaBaseline: number
+  /** 次要上报：数字文本底边 − 正文行首可见文本底边的像素差（旧基线
+   *  代理口径，负 = 行号偏上）。保留用于诊断对照，不作断言口径。 */
   deltaBottom: number
 }
 
@@ -951,7 +957,8 @@ function isNonNegativeInt(v: unknown): boolean {
 }
 
 /** #34 行号栏观测校验：on 布尔、count 非负整数、first/last 字符串或 null；
- *  #116 alignment 可缺省（旧 webview）、null 或条目数组（num 字符串 + deltaBottom 数字） */
+ *  #116 alignment 可缺省（旧 webview）、null 或条目数组（num 字符串 +
+ *  deltaBaseline/deltaBottom 数字） */
 function isLineGutterProbe(v: unknown): v is LineGutterProbe {
   return (
     isObject(v) &&
@@ -961,7 +968,8 @@ function isLineGutterProbe(v: unknown): v is LineGutterProbe {
     (v.last === null || isString(v.last)) &&
     (v.alignment === undefined || v.alignment === null ||
       (Array.isArray(v.alignment) && v.alignment.every((item) =>
-        isObject(item) && isString(item.num) && typeof item.deltaBottom === 'number')))
+        isObject(item) && isString(item.num) &&
+        typeof item.deltaBaseline === 'number' && typeof item.deltaBottom === 'number')))
   )
 }
 

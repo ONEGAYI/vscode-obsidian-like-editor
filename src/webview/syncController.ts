@@ -4983,15 +4983,20 @@ export class WebviewSyncController {
     }
   }
 
-  /** #116 行号几何对齐采样：每条可见行号取「数字文本底边 − 所属正文行
-   *  首个可见文本底边」的像素差（基线代理，|值| ≤ 1 视为对齐）。
-   *  依赖真实布局（getBoundingClientRect）：jsdom 无布局（rect 恒 0）、
-   *  reading 态 live 容器隐藏或视口内无可见文本行时无可采条目，返回
-   *  null 与空文档的空数组区分。 */
+  /** #116 行号几何对齐采样：每条可见行号取两个口径的偏差——
+   *  deltaBaseline（主口径）：数字基线 − 正文行首可见文本基线，由两侧
+   *  底边差按各自 computed font 的 fontBoundingBox descent 换算（行号字号
+   *  小于正文，底边重合 ≠ 基线重合，光学对齐以基线为准，|值| ≤ 1 视为
+   *  对齐）；deltaBottom（次要上报）：底边差（旧基线代理口径，诊断对照）。
+   *  依赖真实布局（getBoundingClientRect）与 canvas 2D：jsdom 无布局
+   *  （rect 恒 0，条目在度量前即被过滤，不触 canvas）、reading 态 live
+   *  容器隐藏或视口内无可见文本行时无可采条目，返回 null 与空文档的
+   *  空数组区分。 */
   private collectGutterAlignment(): LineGutterAlignment[] | null {
     const view = this.view
     if (!view) return null
     const out: LineGutterAlignment[] = []
+    const fontMetric = createFontBoundingBoxMeasurer()
     try {
       const elements = view.dom.querySelectorAll<HTMLElement>(LINE_NUMBER_GUTTER_SELECTOR)
       for (const element of Array.from(elements)) {
@@ -5006,6 +5011,9 @@ export class WebviewSyncController {
         const lineEl = anchor?.closest('.cm-line')
         if (!lineEl) continue
         const walker = document.createTreeWalker(lineEl, NodeFilter.SHOW_TEXT)
+        // 首个可见文本的宿主元素（取 parentElement，避免与 CM6 Text 导入
+        // 重名的 DOM Text 类型）；rect 与宿主同点命中
+        let firstTextHost: HTMLElement | null = null
         let firstTextRect: DOMRect | null = null
         while (walker.nextNode()) {
           const value = walker.currentNode.nodeValue ?? ''
@@ -5016,16 +5024,28 @@ export class WebviewSyncController {
           range.setEnd(walker.currentNode, at + 1)
           const rect = range.getBoundingClientRect()
           if (rect.height > 0) {
+            firstTextHost = walker.currentNode.parentElement
             firstTextRect = rect
             break
           }
         }
-        if (!firstTextRect) continue
+        if (!firstTextHost || !firstTextRect) continue
         const numRange = document.createRange()
         numRange.selectNodeContents(element)
         const numRect = numRange.getBoundingClientRect()
         if (numRect.height <= 0) continue
-        out.push({ num: text.trim(), deltaBottom: +(numRect.bottom - firstTextRect.bottom).toFixed(2) })
+        // 基线换算：基线 = 文本盒底边 − 该字体 fontBoundingBox descent，
+        // 两侧各自 computed font 度量（惰性建 canvas，jsdom 永不触达）
+        const numMetric = fontMetric(getComputedStyle(element).font)
+        const textMetric = fontMetric(getComputedStyle(firstTextHost).font)
+        if (!numMetric || !textMetric) continue
+        const deltaBaseline =
+          (numRect.bottom - numMetric.descent) - (firstTextRect.bottom - textMetric.descent)
+        out.push({
+          num: text.trim(),
+          deltaBaseline: +deltaBaseline.toFixed(2),
+          deltaBottom: +(numRect.bottom - firstTextRect.bottom).toFixed(2),
+        })
       }
     } catch {
       return out.length ? out : null
@@ -5905,6 +5925,43 @@ export class WebviewSyncController {
         },
       })),
     ]
+  }
+}
+
+/** 字体度量盒缓存工厂（#116 基线换算）：font 串 → measureText 的
+ *  fontBoundingBoxAscent/Descent。canvas 2D 惰性创建（首次真实换算才
+ *  触达——jsdom 无布局，条目在度量前已被 rect 过滤，不会喷
+ *  「Not implemented」噪音）；computed font 串按结果缓存，同一采样内
+ *  每种字体只量一次。环境无 canvas 2D 或无 fontBoundingBox 度量时
+ *  返回 null（调用方放弃该条目，不伪造基线值）。 */
+function createFontBoundingBoxMeasurer(): (font: string) => { ascent: number; descent: number } | null {
+  let ctx: CanvasRenderingContext2D | null | undefined
+  const cache = new Map<string, { ascent: number; descent: number } | null>()
+  return (font: string): { ascent: number; descent: number } | null => {
+    const cached = cache.get(font)
+    if (cached !== undefined) return cached
+    let metric: { ascent: number; descent: number } | null = null
+    if (ctx === undefined) {
+      try {
+        ctx = document.createElement('canvas').getContext('2d')
+      } catch {
+        ctx = null
+      }
+    }
+    if (ctx) {
+      try {
+        ctx.font = font
+        const measured = ctx.measureText('0')
+        if (typeof measured.fontBoundingBoxAscent === 'number' &&
+            typeof measured.fontBoundingBoxDescent === 'number') {
+          metric = { ascent: measured.fontBoundingBoxAscent, descent: measured.fontBoundingBoxDescent }
+        }
+      } catch {
+        metric = null
+      }
+    }
+    cache.set(font, metric)
+    return metric
   }
 }
 
