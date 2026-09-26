@@ -68,16 +68,29 @@ function mergeIntervals(intervals: FormatSelection[]): FormatSelection[] {
   return merged
 }
 
+function codeSpanMarkers(content: string): { open: string; close: string } {
+  const delimiter = codeDelimiter(content)
+  // CommonMark 在内容以反引号起止时要求用空格隔开定界符；两侧均有
+  // 原始空格时也要各补一个，抵消代码段解析器对首尾各一个空格的裁剪。
+  const padding = content.startsWith('`') || content.endsWith('`') ||
+    content.startsWith(' ') && content.endsWith(' ') ? ' ' : ''
+  return { open: delimiter + padding, close: padding + delimiter }
+}
+
 function rewriteInlineLine(text: string, root: SyntaxNode, name: string, mark: string,
   lineFrom: number, lineTo: number, from: number, to: number,
   action: FormatAction): FormatChange | null {
-  const line = text.slice(lineFrom, lineTo)
-  const spans = inlineSpans(root, name, lineFrom, lineTo)
+  const touched = inlineSpans(root, name, lineFrom, lineTo).filter((span) =>
+    span.firstChild && span.lastChild && span.firstChild.to < to && span.lastChild.from > from)
+  const changeFrom = Math.min(from, ...touched.map((span) => span.from))
+  const changeTo = Math.max(to, ...touched.map((span) => span.to))
+  const line = text.slice(changeFrom, changeTo)
+  const spans = inlineSpans(root, name, changeFrom, changeTo)
   const masked = new Array<boolean>(line.length).fill(false)
   for (const span of spans) {
     if (!span.firstChild || !span.lastChild || span.firstChild === span.lastChild) continue
     for (const marker of [span.firstChild, span.lastChild]) {
-      for (let i = marker.from; i < marker.to; i++) masked[i - lineFrom] = true
+      for (let i = marker.from; i < marker.to; i++) masked[i - changeFrom] = true
     }
   }
   const positions = new Array<number>(line.length + 1).fill(0)
@@ -86,11 +99,11 @@ function rewriteInlineLine(text: string, root: SyntaxNode, name: string, mark: s
     positions[i + 1] = positions[i] + (masked[i] ? 0 : 1)
     if (!masked[i]) plain += line[i]
   }
-  const selected = { from: positions[from - lineFrom]!, to: positions[to - lineFrom]! }
+  const selected = { from: positions[from - changeFrom]!, to: positions[to - changeFrom]! }
   if (selected.from >= selected.to) return null
   const existing = mergeIntervals(spans.map((span) => ({
-    from: positions[span.firstChild!.to - lineFrom]!,
-    to: positions[span.lastChild!.from - lineFrom]!,
+    from: positions[span.firstChild!.to - changeFrom]!,
+    to: positions[span.lastChild!.from - changeFrom]!,
   })))
   const allApplied = existing.some((span) => span.from <= selected.from && span.to >= selected.to)
   const shouldRemove = action === 'remove' || action === 'toggle' && allApplied
@@ -104,30 +117,42 @@ function rewriteInlineLine(text: string, root: SyntaxNode, name: string, mark: s
   let rendered = ''
   let cursor = 0
   for (const span of next) {
-    rendered += plain.slice(cursor, span.from) + mark + plain.slice(span.from, span.to) + mark
+    const content = plain.slice(span.from, span.to)
+    const markers = name === 'InlineCode'
+      ? codeSpanMarkers(content) : { open: mark, close: mark }
+    rendered += plain.slice(cursor, span.from) + markers.open + content + markers.close
     cursor = span.to
   }
   rendered += plain.slice(cursor)
-  return rendered === line ? null : { from: lineFrom, to: lineTo, insert: rendered }
+  return rendered === line ? null : { from: changeFrom, to: changeTo, insert: rendered }
 }
 
 function clearInlineLine(text: string, root: SyntaxNode, lineFrom: number, lineTo: number,
   from: number, to: number): FormatChange | null {
-  const line = text.slice(lineFrom, lineTo)
-  const masked = new Array<boolean>(line.length).fill(false)
-  const styles: Array<{ from: number; to: number; open: string; close: string }> = []
+  const found: Array<{ node: SyntaxNode; first: SyntaxNode; last: SyntaxNode }> = []
   for (const config of Object.values(INLINE)) {
     if (!config) continue
-    for (const span of inlineSpans(root, config.node, lineFrom, lineTo)) {
-      const first = span.firstChild
-      const last = span.lastChild
-      if (!first || !last || first === last) continue
-      for (const marker of [first, last]) {
-        for (let i = marker.from; i < marker.to; i++) masked[i - lineFrom] = true
+    for (const node of inlineSpans(root, config.node, lineFrom, lineTo)) {
+      if (node.firstChild && node.lastChild && node.firstChild !== node.lastChild) {
+        found.push({ node, first: node.firstChild, last: node.lastChild })
       }
-      styles.push({ from: first.to, to: last.from,
-        open: text.slice(first.from, first.to), close: text.slice(last.from, last.to) })
     }
+  }
+  const touched = found.filter((span) => span.first.to < to && span.last.from > from)
+  if (!touched.length) return null
+  const changeFrom = Math.min(from, ...touched.map((span) => span.node.from))
+  const changeTo = Math.max(to, ...touched.map((span) => span.node.to))
+  const line = text.slice(changeFrom, changeTo)
+  const masked = new Array<boolean>(line.length).fill(false)
+  const styles: Array<{ from: number; to: number; open: string; close: string; kind: string }> = []
+  for (const span of found) {
+    if (span.node.from < changeFrom || span.node.to > changeTo) continue
+    for (const marker of [span.first, span.last]) {
+      for (let i = marker.from; i < marker.to; i++) masked[i - changeFrom] = true
+    }
+    styles.push({ from: span.first.to, to: span.last.from,
+      open: text.slice(span.first.from, span.first.to),
+      close: text.slice(span.last.from, span.last.to), kind: span.node.name })
   }
   const positions = new Array<number>(line.length + 1).fill(0)
   let plain = ''
@@ -135,16 +160,19 @@ function clearInlineLine(text: string, root: SyntaxNode, lineFrom: number, lineT
     positions[i + 1] = positions[i] + (masked[i] ? 0 : 1)
     if (!masked[i]) plain += line[i]
   }
-  const chosen = { from: positions[from - lineFrom]!, to: positions[to - lineFrom]! }
+  const chosen = { from: positions[from - changeFrom]!, to: positions[to - changeFrom]! }
   const remaining = styles.flatMap((style) => {
-    const start = positions[style.from - lineFrom]!
-    const end = positions[style.to - lineFrom]!
+    const start = positions[style.from - changeFrom]!
+    const end = positions[style.to - changeFrom]!
     if (end <= chosen.from || start >= chosen.to) return [{ from: start, to: end,
       open: style.open, close: style.close }]
     return [
-      { from: start, to: Math.min(end, chosen.from), open: style.open, close: style.close },
-      { from: Math.max(start, chosen.to), to: end, open: style.open, close: style.close },
+      { from: start, to: Math.min(end, chosen.from) },
+      { from: Math.max(start, chosen.to), to: end },
     ].filter((item) => item.from < item.to)
+      .map((item) => ({ ...item, ...(
+        style.kind === 'InlineCode' ? codeSpanMarkers(plain.slice(item.from, item.to))
+          : { open: style.open, close: style.close }) }))
   })
   const opens = new Map<number, typeof remaining>()
   const closes = new Map<number, typeof remaining>()
@@ -158,7 +186,7 @@ function clearInlineLine(text: string, root: SyntaxNode, lineFrom: number, lineT
     for (const style of (opens.get(pos) ?? []).sort((a, b) => b.to - a.to)) rendered += style.open
     if (pos < plain.length) rendered += plain[pos]
   }
-  return rendered === line ? null : { from: lineFrom, to: lineTo, insert: rendered }
+  return rendered === line ? null : { from: changeFrom, to: changeTo, insert: rendered }
 }
 
 function clearInlinePlan(text: string, range: FormatSelection, root: SyntaxNode): FormatPlan | null {
@@ -256,12 +284,18 @@ function inlinePlan(text: string, op: FormatOperationId, range: FormatSelection,
       const prefix = /^(\s*(?:#{1,6}\s+|(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s+)?|>\s*))/u.exec(line)?.[0].length ?? 0
       const start = Math.max(partFrom, lineFrom + prefix)
       if (start < partTo && !blockedInline(root, start, partTo, config.node)) {
-        const change = inlineSpans(root, config.node, lineFrom, lineTo).some((span) =>
-          span.from <= partTo && span.to >= start)
-          ? rewriteInlineLine(text, root, config.node, mark,
+        let change: FormatChange | null = null
+        if (inlineSpans(root, config.node, lineFrom, lineTo).some((span) =>
+          span.from <= partTo && span.to >= start)) {
+          change = rewriteInlineLine(text, root, config.node, mark,
             lineFrom, lineTo, start, partTo, action)
-          : action === 'remove' ? null
-            : { from: start, to: partTo, insert: mark + text.slice(start, partTo) + mark }
+        } else if (action !== 'remove') {
+          const content = text.slice(start, partTo)
+          const markers = op === 'inlineCode' ? codeSpanMarkers(content)
+            : { open: mark, close: mark }
+          change = { from: start, to: partTo,
+            insert: markers.open + content + markers.close }
+        }
         if (change) changes.push(change)
       }
     }
