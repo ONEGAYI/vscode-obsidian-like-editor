@@ -326,6 +326,19 @@ export function renderMermaidIn(root: ParentNode): void {
   }
 }
 
+/** 取渲染 SVG 字符串（#111 图表弹窗与导出共用）：缓存优先（同源码不
+ *  重渲染）、走同一串行队列与主题代次防护；失败返回错误消息。 */
+export type MermaidSvgResult = { ok: true; svg: string } | { ok: false; message: string }
+
+export async function renderMermaidSvg(code: string): Promise<MermaidSvgResult> {
+  const api = await ensureMermaidApi()
+  if (!api) {
+    return { ok: false, message: t('decor.mermaidUnavailable') }
+  }
+  const entry = await renderCached(api, code)
+  return entry.kind === 'ok' ? { ok: true, svg: entry.svg } : { ok: false, message: entry.message }
+}
+
 /** 主题联动：切换明暗时递增主题代次、以新主题重新 initialize、清空缓存
  *  并重渲染当前在文档中的全部容器（等值跳过；真实切换由
  *  syncController.applyHostTheme 驱动）。 */

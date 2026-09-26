@@ -78,7 +78,10 @@ import { liveMath } from './liveMath'
 import { MATH_CLASS_NAMES } from '../shared/math'
 import { liveMermaid } from './liveMermaid'
 import { renderMermaidIn, setMermaidDarkTheme } from './mermaidRender'
-import { MERMAID_CLASS_NAMES, MERMAID_STATE_ATTR } from '../shared/mermaid'
+import { closeDiagramPopup, isDiagramPopupOpen, openGraphicPopup, setDiagramExportSender } from './diagramPopup'
+import { graphicRendererFor } from './graphicRenderers'
+import { GRAPHIC_CHROME_CLASS_NAMES, wrapGraphicFrame } from './graphicBlockChrome'
+import { GRAPHIC_LANG_ATTR, MERMAID_CLASS_NAMES, MERMAID_CODE_ATTR, MERMAID_STATE_ATTR } from '../shared/mermaid'
 import { ImageResourceManager } from './imageResource'
 import { runPerfProbe } from './perfProbe'
 import { runReadingPerfProbe } from './readingProbe'
@@ -684,6 +687,7 @@ export class WebviewSyncController {
           prepareReadingImages(el, this.images)
         }
         renderMermaidIn(el)
+        this.decorateGraphicChromeBlock(el)
         // #84 阅读代码块卡片：挂载即增强（幂等；mermaid 块类不同不命中）
         this.decorateReadingCodeCardBlock(el)
       },
@@ -837,6 +841,22 @@ export class WebviewSyncController {
     // 重算。监听器挂在 view 自身的 scrollDOM 上——dispose 时整棵 view.dom
     // 随 destroy 移除，无需单独解绑
     this.view.scrollDOM.addEventListener('scroll', () => this.onOutlineScrollSignal())
+    // #111 图表导出通道：弹窗 → 宿主另存为（会话字段在此补齐；只读交互，
+    // init 前无会话时静默丢弃——按钮在渲染成功后才可点）
+    setDiagramExportSender((req) => {
+      if (!this.sessionId) {
+        return
+      }
+      this.bridge.postMessage({
+        kind: 'diagram.export',
+        sessionId: this.sessionId,
+        docUri: this.docUri,
+        reqId: req.reqId,
+        format: req.format,
+        fileName: req.fileName,
+        content: req.content,
+      })
+    })
     this.hostDarkApplied = isVscodeDarkBody()
     this.applyModeDom(this.viewMode)
     // #94 语言切换：常驻文本就地换词（首帧装配不触发，installLocale 才通知）
@@ -850,6 +870,8 @@ export class WebviewSyncController {
   }
 
   dispose(): void {
+    closeDiagramPopup()
+    setDiagramExportSender(null)
     this.unsubscribeLocale?.()
     this.unsubscribeLocale = undefined
     if (this.flushTimer !== undefined) {
@@ -1444,6 +1466,18 @@ export class WebviewSyncController {
           `.${CODE_CARD_CLASS_NAMES.fold}`,
         )
         buttons?.[message.index]?.click()
+        break
+      }
+      case 'graphic.test.popup': {
+        // 测试钩子（#111）：按序号点击图形化代码块 popup 按钮（驱动与用户
+        // 点击相同的处理器链路：打开图表弹窗）
+        if (this.viewMode === message.view) {
+          const scope = this.viewMode === 'reading' ? this.readingContainer : this.view?.contentDOM
+          const buttons = scope?.querySelectorAll<HTMLButtonElement>(
+            `.${GRAPHIC_CHROME_CLASS_NAMES.popup}`,
+          )
+          buttons?.[message.index]?.click()
+        }
         break
       }
       case 'image.result':
@@ -4992,6 +5026,20 @@ export class WebviewSyncController {
     const mermaid = mermaidEl
       ? { visible: mermaidVisible, display: mermaidDisplay, ...mermaidCounts }
       : undefined
+    // #111 图形化代码块按钮组与图表弹窗探针：当前激活视图内的 frame 与
+    // 按钮计数（显隐由 CSS 悬停承担，此处观测 DOM 在场与发射形态）；
+    // 浮层为 document 级单例
+    const graphicScope = this.viewMode === 'reading' ? this.readingContainer : view.contentDOM
+    const graphicFrames = graphicScope?.querySelectorAll(`.${GRAPHIC_CHROME_CLASS_NAMES.frame}`).length ?? 0
+    const graphic = graphicFrames > 0 || isDiagramPopupOpen()
+      ? {
+          frames: graphicFrames,
+          editButtons: graphicScope?.querySelectorAll(`.${GRAPHIC_CHROME_CLASS_NAMES.edit}`).length ?? 0,
+          popupButtons: graphicScope?.querySelectorAll(`.${GRAPHIC_CHROME_CLASS_NAMES.popup}`).length ?? 0,
+          overlay: isDiagramPopupOpen(),
+          overlaySvg: document.querySelector('.vsidian-diagram-media svg') !== null,
+        }
+      : undefined
     const quickBar = this.quickActionsEl
     const quickBold = quickBar?.querySelector<HTMLElement>('[data-op="bold"]') ?? null
     const quickActive = quickBar?.querySelector<HTMLElement>('[data-format-state="active"]') ?? null
@@ -5116,6 +5164,7 @@ export class WebviewSyncController {
       },
       math,
       mermaid,
+      graphic,
       quickActions,
       code,
       heading: headingPaint,
@@ -5446,6 +5495,35 @@ export class WebviewSyncController {
   private setBannerVisible(visible: boolean): void {
     if (this.banner) {
       this.banner.style.display = visible ? 'flex' : 'none'
+    }
+  }
+
+  /** #111 阅读视图图形化代码块按钮组：挂载钩子把渲染容器包进定位 frame
+   *  并挂 popup 按钮（幂等；仅对 webview 侧有渲染管线的语言生效）。 */
+  private decorateGraphicChromeBlock(el: HTMLElement): void {
+    if (!(el instanceof HTMLElement)) {
+      return
+    }
+    const targets = [
+      ...(el.matches(`.${MERMAID_CLASS_NAMES.diagram}[${MERMAID_CODE_ATTR}]`)
+        ? [el as HTMLElement]
+        : []),
+      ...Array.from(el.querySelectorAll<HTMLElement>(`.${MERMAID_CLASS_NAMES.diagram}[${MERMAID_CODE_ATTR}]`)),
+    ]
+    for (const inner of targets) {
+      if (inner.parentElement?.classList.contains(GRAPHIC_CHROME_CLASS_NAMES.frame)) {
+        continue
+      }
+      const language = (inner.getAttribute(GRAPHIC_LANG_ATTR) ?? 'mermaid').trim()
+      if (!graphicRendererFor(language)) {
+        continue
+      }
+      const code = inner.getAttribute(MERMAID_CODE_ATTR) ?? ''
+      wrapGraphicFrame(inner, {
+        onPopup: () => {
+          openGraphicPopup(language, code)
+        },
+      })
     }
   }
 

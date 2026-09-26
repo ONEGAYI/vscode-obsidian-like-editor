@@ -936,21 +936,32 @@ try {
           return svg && svg !== window.__firstMermaidSvg && svg !== window.__secondMermaidSvg
         }, null, { timeout: 20000 })
       } else if (scenario === 'card-in-out') {
-        // 渲染型围栏接入卡片（点击 SVG → 编辑态卡片接管）。点击 widget
-        // 背景区（顶缘）→ CM6 光标落围栏起点（触及区间 → 该图退场、
-        // Mermaid 标签卡片接管）；点击围栏外退出 → 卡片退场、SVG 恢复。
-        // 注：点击落位依命中元素（SVG 背景区 vs 节点图形）而异，非稳定
-        // 契约——本场景只钉进入/退出两条主路径
+        // #111 渲染型围栏与卡片的交界：点击图形本体不进入编辑（widget 吞
+        // 事件），编辑入口收敛到 frame 右上角 edit 按钮（悬停显现后原生
+        // 点击 → 光标落围栏起点 → 源码显形、Mermaid 标签卡片接管）；
+        // 点击围栏外退出 → 卡片退场、SVG 恢复渲染
         await page.waitForFunction(() =>
           document.querySelectorAll('.cm-content .vsidian-mermaid').length === 5, null, { timeout: 20000 })
+        // 禁点击：SVG 上原生点击不落光标、图不退场
         await page.locator('.cm-content .vsidian-mermaid svg').first().click({ position: { x: 20, y: 6 } })
+        await page.waitForTimeout(200)
+        const afterImageClick = await page.evaluate(() => ({
+          mermaid: document.querySelectorAll('.cm-content .vsidian-mermaid').length,
+          cards: document.querySelectorAll('.cm-content .vsidian-code-card-header').length,
+          anchor: window.readEditor ? window.readEditor().anchor : undefined,
+        }))
+        assert.equal(afterImageClick.mermaid, 5, '点击图形不得使图退场（#111 禁点击进编辑）')
+        assert.equal(afterImageClick.cards, 0, '点击图形不得进入编辑态卡片')
+        // edit 按钮：悬停 frame 显现后原生点击进入编辑
+        await page.locator('.cm-content .vsidian-graphic-frame').first().hover()
+        await page.locator('.cm-content .vsidian-graphic-chrome-edit').first().click()
         await page.waitForFunction(() => {
           const cards = document.querySelectorAll('.cm-content .vsidian-code-card-header')
           const mermaidCard = [...cards].some((h) =>
             (h.querySelector('.vsidian-code-card-header-label')?.lastChild?.textContent ?? '') === 'Mermaid')
           return document.querySelectorAll('.cm-content .vsidian-mermaid').length === 4 && mermaidCard
         }, null, { timeout: 20000 })
-        assert.equal((await states()).text, MERMAID_DOC, '点击进入编辑态零写回')
+        assert.equal((await states()).text, MERMAID_DOC, 'edit 进入编辑态零写回')
         // 点击围栏外（文档首行）退出 → 卡片退场、SVG 恢复渲染
         await page.locator('.cm-line').first().click({ position: { x: 5, y: 8 } })
         await page.waitForFunction(() =>

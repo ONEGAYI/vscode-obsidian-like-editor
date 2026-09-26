@@ -444,6 +444,14 @@ interface ViewState {
       error: number
       count: number
     }
+    /** #111 图形化代码块按钮组与图表弹窗绘制 */
+    graphic?: {
+      frames: number
+      editButtons: number
+      popupButtons: number
+      overlay: boolean
+      overlaySvg: boolean
+    }
     quickActions?: {
       open: boolean
       togglePainted: boolean
@@ -5849,6 +5857,42 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(reading.paint?.mermaid?.error === 1, `无效语法应降级 1 个，实际 ${reading.paint?.mermaid?.error}`)
     // 大围栏豁免切片 + 降级不吞后续块：切块数合理且锚点块可定位
     assert((reading.readingTotalBlocks ?? 0) >= 5, `阅读切块应含全部图表块，实际 ${reading.readingTotalBlocks}`)
+  }],
+
+  ['图形化代码块按钮组与图表弹窗：live/reading 形态与浮层装载（#111）', async () => {
+    await openWithEditor('mermaid.md')
+    await waitSessionReady('mermaid.md')
+    const uri = wsUri('mermaid.md').toString()
+    const diskBefore = await readDisk('mermaid.md')
+    const tailAnchor = diskBefore.indexOf('结尾段落')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: tailAnchor,
+    })
+    // live：全部 frame 就位，edit+popup 成对（含无效降级块——按钮显隐由
+    // CSS 渲染态联动，DOM 在场是发射形态断言）
+    const live = await waitViewState('mermaid.md', (v) =>
+      (v.liveMermaidCount ?? -1) === 5 && v.paint?.graphic?.frames === 5, 0, 60000)
+    assert(live.paint?.graphic?.editButtons === 5,
+      `live 应有 5 枚 edit 按钮，实际 ${live.paint?.graphic?.editButtons}`)
+    assert(live.paint?.graphic?.popupButtons === 5,
+      `live 应有 5 枚 popup 按钮，实际 ${live.paint?.graphic?.popupButtons}`)
+    assert(live.paint?.graphic?.overlay === false, '初始不得有浮层')
+    // 经测试钩子驱动真实处理器链路打开弹窗：浮层在场且 SVG 装载（绘制层）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'graphic.test.popup', view: 'live', index: 0,
+    })
+    const opened = await waitViewState('mermaid.md', (v) =>
+      v.paint?.graphic?.overlay === true && v.paint?.graphic?.overlaySvg === true, 0, 60000)
+    assert(opened.paint?.graphic?.overlaySvg === true, '图表弹窗内 SVG 应完成装载')
+    assert(await readDisk('mermaid.md') === diskBefore, '弹窗交互零写回')
+    // reading：edit 不发射（阅读无编辑入口）、popup 照常包 frame
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const readingChrome = await waitViewState('mermaid.md', (v) =>
+      v.viewMode === 'reading' && (v.readingMermaidCount ?? -1) === 5 &&
+      v.paint?.graphic?.frames === 5 && v.paint?.graphic?.editButtons === 0, 0, 60000)
+    assert(readingChrome.paint?.graphic?.popupButtons === 5,
+      `阅读应有 5 枚 popup 按钮，实际 ${readingChrome.paint?.graphic?.popupButtons}`)
+    assert(await readDisk('mermaid.md') === diskBefore, '模式切换不得触发磁盘写回')
   }],
 
   ['Mermaid 跨模式切换一致性：两模式计数对齐、文本不变、无写回（#60）', async () => {

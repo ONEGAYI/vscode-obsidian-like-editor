@@ -37,15 +37,21 @@ export const MERMAID_CODE_ATTR = 'data-vsidian-mermaid-code'
 /** 容器 data 属性：渲染状态（loading/rendered/error；探针与重复渲染防护） */
 export const MERMAID_STATE_ATTR = 'data-vsidian-mermaid-state'
 
-/** info string 是否标记 mermaid 围栏（精确匹配，trim 后全等，大小写敏感） */
-export function isMermaidInfo(info: string): boolean {
-  return info.trim() === 'mermaid'
+/** 容器 data 属性：图形化渲染语言（#111 阅读容器标注，按钮组与弹窗消费） */
+export const GRAPHIC_LANG_ATTR = 'data-vsidian-graphic-lang'
+
+/** info string 是否标记渲染型围栏（trim 后全等、大小写敏感；判定源 =
+ *  RENDERED_FENCE_LABELS 注册表——#111 起为图形化代码块注册表的共享侧
+ *  事实源，webview 侧管线注册表见 graphicRenderers.ts，两侧键集一致性
+ *  由契约测试钉住）。当前仅 mermaid；新增图形化渲染语言在此登记 */
+export function isRenderedFenceInfo(info: string): boolean {
+  return Object.prototype.hasOwnProperty.call(RENDERED_FENCE_LABELS, info.trim())
 }
 
 /**
  * 渲染型围栏的语言显示名（卡片编辑态的头部标签；键 = trim 后的 info）。
  * 当前仅 mermaid——未来新增「会被渲染成图形的围栏语言」（图表 DSL 等）
- * 时，在此登记显示名，并在围栏标志判定（FenceSpan.mermaid 的渲染型
+ * 时，在此登记显示名，并在围栏标志判定（FenceSpan.rendered 的渲染型
  * 语义）同步扩展；这类围栏编辑态走代码块卡片、呈现态让位专属渲染管线。
  */
 export const RENDERED_FENCE_LABELS: Readonly<Record<string, string>> = {
@@ -62,8 +68,9 @@ export interface FenceSpan {
   char: '`' | '~'
   /** 开围栏 run 长度（≥3） */
   run: number
-  /** info string 是否标记 mermaid */
-  mermaid: boolean
+  /** 是否渲染型围栏（RENDERED_FENCE_LABELS 命中；#111 起驱动图形化
+   *  代码块交互：live widget 发射、卡片让位、阅读容器输出） */
+  rendered: boolean
   /** 开围栏 info string 原文（#79 代码块卡片消费：语言路由与标签） */
   info: string
   /** 围栏内容（内容行以 \n 拼接，不含围栏标记行） */
@@ -76,7 +83,7 @@ export interface OpenFence {
   from: number
   char: '`' | '~'
   run: number
-  mermaid: boolean
+  rendered: boolean
   /** 开围栏 info string 原文（闭合时随 FenceSpan 产出） */
   info: string
   /** 已累积的内容行（\n 拼接） */
@@ -144,13 +151,13 @@ export function scanFencesDetailed(
   initialOpen: OpenFence | null = null,
 ): FenceScanResult {
   const spans: FenceSpan[] = []
-  let open: { from: number; char: '`' | '~'; run: number; mermaid: boolean; info: string; code: string[] } | null =
+  let open: { from: number; char: '`' | '~'; run: number; rendered: boolean; info: string; code: string[] } | null =
     initialOpen
       ? {
           from: initialOpen.from,
           char: initialOpen.char,
           run: initialOpen.run,
-          mermaid: initialOpen.mermaid,
+          rendered: initialOpen.rendered,
           info: initialOpen.info,
           code: initialOpen.code === '' ? [] : initialOpen.code.split('\n'),
         }
@@ -167,7 +174,7 @@ export function scanFencesDetailed(
             to: lineStart + line.length,
             char: open.char,
             run: open.run,
-            mermaid: open.mermaid,
+            rendered: open.rendered,
             info: open.info,
             code: open.code.join('\n'),
           })
@@ -183,13 +190,13 @@ export function scanFencesDetailed(
     if (cols <= 3) {
       const hit = matchFenceOpen(line.slice(restStart))
       if (hit && !(hit.char === '`' && hit.info.includes('`'))) {
-        open = { from: lineStart, char: hit.char, run: hit.run, mermaid: isMermaidInfo(hit.info), info: hit.info, code: [] }
+        open = { from: lineStart, char: hit.char, run: hit.run, rendered: isRenderedFenceInfo(hit.info), info: hit.info, code: [] }
       }
     }
     lineStart += line.length + 1
   }
   return {
     spans,
-    open: open ? { from: open.from, char: open.char, run: open.run, mermaid: open.mermaid, info: open.info, code: open.code.join('\n') } : null,
+    open: open ? { from: open.from, char: open.char, run: open.run, rendered: open.rendered, info: open.info, code: open.code.join('\n') } : null,
   }
 }

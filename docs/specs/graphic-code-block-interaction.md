@@ -1,6 +1,6 @@
 # 规格：图形化代码块交互（按钮、图表弹窗与导出）
 
-状态：草案，2026-09-26。设计共识经 grill 访谈确认；实施工单 [#111 图形化代码块交互重做](https://github.com/ONEGAYI/vsidian/issues/111)，关联 [#110 Mermaid 暗色主题修复](https://github.com/ONEGAYI/vsidian/issues/110)（不属本规格范围，两票变更面不相交、可并行）。参考 [vscode-office](https://github.com/cweijan/vscode-office)（本地 `D:/CODE/Project/_Extensions/vscode-office`）的交互实现，**只借鉴交互与结构，不复用其代码**。本文是图形化代码块交互的单一事实源，实施工单的验收以此为准。
+状态：已实施（工单 [#111](https://github.com/ONEGAYI/vsidian/issues/111)，2026-09-26），人工验收按[人工验证清单](manual-verification.md) #111 节逐项记录；关联 [#110 Mermaid 暗色主题修复](https://github.com/ONEGAYI/vsidian/issues/110)（不属本规格范围）。接入清单（新增图形化渲染语言三步）见 `src/webview/graphicRenderers.ts` 文件头注释与 AGENTS.md「图形化代码块扩展约定」。参考 [vscode-office](https://github.com/cweijan/vscode-office)（本地 `D:/CODE/Project/_Extensions/vscode-office`）的交互实现，**只借鉴交互与结构，不复用其代码**。本文是图形化代码块交互的单一事实源，实施工单的验收以此为准。
 
 ## 范围
 

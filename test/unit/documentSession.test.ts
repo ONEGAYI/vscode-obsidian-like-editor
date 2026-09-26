@@ -1219,3 +1219,59 @@ describe('#69 clipboard.write：两变体路由到注入端口', () => {
     // 无异常即通过
   })
 })
+
+describe('图表导出路由（#111）', () => {
+  it('diagram.export 转发注入端口，report 结果回来源面板', async () => {
+    const doc = new FakeDoc('x')
+    const s = new DocumentSession(doc, { docUri: 'file:///d/a.md' })
+    const toWebview: HostToWebview[] = []
+    const received: unknown[] = []
+    const id = s.attachPanel({
+      send: (m) => toWebview.push(m),
+      exportDiagram: (payload, report) => {
+        received.push(payload)
+        report({ ok: false, reason: 'cancelled' })
+      },
+    })
+    await s.handleWebviewMessage(
+      {
+        kind: 'diagram.export',
+        sessionId: id,
+        docUri: 'file:///d/a.md',
+        reqId: 7,
+        format: 'svg',
+        fileName: 'mermaid-diagram.svg',
+        content: '<svg/>',
+      },
+      id,
+    )
+    expect(received).toHaveLength(1)
+    const result = toWebview.at(-1) as { kind: string; reqId: number; ok: boolean; reason?: string }
+    expect(result.kind).toBe('diagram.export.result')
+    expect(result.reqId).toBe(7)
+    expect(result.ok).toBe(false)
+    expect(result.reason).toBe('cancelled')
+  })
+
+  it('未注入导出端口：回报 invalid（不抛错）', async () => {
+    const doc = new FakeDoc('x')
+    const s = new DocumentSession(doc, { docUri: 'file:///d/a.md' })
+    const toWebview: HostToWebview[] = []
+    const id = s.attachPanel({ send: (m) => toWebview.push(m) })
+    await s.handleWebviewMessage(
+      {
+        kind: 'diagram.export',
+        sessionId: id,
+        docUri: 'file:///d/a.md',
+        reqId: 8,
+        format: 'png',
+        fileName: 'x.png',
+        content: 'aGk=',
+      },
+      id,
+    )
+    const result = toWebview.at(-1) as { kind: string; reason?: string }
+    expect(result.kind).toBe('diagram.export.result')
+    expect(result.reason).toBe('invalid')
+  })
+})

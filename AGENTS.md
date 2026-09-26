@@ -9,6 +9,7 @@ VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 - 通用工程规范（提交规范、TDD、文件树维护）遵循工程根 `D:\CODE\Project\AGENTS.md`，此处不重复展开。
 - **插件设置入口**：Vsidian 面向用户的设置统一在扩展自己的设置页面展示与修改，不复用 VSCode 统一设置中心作为设置界面。后续新增设置项时，同步纳入该页面，并验证设置持久化、重新打开后的回显及变更生效。
 - **操作与快捷键注册**：快捷键管理覆盖项目全部面向用户的可绑定操作。每次新增或修改操作，都必须评估并记录是否提供快捷键入口、默认绑定（允许默认未绑定）及生效模式；不能仅因操作不常驻工具栏就省略快捷键入口。写操作快捷键仅在 Live 编辑正文时覆盖宿主绑定，不接管源码模式或设置页输入；注册模型须支持未来其他操作按需覆盖 Live、阅读或双模式。绑定支持显式清空、单项恢复默认与全部恢复默认；清空不能因重启或升级自动恢复。插件内部冲突按键位及生效范围是否重叠判定。
+- **图形化代码块扩展约定（#111 落档）**：「渲染成图形的围栏代码块」的按钮组、图表弹窗、禁点击进编辑与导出是注册表驱动的路径级行为：共享侧 `RENDERED_FENCE_LABELS`（`src/shared/mermaid.ts`，同时是 `FenceSpan.rendered` 判定源）登记语言显示名，webview 侧 `graphicRenderers.ts` 登记渲染管线（`renderInto`/`renderSvg`），两侧键集一致性由 `test/unit/graphicRenderers.test.ts` 钉住。新增此类语言走 `graphicRenderers.ts` 文件头的三步接入清单（标签、管线、契约测试一行），登记即继承全部交互；「登记即继承」由假想第二渲染器用例验证，不引入真实依赖。点击图形本体不进入编辑（widget `ignoreEvent: true`），编辑入口收敛到 edit 按钮（仅实时预览，派发选区触发现有源码显形管线）；PNG 光栅化在 webview canvas 完成，CSP `img-src` 已放行 `data:`，环境不支持时按规格降级为仅 SVG 并提示。
 - **行内围栏扩展约定（#103 落档）**：粗体/斜体/删除线/行内代码这类成对行内标记统一走 `inlinePlan` 共用路径，两态切换（光标在围栏语法节点内即取消整段）与无选区扩词包裹的光标落位（开围栏内侧，锚点按 `markers.open.length` 从实际定界符计算）是路径级行为，不逐操作实现。新增此类围栏只需：`src/webview/formatOperations.ts` 的 `INLINE` 表登记 `{ mark, node }`（node 为 Lezer 语法节点名，取消分支按它命中）+ `src/shared/formatOperations.ts` 注册表（titleKey／i18n／快捷键入口评估见上条），即自动继承全部行为；「清除行内格式」按 `INLINE` 全表遍历，亦自动覆盖。两处例外需主动适配：定界符随内容变化的围栏（多反引号、补位空格一类）须在全部三处构造 markers 的分派接入自己的 marker 函数——fresh-wrap 包裹处、`rewriteInlineLine` 重包与 `clearInlineLine` 局部重包各有一处 `codeSpanMarkers` 三元，漏改任一处该路径会退回静态定界符——锚点仍自动；插入型结构（wikilink／inlineMath 所在分支）无切换语义，新操作要两态化须自行设计取消分支。测试惯例：新围栏在 `test/unit/formatOperations.test.ts` 补一条包裹后光标位置断言，并在 `test/unit/formatInteraction.test.ts` 两态往返用例的枚举里加一行（现有四种为显式枚举，不自动生成）。已知边界：词与既有同类围栏贴边相邻（如 `**a**b` 光标在 b 处——贴边包裹产物被解析为合并节点，取消会整体摘除）或光标停在既有围栏紧前方（星号处取不到词，落入空对插入）时，包裹与取消仍不两态，属 #107 遗留缺陷，不在「自动继承两态」的承诺范围。
 - **视觉层断言（评审必查）**：webview/样式/渲染类变更，评审必须核对断言对象是"用户看到的东西"（可见性、对齐、颜色）而非 DOM 存在性或几何坐标——样式注入失效时后者照样通过（PR #37 P0 实证：CSP 拦截 CM6 注入样式后 74 集成用例仍全绿，正文实际不可见）。涉及呈现的新特性至少一条集成断言落在绘制层（现有 `view.state.paint` 探针），CSS 关键规则由契约测试钉住。
 - **大纲样式设计哲学（#65 落档）**：大纲条目的呈现遵循三条原则，后续大纲呈现类变更不得违背。其一，**结构装饰与正文主题同源**——层级颜色等主题性装饰不复制读值，而是与正文标题引用同一 CSS 变量族（`--vsidian-heading-color-1..6`，定义于 `#app`，live 标题行级、阅读标题块级、大纲条目级三侧同引），主题分级着色一处定义多处生效。其二，**强调语义只认显式标记**——条目一律常规字重（400），不继承标题级别的结构性加粗；仅显式 `**粗体**` 段加重，斜体/行内代码/删除线同理只由标记触发。其三，**透传集合 = 正文已支持的行内标记子集**——当前白名单为粗体/斜体/行内代码/删除线（`OutlineSpanKind`，提取与校验同源），高亮/公式/行内颜色待正文支持后按同一白名单机制接入（提取处 `SPAN_KIND_BY_NODE` 加映射即可），大纲侧零额外设计；双链/链接显示别名/链接文字的纯文本，不可点。
@@ -122,15 +123,17 @@ vsidian/
 ├── src/                   # 扩展源码
 │   ├── extension.ts # 扩展激活入口
 │   ├── host/        # 宿主端实现
-│   │   ├── documentSession.ts    # 文档会话与写回同步
-│   │   ├── hostLocale.ts         # 生效语言宿主装配解析帮手
-│   │   ├── keybindingService.ts  # 快捷键全局存储服务
-│   │   ├── linkTarget.ts         # 宿主侧链接目标分类纯逻辑（#10）
-│   │   ├── settingsPage.ts       # 独立设置页面板装配
-│   │   ├── settingsService.ts    # 宿主设置服务
-│   │   ├── textEditorProvider.ts # 自定义文本编辑器提供者
-│   │   ├── viewCycle.ts          # 三态视图编排纯逻辑
-│   │   └── wikilinkTarget.ts     # 宿主侧双链目标解析纯逻辑（#11）
+│   │   ├── diagramExportHost.ts     # 宿主图表导出执行壳
+│   │   ├── diagramExportValidate.ts # 图表导出载荷校验
+│   │   ├── documentSession.ts       # 文档会话与写回同步
+│   │   ├── hostLocale.ts            # 生效语言宿主装配解析帮手
+│   │   ├── keybindingService.ts     # 快捷键全局存储服务
+│   │   ├── linkTarget.ts            # 宿主侧链接目标分类纯逻辑（#10）
+│   │   ├── settingsPage.ts          # 独立设置页面板装配
+│   │   ├── settingsService.ts       # 宿主设置服务
+│   │   ├── textEditorProvider.ts    # 自定义文本编辑器提供者
+│   │   ├── viewCycle.ts             # 三态视图编排纯逻辑
+│   │   └── wikilinkTarget.ts        # 宿主侧双链目标解析纯逻辑（#11）
 │   ├── shared/      # 两端共享纯逻辑
 │   │   ├── changeMapping.ts    # 变更重定位纯函数
 │   │   ├── codeLangs.ts        # 代码块语言注册表与别名路由
@@ -152,8 +155,13 @@ vsidian/
 │       ├── codeCardState.ts        # 卡片共享状态中立模块
 │       ├── codeHighlight.ts        # 语法高亮引擎装配与缓存
 │       ├── css.d.ts                # CSS 导入类型声明
+│       ├── diagramExport.ts        # 图表导出序列化与光栅化
+│       ├── diagramPopup.ts         # 图表弹窗全屏浮层
+│       ├── diagramPopupGeometry.ts # 弹窗几何纯函数
 │       ├── findSession.ts          # 查找匹配纯函数（#14）
 │       ├── formatOperations.ts     # 格式文本变换规划
+│       ├── graphicBlockChrome.ts   # 图形化块右上角按钮组
+│       ├── graphicRenderers.ts     # 图形化渲染器注册表
 │       ├── imageResource.ts        # 图片资源状态机（#10）
 │       ├── keybindingRouter.ts     # 编辑器按键分发器
 │       ├── keybindingSettings.ts   # 快捷键设置分页

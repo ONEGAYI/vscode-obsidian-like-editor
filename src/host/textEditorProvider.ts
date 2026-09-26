@@ -49,6 +49,7 @@ import {
 import type { SettingsService } from './settingsService'
 import type { KeybindingService } from './keybindingService'
 import type { SettingsPageHandle } from './settingsPage'
+import { runDiagramExport } from './diagramExportHost'
 import { installHostLocale, LOCALE_MESSAGES, type LocaleCode } from '../shared/locales'
 import { buildLocaleIslandHtml } from '../shared/locales/island'
 import { hostLocale } from './hostLocale'
@@ -757,6 +758,11 @@ export function createTextEditorProvider(
           void vscode.env.clipboard.writeText(
             `[[${outlineNoteNameOf(docUri)}#${outlineLinkHeading(heading)}]]`,
           )
+        },
+        // #111 图表导出端口：弹窗工具条 → 载荷校验 + showSaveDialog +
+        // writeFile，结果经 diagram.export.result 回来源面板
+        exportDiagram: (payload, report) => {
+          void runDiagramExport(payload, report)
         },
       })
       entry.panels.set(sessionId, webviewPanel)
@@ -1633,7 +1639,9 @@ function buildWebviewHtml(
   )
   const csp = [
     `default-src 'none'`,
-    `img-src ${webview.cspSource} https:`,
+    // data: 供 #111 图表弹窗 PNG 光栅化（自有 mermaid SVG 经 data URL
+    // 装载到 canvas；位图不可执行，风险面限于解码）
+    `img-src ${webview.cspSource} https: data:`,
     `script-src ${webview.cspSource} 'nonce-${nonce}'`,
     // 'unsafe-inline' 仅放行样式：CodeMirror 6（style-mod）在运行时向
     // document 注入 <style> 元素承载 baseTheme 与扩展样式，属 CSP 的

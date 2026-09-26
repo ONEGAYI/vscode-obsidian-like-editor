@@ -2,35 +2,35 @@
 // CommonMark 围栏状态机行扫描。live 装饰与阅读渲染共用同一判定口径。
 import { describe, expect, it } from 'vitest'
 import {
-  isMermaidInfo,
+  isRenderedFenceInfo,
   scanFenceSpans,
   scanFencesDetailed,
   type FenceSpan,
 } from '../../src/shared/mermaid'
 
 /** 便捷：行数组 + 首行 offset 0 扫描，返回紧凑断言形态 */
-function scan(text: string): Array<{ from: number; to: number; mermaid: boolean; code: string }> {
+function scan(text: string): Array<{ from: number; to: number; rendered: boolean; code: string }> {
   return scanFenceSpans(text.split('\n'), 0).map((s) => ({
     from: s.from,
     to: s.to,
-    mermaid: s.mermaid,
+    rendered: s.rendered,
     code: s.code,
   }))
 }
 
-describe('isMermaidInfo：info string 判定', () => {
+describe('isRenderedFenceInfo：info string 判定', () => {
   it('精确匹配 mermaid（前后空白容忍）', () => {
-    expect(isMermaidInfo('mermaid')).toBe(true)
-    expect(isMermaidInfo(' mermaid ')).toBe(true)
-    expect(isMermaidInfo('mermaid\t')).toBe(true)
+    expect(isRenderedFenceInfo('mermaid')).toBe(true)
+    expect(isRenderedFenceInfo(' mermaid ')).toBe(true)
+    expect(isRenderedFenceInfo('mermaid\t')).toBe(true)
   })
 
   it('大小写敏感；非 mermaid 语言与多余词不命中', () => {
-    expect(isMermaidInfo('Mermaid')).toBe(false)
-    expect(isMermaidInfo('MERMAID')).toBe(false)
-    expect(isMermaidInfo('mermaid flowchart')).toBe(false)
-    expect(isMermaidInfo('js')).toBe(false)
-    expect(isMermaidInfo('')).toBe(false)
+    expect(isRenderedFenceInfo('Mermaid')).toBe(false)
+    expect(isRenderedFenceInfo('MERMAID')).toBe(false)
+    expect(isRenderedFenceInfo('mermaid flowchart')).toBe(false)
+    expect(isRenderedFenceInfo('js')).toBe(false)
+    expect(isRenderedFenceInfo('')).toBe(false)
   })
 })
 
@@ -40,7 +40,7 @@ describe('scanFenceSpans：围栏状态机', () => {
     const spans = scan(text)
     expect(spans).toHaveLength(1)
     const s = spans[0]!
-    expect(s.mermaid).toBe(true)
+    expect(s.rendered).toBe(true)
     expect(s.from).toBe(text.indexOf('```mermaid'))
     expect(s.to).toBe(text.indexOf('```', 3 + '```mermaid'.length) + 3) // 闭围栏行行尾（不含换行，排他端）
     expect(s.code).toBe('graph TD\nA-->B')
@@ -49,14 +49,14 @@ describe('scanFenceSpans：围栏状态机', () => {
   it('波浪线围栏同样识别；info 前后空白容忍', () => {
     const spans = scan('~~~mermaid  \nflowchart LR\nA-->B\n~~~')
     expect(spans).toHaveLength(1)
-    expect(spans[0]!.mermaid).toBe(true)
+    expect(spans[0]!.rendered).toBe(true)
     expect(spans[0]!.code).toBe('flowchart LR\nA-->B')
   })
 
   it('非 mermaid 围栏产出 span（mermaid=false）供嵌套抑制消费', () => {
     const spans = scan('```js\nlet a = 1\n```')
     expect(spans).toHaveLength(1)
-    expect(spans[0]!.mermaid).toBe(false)
+    expect(spans[0]!.rendered).toBe(false)
   })
 
   it('普通围栏内的伪 mermaid 围栏不产出（嵌套抑制）', () => {
@@ -64,7 +64,7 @@ describe('scanFenceSpans：围栏状态机', () => {
     const text = ['````md', '```mermaid', 'graph TD', 'A-->B', '```', '````'].join('\n')
     const spans = scan(text)
     expect(spans).toHaveLength(1)
-    expect(spans[0]!.mermaid).toBe(false)
+    expect(spans[0]!.rendered).toBe(false)
     expect(spans[0]!.code).toBe('```mermaid\ngraph TD\nA-->B\n```')
   })
 
@@ -94,7 +94,7 @@ describe('scanFenceSpans：围栏状态机', () => {
   it('缩进 0-3 空格的围栏正常识别（列表内围栏容忍）', () => {
     const spans = scan('  ```mermaid\n  graph TD\n  ```')
     expect(spans).toHaveLength(1)
-    expect(spans[0]!.mermaid).toBe(true)
+    expect(spans[0]!.rendered).toBe(true)
   })
 
   it('闭合围栏要求 run ≥ 开启 run 且行内无其他内容', () => {
@@ -129,7 +129,7 @@ describe('scanFenceSpans：围栏状态机', () => {
     ].join('\n')
     const spans = scan(text)
     expect(spans).toHaveLength(2)
-    expect(spans.every((s) => s.mermaid)).toBe(true)
+    expect(spans.every((s) => s.rendered)).toBe(true)
     expect(spans[1]!.code).toBe('sequenceDiagram\nA->>B: hi')
   })
 
@@ -147,7 +147,7 @@ describe('scanFencesDetailed：窗口扫描的开放状态回报', () => {
     expect(r.spans).toHaveLength(0)
     expect(r.open).not.toBeNull()
     expect(r.open!.from).toBe('正文\n'.length)
-    expect(r.open!.mermaid).toBe(true)
+    expect(r.open!.rendered).toBe(true)
   })
 
   it('窗口全部闭合时 open 为 null', () => {
@@ -165,7 +165,7 @@ describe('scanFencesDetailed：窗口扫描的开放状态回报', () => {
     const second = scanFencesDetailed(['b', '````', 'tail'], '````md\na\n'.length, first.open)
     expect(second.spans).toHaveLength(1)
     expect(second.spans[0]!.code).toBe('a\nb')
-    expect(second.spans[0]!.mermaid).toBe(false)
+    expect(second.spans[0]!.rendered).toBe(false)
     expect(second.open).toBeNull()
   })
 
@@ -175,7 +175,7 @@ describe('scanFencesDetailed：窗口扫描的开放状态回报', () => {
     const second = scanFencesDetailed(['A-->B', '```'], '```mermaid\n'.length, first.open)
     expect(second.spans).toHaveLength(1)
     expect(second.spans[0]!.code).toBe('A-->B')
-    expect(second.spans[0]!.mermaid).toBe(true)
+    expect(second.spans[0]!.rendered).toBe(true)
   })
 })
 

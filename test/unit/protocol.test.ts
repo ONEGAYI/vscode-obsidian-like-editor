@@ -1543,3 +1543,30 @@ describe('设置消息协议（#33）', () => {
     expect(isWebviewToHost({ ...baseViewState, settings: 'x' })).toBe(false)
   })
 })
+
+describe('图表导出协议校验（#111）', () => {
+  const base = {
+    kind: 'diagram.export',
+    sessionId: 's1',
+    docUri: 'file:///d/a.md',
+    reqId: 3,
+    format: 'svg',
+    fileName: 'mermaid-diagram.svg',
+    content: '<svg/>',
+  }
+  it('合法载荷通过 isWebviewToHost', () => {
+    expect(isWebviewToHost(base)).toBe(true)
+    expect(isWebviewToHost({ ...base, format: 'png', content: 'aGk=' })).toBe(true)
+  })
+  it('非法格式/缺字段拒绝', () => {
+    expect(isWebviewToHost({ ...base, format: 'exe' })).toBe(false)
+    expect(isWebviewToHost({ ...base, reqId: 0 })).toBe(false)
+    expect(isWebviewToHost({ ...base, content: 1 })).toBe(false)
+  })
+  it('diagram.export.result 双向校验：ok 必填、reason 枚举', () => {
+    expect(isHostToWebview({ kind: 'diagram.export.result', reqId: 3, ok: true })).toBe(true)
+    expect(isHostToWebview({ kind: 'diagram.export.result', reqId: 3, ok: false, reason: 'cancelled' })).toBe(true)
+    expect(isHostToWebview({ kind: 'diagram.export.result', reqId: 3, ok: false, reason: 'nope' })).toBe(false)
+    expect(isHostToWebview({ kind: 'diagram.export.result', reqId: 3 })).toBe(false)
+  })
+})
