@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import MarkdownIt from 'markdown-it'
 import { planFormatOperation } from '../../src/webview/formatOperations'
 
 function apply(text: string, op: Parameters<typeof planFormatOperation>[1], from: number, to = from,
@@ -128,5 +129,21 @@ describe('格式操作的文本契约', () => {
       .toBe('``a`b`` and bold')
     expect(apply('``a`b`` and word', 'inlineCode', 12, 16).text)
       .toBe('``a`b`` and `word`')
+  })
+
+  it('局部取消多反引号代码时保留未选中字面反引号和代码内容', () => {
+    const source = '``a`b``'
+    const expected = 'a`` `b ``'
+    expect(apply(source, 'inlineCode', 2, 3).text).toBe(expected)
+    expect(apply(source, 'clearInline', 2, 3).text).toBe(expected)
+    expect(new MarkdownIt().renderInline(expected)).toBe('a<code>`b</code>')
+    const leadingTick = apply('`a', 'inlineCode', 0, 2).text
+    expect(leadingTick).toBe('`` `a ``')
+    expect(new MarkdownIt().renderInline(leadingTick)).toBe('<code>`a</code>')
+  })
+
+  it('局部取消斜体保留选区外的原始下划线标记', () => {
+    expect(apply('_one_ _two_', 'italic', 7, 10).text).toBe('_one_ two')
+    expect(apply('_one_ _two_', 'clearInline', 7, 10).text).toBe('_one_ two')
   })
 })
