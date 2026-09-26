@@ -129,4 +129,4 @@
 - 集成：`PaintProbe` 新增 `code` 节（绘制层断言：卡片可见性、头部、行号、按钮分态）；光标进出零写回用例沿用 #60 模式；设置链路（切换、生效、回显）用例沿用 #33/#34 模式。
 - 浏览器（合并前必跑）：光标进出代码块的原生键盘输入、折叠块键盘导航、复制按钮点击（Playwright 原生事件驱动）。
 - 性能：`node test/perf/runPerf.mjs` 增代码块密集档；VSIX 体积经 `npm run release:check` 核查（#85）。
-- 人工验证：[manual-verification.md](manual-verification.md) 十四节 A28/A29。
+- 人工验证：[manual-verification.md](manual-verification.md) 二十一节 A35/A36。

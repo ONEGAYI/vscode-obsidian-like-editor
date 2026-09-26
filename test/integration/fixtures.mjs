@@ -515,6 +515,9 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   writeFileSync(path.join(wsDir, 'find.md'), FIND_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'untouched.md'), '未触碰文档\n保持原样\n', 'utf8')
   writeFileSync(path.join(wsDir, 'crlf.md'), CRLF_DOC, 'utf8')
+  // #88/#89 独立 CRLF 样本：早期坐标测试会保存修改后的 crlf.md。
+  writeFileSync(path.join(wsDir, 'format-crlf.md'), CRLF_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'quick-actions-crlf.md'), CRLF_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'split.md'), SPLIT_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'undo.md'), UNDO_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'undo2.md'), UNDO2_DOC, 'utf8')

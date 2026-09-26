@@ -131,3 +131,73 @@ describe('变更上送与权威值恢复', () => {
     expect(revived.checked).toBe(false)
   })
 })
+
+describe('分类与全局搜索（#90）', () => {
+  it('按名称和说明搜索真实设置，标注分类并定位；清空与无结果反馈明确', () => {
+    const { parent } = makeView(FIXTURE_DEFS)
+    const search = parent.querySelector<HTMLInputElement>('input[type=search]')!
+    expect(search).toBeTruthy()
+    search.value = '左侧'
+    search.dispatchEvent(new Event('input'))
+    expect(parent.querySelectorAll('.vsidian-settings-result')).toHaveLength(1)
+    const result = parent.querySelector<HTMLButtonElement>('.vsidian-settings-result')!
+    expect(result.textContent).toContain('编辑器')
+    result.click()
+    expect(search.value).toBe('')
+    expect(parent.querySelectorAll(`.${SETTINGS_PAGE_CLASS_NAMES.item}`)).toHaveLength(2)
+    search.value = '不存在'
+    search.dispatchEvent(new Event('input'))
+    expect(parent.textContent).toContain('未找到匹配的设置')
+    search.value = ''
+    search.dispatchEvent(new Event('input'))
+    expect(parent.querySelectorAll(`.${SETTINGS_PAGE_CLASS_NAMES.item}`)).toHaveLength(2)
+  })
+})
+
+it('保存拒绝恢复权威值并反馈，初始快照不报错，回包保持焦点', () => {
+  const { view, parent } = makeView(FIXTURE_DEFS)
+  document.body.append(parent)
+  view.handleHostMessage({ kind: 'settings.snapshot', values: { 'editor.lineNumbers': false } })
+  expect(parent.querySelector('.vsidian-settings-status')?.textContent).toBe('')
+  const box = parent.querySelector<HTMLInputElement>('input[type=checkbox]')!
+  box.focus()
+  box.checked = true
+  box.dispatchEvent(new Event('change'))
+  view.handleHostMessage({ kind: 'settings.snapshot', values: { 'editor.lineNumbers': false } })
+  expect(box.checked).toBe(false)
+  expect(parent.querySelector('.vsidian-settings-status')?.textContent).toContain('未能保存')
+  expect(document.activeElement).toBe(box)
+  parent.remove()
+})
+
+it('扩展分页提供全局搜索入口，定位回调与清理独立于分页内部搜索', () => {
+  let located: string | undefined
+  let disposed = 0
+  const parent = document.createElement('div')
+  const view = new SettingsPageView({ postMessage() {} }, FIXTURE_DEFS, [{
+    id: 'shortcuts', title: '快捷键', description: '管理操作绑定', icon: 'keyboard',
+    entries: [{ id: 'bindings', title: '按键绑定', description: '修改操作组合键' }],
+    mount(content, focusEntry) { located = focusEntry; content.textContent = '快捷键内容'; return () => { disposed++ } },
+  }])
+  view.mount(parent)
+  const search = parent.querySelector<HTMLInputElement>('input[type=search]')!
+  search.value = '组合键'
+  search.dispatchEvent(new Event('input'))
+  const result = parent.querySelector<HTMLButtonElement>('.vsidian-settings-result')!
+  expect(result.textContent).toContain('快捷键')
+  result.click()
+  expect(located).toBe('bindings')
+  expect(parent.textContent).toContain('快捷键内容')
+  parent.querySelector<HTMLButtonElement>('.vsidian-settings-nav-item')!.click()
+  expect(disposed).toBe(1)
+})
+
+it('样式契约：双栏、主题选中态、可见焦点及窄屏布局', async () => {
+  const { readFileSync } = await import('node:fs')
+  const css = readFileSync('src/webview/settingsPage.css', 'utf8')
+  expect(css).toContain('grid-template-columns: 236px minmax(0, 1fr)')
+  expect(css).toContain('.vsidian-settings-nav-item[aria-current="page"]')
+  expect(css).toContain('--vscode-list-activeSelectionBackground')
+  expect(css).toContain(':focus-visible')
+  expect(css).toContain('@media (max-width: 600px)')
+})

@@ -278,6 +278,7 @@ interface ViewState {
   selectionOffset?: number
   selectionHead?: number
   selectionAssoc?: number
+  wordSegmenter?: boolean
   readingBlockCount?: number
   readingAnchorStart?: number
   /** #7 按需挂载观测 */
@@ -437,6 +438,16 @@ interface ViewState {
       rendered: number
       error: number
       count: number
+    }
+    quickActions?: {
+      open: boolean
+      togglePainted: boolean
+      barPainted: boolean
+      boldPainted: boolean
+      activePainted: boolean
+      menuPainted: boolean
+      barBelowToolbar: boolean
+      editorBelowBar: boolean
     }
     /** #79 代码块卡片绘制：当前激活视图内卡片头部的实际可见性与计数 */
     code?: {
@@ -5697,7 +5708,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(state.liveMermaidCount === 5,
       `live 围栏装饰数应为 5（4 有效 + 1 无效降级），实际 ${state.liveMermaidCount}`)
     // 绘制层断言（AGENTS 视觉层断言约定）：图真的画出来（rect 有面积 +
-    // elementFromPoint 命中），不是只有 DOM 存在
+    // elementFromPoint 命中）；首图可能滚出视口，探针须命中任一有效图
     assert(state.paint?.mermaid?.visible === true,
       `图表应真实绘制（paint.mermaid.visible=${String(state.paint?.mermaid?.visible)}，` +
         `display=${String(state.paint?.mermaid?.display)}）`)
@@ -5817,6 +5828,90 @@ export const cases: Array<[string, () => Promise<void>]> = [
       kind: 'view.mode.set', mode: 'reading' })
     await waitViewState('mermaid.md', (v) =>
       v.viewMode === 'reading' && (v.readingMermaidCount ?? -1) === 6)
+  }],
+  ['格式命令：真实 Live 选区写回、绘制、一次撤销与运行时中文分词（#88）', async () => {
+    await openWithEditor('lf.md')
+    await waitSessionReady('lf.md')
+    const uri = wsUri('lf.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('lf.md'))
+    const before = doc.getText()
+    const probe = await waitViewState('lf.md', (v) => v.wordSegmenter !== undefined)
+    assert(probe.wordSegmenter === true, 'VSCode 1.86 webview 应提供 Intl.Segmenter 中文分词')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.crossSelect', anchor: 0, head: 2 })
+    await waitViewState('lf.md', (v) => v.selectionOffset === 0 && v.selectionHead === 2)
+    assert(await vscode.commands.executeCommand('onegayi.vsidian.format.bold') === true,
+      '格式命令应命中活动 Live 面板')
+    await poll('格式写回权威文档', () => doc.getText() === '**中文**' + before.slice(2) ? true : undefined)
+    const rendered = await waitViewState('lf.md', (v) => v.liveSyntax?.strongSpans === 1)
+    assert(rendered.paint?.textVisible === true, '格式化后的正文应在绘制层可见')
+    const session = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(session.appliedEdits === 1, `格式命令应仅提交一笔写回，实际 ${session.appliedEdits}`)
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('格式一次撤销', () => doc.getText() === before ? true : undefined)
+    const after = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(after.appliedEdits === 1, '宿主撤销回流不应产生新的写回')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.crossSelect', anchor: 0, head: 0 })
+    await waitViewState('lf.md', (v) => v.selectionOffset === 0 && v.selectionHead === 0)
+    assert(await vscode.commands.executeCommand('onegayi.vsidian.format.bold') === true,
+      '无选区格式命令应命中当前词')
+    await poll('真实 webview 中文分词写回', () =>
+      doc.getText() === '**中文**' + before.slice(2) ? true : undefined)
+
+    await openWithEditor('format-crlf.md')
+    await waitSessionReady('format-crlf.md')
+    const crlfUri = wsUri('format-crlf.md').toString()
+    const crlf = await vscode.workspace.openTextDocument(wsUri('format-crlf.md'))
+    const crlfBefore = crlf.getText()
+    assert(crlfBefore === CRLF_DOC, '格式命令应从独立 CRLF 原始样本开始')
+    await vscode.commands.executeCommand(CMD.postToPanel, crlfUri,
+      { kind: 'table.test.crossSelect', anchor: 4, head: 6 })
+    await waitViewState('format-crlf.md', (v) => v.selectionOffset === 4 && v.selectionHead === 6)
+    assert(await vscode.commands.executeCommand('onegayi.vsidian.format.bold') === true,
+      'CRLF 文档的活动 Live 面板应接受格式命令')
+    await poll('CRLF 格式写回', () =>
+      crlf.getText() === '标题一\r\n**正文** A 行\r\n正文 B 行\r\n' ? true : undefined)
+    await vscode.commands.executeCommand(CMD.injectMessage, crlfUri, { kind: 'history.request', op: 'undo' })
+    await poll('CRLF 格式撤销', () => crlf.getText() === crlfBefore ? true : undefined)
+  }],
+  ['快速操作条：流内绘制、选区按钮与标题菜单写回（#89）', async () => {
+    await openWithEditor('quick-actions-crlf.md')
+    await waitSessionReady('quick-actions-crlf.md')
+    const uri = wsUri('quick-actions-crlf.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('quick-actions-crlf.md'))
+    const before = doc.getText()
+    assert(before === CRLF_DOC, '操作条应从独立 CRLF 原始样本开始')
+    const initial = await waitViewState('quick-actions-crlf.md', (v) => v.paint?.quickActions !== undefined)
+    if (!initial.paint!.quickActions!.open) {
+      await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'quick.test.click', action: 'toggle' })
+    }
+    const opened = await waitViewState('quick-actions-crlf.md', (v) => v.paint?.quickActions?.barPainted === true)
+    const bar = opened.paint!.quickActions!
+    assert(bar.togglePainted && bar.boldPainted && bar.barBelowToolbar && bar.editorBelowBar,
+      `快速操作条和正文应在各自流内真实绘制：${JSON.stringify(bar)}`)
+
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.crossSelect', anchor: 4, head: 6 })
+    await waitViewState('quick-actions-crlf.md', (v) => v.selectionOffset === 4 && v.selectionHead === 6)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'quick.test.click', action: 'bold' })
+    await poll('操作条粗体写回', () =>
+      doc.getText() === '标题一\r\n**正文** A 行\r\n正文 B 行\r\n' ? true : undefined)
+    const active = await waitViewState('quick-actions-crlf.md', (v) => v.paint?.quickActions?.activePainted === true)
+    assert(active.paint?.quickActions?.activePainted === true,
+      '粗体已应用态应有真实绘制的主题背景')
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('操作条粗体撤销', () => doc.getText() === before ? true : undefined)
+
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.crossSelect', anchor: 0, head: 0 })
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'quick.test.click', action: 'heading' })
+    const popup = await waitViewState('quick-actions-crlf.md', (v) => v.paint?.quickActions?.menuPainted === true)
+    assert(popup.paint?.quickActions?.menuPainted === true, '标题 popup 应真实绘制')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'quick.test.click', action: 'heading1' })
+    await poll('标题菜单写回', () => doc.getText().startsWith('# 标题一\r\n') ? true : undefined)
+    await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
+    await poll('标题菜单撤销', () => doc.getText() === before ? true : undefined)
   }],
 
   ['live 代码块卡片：呈现态头部绘制、编辑态保留、零写回与设置开关（#79/#80/#81）', async () => {

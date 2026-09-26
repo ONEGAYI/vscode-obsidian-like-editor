@@ -11,7 +11,8 @@ import { chromium } from 'playwright'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const bundle = path.join(root, 'out/test/browser/outlineJump.js')
 await build({ entryPoints: [path.join(root, 'test/browser/outlineJumpFixture.ts')],
-  bundle: true, outfile: bundle, format: 'iife' })
+  bundle: true, outfile: bundle, format: 'iife',
+  loader: { '.svg': 'file' }, assetNames: 'assets/[name]' })
 
 // 长文档：15 个一级标题 ×（3 段正文），标题行号可预期
 // 标题 i（0 基）行号 = i*5 + 1：标题行 + 空行 + 三行正文

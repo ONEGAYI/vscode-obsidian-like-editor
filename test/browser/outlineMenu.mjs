@@ -11,7 +11,8 @@ import { chromium } from 'playwright'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const bundle = path.join(root, 'out/test/browser/outlineMenu.js')
 await build({ entryPoints: [path.join(root, 'test/browser/outlineMenuFixture.ts')],
-  bundle: true, outfile: bundle, format: 'iife' })
+  bundle: true, outfile: bundle, format: 'iife',
+  loader: { '.svg': 'file' }, assetNames: 'assets/[name]' })
 
 // 样例：0 主(H1) 1 Alpha(H2) 2 Alpha子(H3) 3 Beta(H2) 4 Beta深(H4 跨级) 5 第二顶(H1)
 const DOC = [

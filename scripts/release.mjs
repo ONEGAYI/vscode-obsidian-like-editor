@@ -81,7 +81,21 @@ const KATEX_FONT_FAMILIES = [
 const REQUIRED_KATEX_FONTS = KATEX_FONT_FAMILIES.map(
   (family) => `out/webview/assets/${family}.woff2`,
 )
-const REQUIRED_EXTENSION_WITH_FONTS = [...REQUIRED_EXTENSION, ...REQUIRED_KATEX_FONTS]
+// 快速操作条 CSS 引用的 15 项 × 明暗主题 SVG，经 esbuild file loader
+// 从 media/quick-actions 制作源搬入 out/webview/assets；全部是运行必需项。
+const QUICK_ACTION_ICON_KEYS = [
+  'bold', 'italic', 'strikethrough', 'inlineCode', 'heading',
+  'bulletList', 'orderedList', 'taskList', 'quote', 'codeBlock',
+  'link', 'clearInline', 'table', 'inlineMath', 'blockMath',
+]
+const REQUIRED_QUICK_ACTION_SVGS = ['light', 'dark'].flatMap((theme) =>
+  QUICK_ACTION_ICON_KEYS.map((key) => `out/webview/assets/${theme}-${key}.svg`),
+)
+const REQUIRED_RUNTIME_FILES = [
+  ...REQUIRED_EXTENSION,
+  ...REQUIRED_KATEX_FONTS,
+  ...REQUIRED_QUICK_ACTION_SVGS,
+]
 
 // 禁止模式：仓库管理与开发文件一律不得进入 VSIX（大小写不敏感）。
 const FORBIDDEN_PATTERNS = [
@@ -92,6 +106,7 @@ const FORBIDDEN_PATTERNS = [
   [/^extension\/test\//, '测试'],
   [/^extension\/docs\//, '项目文档'],
   [/^extension\/scripts\//, '构建脚本'],
+  [/^extension\/media\/quick-actions\//, '快速操作图标制作源'],
   [/\.map$/, 'sourcemap'],
   [/\.tsx?$/, 'TypeScript 源文件'],
   [/package-lock\.json$/, 'npm lockfile'],
@@ -177,7 +192,7 @@ export function inspectVsixEntries(entries, options = {}) {
   for (const root of REQUIRED_ROOT) {
     if (!lowerNames.includes(root)) errors.push(`缺少结构文件 ${root}`)
   }
-  for (const rel of REQUIRED_EXTENSION_WITH_FONTS) {
+  for (const rel of REQUIRED_RUNTIME_FILES) {
     if (rel === 'license') {
       const hit = lowerNames.some((n) => /^extension\/license(\.txt)?$/.test(n))
       if (!hit) errors.push('缺少 LICENSE（打包后应为 extension/LICENSE*）')
@@ -190,7 +205,7 @@ export function inspectVsixEntries(entries, options = {}) {
   // 未登记文件（调试遗留、构建实验产物、裁剪失效的重复字体）一律拒绝，
   // 避免「REQUIRED 不含即静默混入包内」（v0.1.0 后曾实测发生 out/ 杂物
   // 混入打包输入且旧检查不拦）。新增运行时产物须同步登记 REQUIRED_EXTENSION。
-  const allowedOut = new Set(REQUIRED_EXTENSION_WITH_FONTS.map((rel) => `extension/${rel.toLowerCase()}`))
+  const allowedOut = new Set(REQUIRED_RUNTIME_FILES.map((rel) => `extension/${rel.toLowerCase()}`))
   for (const e of entries) {
     const lower = e.name.toLowerCase()
     if (lower.startsWith('extension/out/') && !allowedOut.has(lower)) {

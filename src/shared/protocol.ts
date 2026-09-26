@@ -6,6 +6,8 @@
 // 设计依据：探索笔记 02 §5（协议设计建议）、§6（陷阱清单）。
 
 import type { SettingsPayload } from './settings'
+import { isFormatOperationId, type FormatOperationId } from './formatOperations'
+import { isKeybindingOperationId, isUiOperationId, type KeybindingOverrides, type UiOperationId } from './keybindings'
 
 /** 设置快照类型随协议消息透出（载荷单一事实源仍在 shared/settings） */
 export type { SettingsPayload }
@@ -102,6 +104,9 @@ export type HostToWebview =
   | { kind: 'table.command'; op: TableEditOp }
   /** 在当前光标/选区建立两列两内容行的空表格，仍走 CM6 文本事务。 */
   | { kind: 'table.create' }
+  /** 格式命令在 Live 光标/选区处执行，单个 CM6 事务经宿主写回。 */
+  | { kind: 'format.command'; op: FormatOperationId }
+  | { kind: 'ui.command'; op: UiOperationId }
   /** 测试钩子（#13）：向真实编辑器派发 Tab/Shift+Tab keydown（与用户按键
    *  同一 keymap 链路；纯选区导航，零写回）。宿主测试无法向 webview 派发
    *  真实键盘事件，以此通道验证导航装配 */
@@ -119,6 +124,8 @@ export type HostToWebview =
    *  处理器（纯视图状态翻转，零写回）。宿主测试无法向 webview 派发真实鼠标
    *  事件，以此通道验证真实宿主内的布局切换与绘制 */
   | { kind: 'sidebar.test.click' }
+  /** #89 测试钩子：点击真实快速操作控件，走用户同一路径。 */
+  | { kind: 'quick.test.click'; action: 'toggle' | 'heading' | 'bold' | 'heading1' | 'headingNone' }
   /** 测试钩子（#54）：点击侧栏顶栏的大纲按钮，驱动与用户点击同一处理器
    *  （纯视图状态翻转，零写回）。与 sidebar.test.click 同通道形态 */
   | { kind: 'outline.test.click' }
@@ -176,6 +183,7 @@ export type HostToWebview =
    *  编辑器面板与设置页（含变更发起页面）。values 仍为全量快照；消费方按
    *  需读取关心的键（#34 场景：editor.lineNumbers 触发 CM6 扩展热重配） */
   | { kind: 'settings.changed'; values: SettingsPayload }
+  | { kind: 'keybindings.snapshot' | 'keybindings.changed'; overrides: KeybindingOverrides; requestId?: number; ok?: boolean; reason?: 'invalid' | 'conflict' | 'storage'; conflicts?: string[] }
 
 /** webview → 宿主消息 */
 export type WebviewToHost =
@@ -184,6 +192,11 @@ export type WebviewToHost =
    *  会被未 ready 面板丢弃——装载以 init 全文为准，内容不丢；仅当窗口内
    *  版本推进且 init 竞态落后时理论可见，宿主按事件序串行发送可缓解 */
   | { kind: 'ready' }
+  | { kind: 'keybindings.get' }
+  | { kind: 'keybindings.set'; id: string; bindings: string[]; replaceConflicts: boolean; requestId: number }
+  | { kind: 'keybindings.reset'; id: string; replaceConflicts: boolean; requestId: number }
+  | { kind: 'keybindings.resetAll'; requestId: number }
+  | { kind: 'keybindings.execute'; id: string }
   /** 编辑请求：seq 会话内单调递增；baseVersion 为发送方自认的权威版本 */
   | {
       kind: 'edit.request'
@@ -232,6 +245,8 @@ export type WebviewToHost =
       selectionOffset?: number
       selectionHead?: number
       selectionAssoc?: number
+      /** webview 实际运行时能否使用词级分段器（#88）。 */
+      wordSegmenter?: boolean
       /** 阅读容器内块元素数（#6；#7 起为挂载块数，屏外块不创建） */
       readingBlockCount?: number
       /** 当前阅读锚点块的源 start（源码位置锚点，非滚动百分比） */
@@ -540,7 +555,7 @@ export interface PaintProbe {
    *  jsdom 无布局（rect 恒 0），visible 恒 false，只作真宿主集成断言依据；
    *  live 态探 live 侧 .vsidian-mermaid，reading 态探阅读容器。无图时缺省。 */
   mermaid?: {
-    /** 首个已渲染 SVG（或降级容器）的 rect 有面积且 elementFromPoint 命中 */
+    /** 视口与裁切祖先交集内，至少一张 SVG 的可见图形子节点被命中 */
     visible: boolean
     /** 首个图表容器 computed display（'none' = 未绘制） */
     display: string | null
@@ -550,6 +565,17 @@ export interface PaintProbe {
     error: number
     /** 当前激活视图内 .vsidian-mermaid 容器总数 */
     count: number
+  }
+  /** #89 快速操作条的真实绘制、流内布局与已应用态。 */
+  quickActions?: {
+    open: boolean
+    togglePainted: boolean
+    barPainted: boolean
+    boldPainted: boolean
+    activePainted: boolean
+    menuPainted: boolean
+    barBelowToolbar: boolean
+    editorBelowBar: boolean
   }
   /** #79 代码块卡片绘制：当前激活视图内卡片头部横带的实际可见性与计数。
    *  jsdom 无布局（rect 恒 0），visible 恒 false，只作真宿主集成断言依据；
@@ -1096,6 +1122,17 @@ function isPaintProbe(v: unknown): v is PaintProbe {
       isNonNegativeInt(v.mermaid.error) &&
       isNonNegativeInt(v.mermaid.count)
     )) &&
+    (v.quickActions === undefined || (
+      isObject(v.quickActions) &&
+      typeof v.quickActions.open === 'boolean' &&
+      typeof v.quickActions.togglePainted === 'boolean' &&
+      typeof v.quickActions.barPainted === 'boolean' &&
+      typeof v.quickActions.boldPainted === 'boolean' &&
+      typeof v.quickActions.activePainted === 'boolean' &&
+      typeof v.quickActions.menuPainted === 'boolean' &&
+      typeof v.quickActions.barBelowToolbar === 'boolean' &&
+      typeof v.quickActions.editorBelowBar === 'boolean'
+    )) &&
     (v.code === undefined || (
       isObject(v.code) &&
       typeof v.code.visible === 'boolean' &&
@@ -1289,6 +1326,19 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
   switch (v.kind) {
     case 'ready':
       return true
+    case 'keybindings.get':
+      return true
+    case 'keybindings.set':
+      return isKeybindingOperationId(v.id) && Array.isArray(v.bindings) &&
+        v.bindings.every(isString) &&
+        typeof v.replaceConflicts === 'boolean' && isPositiveInt(v.requestId)
+    case 'keybindings.reset':
+      return isKeybindingOperationId(v.id) && typeof v.replaceConflicts === 'boolean' &&
+        isPositiveInt(v.requestId)
+    case 'keybindings.resetAll':
+      return isPositiveInt(v.requestId)
+    case 'keybindings.execute':
+      return isKeybindingOperationId(v.id)
     case 'edit.request':
       return (
         isString(v.sessionId) &&
@@ -1355,6 +1405,7 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
         (v.selectionHead === undefined || isNonNegativeInt(v.selectionHead)) &&
         (v.selectionAssoc === undefined || (typeof v.selectionAssoc === 'number' &&
           Number.isInteger(v.selectionAssoc) && v.selectionAssoc >= -1 && v.selectionAssoc <= 1)) &&
+        (v.wordSegmenter === undefined || typeof v.wordSegmenter === 'boolean') &&
         (v.readingBlockCount === undefined || isNonNegativeInt(v.readingBlockCount)) &&
         (v.readingAnchorStart === undefined || isNonNegativeInt(v.readingAnchorStart)) &&
         (v.readingTotalBlocks === undefined || isNonNegativeInt(v.readingTotalBlocks)) &&
@@ -1462,6 +1513,14 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
     return false
   }
   switch (v.kind) {
+    case 'keybindings.snapshot':
+    case 'keybindings.changed':
+      return isObject(v.overrides) && Object.values(v.overrides).every((value) =>
+        Array.isArray(value) && value.every(isString)) &&
+        (v.requestId === undefined || isPositiveInt(v.requestId)) &&
+        (v.ok === undefined || typeof v.ok === 'boolean') &&
+        (v.reason === undefined || v.reason === 'invalid' || v.reason === 'conflict' || v.reason === 'storage') &&
+        (v.conflicts === undefined || (Array.isArray(v.conflicts) && v.conflicts.every(isString)))
     case 'init':
       return (
         isString(v.sessionId) &&
@@ -1549,6 +1608,10 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return isTableEditOp(v.op)
     case 'table.create':
       return true
+    case 'format.command':
+      return isFormatOperationId(v.op)
+    case 'ui.command':
+      return isUiOperationId(v.op)
     case 'table.test.key':
       return v.key === 'tab' || v.key === 'shift-tab' || v.key === 'select-all' || v.key === 'enter' ||
         v.key === 'backspace' || v.key === 'delete'
@@ -1566,6 +1629,9 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return isNonNegativeInt(v.sourceIndex) && isNonNegativeInt(v.targetSlot)
     case 'sidebar.test.click':
       return true
+    case 'quick.test.click':
+      return v.action === 'toggle' || v.action === 'heading' || v.action === 'bold' ||
+        v.action === 'heading1' || v.action === 'headingNone'
     case 'outline.test.click':
       return true
     case 'outline.test.itemClick':

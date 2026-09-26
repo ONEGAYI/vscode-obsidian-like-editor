@@ -8,6 +8,7 @@ VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 
 - 通用工程规范（提交规范、TDD、文件树维护）遵循工程根 `D:\CODE\Project\AGENTS.md`，此处不重复展开。
 - **插件设置入口**：Vsidian 面向用户的设置统一在扩展自己的设置页面展示与修改，不复用 VSCode 统一设置中心作为设置界面。后续新增设置项时，同步纳入该页面，并验证设置持久化、重新打开后的回显及变更生效。
+- **操作与快捷键注册**：快捷键管理覆盖项目全部面向用户的可绑定操作。每次新增或修改操作，都必须评估并记录是否提供快捷键入口、默认绑定（允许默认未绑定）及生效模式；不能仅因操作不常驻工具栏就省略快捷键入口。写操作快捷键仅在 Live 编辑正文时覆盖宿主绑定，不接管源码模式或设置页输入；注册模型须支持未来其他操作按需覆盖 Live、阅读或双模式。绑定支持显式清空、单项恢复默认与全部恢复默认；清空不能因重启或升级自动恢复。插件内部冲突按键位及生效范围是否重叠判定。
 - **视觉层断言（评审必查）**：webview/样式/渲染类变更，评审必须核对断言对象是"用户看到的东西"（可见性、对齐、颜色）而非 DOM 存在性或几何坐标——样式注入失效时后者照样通过（PR #37 P0 实证：CSP 拦截 CM6 注入样式后 74 集成用例仍全绿，正文实际不可见）。涉及呈现的新特性至少一条集成断言落在绘制层（现有 `view.state.paint` 探针），CSS 关键规则由契约测试钉住。
 - **大纲样式设计哲学（#65 落档）**：大纲条目的呈现遵循三条原则，后续大纲呈现类变更不得违背。其一，**结构装饰与正文主题同源**——层级颜色等主题性装饰不复制读值，而是与正文标题引用同一 CSS 变量族（`--vsidian-heading-color-1..6`，定义于 `#app`，live 标题行级、阅读标题块级、大纲条目级三侧同引），主题分级着色一处定义多处生效。其二，**强调语义只认显式标记**——条目一律常规字重（400），不继承标题级别的结构性加粗；仅显式 `**粗体**` 段加重，斜体/行内代码/删除线同理只由标记触发。其三，**透传集合 = 正文已支持的行内标记子集**——当前白名单为粗体/斜体/行内代码/删除线（`OutlineSpanKind`，提取与校验同源），高亮/公式/行内颜色待正文支持后按同一白名单机制接入（提取处 `SPAN_KIND_BY_NODE` 加映射即可），大纲侧零额外设计；双链/链接显示别名/链接文字的纯文本，不可点。
 
@@ -92,6 +93,7 @@ vsidian/
 │   │   └── obsidian-viewport-rendering.md  # 视口渲染性能补充调研
 │   └── specs/    # 产品规格
 │       ├── code-block-card.md          # 代码块卡片功能规格
+│       ├── keybindings.md              # 快捷键清单与默认值
 │       ├── manual-verification.md      # 人工验证清单
 │       ├── mvp-issues.md               # MVP GitHub Issue 索引
 │       ├── mvp.md                      # MVP 规格主文档
@@ -100,6 +102,7 @@ vsidian/
 ├── LICENSE                # MIT 许可证全文
 ├── media/                 # 随扩展打包的静态资源
 │   ├── css-contract-probe.css # 样式契约内部测试片段
+│   ├── quick-actions/         # 快速操作明暗图标与源PNG
 │   ├── vsidian-icon-256.png   # 扩展图标 256 版，VSIX 打包用
 │   └── vsidian-icon.png       # Vsidian 扩展图标
 ├── package-lock.json      # npm 依赖锁定文件
@@ -109,11 +112,13 @@ vsidian/
 ├── README.en.md           # 英文版 README，与中文版互指
 ├── README.md              # 项目门面说明
 ├── scripts/               # 仓库工具脚本目录
-│   └── release.mjs # 发布脚本：打包、包体检查与上传
+│   ├── quick-action-icons.py # 快速操作图标生成与校验
+│   └── release.mjs           # 发布脚本：打包、包体检查与上传
 ├── src/                   # 扩展源码
 │   ├── extension.ts # 扩展激活入口
 │   ├── host/        # 宿主端实现
 │   │   ├── documentSession.ts    # 文档会话与写回同步
+│   │   ├── keybindingService.ts  # 快捷键全局存储服务
 │   │   ├── linkTarget.ts         # 宿主侧链接目标分类纯逻辑（#10）
 │   │   ├── settingsPage.ts       # 独立设置页面板装配
 │   │   ├── settingsService.ts    # 宿主设置服务
@@ -121,20 +126,25 @@ vsidian/
 │   │   ├── viewCycle.ts          # 三态视图编排纯逻辑
 │   │   └── wikilinkTarget.ts     # 宿主侧双链目标解析纯逻辑（#11）
 │   ├── shared/      # 两端共享纯逻辑
-│   │   ├── changeMapping.ts # 变更重定位纯函数
-│   │   ├── codeLangs.ts     # 代码块语言注册表与别名路由
-│   │   ├── math.ts          # 公式形态学纯函数（#59）
-│   │   ├── mermaid.ts       # Mermaid 围栏形态学（#60）
-│   │   ├── newline.ts       # CRLF/LF 换行协调器
-│   │   ├── protocol.ts      # 消息协议单一事实源
-│   │   ├── settings.ts      # 设置定义与读写纯逻辑
-│   │   └── wikilink.ts      # 双链形态学单一事实源（#11）
+│   │   ├── changeMapping.ts    # 变更重定位纯函数
+│   │   ├── codeLangs.ts        # 代码块语言注册表与别名路由
+│   │   ├── formatOperations.ts # 格式操作注册清单
+│   │   ├── keybindings.ts      # 快捷键操作与冲突模型
+│   │   ├── math.ts             # 公式形态学纯函数（#59）
+│   │   ├── mermaid.ts          # Mermaid 围栏形态学（#60）
+│   │   ├── newline.ts          # CRLF/LF 换行协调器
+│   │   ├── protocol.ts         # 消息协议单一事实源
+│   │   ├── settings.ts         # 设置定义与读写纯逻辑
+│   │   └── wikilink.ts         # 双链形态学单一事实源（#11）
 │   └── webview/     # webview 端实现
 │       ├── codeCardState.ts        # 卡片共享状态中立模块
 │       ├── codeHighlight.ts        # 语法高亮引擎装配与缓存
 │       ├── css.d.ts                # CSS 导入类型声明
 │       ├── findSession.ts          # 查找匹配纯函数（#14）
+│       ├── formatOperations.ts     # 格式文本变换规划
 │       ├── imageResource.ts        # 图片资源状态机（#10）
+│       ├── keybindingRouter.ts     # 编辑器按键分发器
+│       ├── keybindingSettings.ts   # 快捷键设置分页
 │       ├── liveCodeCard.ts         # Live 代码块卡片装饰
 │       ├── liveDecorations.ts      # 语法树驱动 Live 装饰（#8）
 │       ├── liveLineNumbers.ts      # 表格段首行号与绘制探针
@@ -155,6 +165,7 @@ vsidian/
 │       ├── outlineSearch.ts        # 大纲标题搜索纯函数
 │       ├── outlineSection.ts       # 大纲控制域纯函数
 │       ├── perfProbe.ts            # webview 性能探针（#5）
+│       ├── quickActionState.ts     # 快速操作状态判定
 │       ├── readingBlocks.ts        # markdown-it 阅读块切分
 │       ├── readingCodeCard.ts      # 阅读代码块卡片增强
 │       ├── readingMarkdown.ts      # markdown-it 安全渲染层

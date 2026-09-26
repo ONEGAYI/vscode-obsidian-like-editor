@@ -90,9 +90,10 @@ describe('布局结构（#53）', () => {
     // 主编辑区：顶栏 + 横幅 + live + reading（顺序与既有挂载一致）
     const children = [...main!.children].map((el) => el.className)
     expect(children[0]).toContain('vsidian-toolbar')
-    expect(children[1]).toContain('vsidian-suspend-banner')
-    expect(children[2]).toContain('vsidian-view-live')
-    expect(children[3]).toContain('vsidian-view-reading')
+    expect(children[1]).toContain('vsidian-quick-actions')
+    expect(children[2]).toContain('vsidian-suspend-banner')
+    expect(children[3]).toContain('vsidian-view-live')
+    expect(children[4]).toContain('vsidian-view-reading')
     // 侧栏与 main 同级
     const sidebar = body!.querySelector<HTMLElement>('.vsidian-sidebar')
     expect(sidebar, 'body 内应有 vsidian-sidebar 侧栏').toBeTruthy()

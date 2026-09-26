@@ -7,7 +7,7 @@ import { keymap } from '@codemirror/view'
 import { defaultKeymap } from '@codemirror/commands'
 import '../../src/webview/main.css'
 
-const controller = new WebviewSyncController({ postMessage() {}, getState() {}, setState() {} })
+const controller = new WebviewSyncController({ postMessage() {}, getState() { return undefined }, setState() {} })
 controller.mount(document.getElementById('app')!, [keymap.of(defaultKeymap)])
 
 /** 大纲面板观测（断言用户看到的东西：折叠隐藏、active 圆点 computed

@@ -248,6 +248,172 @@ body {
   padding: 0 6px;
 }
 
+/* #89 快速操作条是主编辑区的普通 flex 行，展开时向下分配高度。 */
+#app .vsidian-quick-actions {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 14px;
+  row-gap: 3px;
+  box-sizing: border-box;
+  padding: 3px 6px;
+  color: var(--vscode-editor-foreground);
+  background: var(--vscode-editor-background);
+  border-bottom: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.3));
+}
+
+#app .vsidian-quick-actions[hidden] {
+  display: none;
+}
+
+#app .vsidian-quick-actions .vsidian-quick-action-group {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+}
+
+/* 只在两个分组同行时绘制分隔线；换行检测由控制器更新 data-separated。 */
+#app .vsidian-quick-actions .vsidian-quick-action-group[data-separated="true"]::before {
+  position: absolute;
+  left: -8px;
+  top: 4px;
+  height: 18px;
+  border-left: 2px solid currentColor;
+  opacity: 0.55;
+  content: '';
+}
+
+#app .vsidian-quick-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+#app .vsidian-quick-actions .vsidian-quick-icon {
+  display: block;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  background-color: currentColor;
+  mask-image: var(--vsidian-quick-icon);
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+}
+
+/* 两套资源保持同一 18px 画布；mask 跟随 VSCode 前景与选中态颜色。 */
+#app .vsidian-quick-actions [data-icon='bold'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-bold.svg'); }
+#app .vsidian-quick-actions [data-icon='italic'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-italic.svg'); }
+#app .vsidian-quick-actions [data-icon='strikethrough'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-strikethrough.svg'); }
+#app .vsidian-quick-actions [data-icon='inlineCode'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-inlineCode.svg'); }
+#app .vsidian-quick-actions [data-icon='heading'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-heading.svg'); }
+#app .vsidian-quick-actions [data-icon='bulletList'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-bulletList.svg'); }
+#app .vsidian-quick-actions [data-icon='orderedList'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-orderedList.svg'); }
+#app .vsidian-quick-actions [data-icon='taskList'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-taskList.svg'); }
+#app .vsidian-quick-actions [data-icon='quote'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-quote.svg'); }
+#app .vsidian-quick-actions [data-icon='codeBlock'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-codeBlock.svg'); }
+#app .vsidian-quick-actions [data-icon='link'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-link.svg'); }
+#app .vsidian-quick-actions [data-icon='clearInline'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-clearInline.svg'); }
+#app .vsidian-quick-actions [data-icon='table'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-table.svg'); }
+#app .vsidian-quick-actions [data-icon='inlineMath'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-inlineMath.svg'); }
+#app .vsidian-quick-actions [data-icon='blockMath'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-blockMath.svg'); }
+
+body.vscode-dark #app .vsidian-quick-actions [data-icon='bold'],
+body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='bold'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-bold.svg'); }
+body.vscode-dark #app .vsidian-quick-actions [data-icon='italic'],
+body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='italic'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-italic.svg'); }
+body.vscode-dark #app .vsidian-quick-actions [data-icon='strikethrough'],
+body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='strikethrough'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-strikethrough.svg'); }
+body.vscode-dark #app .vsidian-quick-actions [data-icon='inlineCode'],
+body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='inlineCode'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-inlineCode.svg'); }
+body.vscode-dark #app .vsidian-quick-actions [data-icon='heading'],
+body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='heading'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-heading.svg'); }
+body.vscode-dark #app .vsidian-quick-actions [data-icon='bulletList'],
+body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='bulletList'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-bulletList.svg'); }
+body.vscode-dark #app .vsidian-quick-actions [data-icon='orderedList'],
+body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='orderedList'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-orderedList.svg'); }
+body.vscode-dark #app .vsidian-quick-actions [data-icon='taskList'],
+body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='taskList'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-taskList.svg'); }
+body.vscode-dark #app .vsidian-quick-actions [data-icon='quote'],
+body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='quote'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-quote.svg'); }
+body.vscode-dark #app .vsidian-quick-actions [data-icon='codeBlock'],
+body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='codeBlock'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-codeBlock.svg'); }
+body.vscode-dark #app .vsidian-quick-actions [data-icon='link'],
+body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='link'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-link.svg'); }
+body.vscode-dark #app .vsidian-quick-actions [data-icon='clearInline'],
+body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='clearInline'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-clearInline.svg'); }
+body.vscode-dark #app .vsidian-quick-actions [data-icon='table'],
+body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='table'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-table.svg'); }
+body.vscode-dark #app .vsidian-quick-actions [data-icon='inlineMath'],
+body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='inlineMath'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-inlineMath.svg'); }
+body.vscode-dark #app .vsidian-quick-actions [data-icon='blockMath'],
+body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='blockMath'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-blockMath.svg'); }
+
+#app .vsidian-quick-actions button:hover,
+#app .vsidian-quick-actions button:focus-visible {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
+}
+
+#app .vsidian-quick-actions button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #4fc1ff);
+  outline-offset: 1px;
+}
+
+#app .vsidian-quick-actions button[data-format-state='active'] {
+  color: var(--vscode-button-foreground, #fff);
+  background: var(--vscode-button-background, #0e639c);
+}
+
+#app .vsidian-quick-actions button[data-format-state='mixed'] {
+  border-color: var(--vscode-focusBorder, #4fc1ff);
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
+}
+
+#app .vsidian-quick-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+#app .vsidian-quick-actions .vsidian-quick-heading-menu {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% - 1px);
+  left: 6px;
+  display: flex;
+  flex-direction: column;
+  min-width: 116px;
+  padding: 3px;
+  border: 1px solid var(--vscode-menu-border, var(--vscode-editorWidget-border));
+  border-radius: 5px;
+  background: var(--vscode-menu-background, var(--vscode-editor-background));
+  color: var(--vscode-menu-foreground, var(--vscode-editor-foreground));
+  box-shadow: 0 3px 10px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.25));
+}
+
+#app .vsidian-quick-heading-menu button {
+  width: 100%;
+  justify-content: flex-start;
+  padding: 0 6px;
+  text-align: left;
+}
+
+#app .vsidian-quick-actions .vsidian-quick-heading-menu[hidden] {
+  display: none;
+}
+
 /* 顶栏图标按钮：透明底、悬停高亮跟随 VSCode 工具栏变量（与文字按钮
    时代 secondary 按钮形态的 #33 样式解耦） */
 .vsidian-toolbar button {

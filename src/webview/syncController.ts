@@ -26,6 +26,11 @@
 //   关闭导致的状态重建）后继续编号，宿主按 seq 幂等去重
 import { Annotation, ChangeSet, Compartment, EditorSelection, EditorState, Prec, type Extension, type Text } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
+import { planFormatOperation } from './formatOperations'
+import { createQuickActionStateReader } from './quickActionState'
+import { FORMAT_OPERATIONS, type FormatOperationId } from '../shared/formatOperations'
+import { getEffectiveBindings } from '../shared/keybindings'
+import { KeybindingRouter } from './keybindingRouter'
 import { liveLineNumbers, paintedLineNumbers } from './liveLineNumbers'
 import { CODE_CARD_CLASS_NAMES, codeCardConfigFacet, codeCardCopyRequest, codeCardFoldField, liveCodeCard, type CodeCardConfig } from './liveCodeCard'
 import { decorateReadingCodeCard, isReadingCodeBlock } from './readingCodeCard'
@@ -184,6 +189,7 @@ interface PersistedState {
    *  全局记忆（跨文档共享），与 sidebarOpen 同机制；手动折叠集合是
    *  会话内内存态，不持久化（重载回到档位精确展开集） */
   outlineExpandLevel?: number
+  quickActionsOpen?: boolean
 }
 
 /** 外部同步事务标记：updateListener 见到它即跳过（不回发）。
@@ -401,6 +407,13 @@ export class WebviewSyncController {
   /** 图片资源管理器（#10：双视图共用；经宿主通道解析工作区图源） */
   private images: ImageResourceManager | undefined
   private toolbar: HTMLElement | undefined
+  private quickActionsEl: HTMLElement | undefined
+  private quickToggleBtn: HTMLButtonElement | undefined
+  private quickHeadingBtn: HTMLButtonElement | undefined
+  private quickHeadingMenu: HTMLElement | undefined
+  private quickActionResizeObserver: ResizeObserver | undefined
+  private quickActionsOpen: boolean
+  private quickBindingHints: (op: FormatOperationId) => readonly string[] = () => []
 
   // ---- 右侧栏布局状态（#53）----
   /** 水平布局根（稳定类名 vsidian-body）：主编辑区 + 右侧栏 */
@@ -525,6 +538,8 @@ export class WebviewSyncController {
   private findDoc: Text | null = null
   /** document 级键盘拦截（Mod-F 打开 / Esc 关闭），dispose 时移除 */
   private docKeydown: ((e: KeyboardEvent) => void) | undefined
+  private readonly keybindingRouter: KeybindingRouter
+  private readonly cancelKeybindingOnBlur = () => this.keybindingRouter.cancel()
 
   // ---- 设置状态（#33）----
   /** 宿主下发的当前设置快照缓存（#34 行号等设置的消费源）；webview 不
@@ -608,6 +623,12 @@ export class WebviewSyncController {
   private lastDocChangedVersion = 0
 
   constructor(private readonly bridge: VsCodeBridge) {
+    this.keybindingRouter = new KeybindingRouter({}, (id) => {
+      if (id === 'find') this.openFind()
+      else if (id === 'findNext') this.findStep('next')
+      else if (id === 'findPrevious') this.findStep('prev')
+      else this.bridge.postMessage({ kind: 'keybindings.execute', id })
+    })
     const saved = bridge.getState<PersistedState>()
     this.seq = typeof saved?.seq === 'number' && saved.seq >= 0 ? Math.floor(saved.seq) : 0
     this.conflictRevision = typeof saved?.conflictRevision === 'number' && saved.conflictRevision >= 0
@@ -617,6 +638,7 @@ export class WebviewSyncController {
     this.sidebarOpen = saved?.sidebarOpen === true
     this.outlineActive = saved?.outlineActive !== false
     this.outlineExpandLevel = normalizeOutlineExpandLevel(saved?.outlineExpandLevel)
+    this.quickActionsOpen = saved?.quickActionsOpen === true
   }
 
   /** 创建编辑器视图并向宿主发送 ready（HTML 加载完成后调用一次） */
@@ -626,11 +648,13 @@ export class WebviewSyncController {
     }
     this.extraExtensions = extraExtensions
     this.toolbar = this.buildToolbar()
+    this.quickActionsEl = this.buildQuickActions()
     this.banner = this.buildBanner()
     this.findPanel = this.buildFindPanel()
     this.liveWrapper = document.createElement('div')
     this.liveWrapper.className = 'vsidian-view-live'
     this.readingContainer = createReadingContainer()
+    this.readingContainer.tabIndex = 0
     this.readingContainer.style.display = 'none'
     this.images = new ImageResourceManager({
       // http/https 图源直连（可加载性由 webview CSP 决定），其余经宿主解析
@@ -744,6 +768,7 @@ export class WebviewSyncController {
     this.mainEl = document.createElement('div')
     this.mainEl.className = 'vsidian-main'
     this.mainEl.appendChild(this.toolbar)
+    this.mainEl.appendChild(this.quickActionsEl)
     this.mainEl.appendChild(this.banner)
     this.mainEl.appendChild(this.liveWrapper)
     this.mainEl.appendChild(this.readingContainer)
@@ -757,25 +782,46 @@ export class WebviewSyncController {
     this.applySidebarDom()
     // 大纲面板初始态（持久化恢复）落到侧栏容器类与按钮 aria-expanded
     this.applyOutlineDom()
-    // webview 内键盘拦截（#14）：Mod-F 打开查找（custom editor webview 不可用
-    // VSCode 原生 find 控件）；Esc 关闭并归还焦点。capture 阶段先行处理
+    this.applyQuickActionsDom()
+    // document 捕获先于 VS Code webview 预加载脚本的 window 冒泡转发。
     this.docKeydown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'f') {
+      if (e.key === 'Escape' && this.quickHeadingMenu && !this.quickHeadingMenu.hidden) {
         e.preventDefault()
-        this.openFind()
+        e.stopPropagation()
+        this.keybindingRouter.cancel()
+        this.closeQuickHeadingMenu(true)
         return
       }
+      if (this.quickHeadingMenu && !this.quickHeadingMenu.hidden &&
+          !this.quickHeadingMenu.contains(e.target as Node) &&
+          ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) {
+        e.preventDefault()
+        e.stopPropagation()
+        const options = [...this.quickHeadingMenu.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
+        const target = e.key === 'ArrowDown' || e.key === 'Home' ? options[0] : options.at(-1)
+        target?.focus()
+        return
+      }
+      const target = e.target instanceof Node ? e.target : null
+      const liveFocused = this.viewMode === 'live' && !!target &&
+        !!this.view?.contentDOM.contains(target) &&
+        !this.view.state.readOnly && this.view.state.facet(EditorView.editable) && !this.suspended
+      const readingFocused = this.viewMode === 'reading' && !!target &&
+        !!this.readingContainer?.contains(target) &&
+        !(target instanceof HTMLInputElement) && !(target instanceof HTMLTextAreaElement)
+      const withinEditor = !!target && (target === document ||
+        !!this.bodyEl?.contains(target) || !!this.findPanel?.contains(target))
+      if (this.keybindingRouter.handle(e, this.viewMode,
+        liveFocused || readingFocused || withinEditor, liveFocused)) return
       if (this.findOpen && e.key === 'Escape') {
         e.preventDefault()
+        e.stopPropagation()
         this.closeFind()
         return
       }
-      if (this.findOpen && e.key === 'F3') {
-        e.preventDefault()
-        this.findStep(e.shiftKey ? 'prev' : 'next')
-      }
     }
     document.addEventListener('keydown', this.docKeydown, true)
+    window.addEventListener('blur', this.cancelKeybindingOnBlur)
     // 宿主明暗主题热跟随：body class 由 VSCode 随主题实时更新
     this.hostThemeObserver = new MutationObserver(() => this.applyHostTheme())
     this.hostThemeObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] })
@@ -789,6 +835,7 @@ export class WebviewSyncController {
     this.view.scrollDOM.addEventListener('scroll', () => this.onOutlineScrollSignal())
     this.hostDarkApplied = isVscodeDarkBody()
     this.applyModeDom(this.viewMode)
+    this.refreshQuickActions()
     this.bridge.postMessage({ kind: 'ready' })
   }
 
@@ -810,16 +857,25 @@ export class WebviewSyncController {
     this.outlineJumpGuarded = false
     this.hostThemeObserver?.disconnect()
     this.hostThemeObserver = undefined
+    this.quickActionResizeObserver?.disconnect()
+    this.quickActionResizeObserver = undefined
     if (this.docKeydown) {
       document.removeEventListener('keydown', this.docKeydown, true)
       this.docKeydown = undefined
     }
+    window.removeEventListener('blur', this.cancelKeybindingOnBlur)
+    this.keybindingRouter.cancel()
     this.view?.destroy()
     this.view = undefined
     this.banner?.remove()
     this.banner = undefined
     this.toolbar?.remove()
     this.toolbar = undefined
+    this.quickActionsEl?.remove()
+    this.quickActionsEl = undefined
+    this.quickToggleBtn = undefined
+    this.quickHeadingBtn = undefined
+    this.quickHeadingMenu = undefined
     this.findPanel?.remove()
     this.findPanel = undefined
     this.findInputEl = undefined
@@ -871,7 +927,15 @@ export class WebviewSyncController {
         // 拉取当前设置快照（#33）：权威在宿主，webview 不持久化——每次
         // 装载（含重载）都拉取；宿主以 settings.snapshot 响应
         this.bridge.postMessage({ kind: 'settings.get' })
+        this.bridge.postMessage({ kind: 'keybindings.get' })
         break
+      case 'keybindings.snapshot':
+      case 'keybindings.changed': {
+        const overrides = message.overrides
+        this.keybindingRouter.update(overrides)
+        this.setQuickActionBindingHints((id) => getEffectiveBindings(overrides, id))
+        break
+      }
       case 'settings.snapshot':
       case 'settings.changed':
         // 设置快照与变更广播共用同一处理（#33）：snapshot 为设置页请求-
@@ -1004,10 +1068,40 @@ export class WebviewSyncController {
         }
         break
       }
+      case 'format.command': {
+        this.runFormatOperation(message.op)
+        break
+      }
+      case 'ui.command':
+        switch (message.op) {
+          case 'sidebarToggle': this.toggleSidebar(); break
+          case 'outlineToggle':
+            if (!this.sidebarOpen && !this.outlineActive) this.toggleSidebar()
+            this.toggleOutline()
+            break
+          case 'outlineSearch':
+            if (!this.sidebarOpen) this.toggleSidebar()
+            if (!this.outlineActive) this.toggleOutline()
+            this.outlineToolbar?.search.focus()
+            break
+          case 'outlineJumpBottom': this.outlineJumpToBottom(); break
+          case 'outlineReset': this.resetOutline(); break
+          case 'outlineCollapseAll': this.setOutlineExpandLevel(0); break
+          case 'outlineExpandAll': this.setOutlineExpandLevel(5); break
+        }
+        break
       case 'sidebar.test.click': {
         // 测试钩子（#53）：点击真实侧栏切换按钮（与用户点击同一处理器；
         // 纯视图状态翻转，零写回）
         this.sidebarToggleBtn?.click()
+        break
+      }
+      case 'quick.test.click': {
+        const selector = message.action === 'toggle' ? '.vsidian-quick-toggle'
+          : message.action === 'heading' ? '.vsidian-quick-heading'
+            : message.action === 'bold' ? '[data-op="bold"]'
+              : `[data-heading-op="${message.action}"]`
+        ;(this.mainEl?.querySelector(selector) as HTMLButtonElement | null)?.click()
         break
       }
       case 'outline.test.click': {
@@ -1458,6 +1552,7 @@ export class WebviewSyncController {
       headingFontPx,
       viewMode: this.viewMode,
       selectionOffset: this.view?.state.selection.main.from ?? 0,
+      wordSegmenter: typeof Intl.Segmenter === 'function',
       selectionHead: this.view?.state.selection.main.head ?? 0,
       selectionAssoc: this.view?.state.selection.main.assoc ?? 0,
       readingBlockCount: rStats?.mountedBlocks ?? 0,
@@ -1646,6 +1741,7 @@ export class WebviewSyncController {
   /** 切换入口（宿主 view.mode.set 消息驱动；#38 起由宿主标题栏三态命令
    *  与命令面板命令编排，webview 工具栏已移除） */
   private setViewMode(target: 'live' | 'reading' | 'toggle'): void {
+    this.keybindingRouter.cancel()
     const next: ViewMode =
       target === 'toggle' ? (this.viewMode === 'live' ? 'reading' : 'live') : target
     if (next === this.viewMode) {
@@ -1657,6 +1753,7 @@ export class WebviewSyncController {
     this.cancelOutlineDrag()
     if (this.view) selectTableRegion(this.view, null)
     if (next === 'reading') {
+      const editorHadFocus = document.activeElement === this.view?.contentDOM
       // #84 切回阅读模式：已挂载块补卡片增强（常驻块不经挂载钩子）
       this.decorateMountedReadingCodeCards()
       // 锚点 = live 光标主位（选区最小 from）；阅读视图按当前 CM6 文本渲染
@@ -1668,6 +1765,7 @@ export class WebviewSyncController {
         : this.modeAnchor ?? 0
       this.modeAnchor = cursor
       this.applyModeDom('reading') // 先更新模式（refreshReading 依赖它）
+      if (editorHadFocus) this.readingContainer?.focus()
       this.refreshReading()
       if (this.readingView) {
         const start = this.readingView.anchorStartFor(this.clampToDoc(cursor)) ?? cursor
@@ -1693,7 +1791,9 @@ export class WebviewSyncController {
         this.modeAnchor = mapped
       }
     }
+    const readingHadFocus = document.activeElement === this.readingContainer
     this.applyModeDom('live')
+    if (readingHadFocus) this.view?.focus()
     // 恢复光标到锚点并滚动到视口中部；事务不带 changes → 不产生编辑历史
     const pos = this.clampToDoc(this.modeAnchor ?? 0)
     this.view?.dispatch({
@@ -1713,6 +1813,8 @@ export class WebviewSyncController {
   /** 容器显隐（稳定类名 vsidian-view-live / vsidian-view-reading） */
   private applyModeDom(mode: ViewMode): void {
     this.viewMode = mode
+    this.closeQuickHeadingMenu(false)
+    this.refreshQuickActions()
     if (this.liveWrapper) {
       this.liveWrapper.style.display = mode === 'live' ? '' : 'none'
     }
@@ -2109,7 +2211,256 @@ export class WebviewSyncController {
       sidebarOpen: this.sidebarOpen,
       outlineActive: this.outlineActive,
       outlineExpandLevel: this.outlineExpandLevel,
+      quickActionsOpen: this.quickActionsOpen,
     })
+  }
+
+  /** #91 的有效绑定快照调用此入口；操作条不保存另一份默认键位。 */
+  setQuickActionBindingHints(resolve: (op: FormatOperationId) => readonly string[]): void {
+    this.quickBindingHints = resolve
+    this.refreshQuickActions()
+  }
+
+  private runFormatOperation(op: FormatOperationId): void {
+    this.closeQuickHeadingMenu(false)
+    const view = this.view
+    if (!view || this.viewMode !== 'live' || this.suspended ||
+        view.state.readOnly || !view.state.facet(EditorView.editable)) return
+    const range = view.state.selection.main
+    const plan = planFormatOperation(view.state.doc.toString(), op,
+      { from: range.from, to: range.to }, view.state.field(tableRegionField, false))
+    if (plan?.changes.length) {
+      view.dispatch({ changes: plan.changes,
+        ...(plan.selection ? { selection: plan.selection } : {}) })
+    }
+    view.focus()
+    this.refreshQuickActions()
+  }
+
+  private buildQuickActions(): HTMLElement {
+    const bar = document.createElement('div')
+    bar.className = 'vsidian-quick-actions'
+    bar.id = 'vsidian-quick-actions'
+    bar.setAttribute('role', 'toolbar')
+    bar.setAttribute('aria-label', '格式快速操作')
+    const button = (label: string, icon: string, className: string,
+      textIcon = false): HTMLButtonElement => {
+      const el = document.createElement('button')
+      el.type = 'button'
+      el.className = className
+      el.setAttribute('aria-label', label)
+      el.title = label
+      const glyph = document.createElement('span')
+      glyph.className = textIcon ? 'vsidian-quick-text-icon' : 'vsidian-quick-icon'
+      glyph.setAttribute('aria-hidden', 'true')
+      if (textIcon) glyph.textContent = icon
+      else glyph.dataset['icon'] = icon
+      el.appendChild(glyph)
+      // 鼠标按下不抢 CM6 焦点；包括标题 popup 与表格矩形选区。
+      el.addEventListener('mousedown', (event) => event.preventDefault())
+      return el
+    }
+    const group = (label: string): HTMLElement => {
+      const el = document.createElement('div')
+      el.className = 'vsidian-quick-action-group'
+      el.setAttribute('role', 'group')
+      el.setAttribute('aria-label', label)
+      bar.appendChild(el)
+      return el
+    }
+    const addOperation = (target: HTMLElement, op: FormatOperationId): void => {
+      const item = FORMAT_OPERATIONS.find((entry) => entry.id === op)!
+      const el = button(item.title, op, 'vsidian-quick-action')
+      el.dataset['op'] = op
+      el.addEventListener('click', () => this.runFormatOperation(op))
+      target.appendChild(el)
+    }
+    const textGroup = group('文字')
+    for (const op of ['bold', 'italic', 'strikethrough', 'inlineCode', 'clearInline'] as const) {
+      addOperation(textGroup, op)
+    }
+    const paragraphGroup = group('段落')
+    const heading = button('标题', 'heading', 'vsidian-quick-heading')
+    heading.setAttribute('aria-haspopup', 'menu')
+    heading.setAttribute('aria-expanded', 'false')
+    heading.setAttribute('aria-controls', 'vsidian-quick-heading-menu')
+    heading.addEventListener('click', (event) => this.toggleQuickHeadingMenu(event.detail === 0))
+    paragraphGroup.appendChild(heading)
+    this.quickHeadingBtn = heading
+    for (const op of ['bulletList', 'orderedList', 'taskList', 'quote', 'codeBlock'] as const) {
+      addOperation(paragraphGroup, op)
+    }
+    const insertGroup = group('插入')
+    addOperation(insertGroup, 'link')
+    const createTable = button('插入表格', 'table', 'vsidian-quick-table')
+    createTable.addEventListener('click', () => {
+      const view = this.view
+      if (view && this.viewMode === 'live' && !this.suspended &&
+          !view.state.readOnly && view.state.facet(EditorView.editable)) {
+        runCreateTable(view)
+        view.focus()
+      }
+    })
+    insertGroup.appendChild(createTable)
+    addOperation(insertGroup, 'inlineMath')
+    addOperation(insertGroup, 'blockMath')
+    const menu = document.createElement('div')
+    menu.className = 'vsidian-quick-heading-menu'
+    menu.id = 'vsidian-quick-heading-menu'
+    menu.setAttribute('role', 'menu')
+    menu.setAttribute('aria-label', '标题层级')
+    menu.hidden = true
+    for (const op of [
+      'heading1', 'heading2', 'heading3', 'heading4', 'heading5', 'heading6', 'headingNone',
+    ] as const) {
+      const item = FORMAT_OPERATIONS.find((entry) => entry.id === op)!
+      const el = button(item.title, op === 'headingNone' ? '正文' : op.replace('heading', 'H'),
+        'vsidian-quick-heading-item', true)
+      el.dataset['headingOp'] = op
+      el.setAttribute('role', 'menuitemradio')
+      el.setAttribute('aria-checked', 'false')
+      el.addEventListener('click', () => {
+        this.closeQuickHeadingMenu(false)
+        this.runFormatOperation(op)
+      })
+      menu.appendChild(el)
+    }
+    menu.addEventListener('keydown', (event) => {
+      const options = [...menu.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        this.closeQuickHeadingMenu(true)
+      } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+        event.preventDefault()
+        const index = options.indexOf(document.activeElement as HTMLButtonElement)
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
+          : event.key === 'ArrowDown' ? (index + 1) % options.length
+            : (index + options.length - 1) % options.length
+        options[next]?.focus()
+      }
+    })
+    bar.appendChild(menu)
+    this.quickHeadingMenu = menu
+    const actions = [...bar.querySelectorAll<HTMLButtonElement>('.vsidian-quick-action-group button')]
+    actions.forEach((action, index) => { action.tabIndex = index === 0 ? 0 : -1 })
+    bar.addEventListener('focusin', (event) => {
+      const focused = event.target as HTMLButtonElement
+      if (!actions.includes(focused)) return
+      actions.forEach((action) => { action.tabIndex = action === focused ? 0 : -1 })
+    })
+    bar.addEventListener('keydown', (event) => {
+      if (!actions.includes(event.target as HTMLButtonElement) ||
+          !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+      const enabled = actions.filter((action) => !action.disabled)
+      if (!enabled.length) return
+      event.preventDefault()
+      const current = enabled.indexOf(event.target as HTMLButtonElement)
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? enabled.length - 1
+        : event.key === 'ArrowRight' ? (current + 1) % enabled.length
+          : (current + enabled.length - 1) % enabled.length
+      enabled[next]?.focus()
+    })
+    if (typeof ResizeObserver !== 'undefined') {
+      this.quickActionResizeObserver = new ResizeObserver(() => this.updateQuickActionSeparators())
+      this.quickActionResizeObserver.observe(bar)
+    }
+    return bar
+  }
+
+  /** 分组整体换行时隐藏行首竖线，避免分隔线独占新行。 */
+  private updateQuickActionSeparators(): void {
+    const bar = this.quickActionsEl
+    if (!bar || bar.hidden) return
+    const groups = [...bar.querySelectorAll<HTMLElement>('.vsidian-quick-action-group')]
+    groups.forEach((group, index) => {
+      group.dataset['separated'] = String(index > 0 &&
+        Math.abs(group.getBoundingClientRect().top - groups[index - 1]!.getBoundingClientRect().top) < 1)
+    })
+    if (this.quickHeadingMenu && !this.quickHeadingMenu.hidden) this.positionQuickHeadingMenu()
+  }
+
+  private positionQuickHeadingMenu(): void {
+    const bar = this.quickActionsEl
+    const heading = this.quickHeadingBtn
+    const menu = this.quickHeadingMenu
+    if (!bar || !heading || !menu || menu.hidden) return
+    const barRect = bar.getBoundingClientRect()
+    const headingRect = heading.getBoundingClientRect()
+    const menuWidth = menu.getBoundingClientRect().width
+    const visibleLeft = Math.max(0, barRect.left)
+    const visibleRight = Math.min(window.innerWidth, barRect.right)
+    const menuLeft = Math.max(visibleLeft, Math.min(headingRect.left, visibleRight - menuWidth))
+    menu.style.left = `${menuLeft - barRect.left}px`
+    menu.style.top = `${headingRect.bottom - barRect.top - 1}px`
+  }
+
+  private toggleQuickHeadingMenu(focusFirst: boolean): void {
+    const menu = this.quickHeadingMenu
+    if (!menu || !this.quickHeadingBtn || this.viewMode !== 'live') return
+    if (!menu.hidden) {
+      this.closeQuickHeadingMenu(true)
+      return
+    }
+    menu.hidden = false
+    this.positionQuickHeadingMenu()
+    this.quickHeadingBtn.setAttribute('aria-expanded', 'true')
+    if (focusFirst) menu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
+  }
+
+  private closeQuickHeadingMenu(returnFocus: boolean): void {
+    if (this.quickHeadingMenu) this.quickHeadingMenu.hidden = true
+    this.quickHeadingBtn?.setAttribute('aria-expanded', 'false')
+    if (returnFocus) this.quickHeadingBtn?.focus()
+  }
+
+  private applyQuickActionsDom(): void {
+    const open = this.quickActionsOpen
+    if (this.quickActionsEl) this.quickActionsEl.hidden = !open
+    this.quickToggleBtn?.setAttribute('aria-expanded', String(open))
+    if (!open) this.closeQuickHeadingMenu(false)
+    if (open) {
+      this.refreshQuickActions()
+      requestAnimationFrame(() => this.updateQuickActionSeparators())
+    }
+  }
+
+  private refreshQuickActions(): void {
+    const bar = this.quickActionsEl
+    const view = this.view
+    if (!bar || !view || !this.quickActionsOpen) return
+    const state = view.state
+    const range = state.selection.main
+    const region = state.field(tableRegionField, false)
+    const editable = this.viewMode === 'live' && !this.suspended && !state.readOnly &&
+      state.facet(EditorView.editable)
+    const tree = state.field(liveDecorationsField).tree
+    const readState = createQuickActionStateReader(state.doc, tree,
+      { from: range.from, to: range.to }, region ?? null, editable)
+    for (const el of bar.querySelectorAll<HTMLButtonElement>('[data-op], [data-heading-op]')) {
+      const op = (el.dataset['op'] ?? el.dataset['headingOp']) as FormatOperationId
+      const status = readState(op)
+      el.disabled = status === 'disabled'
+      el.dataset['formatState'] = status
+      if (el.hasAttribute('role')) el.setAttribute('aria-checked', String(status === 'active'))
+      else el.setAttribute('aria-pressed', status === 'mixed' ? 'mixed' : String(status === 'active'))
+      const base = FORMAT_OPERATIONS.find((item) => item.id === op)!.title
+      const bindings = this.quickBindingHints(op)
+      const keys = bindings.map((key) => key.split('+').map((part) =>
+        part.length === 1 ? part.toUpperCase() : part[0]!.toUpperCase() + part.slice(1)).join('+'))
+      el.title = keys.length ? `${base} (${keys.join('、')})` : base
+      if (keys.length) el.setAttribute('aria-description', `快捷键：${keys.join('、')}`)
+      else el.removeAttribute('aria-description')
+    }
+    const headingOptions = [...bar.querySelectorAll<HTMLElement>('[data-heading-op]')]
+    this.quickHeadingBtn!.disabled = !editable || headingOptions.every((item) =>
+      (item as HTMLButtonElement).disabled)
+    bar.querySelector<HTMLButtonElement>('.vsidian-quick-table')!.disabled = !editable
+    // 选区变化可禁用当前 roving Tab 入口（如行内代码内的粗体）。
+    // 保留仍可用的入口；否则转移到首个可用按钮，且全条只留一个 Tab 停靠点。
+    const actions = [...bar.querySelectorAll<HTMLButtonElement>('.vsidian-quick-action-group button')]
+    const tabStop = actions.find((action) => !action.disabled && action.tabIndex === 0) ??
+      actions.find((action) => !action.disabled)
+    actions.forEach((action) => { action.tabIndex = action === tabStop ? 0 : -1 })
   }
 
   /** 主编辑区顶栏（#53 图标化）：左端齿轮设置按钮（打开宿主级 Vsidian
@@ -2126,6 +2477,23 @@ export class WebviewSyncController {
     settingsBtn.setAttribute('title', '打开 Vsidian 设置')
     settingsBtn.appendChild(createSettingsGearIcon())
     settingsBtn.addEventListener('click', () => this.bridge.postMessage({ kind: 'settings.open' }))
+    const quickBtn = document.createElement('button')
+    quickBtn.type = 'button'
+    quickBtn.className = 'vsidian-quick-toggle'
+    quickBtn.setAttribute('aria-label', '快速操作条')
+    quickBtn.setAttribute('title', '快速操作条')
+    quickBtn.setAttribute('aria-controls', 'vsidian-quick-actions')
+    quickBtn.setAttribute('aria-expanded', 'false')
+    quickBtn.textContent = '✎'
+    // 与操作条内按钮一致：鼠标展开时保留正文焦点及表格矩形格区。
+    // 只拦默认聚焦，不拦 click；Tab 聚焦后 Enter/Space 仍由原生按钮激活。
+    quickBtn.addEventListener('mousedown', (event) => event.preventDefault())
+    quickBtn.addEventListener('click', () => {
+      this.quickActionsOpen = !this.quickActionsOpen
+      this.applyQuickActionsDom()
+      this.persistState()
+    })
+    this.quickToggleBtn = quickBtn
     const sidebarBtn = document.createElement('button')
     sidebarBtn.type = 'button'
     sidebarBtn.className = 'vsidian-sidebar-toggle'
@@ -2134,6 +2502,7 @@ export class WebviewSyncController {
     sidebarBtn.addEventListener('click', () => this.toggleSidebar())
     this.sidebarToggleBtn = sidebarBtn
     bar.appendChild(settingsBtn)
+    bar.appendChild(quickBtn)
     bar.appendChild(sidebarBtn)
     return bar
   }
@@ -4492,24 +4861,22 @@ export class WebviewSyncController {
         }
       : undefined
     // #60 Mermaid 绘制探针：按当前激活视图取图表容器（分态计数）；
-    // 可见性优先取已渲染 SVG 的 rect + elementFromPoint 命中（错误降级
-    // 容器同样可命中——可见 ≠ 语法有效，语义由 rendered/error 分开断言）
+    // 可见性取视口内任一已渲染 SVG 的 rect + elementFromPoint 命中；
+    // 首图可能因 view.locate 滚到文末而离开视口，不代表图表没有绘制。
     const mermaidScope = this.viewMode === 'reading' ? this.readingContainer : view.contentDOM
     const mermaidEl = mermaidScope?.querySelector<HTMLElement>(
       `.${MERMAID_CLASS_NAMES.diagram}`,
     ) ?? null
-    const mermaidSvg = mermaidEl?.querySelector('svg') ?? mermaidEl
     let mermaidVisible = false
-    let mermaidDisplay: string | null = null
-    if (mermaidEl) {
-      mermaidDisplay = getComputedStyle(mermaidEl).display
+    const mermaidDisplay = mermaidEl ? getComputedStyle(mermaidEl).display : null
+    for (const diagram of mermaidScope?.querySelectorAll<HTMLElement>(
+      `.${MERMAID_CLASS_NAMES.diagram}[${MERMAID_STATE_ATTR}="rendered"]`) ?? []) {
+      const svg = diagram.querySelector('svg')
+      if (!svg) continue
       try {
-        const rect = mermaidSvg!.getBoundingClientRect()
-        if (rect.width > 0 && rect.height > 0) {
-          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
-          if (hit && mermaidEl.contains(hit)) {
-            mermaidVisible = true
-          }
+        if (isSvgPainted(svg)) {
+          mermaidVisible = true
+          break
         }
       } catch {
         // jsdom 无布局与 elementFromPoint；真宿主才能证明实际可见。
@@ -4529,6 +4896,24 @@ export class WebviewSyncController {
     const mermaid = mermaidEl
       ? { visible: mermaidVisible, display: mermaidDisplay, ...mermaidCounts }
       : undefined
+    const quickBar = this.quickActionsEl
+    const quickBold = quickBar?.querySelector<HTMLElement>('[data-op="bold"]') ?? null
+    const quickActive = quickBar?.querySelector<HTMLElement>('[data-format-state="active"]') ?? null
+    const barRect = quickBar?.getBoundingClientRect()
+    const toolbarRect = this.toolbar?.getBoundingClientRect()
+    const editorRect = this.liveWrapper?.getBoundingClientRect()
+    const quickActions = {
+      open: this.quickActionsOpen,
+      togglePainted: hitPaintedElement(this.quickToggleBtn),
+      barPainted: hitPaintedElement(quickBar, quickBar),
+      boldPainted: hitPaintedElement(quickBold, quickBar),
+      activePainted: !!quickActive && paintedWithVisibleBackground(quickActive),
+      menuPainted: hitPaintedElement(this.quickHeadingMenu, this.quickHeadingMenu),
+      barBelowToolbar: !!barRect && !!toolbarRect && barRect.height > 0 &&
+        barRect.top >= toolbarRect.bottom - 1,
+      editorBelowBar: !!barRect && !!editorRect && barRect.height > 0 &&
+        editorRect.top >= barRect.bottom - 1,
+    }
     // #79 代码块卡片绘制探针：当前激活视图取头部横带。CM6 挂载缓冲内的
     // 头部可能滚出可视裁剪区（rect 在视口外，elementFromPoint 不命中），
     // 故遍历取首个「rect 有面积 + 在视口内 + elementFromPoint 命中」的
@@ -4635,6 +5020,7 @@ export class WebviewSyncController {
       },
       math,
       mermaid,
+      quickActions,
       code,
       heading: headingPaint,
     }
@@ -5039,6 +5425,11 @@ export class WebviewSyncController {
       findDecorations,
       ...this.extraExtensions,
       EditorView.updateListener.of((update) => {
+        if (this.quickActionsOpen && (update.docChanged || update.selectionSet)) {
+          // StateField 已在本事务更新；微任务避免在 CM6 update 生命周期内
+          // 再读取旧 EditorView.state。重复信号合并由当前状态读取自然收敛。
+          queueMicrotask(() => this.refreshQuickActions())
+        }
         if (!update.docChanged) {
           return
         }
@@ -5110,6 +5501,74 @@ export class WebviewSyncController {
       })),
     ]
   }
+}
+
+/** Mermaid 图的真实可见区域：视口和各层裁切交集内，命中有效图形子节点。 */
+function isSvgPainted(svg: SVGSVGElement): boolean {
+  const rect = svg.getBoundingClientRect()
+  let left = Math.max(0, rect.left)
+  let right = Math.min(window.innerWidth, rect.right)
+  let top = Math.max(0, rect.top)
+  let bottom = Math.min(window.innerHeight, rect.bottom)
+  for (let node: Element | null = svg; node; node = node.parentElement) {
+    const style = getComputedStyle(node)
+    if (style.display === 'none' || style.contentVisibility === 'hidden' ||
+        Number(style.opacity) === 0) return false
+    // visibility 可由后代覆写；SVG 的计算值才是它自身的有效值。
+    if (node === svg && style.visibility !== 'visible') return false
+    if (node === svg) continue
+    const clipsBoth = style.clipPath !== 'none' || style.contain.split(' ').includes('paint')
+    const clipX = clipsBoth || style.overflowX !== 'visible'
+    const clipY = clipsBoth || style.overflowY !== 'visible'
+    if (!clipX && !clipY) continue
+    const boundary = node.getBoundingClientRect()
+    if (clipX) {
+      left = Math.max(left, boundary.left)
+      right = Math.min(right, boundary.right)
+    }
+    if (clipY) {
+      top = Math.max(top, boundary.top)
+      bottom = Math.min(bottom, boundary.bottom)
+    }
+  }
+  if (right <= left || bottom <= top) return false
+  const selector = 'path,rect,circle,ellipse,line,polyline,polygon,text,tspan,textPath,image,use,foreignObject'
+  for (const graphic of svg.querySelectorAll(selector)) {
+    const style = getComputedStyle(graphic)
+    if (style.visibility !== 'visible') continue
+    let hidden = false
+    for (let node: Element | null = graphic; node && node !== svg; node = node.parentElement) {
+      const nodeStyle = getComputedStyle(node)
+      if (nodeStyle.display === 'none' || nodeStyle.contentVisibility === 'hidden' ||
+          Number(nodeStyle.opacity) === 0) {
+        hidden = true
+        break
+      }
+    }
+    if (hidden) continue
+    const tag = graphic.localName.toLowerCase()
+    const fill = style.fill !== 'none' && Number(style.fillOpacity) > 0
+    const strokeWidth = Number.parseFloat(style.strokeWidth)
+    const stroke = style.stroke !== 'none' && Number(style.strokeOpacity) > 0 && strokeWidth > 0
+    if (tag === 'foreignobject' ? !graphic.firstElementChild
+      : tag !== 'image' && !fill && !stroke) continue
+    const bounds = graphic.getBoundingClientRect()
+    const pad = stroke ? strokeWidth / 2 : 0
+    const drawLeft = Math.max(left, bounds.left - pad)
+    const drawRight = Math.min(right, bounds.right + pad)
+    const drawTop = Math.max(top, bounds.top - pad)
+    const drawBottom = Math.min(bottom, bounds.bottom + pad)
+    if (drawRight <= drawLeft || drawBottom <= drawTop) continue
+    const xs = [drawLeft + (drawRight - drawLeft) * 0.2, (drawLeft + drawRight) / 2,
+      drawRight - (drawRight - drawLeft) * 0.2]
+    const ys = [drawTop + (drawBottom - drawTop) * 0.2, (drawTop + drawBottom) / 2,
+      drawBottom - (drawBottom - drawTop) * 0.2]
+    for (const y of ys) for (const x of xs) {
+      const hit = document.elementFromPoint(x, y)
+      if (hit === graphic || (hit && graphic.contains(hit))) return true
+    }
+  }
+  return false
 }
 
 const SVG_NS = 'http://www.w3.org/2000/svg'

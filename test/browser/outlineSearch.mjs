@@ -11,7 +11,8 @@ import { chromium } from 'playwright'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const bundle = path.join(root, 'out/test/browser/outlineSearch.js')
 await build({ entryPoints: [path.join(root, 'test/browser/outlineSearchFixture.ts')],
-  bundle: true, outfile: bundle, format: 'iife' })
+  bundle: true, outfile: bundle, format: 'iife',
+  loader: { '.svg': 'file' }, assetNames: 'assets/[name]' })
 
 // 与单测样例同构：三章 H1，甲/乙带 H2 与 H3 孙级，丙是叶；正文撑出滚动空间。
 // 条目索引：0=Alpha 1=Beta 2=Gamma 3=Delta 4=Epsilon 5=Zeta
