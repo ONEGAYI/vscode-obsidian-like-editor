@@ -154,6 +154,7 @@ import { locateOutlineIndex } from './outlineLocate'
 import { resolveStaleTaskToggle } from './taskToggle'
 import { VirtualReadingView } from './readingVirtualView'
 import { blankRowInputPlan, runCreateTable, runTableEdit, tableEditing, tableRowsAt } from './tableEditing'
+import { listEditing } from './listEditing'
 import { selectTableRegion, tableRegionField } from './tableRegionSelection'
 import { planTableRegionReplace, type TableRegion } from './tableRegion'
 import { splitTableRowCells } from './tableCells'
@@ -5898,6 +5899,10 @@ export class WebviewSyncController {
       // 表格单元格输入钩子（#12）：表格行内键入 | 转义写回 \|；
       // 编辑面即 CM6 源文本行，同步链路复用本控制器的标准出站路径
       tableEditing,
+      // #119 列表/引用 Enter 前缀延续与退格清层：必须排在 tableEditing
+      // 之后（表格上下文优先，格内 Enter 仍为 <br>）、extraExtensions 的
+      // defaultKeymap 之前（先于通用键位拦截）
+      listEditing,
       // 查找装饰（#14）：当前匹配（直接）+ 全部匹配（视口内间接）
       findDecorations,
       ...this.extraExtensions,
