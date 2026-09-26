@@ -114,6 +114,7 @@ vsidian/
 ├── README.en.md           # 英文版 README，与中文版互指
 ├── README.md              # 项目门面说明
 ├── scripts/               # 仓库工具脚本目录
+│   ├── genNls.mjs            # manifest NLS 文件生成脚本
 │   ├── quick-action-icons.py # 快速操作图标生成与校验
 │   └── release.mjs           # 发布脚本：打包、包体检查与上传
 ├── src/                   # 扩展源码

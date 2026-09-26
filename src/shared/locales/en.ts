@@ -234,6 +234,37 @@ export const en = {
   'decor.unknownReason': 'unknown reason',
   'decor.mermaidUnavailable': 'Diagram renderer unavailable (mermaid.js failed to load)',
   'decor.mermaidError': 'Diagram failed to render: {message}',
+
+  // ---- #97 manifest NLS（命令 title 与 displayName/description 生成源）----
+  // 工具条 21 条命令直接复用上方 format.* 既有键（FORMAT_OPERATIONS 的
+  // titleKey，见 scripts/genNls.mjs 映射）；此处只登记无 webview 对应者：
+  // 键名 = command.<command id 去掉 onegayi.vsidian. 前缀>.title。
+  /** 扩展市场 displayName / description（含 customEditors displayName 同源） */
+  'manifest.displayName': 'Vsidian',
+  'manifest.description': 'Obsidian-like Markdown editing: live preview + reading views',
+
+  'command.toggleViewMode.title': 'Switch to the next view mode',
+  'command.mode.toReading.title': 'Switch to reading view',
+  'command.mode.toSource.title': 'Switch to the source editor',
+  'command.mode.toLive.title': 'Switch to live preview',
+  'command.find.title': 'Find (in the editor)',
+  'command.find.next.title': 'Next match',
+  'command.find.previous.title': 'Previous match',
+  'command.table.create.title': 'Create a table',
+  'command.table.insertRowAbove.title': 'Table: insert row above',
+  'command.table.insertRowBelow.title': 'Table: insert row below',
+  'command.table.deleteRow.title': 'Table: delete row',
+  'command.table.insertColumnLeft.title': 'Table: insert column left',
+  'command.table.insertColumnRight.title': 'Table: insert column right',
+  'command.table.deleteColumn.title': 'Table: delete column',
+  'command.openSettings.title': 'Open settings',
+  'command.ui.sidebarToggle.title': 'Expand or collapse the sidebar',
+  'command.ui.outlineToggle.title': 'Show or hide the outline',
+  'command.ui.outlineSearch.title': 'Search headings',
+  'command.ui.outlineJumpBottom.title': 'Jump to end of note',
+  'command.ui.outlineReset.title': 'Reset outline',
+  'command.ui.outlineCollapseAll.title': 'Collapse all outline headings',
+  'command.ui.outlineExpandAll.title': 'Expand all outline headings',
 } as const satisfies Record<string, string>
 
 /** 字典键：点分扁平键，以本包为类型基准（编译期检查 t() 取词键） */

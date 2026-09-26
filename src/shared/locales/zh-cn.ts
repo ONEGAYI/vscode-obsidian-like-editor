@@ -209,4 +209,33 @@ export const zhCn: Record<MessageKey, string> = {
   'decor.unknownReason': '未知原因',
   'decor.mermaidUnavailable': '图表渲染器不可用（mermaid.js 未能加载）',
   'decor.mermaidError': '图表渲染失败：{message}',
+
+  // ---- #97 manifest NLS（命令 title 与 displayName/description 生成源）----
+  // 值即 package.json 原硬编码字面量（呈现不变）；工具条 21 条命令复用
+  // format.* 既有键，此处只登记无 webview 对应者。
+  'manifest.displayName': 'Vsidian',
+  'manifest.description': '类 Obsidian 的 Markdown 编辑体验：实时预览 + 阅读双视图',
+
+  'command.toggleViewMode.title': '切换到下一视图模式',
+  'command.mode.toReading.title': '切换到阅读模式',
+  'command.mode.toSource.title': '切换到源码编辑器',
+  'command.mode.toLive.title': '切换到实时预览',
+  'command.find.title': '查找（编辑区）',
+  'command.find.next.title': '下一个查找结果',
+  'command.find.previous.title': '上一个查找结果',
+  'command.table.create.title': '创建表格',
+  'command.table.insertRowAbove.title': '表格：上方插入行',
+  'command.table.insertRowBelow.title': '表格：下方插入行',
+  'command.table.deleteRow.title': '表格：删除行',
+  'command.table.insertColumnLeft.title': '表格：左侧插入列',
+  'command.table.insertColumnRight.title': '表格：右侧插入列',
+  'command.table.deleteColumn.title': '表格：删除列',
+  'command.openSettings.title': '打开设置',
+  'command.ui.sidebarToggle.title': '展开或收起右侧栏',
+  'command.ui.outlineToggle.title': '显示或隐藏大纲',
+  'command.ui.outlineSearch.title': '搜索大纲标题',
+  'command.ui.outlineJumpBottom.title': '跳转到笔记末尾',
+  'command.ui.outlineReset.title': '重置大纲',
+  'command.ui.outlineCollapseAll.title': '折叠全部大纲',
+  'command.ui.outlineExpandAll.title': '展开全部大纲',
 }

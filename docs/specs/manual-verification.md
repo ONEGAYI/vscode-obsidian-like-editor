@@ -569,3 +569,13 @@ review-loops 审查循环第 4 轮（2026-09-26，分支 `feature/65-70-outline-
 
 - 自动化已证实：展开状态回显；原生浏览器中 300px 窄窗流内换行、明暗主题绘制、选区粗体按钮与标题菜单 Escape／方向键／Enter；VSCode 1.86.2 定向集成中按钮与菜单真实绘制、B 和标题 H1 写回及一次撤销。
 - 人工待验：在常用 VSCode 明暗及高对比主题下查看图标、已应用／混合／禁用态和标题菜单；用物理鼠标拖选文字、表格矩形格区后点击按钮，确认选区与焦点手感；收起重开、窄面板和阅读模式下检查布局。自动化与截图自检不代替用户验收。
+
+## #97 manifest NLS 双语补全（2026-09-26）
+
+- 自动化已证实（契约测试 `test/unit/nlsManifest.test.ts`）：两份 nls 文件键集一致、`package.json` 全部 `%key%` 引用存在、nls 键集与引用集相等（无残留键）、43 条命令 title 全部引用化（工具条 21 条 = `FORMAT_OPERATIONS.titleKey`，其余按 command id 推导）、生成幂等（`node scripts/genNls.mjs --check`，字典单一事实源，负向自证：改字典后 --check 报不一致）；`npm run release:check` 通过（VSIX 含两份 nls，包体检查机制不变）。
+- 集成断言不可行的原因（登记人工项的依据）：命令面板标题由 VSCode workbench 按宿主显示语言解析 manifest 后渲染，扩展 API（`vscode.commands`）只暴露命令 id、无标题查询接口，QuickPick 界面文本不可编程读取——1.86.2 集成宿主无法断言该呈现面。
+- 人工待验：
+  1. **命令面板标题随宿主显示语言**：中文显示语言的 VSCode 安装 VSIX，命令面板检索「Vsidian:」——43 条命令标题应为简体中文（如「粗体」「表格：上方插入行」「展开或收起右侧栏」）；经「Configure Display Language」切 English 并重载后应为英文（如 "Bold"、"Table: insert row above"、"Expand or collapse the sidebar"）。
+  2. **市场字段双语**：扩展列表中 displayName 与 description 按宿主语言显示（中文环境「类 Obsidian 的 Markdown 编辑体验：实时预览 + 阅读双视图」，英文环境 "Obsidian-like Markdown editing: live preview + reading views"）——原中英混排单串已拆分双语。
+  3. **打开方式入口**：`.md` 的「打开方式…」列表中 customEditors 的 displayName 显示正常（Vsidian，不透出 `%manifest.displayName%` 原文——contributes 字段按 VSCode manifest nls 机制解析，仍以真实宿主目视为准）。
+- 操作入口评估：manifest 层由 VSCode 按宿主显示语言解析，不随扩展语言设置联动（两层语言模型），无扩展侧操作入口。
