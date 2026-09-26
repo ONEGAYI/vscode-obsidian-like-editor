@@ -15,6 +15,7 @@ const CMD = {
   injectMessage: 'onegayi.vsidian._test.injectWebviewMessage',
   postToPanel: 'onegayi.vsidian._test.postToPanel',
   viewState: 'onegayi.vsidian._test.requestViewState',
+  cachedViewState: 'onegayi.vsidian._test.getCachedViewState',
   conflictState: 'onegayi.vsidian._test.getConflictState',
   closedInput: 'onegayi.vsidian._test.getLastClosedInput',
   viewStateCache: 'onegayi.vsidian._test.getPanelViewStateCache',
@@ -980,15 +981,20 @@ export const cases: Array<[string, () => Promise<void>]> = [
       CMD.viewStateCache, syntaxUri,
     )) as { found: boolean; viewMode?: string }
     assert(keptLive.found && keptLive.viewMode === 'live', '非活动的 syntax 面板应保留自身状态')
+    const beforeResume = (await vscode.commands.executeCommand(
+      CMD.cachedViewState, syntaxUri,
+    )) as ViewState | undefined
 
     // 重显 syntax 面板使其活动（openWith 对已开面板是重显，不新建 tab），
     // toReading 只作用于 syntax；原生 mode 标签不受影响。不可见期间面板
-    // 可能经卸载重载：先以 0 轮探针（纯往返，不动文档）等待 webview 恢复
-    // 响应再下发模式命令，避免命令发给重载中的 webview 而丢失
+    // 可能经卸载重载：等待新 view.state 回报（与隐藏前缓存对象不同），
+    // 再下发模式命令，避免发给重载中的 webview 而丢失
     await vscode.commands.executeCommand('vscode.openWith', wsUri('syntax.md'), VIEW_TYPE)
     await waitActiveCustomTab('syntax.md')
-    await vscode.commands.executeCommand(
-      CMD.perfProbe, syntaxUri, { typingRounds: 0, scrollRounds: 0 })
+    await poll('重显面板恢复响应', async () => {
+      const current = (await vscode.commands.executeCommand(CMD.viewState, syntaxUri)) as ViewState | undefined
+      return current && current !== beforeResume ? true : undefined
+    })
     await vscode.commands.executeCommand('onegayi.vsidian.mode.toReading', wsUri('syntax.md'))
     await waitViewState('syntax.md', (v) => v.viewMode === 'reading')
     const backToMode = await vscode.window.showTextDocument(modeDoc)

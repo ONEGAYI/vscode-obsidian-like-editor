@@ -1393,7 +1393,8 @@ export function createTextEditorProvider(
           }
           await new Promise((r) => setTimeout(r, 100))
         }
-        return entry.session.getViewState(panel.sessionId)
+        // 旧缓存不能证明本次请求收到了 webview 回报；由调用者继续等待或报错。
+        return undefined
       },
     ),
     vscode.commands.registerCommand(

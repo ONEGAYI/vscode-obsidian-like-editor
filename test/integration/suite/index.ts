@@ -26,8 +26,28 @@ export async function run(): Promise<void> {
   if (filter && (!parts.length || !selected.length)) {
     throw new Error(`VSIDIAN_TEST_CASES 未命中用例：${JSON.stringify(filter)}`)
   }
-  console.log(`[集成测试] 执行 ${selected.length}/${cases.length} 项${filter ? `（筛选 ${JSON.stringify(filter)}）` : ''}`)
-  for (const [name, fn] of selected) {
+  // 分片：VSIDIAN_TEST_SHARD=k/N（1<=k<=N）把筛选后的用例按索引取模切给
+  // 当前片，与 VSIDIAN_TEST_CASES 正交（先筛选后切片）。缺省不分片跑全量；
+  // 筛选结果少于片数时允许空片（合法情况，0 项直接通过）
+  const shardSpec = process.env['VSIDIAN_TEST_SHARD']
+  let sharded = selected
+  let shardLabel = ''
+  if (shardSpec) {
+    const match = /^(\d+)\/(\d+)$/.exec(shardSpec)
+    if (!match) {
+      throw new Error(`VSIDIAN_TEST_SHARD 形如 k/N，收到 ${JSON.stringify(shardSpec)}`)
+    }
+    const shard = Number(match[1])
+    const total = Number(match[2])
+    if (total < 1 || shard < 1 || shard > total) {
+      throw new Error(`VSIDIAN_TEST_SHARD 越界：${shardSpec}`)
+    }
+    sharded = selected.filter((_, index) => index % total === shard - 1)
+    shardLabel = `（分片 ${shard}/${total}，本片 ${sharded.length} 项）`
+  }
+  console.log(`[集成测试] 执行 ${sharded.length}/${cases.length} 项${filter ? `（筛选 ${JSON.stringify(filter)}）` : ''}${shardLabel}`)
+  for (const [name, fn] of sharded) {
+    const caseStarted = Date.now()
     try {
       // #38：全局模式记忆（globalState）在同一集成进程内跨用例共享——
       // reading 记忆会让后续用例的新面板被恢复成阅读模式、source 记忆会
@@ -116,9 +136,10 @@ export async function run(): Promise<void> {
       } catch {
         // 忽略清理失败
       }
+      console.log(`[集成测试][TIME] ${Date.now() - caseStarted}ms ${name}`)
     }
   }
   if (failures.length > 0) {
-    throw new Error(`集成测试失败 ${failures.length} 项：${failures.join('；')}`)
+    throw new Error(`集成测试失败 ${failures.length} 项${shardLabel ? ` ${shardLabel}` : ''}：${failures.join('；')}`)
   }
 }
