@@ -1233,6 +1233,7 @@ describe('图表导出路由（#111）', () => {
         report({ ok: false, reason: 'cancelled' })
       },
     })
+    await s.handleWebviewMessage({ kind: 'ready' }, id)
     await s.handleWebviewMessage(
       {
         kind: 'diagram.export',
@@ -1253,11 +1254,55 @@ describe('图表导出路由（#111）', () => {
     expect(result.reason).toBe('cancelled')
   })
 
+  it('会话守卫：面板未就绪或 docUri 不匹配时静默丢弃（对齐 codeblock.copy）', async () => {
+    const doc = new FakeDoc('x')
+    const s = new DocumentSession(doc, { docUri: 'file:///d/a.md' })
+    const toWebview: HostToWebview[] = []
+    const received: unknown[] = []
+    const id = s.attachPanel({
+      send: (m) => toWebview.push(m),
+      exportDiagram: (payload, report) => {
+        received.push(payload)
+        report({ ok: true })
+      },
+    })
+    // 未 ready：丢弃
+    await s.handleWebviewMessage(
+      {
+        kind: 'diagram.export',
+        sessionId: id,
+        docUri: 'file:///d/a.md',
+        reqId: 9,
+        format: 'svg',
+        fileName: 'a.svg',
+        content: '<svg/>',
+      },
+      id,
+    )
+    // ready 后 docUri 不匹配：同样丢弃
+    await s.handleWebviewMessage({ kind: 'ready' }, id)
+    await s.handleWebviewMessage(
+      {
+        kind: 'diagram.export',
+        sessionId: id,
+        docUri: 'file:///d/other.md',
+        reqId: 10,
+        format: 'svg',
+        fileName: 'a.svg',
+        content: '<svg/>',
+      },
+      id,
+    )
+    expect(received).toHaveLength(0)
+    expect(toWebview.filter((m) => m.kind === 'diagram.export.result')).toHaveLength(0)
+  })
+
   it('未注入导出端口：回报 invalid（不抛错）', async () => {
     const doc = new FakeDoc('x')
     const s = new DocumentSession(doc, { docUri: 'file:///d/a.md' })
     const toWebview: HostToWebview[] = []
     const id = s.attachPanel({ send: (m) => toWebview.push(m) })
+    await s.handleWebviewMessage({ kind: 'ready' }, id)
     await s.handleWebviewMessage(
       {
         kind: 'diagram.export',

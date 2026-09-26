@@ -1,10 +1,13 @@
 // 图形化代码块交互浏览器回归（工单 #111）：真实 Chromium + 真实 mermaid
 // 产物上的原生键鼠路径——按钮悬停显隐、禁点击、edit 迁移、弹窗滚轮缩放/
-// 拖拽平移/键盘/Esc、导出消息与 PNG 光栅化（CSP data: 放行的实证）。
+// 拖拽平移/键盘/Esc、单击图本体不关闭、导出消息与 PNG 光栅化。页面经本地
+// HTTP 服务装载并复刻宿主 CSP（含 #111 的 img-src data:）——PNG 光栅化在
+// 真实 CSP 约束下的放行实证，不再是无 CSP 环境的空验证。
 import assert from 'node:assert/strict'
+import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { build } from 'esbuild'
 import { chromium } from 'playwright'
 
@@ -16,6 +19,15 @@ await build({
   entryPoints: [path.join(root, 'test/browser/quickActionsFixture.ts')],
   bundle: true, outfile: output, format: 'iife',
   loader: { '.svg': 'file' }, assetNames: 'assets/[name]',
+})
+// mermaid 独立产物自建（入口与配置同 esbuild.mjs 的 mermaid target）：CI
+// browser job 不跑 npm run compile，引用 out/webview/mermaid.js 会因产物
+// 缺失而懒加载 404，本测试须自包含、不依赖前置构建
+const mermaidArtifact = path.join(outDir, 'mermaid.js')
+await build({
+  entryPoints: [path.join(root, 'src/webview/mermaidEntry.ts')],
+  outfile: mermaidArtifact, bundle: true, platform: 'browser', format: 'iife',
+  target: 'chrome118', minify: true, sourcemap: false, logLevel: 'silent',
 })
 
 const DOC = [
@@ -29,18 +41,46 @@ const DOC = [
   '',
 ].join('\n')
 
-const html = `<!doctype html><html><head><meta charset="utf-8">
-<link rel="stylesheet" href="fixture.css">
-<script>window.__vsidianMermaidUri = new URL('../../../webview/mermaid.js', location.href).href;</script>
-</head><body><div id="app"></div><script src="fixture.js"></script></body></html>`
-await writeFile(path.join(outDir, 'page.html'), html)
+// CSP 复刻（与 textEditorProvider.buildWebviewHtml 同形，含 #111 新增的
+// img-src data:）：script-src 'self'+nonce（放行 URI 注入内联脚本与懒加载
+// mermaid.js）、style-src 'unsafe-inline'（CM6 与 mermaid SVG 内嵌样式）
+const graphicNonce = 'vsidian-graphic-test-nonce'
+const pageHtml = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'nonce-${graphicNonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; font-src 'self'">
+<link rel="stylesheet" href="/fixture.css">
+<script nonce="${graphicNonce}">window.__vsidianMermaidUri = new URL('/mermaid.js', location.href).href;</script>
+</head><body><div id="app"></div><script nonce="${graphicNonce}" src="/fixture.js"></script></body></html>`
+
+const server = http.createServer((req, res) => {
+  void (async () => {
+    const url = new URL(req.url ?? '/', 'http://localhost')
+    if (url.pathname === '/') {
+      res.writeHead(200, { 'content-type': 'text/html' })
+      res.end(pageHtml)
+      return
+    }
+    const rel = url.pathname.slice(1)
+    try {
+      const data = await readFile(path.join(outDir, rel))
+      res.writeHead(200, {
+        'content-type': rel.endsWith('.css') ? 'text/css' : 'text/javascript',
+      })
+      res.end(data)
+    } catch {
+      res.writeHead(404)
+      res.end('not found')
+    }
+  })()
+})
+await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+const pageBase = `http://127.0.0.1:${server.address().port}`
 
 const browser = await chromium.launch({
   headless: true, channel: process.env.VSIDIAN_TEST_BROWSER_CHANNEL || undefined,
 })
 try {
   const page = await browser.newPage({ viewport: { width: 900, height: 700 } })
-  await page.goto('file:///' + path.join(outDir, 'page.html').replaceAll('\\', '/'))
+  await page.goto(pageBase + '/')
   await page.evaluate((doc) => {
     window.initQuick(doc)
     const view = window.controller.getView()
@@ -165,12 +205,17 @@ try {
   assert.ok(pngExport.content.length > 1000, 'PNG base64 应为非平凡载荷')
   assert.match(pngExport.content, /^[A-Za-z0-9+/]+={0,2}$/, 'PNG 内容应为严格 base64')
 
-  // 10) 关闭路径：点击 backdrop 关闭
+  // 10) 关闭路径：单击图形本体不关闭（编辑入口语义），点空白区关闭
+  const mediaBox = await page.locator('.vsidian-diagram-media').boundingBox()
+  await page.mouse.click(mediaBox.x + mediaBox.width / 2, mediaBox.y + mediaBox.height / 2)
+  await page.waitForTimeout(150)
+  assert.ok(await page.locator('.vsidian-diagram-overlay').isVisible(), '单击图形本体不得关闭弹窗')
   await page.mouse.click(20, 20)
   await page.waitForFunction(() => document.querySelector('.vsidian-diagram-overlay') === null)
 
   await page.close()
-  console.log('[图形化代码块交互] 悬停显隐、禁点击、edit 迁移、弹窗缩放/平移/键盘/Esc、SVG/PNG 导出通过')
+  console.log('[图形化代码块交互] 悬停显隐、禁点击、edit 迁移、弹窗缩放/平移/键盘/Esc、点图不关、SVG/PNG 导出（CSP 复刻页）通过')
 } finally {
+  server.close()
   await browser.close()
 }

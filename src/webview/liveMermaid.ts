@@ -122,6 +122,9 @@ export function mermaidWidgetDeco(
   const key = `${language}\u0000${code}`
   const hit = decoCache.get(key)
   if (hit) {
+    // LRU：命中重排到 Map 尾部（FIFO 会把热条目淘汰，与渲染缓存口径一致）
+    decoCache.delete(key)
+    decoCache.set(key, hit)
     return hit
   }
   const deco = Decoration.replace({ widget: new LiveMermaidWidget(code, language) })

@@ -6,6 +6,7 @@
 // 导出经 setDiagramExportSender 注入的出站通道交宿主另存为（SVG 矢量、
 // PNG 光栅化失败时按规格降级为仅 SVG 并提示）。
 import { t } from '../shared/i18n'
+import { locateGraphicFenceCode } from '../shared/mermaid'
 import { graphicRendererFor } from './graphicRenderers'
 import {
   rasterizeDiagramPng,
@@ -14,6 +15,8 @@ import {
   type IntrinsicSize,
 } from './diagramExport'
 import {
+  POPUP_DRAG_SLOP,
+  POPUP_FALLBACK_SIZE,
   containFitTransform,
   panTransform,
   POPUP_PAN_KEY_STEP,
@@ -28,6 +31,7 @@ export const DIAGRAM_POPUP_CLASS_NAMES = {
   stage: 'vsidian-diagram-stage',
   media: 'vsidian-diagram-media',
   error: 'vsidian-diagram-error',
+  note: 'vsidian-diagram-note',
   toolbar: 'vsidian-diagram-toolbar',
   zoomOut: 'vsidian-diagram-zoom-out',
   zoomLabel: 'vsidian-diagram-zoom-label',
@@ -55,6 +59,15 @@ let exportReqSeq = 0
 /** 装配导出通道（syncController.mount 注入；出站时补会话字段） */
 export function setDiagramExportSender(sender: ((req: DiagramExportRequest) => void) | null): void {
   exportSender = sender
+}
+
+/** 当前文档全文提供者（syncController.mount 注入；刷新语义的源码来源——
+ *  live CM6 state 是文本权威，阅读视图只是呈现切换） */
+let docSource: (() => string | null) | null = null
+
+/** 装配文档源（syncController.mount 注入；dispose 清空） */
+export function setDiagramPopupDocSource(source: (() => string | null) | null): void {
+  docSource = source
 }
 
 function sendExport(format: 'svg' | 'png', language: string, content: string): void {
@@ -87,6 +100,9 @@ interface PopupState {
   transform: PopupTransform
   /** 装载代次：丢弃过期异步结果（刷新连点/关闭后回插） */
   loadSeq: number
+  /** 降级提示条（PNG 不可用等）：单例复用，避免连点堆叠 */
+  note: HTMLElement | null
+  noteTimer: number | null
   prevFocus: HTMLElement | null
   prevBodyOverflow: string
   cleanups: Array<() => void>
@@ -184,14 +200,19 @@ async function loadSnapshot(p: PopupState): Promise<void> {
     error.textContent = result.message
     p.media.appendChild(error)
     for (const btn of p.toolbar.querySelectorAll('button')) {
-      if (!btn.classList.contains(DIAGRAM_POPUP_CLASS_NAMES.close)) {
+      // 错误态保留 close 与 refresh：源码在外部被修好后可原地重取
+      // （refresh 语义见 refreshSnapshot），无需关闭重开
+      if (
+        !btn.classList.contains(DIAGRAM_POPUP_CLASS_NAMES.close) &&
+        !btn.classList.contains(DIAGRAM_POPUP_CLASS_NAMES.refresh)
+      ) {
         btn.disabled = true
       }
     }
     return
   }
   p.svg = result.svg
-  p.intrinsic = readSvgIntrinsicSize(result.svg) ?? { w: 960, h: 540 }
+  p.intrinsic = readSvgIntrinsicSize(result.svg) ?? POPUP_FALLBACK_SIZE
   p.media.textContent = ''
   const tpl = document.createElement('template')
   tpl.innerHTML = result.svg
@@ -206,15 +227,60 @@ async function loadSnapshot(p: PopupState): Promise<void> {
   applyTransform(p)
 }
 
+/** 刷新语义（规格契约 4）：按当前文档源码重取——经 docSource 在当前
+ *  全文中重定位该语言围栏的最新内容（外部变更主场景），重定位失败
+ *  （文档不可得或歧义）回退打开时快照 */
+function refreshSnapshot(p: PopupState): void {
+  const doc = docSource?.() ?? null
+  if (doc !== null) {
+    const fresh = locateGraphicFenceCode(doc, p.language, p.code)
+    if (fresh !== null && fresh !== p.code) {
+      p.code = fresh
+    }
+  }
+  void loadSnapshot(p)
+}
+
+/** 弹窗内降级提示条（替代 window.alert——宿主 webview 的 sandbox iframe
+ *  无 allow-modals，alert 会被静默吞掉，规格要求的「明确回报」就落空） */
+function showPopupNote(p: PopupState, message: string): void {
+  dismissPopupNote(p)
+  const note = document.createElement('div')
+  note.className = DIAGRAM_POPUP_CLASS_NAMES.note
+  note.setAttribute('role', 'note')
+  note.textContent = message
+  p.overlay.appendChild(note)
+  const dismiss = () => {
+    if (p.noteTimer !== null) {
+      window.clearTimeout(p.noteTimer)
+      p.noteTimer = null
+    }
+    note.remove()
+    if (p.note === note) {
+      p.note = null
+    }
+  }
+  note.addEventListener('click', dismiss)
+  p.note = note
+  p.noteTimer = window.setTimeout(dismiss, 5000)
+}
+
+function dismissPopupNote(p: PopupState): void {
+  p.note?.click()
+}
+
 async function exportPng(p: PopupState): Promise<void> {
   if (!p.svg) {
     return
   }
   const serialized = serializeDiagramSvg(p.svg, p.intrinsic)
   const dataUrl = await rasterizeDiagramPng(serialized, p.intrinsic)
+  if (popup !== p) {
+    return // 光栅化期间弹窗已关闭：放弃在途导出（用户已取消意图）
+  }
   if (!dataUrl) {
     // 规格契约 6：PNG 光栅化不可用时降级为仅 SVG，明确提示（不静默砍）
-    window.alert(t('graphic.exportPngUnavailable'))
+    showPopupNote(p, t('graphic.exportPngUnavailable'))
     return
   }
   sendExport('png', p.language, dataUrl.slice('data:image/png;base64,'.length))
@@ -255,9 +321,11 @@ export function openGraphicPopup(language: string, code: string): void {
     language: language.trim(),
     code,
     svg: null,
-    intrinsic: { w: 960, h: 540 },
+    intrinsic: POPUP_FALLBACK_SIZE,
     transform: { scale: 1, panX: 0, panY: 0 },
     loadSeq: 0,
+    note: null,
+    noteTimer: null,
     prevFocus: document.activeElement instanceof HTMLElement ? document.activeElement : null,
     prevBodyOverflow: document.body.style.overflow,
     cleanups: [],
@@ -276,7 +344,7 @@ export function openGraphicPopup(language: string, code: string): void {
       applyTransform(state)
     }),
     toolbarButton(DIAGRAM_POPUP_CLASS_NAMES.refresh, t('graphic.popupRefresh'), TB_ICON.refresh, () => {
-      void loadSnapshot(state)
+      refreshSnapshot(state)
     }),
     toolbarButton(DIAGRAM_POPUP_CLASS_NAMES.exportSvg, t('graphic.popupExportSvg'), TB_ICON.download, () => {
       if (state.svg) {
@@ -308,6 +376,9 @@ export function openGraphicPopup(language: string, code: string): void {
   // 拖拽平移 + 点空白关闭（拖拽落点不算点击）
   let dragging = false
   let moved = false
+  let downX = 0
+  let downY = 0
+  let downTarget: EventTarget | null = null
   let lastX = 0
   let lastY = 0
   const onPointerDown = (event: PointerEvent) => {
@@ -316,9 +387,12 @@ export function openGraphicPopup(language: string, code: string): void {
     }
     dragging = true
     moved = false
+    downTarget = event.target
+    downX = event.clientX
+    downY = event.clientY
     lastX = event.clientX
     lastY = event.clientY
-    stage.setPointerCapture(event.pointerId)
+    stage.setPointerCapture?.(event.pointerId)
     stage.classList.add('vsidian-diagram-stage--dragging')
   }
   const onPointerMove = (event: PointerEvent) => {
@@ -327,7 +401,10 @@ export function openGraphicPopup(language: string, code: string): void {
     }
     const dx = event.clientX - lastX
     const dy = event.clientY - lastY
-    if (Math.abs(dx) + Math.abs(dy) > 0) {
+    if (
+      !moved &&
+      Math.abs(event.clientX - downX) + Math.abs(event.clientY - downY) > POPUP_DRAG_SLOP
+    ) {
       moved = true
     }
     lastX = event.clientX
@@ -341,10 +418,13 @@ export function openGraphicPopup(language: string, code: string): void {
     }
     dragging = false
     stage.classList.remove('vsidian-diagram-stage--dragging')
-    if (stage.hasPointerCapture(event.pointerId)) {
-      stage.releasePointerCapture(event.pointerId)
+    if (stage.hasPointerCapture?.(event.pointerId)) {
+      stage.releasePointerCapture?.(event.pointerId)
     }
-    if (!moved && (event.target === stage || event.target === backdrop)) {
+    // 空白关闭判定用按下时的原始 target：setPointerCapture 会把后续事件
+    // target 重定向到 stage，若按 up 时 target 判定，点在图上也会被误判
+    // 为空白而关闭
+    if (!moved && downTarget === stage) {
       closeDiagramPopup()
     }
   }
@@ -418,6 +498,7 @@ export function openGraphicPopup(language: string, code: string): void {
     stage.removeEventListener('pointermove', onPointerMove)
     stage.removeEventListener('pointerup', onPointerUp)
     overlay.removeEventListener('keydown', onKeyDown)
+    dismissPopupNote(state)
   })
 
   popup = state

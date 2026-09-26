@@ -12,12 +12,15 @@
 //    降级态，renderSvg 供弹窗/导出取矢量产物，缓存口径与 mermaidRender
 //    对齐）；
 // 3. 契约测试补一行（test/unit/graphicRenderers.test.ts 的语言枚举）。
-// 按钮/弹窗/禁点击/导出自动继承，无需逐处适配。
+// 按钮/弹窗/禁点击/导出自动继承，无需逐处适配。已知边界：主题明暗切换
+// 的全量重渲仍走 mermaidRender 的 mermaid 专属扫描（setMermaidDarkTheme），
+// 第二渲染语言接入时须自行评估主题联动路径。
 import {
   renderMermaidInto,
   renderMermaidSvg,
   type MermaidSvgResult,
 } from './mermaidRender'
+import { GRAPHIC_LANG_ATTR, MERMAID_CODE_ATTR, MERMAID_STATE_ATTR } from '../shared/mermaid'
 
 /** 图形化代码块渲染管线（webview 侧能力面） */
 export interface GraphicRenderer {
@@ -54,5 +57,34 @@ export function __registerGraphicRendererForTest(
   registry.set(language, renderer)
   return () => {
     registry.delete(language)
+  }
+}
+
+/** 渲染容器分派入口：扫描 root（含自身）内 pending 态图形容器，按
+ *  GRAPHIC_LANG_ATTR 经注册表找管线、从 MERMAID_CODE_ATTR 取源码渲染；
+ *  未登记管线的语言跳过（容器停留 pending 降级，不回落 mermaid 误渲）。
+ *  「登记即继承」在阅读挂载钩子的落点——live 侧由 widget 发射 gate
+ *  直接走 renderInto，不经此函数 */
+export function renderGraphicBlockInto(root: ParentNode): void {
+  const targets: HTMLElement[] = []
+  if (
+    root instanceof HTMLElement &&
+    root.getAttribute(GRAPHIC_LANG_ATTR) !== null &&
+    root.getAttribute(MERMAID_STATE_ATTR) === 'pending'
+  ) {
+    targets.push(root)
+  }
+  for (const el of Array.from(root.querySelectorAll<HTMLElement>(`[${GRAPHIC_LANG_ATTR}]`))) {
+    if (el.getAttribute(MERMAID_STATE_ATTR) === 'pending') {
+      targets.push(el)
+    }
+  }
+  for (const el of targets) {
+    const language = (el.getAttribute(GRAPHIC_LANG_ATTR) ?? '').trim()
+    const renderer = graphicRendererFor(language)
+    if (!renderer) {
+      continue
+    }
+    renderer.renderInto(el, el.getAttribute(MERMAID_CODE_ATTR) ?? '')
   }
 }

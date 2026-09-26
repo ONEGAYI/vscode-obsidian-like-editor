@@ -1569,4 +1569,13 @@ describe('图表导出协议校验（#111）', () => {
     expect(isHostToWebview({ kind: 'diagram.export.result', reqId: 3, ok: false, reason: 'nope' })).toBe(false)
     expect(isHostToWebview({ kind: 'diagram.export.result', reqId: 3 })).toBe(false)
   })
+
+  it('graphic.test.popup：action 可选且只认导出枚举', () => {
+    const base = { kind: 'graphic.test.popup', view: 'live', index: 0 } as const
+    expect(isHostToWebview({ ...base })).toBe(true)
+    expect(isHostToWebview({ ...base, action: 'export-svg' })).toBe(true)
+    expect(isHostToWebview({ ...base, action: 'export-png' })).toBe(true)
+    expect(isHostToWebview({ ...base, action: 'export-tiff' })).toBe(false)
+    expect(isHostToWebview({ kind: 'graphic.test.popup', view: 'both', index: 0 })).toBe(false)
+  })
 })

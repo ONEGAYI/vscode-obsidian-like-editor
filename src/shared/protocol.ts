@@ -80,8 +80,15 @@ export type HostToWebview =
   | { kind: 'codecard.test.copy'; index: number }
   /** 测试钩子（#111）：按序号点击图形化代码块的 popup 按钮（驱动与用户
    *  点击相同的处理器链路：打开图表弹窗）。宿主测试无法向 webview 派发
-   *  真实鼠标事件，以此通道验证真实宿主内的弹窗打开 */
-  | { kind: 'graphic.test.popup'; view: 'live' | 'reading'; index: number }
+   *  真实鼠标事件，以此通道验证真实宿主内的弹窗打开；action 存在时改为
+   *  点击弹窗工具条的导出按钮（集成回归驱动导出链路的消息形态——宿主
+   *  测试钩子模式下短路真实另存为对话框） */
+  | {
+      kind: 'graphic.test.popup'
+      view: 'live' | 'reading'
+      index: number
+      action?: 'export-svg' | 'export-png'
+    }
   /** 测试钩子（#82）：按序号点击卡片头部折叠 chevron（驱动与用户点击相同
    *  的处理器链路：effect → codeCardFoldField 视图态切换） */
   | { kind: 'codecard.test.fold'; index: number }
@@ -595,6 +602,9 @@ export interface PaintProbe {
     popupButtons: number
     /** 图表弹窗浮层在场（document 级单例） */
     overlay: boolean
+    /** 浮层实际遮蔽正文：backdrop 几何中心被浮层子树占据且可见（jsdom
+     *  无布局恒 false，真宿主集成断言依据，与 mermaid.visible 同口径） */
+    overlayVisible: boolean
     /** 浮层内 SVG 已装载 */
     overlaySvg: boolean
   }
@@ -1152,6 +1162,7 @@ function isPaintProbe(v: unknown): v is PaintProbe {
       isNonNegativeInt(v.graphic.editButtons) &&
       isNonNegativeInt(v.graphic.popupButtons) &&
       typeof v.graphic.overlay === 'boolean' &&
+      typeof v.graphic.overlayVisible === 'boolean' &&
       typeof v.graphic.overlaySvg === 'boolean'
     )) &&
     (v.mermaid === undefined || (
@@ -1640,7 +1651,8 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
     case 'graphic.test.popup':
       return (
         (v.view === 'live' || v.view === 'reading') &&
-        isNonNegativeInt(v.index)
+        isNonNegativeInt(v.index) &&
+        (v.action === undefined || v.action === 'export-svg' || v.action === 'export-png')
       )
     case 'codecard.test.fold':
       return isNonNegativeInt(v.index)

@@ -39,3 +39,10 @@ export function validateDiagramExportPayload(payload: DiagramExportPayload): boo
   }
   return payload.format === 'svg' || BASE64_STRICT.test(payload.content)
 }
+
+/** 文档 URI path → 所在目录 path（无目录分隔返回 null，调用方回退文件
+ *  系统根）——另存为默认目录落文档所在处的纯函数内核 */
+export function documentDirPath(docPath: string): string | null {
+  const idx = docPath.lastIndexOf('/')
+  return idx > 0 ? docPath.slice(0, idx) : null
+}

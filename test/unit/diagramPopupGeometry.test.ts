@@ -22,6 +22,14 @@ describe('containFitTransform', () => {
   it('小图放大补满不受用户缩放上限约束（上限只管缩放操作）', () => {
     const tiny = containFitTransform({ w: 1920, h: 1080 }, { w: 100, h: 60 })
     expect(tiny.scale).toBeGreaterThan(1)
+    // 极小图：fit 倍率远超 MAX 也不截断（截断会让整图可见的留边语义失效）
+    const extreme = containFitTransform({ w: 1920, h: 1080 }, { w: 10, h: 6 })
+    const expectRatio = Math.min((1920 * 0.92) / 10, (1080 * 0.92) / 6)
+    expect(extreme.scale).toBeCloseTo(expectRatio, 10)
+    expect(extreme.scale).toBeGreaterThan(POPUP_SCALE_MAX)
+    // 用户缩放下限仍生效（空视口等极端入参不至于归零）
+    const zeroVp = containFitTransform({ w: 0, h: 0 }, { w: 10, h: 6 })
+    expect(zeroVp.scale).toBe(POPUP_SCALE_MIN)
   })
 })
 

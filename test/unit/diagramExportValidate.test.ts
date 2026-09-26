@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DIAGRAM_EXPORT_LIMITS,
+  documentDirPath,
   sanitizeExportFileName,
   validateDiagramExportPayload,
 } from '../../src/host/diagramExportValidate'
@@ -49,5 +50,13 @@ describe('sanitizeExportFileName', () => {
     expect(sanitizeExportFileName('', 'png')).toBe('diagram.png')
     expect(sanitizeExportFileName('   ', 'svg')).toBe('diagram.svg')
     expect(sanitizeExportFileName('x'.repeat(200), 'svg')).toBe('diagram.svg')
+  })
+})
+
+describe('documentDirPath', () => {
+  it('返回文档所在目录；无目录分隔回退 null（调用方走文件系统根）', () => {
+    expect(documentDirPath('/d/notes/g.md')).toBe('/d/notes')
+    expect(documentDirPath('/g.md')).toBe(null)
+    expect(documentDirPath('g.md')).toBe(null)
   })
 })

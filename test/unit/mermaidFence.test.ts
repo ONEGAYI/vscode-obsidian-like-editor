@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   isRenderedFenceInfo,
+  locateGraphicFenceCode,
   scanFenceSpans,
   scanFencesDetailed,
   type FenceSpan,
@@ -185,5 +186,24 @@ describe('FenceSpan 与增量重建的坐标契约', () => {
     const s: FenceSpan | undefined = scanFenceSpans(text.split('\n'), 0)[0]
     expect(s).toBeDefined()
     expect(text.slice(s!.from, s!.to)).toBe('```mermaid\nA\n```')
+  })
+})
+
+describe('locateGraphicFenceCode（弹窗刷新重定位，#111 契约 4）', () => {
+  it('单围栏被外部改写：返回最新内容（主场景）', () => {
+    expect(locateGraphicFenceCode('# t\n\n```mermaid\nC-->D\n```\n', 'mermaid', 'A-->B')).toBe('C-->D')
+  })
+
+  it('来源围栏未变：精确匹配返回原文（刷新为无操作，命中缓存）', () => {
+    const doc = '```mermaid\nA-->B\n```\n\n```mermaid\nX\n```\n'
+    expect(locateGraphicFenceCode(doc, 'mermaid', 'A-->B')).toBe('A-->B')
+    expect(locateGraphicFenceCode(doc, 'mermaid', 'X')).toBe('X')
+  })
+
+  it('多围栏且旧内容不在：歧义返回 null（回退打开时快照）；非该语言围栏不参与', () => {
+    const doc = '```mermaid\nP\n```\n\n```mermaid\nQ\n```\n'
+    expect(locateGraphicFenceCode(doc, 'mermaid', 'gone')).toBe(null)
+    expect(locateGraphicFenceCode('```plantuml\nP\n```\n', 'mermaid', 'P')).toBe(null)
+    expect(locateGraphicFenceCode('', 'mermaid', 'P')).toBe(null)
   })
 })

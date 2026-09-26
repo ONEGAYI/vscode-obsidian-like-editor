@@ -3,11 +3,18 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 import { EditorSelection, EditorState } from '@codemirror/state'
-import { RENDERED_FENCE_LABELS, scanFenceSpans } from '../../src/shared/mermaid'
+import {
+  GRAPHIC_LANG_ATTR,
+  MERMAID_CODE_ATTR,
+  MERMAID_STATE_ATTR,
+  RENDERED_FENCE_LABELS,
+  scanFenceSpans,
+} from '../../src/shared/mermaid'
 import {
   __registerGraphicRendererForTest,
   graphicRendererFor,
   graphicRendererLanguages,
+  renderGraphicBlockInto,
 } from '../../src/webview/graphicRenderers'
 import { buildMermaidDecorationRanges, mermaidFencesField } from '../../src/webview/liveMermaid'
 
@@ -50,5 +57,34 @@ describe('登记即继承（假想第二渲染器）', () => {
       { from: 0, to: 10, char: '`' as const, run: 3, rendered: true, info: 'nostack', code: 'X' },
     ]
     expect(buildMermaidDecorationRanges(EditorSelection.single(100), null, fences)).toHaveLength(0)
+  })
+
+  it('阅读渲染分派走注册表：块容器扫描后代 pending 容器，命中管线即渲染，未登记跳过', () => {
+    const calls: Array<{ lang: string; code: string }> = []
+    const restore = __registerGraphicRendererForTest('renderlang', {
+      renderInto: (el, code) => {
+        calls.push({ lang: el.getAttribute(GRAPHIC_LANG_ATTR) ?? '', code })
+      },
+      renderSvg: async () => ({ ok: true, svg: '<svg></svg>' }),
+    })
+    // 挂载钩子传入的是块容器，图形容器是其后代（同 renderMermaidIn 扫描语义）
+    const block = document.createElement('div')
+    const el = document.createElement('div')
+    el.setAttribute(GRAPHIC_LANG_ATTR, 'renderlang')
+    el.setAttribute(MERMAID_CODE_ATTR, 'X')
+    el.setAttribute(MERMAID_STATE_ATTR, 'pending')
+    block.appendChild(el)
+    renderGraphicBlockInto(block)
+    expect(calls).toEqual([{ lang: 'renderlang', code: 'X' }])
+    // 共享标签在而管线缺失的语言：不得回落 mermaid 管线误渲（停留降级）；
+    // renderlang 容器 mock 下仍为 pending 会被重扫，属扫描语义而非缺陷
+    const unknown = document.createElement('div')
+    unknown.setAttribute(GRAPHIC_LANG_ATTR, 'nostack')
+    unknown.setAttribute(MERMAID_CODE_ATTR, 'X')
+    unknown.setAttribute(MERMAID_STATE_ATTR, 'pending')
+    block.appendChild(unknown)
+    renderGraphicBlockInto(block)
+    expect(calls.some((entry) => entry.lang === 'nostack')).toBe(false)
+    restore()
   })
 })

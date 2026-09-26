@@ -146,20 +146,79 @@ describe('图表弹窗（契约 4–6）', () => {
     expect(document.body.style.overflow).toBe('')
   })
 
-  it('刷新按钮按当前源码重取（同源码命中缓存不重复 render，弹窗保持）', async () => {
+  it('刷新按当前文档源码重取：围栏被改写后取新图，同源码命中缓存不重复 render', async () => {
     const api = mockMermaid()
     const { bridge } = makeBridge()
     const c = mountDoc(bridge)
     await settle()
-    const rendersBefore = api.renders.length
     ;(c.getView()!.dom.querySelector('.vsidian-graphic-chrome-popup') as HTMLButtonElement).click()
     await settle()
+    expect(api.renders.at(-1)).toBe('A-->B')
     ;(document.querySelector('.vsidian-diagram-refresh') as HTMLButtonElement).click()
     await settle()
+    // 同源码命中渲染缓存：不重复 render，弹窗保持（规格契约 4 刷新语义）
+    expect(api.renders.filter((code) => code === 'A-->B')).toHaveLength(1)
     expect(isDiagramPopupOpen()).toBe(true)
-    // 弹窗装载与刷新共用 renderSvg——同源码命中渲染缓存，不重复 render
-    expect(api.renders.length).toBe(rendersBefore)
+    // 模拟外部程序改写围栏（文档变化），刷新应取新源码重渲染
+    const view = c.getView()!
+    const at = view.state.doc.toString().indexOf('A-->B')
+    view.dispatch({ changes: { from: at, to: at + 'A-->B'.length, insert: 'C-->D' } })
+    ;(document.querySelector('.vsidian-diagram-refresh') as HTMLButtonElement).click()
+    await settle()
+    expect(api.renders.at(-1)).toBe('C-->D')
     expect(document.querySelector('.vsidian-diagram-media svg')).not.toBeNull()
+    expect(isDiagramPopupOpen()).toBe(true)
+  })
+
+  it('装载失败错误态：close/refresh 保留可用（外部修好源码可原地重取），导出禁用', async () => {
+    const api: MermaidApi = {
+      initialize() {},
+      async render() {
+        throw new Error('syntax error')
+      },
+    }
+    __setMermaidApiForTest(api)
+    const { bridge } = makeBridge()
+    const c = mountDoc(bridge)
+    await settle()
+    ;(c.getView()!.dom.querySelector('.vsidian-graphic-chrome-popup') as HTMLButtonElement).click()
+    await settle()
+    const disabled = (cls: string) =>
+      (document.querySelector(cls) as HTMLButtonElement).disabled
+    expect(document.querySelector('.vsidian-diagram-error')).not.toBeNull()
+    expect(disabled('.vsidian-diagram-close')).toBe(false)
+    expect(disabled('.vsidian-diagram-refresh')).toBe(false)
+    expect(disabled('.vsidian-diagram-export-svg')).toBe(true)
+    expect(disabled('.vsidian-diagram-export-png')).toBe(true)
+  })
+
+  it('单击图形本体不关闭弹窗（仅空白区单击关闭）', async () => {
+    mockMermaid()
+    const { bridge } = makeBridge()
+    const c = mountDoc(bridge)
+    await settle()
+    ;(c.getView()!.dom.querySelector('.vsidian-graphic-chrome-popup') as HTMLButtonElement).click()
+    await settle()
+    const stage = document.querySelector('.vsidian-diagram-stage') as HTMLElement
+    const mk = (type: string) => {
+      // jsdom 无 PointerEvent：MouseEvent 冒充（type 决定分派，浏览器层
+      // 由真实键鼠回归覆盖）
+      const ev = new MouseEvent(type, { bubbles: true, cancelable: true })
+      Object.defineProperty(ev, 'pointerId', { value: 1 })
+      return ev
+    }
+    // 点在图上：down 的原始 target 是 SVG 子树，up 因 capture 重定向到
+    // stage——不得判为空白关闭
+    const svg = document.querySelector('.vsidian-diagram-media svg') as SVGElement
+    svg.dispatchEvent(mk('pointerdown'))
+    stage.dispatchEvent(mk('pointerup'))
+    await settle()
+    expect(isDiagramPopupOpen()).toBe(true)
+    // 点纯空白（target = stage）：关闭
+    stage.dispatchEvent(mk('pointerdown'))
+    stage.dispatchEvent(mk('pointerup'))
+    await settle()
+    expect(isDiagramPopupOpen()).toBe(false)
   })
 
   it('导出 SVG：经桥发出 diagram.export（含序列化 SVG 文本）', async () => {
@@ -180,25 +239,40 @@ describe('图表弹窗（契约 4–6）', () => {
     expect(msg!.sessionId).toBe('s1')
   })
 
-  it('PNG 光栅化不可用（jsdom 无 canvas）：提示降级、不发 diagram.export', async () => {
-    const alerts: string[] = []
-    const stub = () => alerts.push('called')
-    window.alert = stub
-    try {
-      mockMermaid()
-      const { bridge, sent } = makeBridge()
-      const c = mountDoc(bridge)
-      await settle()
-      ;(c.getView()!.dom.querySelector('.vsidian-graphic-chrome-popup') as HTMLButtonElement).click()
-      await settle()
-      ;(document.querySelector('.vsidian-diagram-export-png') as HTMLButtonElement).click()
-      await settle()
-      expect(alerts).toHaveLength(1)
-      expect(sent.filter((m) => m.kind === 'diagram.export')).toHaveLength(0)
-    } finally {
-      // jsdom 默认无 alert 实现，测试内替换后无需还原（下轮覆盖）
-      delete (window as { alert?: unknown }).alert
-    }
+  it('graphic.test.popup 钩子：action 只点工具条导出按钮，不重开弹窗清快照', async () => {
+    mockMermaid()
+    const { bridge, sent } = makeBridge()
+    const c = mountDoc(bridge)
+    await settle()
+    // 开弹窗并等装载完成（集成用例同款前置）
+    c.handleHostMessage({ kind: 'graphic.test.popup', view: 'live', index: 0 })
+    await settle(20)
+    expect(document.querySelector('.vsidian-diagram-media svg')).not.toBeNull()
+    // action 路径：不重新点 popup 按钮（重开会清空快照使导出点击落空）
+    c.handleHostMessage({ kind: 'graphic.test.popup', view: 'live', index: 0, action: 'export-svg' })
+    await settle()
+    const msg = sent.find((m): m is Extract<WebviewToHost, { kind: 'diagram.export' }> =>
+      m.kind === 'diagram.export')
+    expect(msg).toBeDefined()
+    expect(msg!.format).toBe('svg')
+  })
+
+  it('PNG 光栅化不可用（jsdom 无 canvas）：弹窗内降级提示条、不发 diagram.export', async () => {
+    mockMermaid()
+    const { bridge, sent } = makeBridge()
+    const c = mountDoc(bridge)
+    await settle()
+    ;(c.getView()!.dom.querySelector('.vsidian-graphic-chrome-popup') as HTMLButtonElement).click()
+    await settle()
+    ;(document.querySelector('.vsidian-diagram-export-png') as HTMLButtonElement).click()
+    await settle()
+    const note = document.querySelector('.vsidian-diagram-note') as HTMLElement | null
+    expect(note).not.toBeNull()
+    expect(note!.textContent).not.toBe('')
+    expect(sent.filter((m) => m.kind === 'diagram.export')).toHaveLength(0)
+    // 提示条点击即消失
+    note!.click()
+    expect(document.querySelector('.vsidian-diagram-note')).toBeNull()
   })
 })
 

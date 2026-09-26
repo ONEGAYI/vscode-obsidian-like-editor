@@ -27,6 +27,7 @@ import { FORMAT_OPERATIONS } from '../shared/formatOperations'
 import { KEYBINDING_OPERATIONS, UI_OPERATIONS } from '../shared/keybindings'
 import {
   isWebviewToHost,
+  type DiagramExportPayload,
   type HostToWebview,
   type SerChange,
   type TableEditOp,
@@ -110,6 +111,10 @@ export function isActiveTabCustomEditorOf(
     input.uri.toString() === uriStr
   )
 }
+
+/** 图表导出消息日志（#111 测试钩子观测：钩子模式下集成测试断言
+ *  webview→宿主导出链路的消息形态；按文档 URI 分桶，查询即取走） */
+const diagramExportTestLog = new Map<string, DiagramExportPayload[]>()
 
 /** 链接跳转执行日志（#10 测试钩子观测：VSIDIAN_TEST_HOOKS 下集成测试断言
  *  宿主收到的跳转意图与处置结果） */
@@ -760,9 +765,19 @@ export function createTextEditorProvider(
           )
         },
         // #111 图表导出端口：弹窗工具条 → 载荷校验 + showSaveDialog +
-        // writeFile，结果经 diagram.export.result 回来源面板
+        // writeFile，结果经 diagram.export.result 回来源面板。测试钩子
+        // 模式（VSIDIAN_TEST_HOOKS）短路真实对话框：记录消息形态供集成
+        // 断言，回报 cancelled（与用户取消同回报形态）
         exportDiagram: (payload, report) => {
-          void runDiagramExport(payload, report)
+          if (process.env.VSIDIAN_TEST_HOOKS === '1') {
+            const key = document.uri.toString()
+            const log = diagramExportTestLog.get(key) ?? []
+            log.push(payload)
+            diagramExportTestLog.set(key, log)
+            report({ ok: false, reason: 'cancelled' })
+            return
+          }
+          void runDiagramExport(payload, document.uri.toString(), report)
         },
       })
       entry.panels.set(sessionId, webviewPanel)
@@ -1445,6 +1460,17 @@ export function createTextEditorProvider(
       (uriStr: string) => {
         const entry = getEntry(vscode.Uri.parse(uriStr))
         return { found: !!entry, log: entry ? [...entry.linkLog] : [] }
+      },
+    ),
+    vscode.commands.registerCommand(
+      // #111 图表导出消息日志（取走即清空）：钩子模式下 exportDiagram 端口
+      // 不弹真实另存为对话框，集成测试经 graphic.test.popup 的 action 驱动
+      // 导出按钮后，以此断言 webview→宿主链路的消息形态
+      'onegayi.vsidian._test.takeDiagramExportLog',
+      (uriStr: string) => {
+        const log = diagramExportTestLog.get(uriStr) ?? []
+        diagramExportTestLog.set(uriStr, [])
+        return [...log]
       },
     ),
     vscode.commands.registerCommand(

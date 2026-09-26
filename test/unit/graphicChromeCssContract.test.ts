@@ -73,4 +73,12 @@ describe('图表弹窗 CSS 契约（#111 契约 4–5）', () => {
       /background:\s*var\(--vscode-editorWidget-background/,
     )
   })
+
+  it('降级提示条浮于工具条上方、高于正文与工具条（PNG 不可用回报可见）', () => {
+    expect(rule('.vsidian-diagram-note')).toMatch(/position:\s*absolute/)
+    expect(rule('.vsidian-diagram-note')).toMatch(/z-index:\s*10002/)
+    expect(rule('.vsidian-diagram-note')).toMatch(
+      /background:\s*var\(--vscode-editorWidget-background/,
+    )
+  })
 })

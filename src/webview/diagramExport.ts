@@ -5,6 +5,8 @@
 //   不支持（jsdom/画布或 CSP 拦截）返回 null，调用方按规格降级为仅 SVG。
 //   已知边界：mermaid htmlLabels 走 foreignObject，SVG-as-image 语境下
 //   部分引擎不渲染该内容——PNG 保真度由浏览器回归实测，属规格显式风险项。
+import { POPUP_FALLBACK_SIZE } from './diagramPopupGeometry'
+
 export interface IntrinsicSize {
   w: number
   h: number
@@ -50,7 +52,7 @@ export function serializeDiagramSvg(svg: string, intrinsic: IntrinsicSize | null
   if (!root) {
     return svg
   }
-  const size = intrinsic ?? { w: 960, h: 540 }
+  const size = intrinsic ?? POPUP_FALLBACK_SIZE
   // style 属性级清洗（不依赖 CSSOM：部分引擎对 SVG 根的 .style 惰性构建）
   const styleAttr = root.getAttribute('style')
   if (styleAttr !== null) {
@@ -79,7 +81,7 @@ export async function rasterizeDiagramPng(
   intrinsic: IntrinsicSize | null,
   pixelRatio = 2,
 ): Promise<string | null> {
-  const size = intrinsic ?? { w: 960, h: 540 }
+  const size = intrinsic ?? POPUP_FALLBACK_SIZE
   // canvas 上下文不可用（jsdom、禁用 canvas 的环境）先于图片装载判定——
   // 否则装载承诺悬挂，导出路径卡死
   const probe = document.createElement('canvas')
@@ -102,7 +104,10 @@ export async function rasterizeDiagramPng(
       return null
     }
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-    return canvas.toDataURL('image/png')
+    const pngDataUrl = canvas.toDataURL('image/png')
+    // 哨兵防御：画布超限等场景部分引擎返回 'data:,' 空串而非抛错——
+    // 统一按不可用降级（null），走规格的仅 SVG 路径
+    return pngDataUrl.startsWith('data:image/png') ? pngDataUrl : null
   } catch {
     return null
   }

@@ -1,10 +1,12 @@
 // Mermaid 暗色主题装配契约（工单 #110）：themeVariables 映射纯函数——
 // VSCode 色板（--vscode-* 计算值）→ mermaid 暗色取值；空色板回退到与
 // Dark Modern 量级一致的暗色兜底；关键墨水色对画布底满足 WCAG AA。
+// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 import {
   MERMAID_DARK_FALLBACK_PALETTE,
   buildDarkMermaidThemeVariables,
+  resolveVscodeMermaidPalette,
   type VscodeMermaidPalette,
 } from '../../src/webview/mermaidTheme'
 
@@ -70,5 +72,20 @@ describe('buildDarkMermaidThemeVariables', () => {
     expect(contrast(tv['lineColor']!, MERMAID_DARK_FALLBACK_PALETTE.background!)).toBeGreaterThanOrEqual(4.5)
     expect(contrast(tv['signalTextColor']!, MERMAID_DARK_FALLBACK_PALETTE.background!)).toBeGreaterThanOrEqual(4.5)
     expect(contrast(tv['primaryTextColor']!, tv['primaryColor']!)).toBeGreaterThanOrEqual(4.5)
+  })
+})
+
+describe('resolveVscodeMermaidPalette（取值链路，#110）', () => {
+  it('读取注入元素的 --vscode-* 计算值并 trim；缺失键不出现（走兜底）', () => {
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+    root.style.setProperty('--vscode-editor-foreground', ' #cccccc ')
+    root.style.setProperty('--vscode-editor-background', '#1f1f1f')
+    const palette = resolveVscodeMermaidPalette(root)
+    expect(palette.foreground).toBe('#cccccc')
+    expect(palette.background).toBe('#1f1f1f')
+    expect(palette.widgetBackground).toBeUndefined()
+    expect(palette.widgetBorder).toBeUndefined()
+    root.remove()
   })
 })

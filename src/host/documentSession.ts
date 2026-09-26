@@ -312,7 +312,11 @@ export class DocumentSession {
         return Promise.resolve()
       case 'diagram.export': {
         // #111 图表导出：只读交互（不写文档、不入撤销栈），暂停态同样
-        // 放行（与 clipboard.write 同口径）；结果回来源面板
+        // 放行（与 clipboard.write 同口径）；结果回来源面板。会话守卫
+        // 对齐 codeblock.copy 先例（就绪且 docUri 匹配才放行，否则静默丢弃）
+        if (!panel.ready || message.docUri !== this.docUri) {
+          return Promise.resolve()
+        }
         const report = (result: { ok: boolean; reason?: DiagramExportFailReason }): void => {
           panel.port.send({
             kind: 'diagram.export.result',

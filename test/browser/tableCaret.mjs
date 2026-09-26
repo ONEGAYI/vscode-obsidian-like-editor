@@ -742,7 +742,7 @@ const serveOutFile = async (res, rel) => {
 // style-src 'unsafe-inline'（CM6 与 mermaid SVG 内嵌样式）、无 unsafe-eval
 const mermaidNonce = 'vsidian-mermaid-test-nonce'
 const mermaidPageHtml = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'nonce-${mermaidNonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' https:; font-src 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'nonce-${mermaidNonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; font-src 'self'">
 <link rel="stylesheet" href="/tableCaret.css">
 </head><body><div id="app"></div>
 <script nonce="${mermaidNonce}">window.__vsidianMermaidUri = "/mermaid.js";</script>

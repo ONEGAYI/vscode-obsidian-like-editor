@@ -16,6 +16,9 @@ export const POPUP_ZOOM_STEP = 1.2
 export const POPUP_FIT_MARGIN = 0.92
 /** 方向键单步平移（px） */
 export const POPUP_PAN_KEY_STEP = 40
+/** 拖拽启动容差（px）：按下到抬起的总位移不超过该值视为单击（真实鼠标
+ *  抖动不误判为拖拽，单击关闭判定稳定） */
+export const POPUP_DRAG_SLOP = 3
 /** 无尺寸信息时的兜底内在尺寸（对齐参考实现） */
 export const POPUP_FALLBACK_SIZE = { w: 960, h: 540 } as const
 
@@ -23,15 +26,16 @@ export function clampScale(scale: number): number {
   return Math.min(POPUP_SCALE_MAX, Math.max(POPUP_SCALE_MIN, scale))
 }
 
-/** contain-fit：整图按舞台留边可见（允许小图放大补满，不设上限——上限
- *  只约束用户缩放操作）；结果居中（pan = 0） */
+/** contain-fit：整图按舞台留边可见（允许小图放大补满，不受 MAX 上限
+ *  约束——上限只约束用户缩放操作）；结果居中（pan = 0） */
 export function containFitTransform(
   viewport: { w: number; h: number },
   content: { w: number; h: number },
 ): PopupTransform {
   const cw = Math.max(content.w, 1)
   const ch = Math.max(content.h, 1)
-  const scale = clampScale(
+  const scale = Math.max(
+    POPUP_SCALE_MIN,
     Math.min((viewport.w * POPUP_FIT_MARGIN) / cw, (viewport.h * POPUP_FIT_MARGIN) / ch),
   )
   return { scale, panX: 0, panY: 0 }

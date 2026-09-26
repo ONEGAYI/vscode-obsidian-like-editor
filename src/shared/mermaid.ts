@@ -144,6 +144,25 @@ export function scanFenceSpans(lines: readonly string[], firstLineStart: number)
   return scanFencesDetailed(lines, firstLineStart).spans
 }
 
+/**
+ * 图形化围栏源码重定位（#111 弹窗刷新语义）：在当前文档全文中找回该
+ * 语言围栏的最新内容。优先精确匹配 prevCode（来源围栏未变，刷新为无
+ * 操作）；否则该语言围栏恰好一个时取其内容（单图文档被外部改写的主
+ * 场景）；多围栏且旧内容已不在（无法判定弹窗对应哪个）返回 null，
+ * 调用方回退打开时快照。纯函数，node 单测直驱。
+ */
+export function locateGraphicFenceCode(doc: string, language: string, prevCode: string): string | null {
+  const spans = scanFenceSpans(doc.split('\n'), 0)
+  const lang = language.trim()
+  const same = spans.filter((span) => span.rendered && span.info.trim() === lang)
+  for (const span of same) {
+    if (span.code === prevCode) {
+      return prevCode
+    }
+  }
+  return same.length === 1 ? same[0]!.code : null
+}
+
 /** 同 scanFenceSpans，另回报窗口末尾的开放围栏状态（增量重建延伸用） */
 export function scanFencesDetailed(
   lines: readonly string[],
