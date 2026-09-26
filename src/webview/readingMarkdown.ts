@@ -158,6 +158,100 @@ function vsidianWikilinkInlineRule(state: StateInline, silent: boolean): boolean
   return true
 }
 
+/**
+ * 高亮 close 定界符扫描（#105）：从 from 起在 [from, posMax) 内找首个
+ * `==`，反引号 run（CommonMark code span：n 反引号开、等长 run 闭）区间
+ * 整体跳过——lezer 侧 InlineCode 先消费同样区间，裸 indexOf 会把 close
+ * 切进 code span（如 `==use \`a==b\` now==`），造成双视图渲染分叉。未
+ * 配对反引号不构成 code span，按普通文本继续扫；每个 run 的闭合搜索只
+ * 前进不回退，成本与行内片段长度同阶。
+ */
+function findHighlightClose(src: string, from: number, posMax: number): number {
+  let i = from
+  while (i + 1 < posMax) {
+    if (src.charCodeAt(i) === 0x60 /* ` */) {
+      let runEnd = i
+      while (runEnd < posMax && src.charCodeAt(runEnd) === 0x60) {
+        runEnd++
+      }
+      const runLen = runEnd - i
+      let scan = runEnd
+      let spanEnd = -1
+      while (scan < posMax) {
+        if (src.charCodeAt(scan) === 0x60) {
+          let scanEnd = scan
+          while (scanEnd < posMax && src.charCodeAt(scanEnd) === 0x60) {
+            scanEnd++
+          }
+          if (scanEnd - scan === runLen) {
+            spanEnd = scanEnd
+            break
+          }
+          scan = scanEnd
+        } else {
+          scan++
+        }
+      }
+      i = spanEnd >= 0 ? spanEnd : runEnd
+      continue
+    }
+    if (src.charCodeAt(i) === 0x3d /* = */ && src.charCodeAt(i + 1) === 0x3d) {
+      return i
+    }
+    i++
+  }
+  return -1
+}
+
+/**
+ * 高亮 inline 规则（#105）：成对 `==` 渲染为 mark 语义元素（html:false 下
+ * 输出语义标签）。形态学与 lezer 侧（markdownDoc 的 Highlight 扩展）对齐：
+ * 定界符紧贴空白拒绝（flanking 同判）、残缺不匹配（普通文本降级，源文
+ * 保真）；段内跨行可配对。close 经 findHighlightClose 扫描（code span
+ * 区间不参与配对）；空内容（close 紧贴 open，如 `====`）整条拒绝——与
+ * live 侧「空区间不发射装饰」口径一致，不产空 mark。已知边界：连续等
+ * 号开头的形态（如 `====x====`）两侧仍有残余分歧（阅读按源码降级、live
+ * 产嵌套高亮），源码降级是安全侧。规则挂 emphasis 之前——backticks 已
+ * 先消费，行内代码内容字面呈现不受影响；内容区间经 tokenize 递归，嵌
+ * 套行内标记照常解析。
+ */
+function vsidianHighlightInlineRule(state: StateInline, silent: boolean): boolean {
+  const src = state.src
+  const start = state.pos
+  if (start + 2 >= state.posMax ||
+      src.charCodeAt(start) !== 0x3d /* '=' */ || src.charCodeAt(start + 1) !== 0x3d) {
+    return false
+  }
+  const after = src.charAt(start + 2)
+  if (after === '' || /\s/u.test(after)) {
+    return false
+  }
+  const close = findHighlightClose(src, start + 2, state.posMax)
+  if (close < 0 || close + 2 > state.posMax) {
+    return false
+  }
+  if (close === start + 2) {
+    return false
+  }
+  const before = close > 0 ? src.charAt(close - 1) : ''
+  if (before === '' || /\s/u.test(before)) {
+    return false
+  }
+  if (!silent) {
+    const oldMax = state.posMax
+    state.push('mark_open', 'mark', 1)
+    state.pos = start + 2
+    state.posMax = close
+    state.md.inline.tokenize(state)
+    state.push('mark_close', 'mark', -1)
+    state.pos = close + 2
+    state.posMax = oldMax
+  } else {
+    state.pos = close + 2
+  }
+  return true
+}
+
 /** 创建阅读渲染器（安全配置锁定；渲染规则一次性装配，实例应复用） */
 export function createMarkdownRenderer(): InstanceType<typeof MarkdownIt> {
   const md = new MarkdownIt({
@@ -169,6 +263,8 @@ export function createMarkdownRenderer(): InstanceType<typeof MarkdownIt> {
   // #11 双链规则先于 link（[t](u)）：`[[…]]` 在 CommonMark 中只是普通文本，
   // 必须在文本规则消费前拦截
   md.inline.ruler.before('link', 'vsidian_wikilink', vsidianWikilinkInlineRule)
+  // #105 高亮：挂 emphasis 之前（backticks 已消费，行内代码内不转换）
+  md.inline.ruler.before('emphasis', 'vsidian_highlight', vsidianHighlightInlineRule)
   // #59 公式：@vscode/markdown-it-katex 的解析规则（$…$ / $$…$$ 判定与
   // shared/math.ts 对齐）；渲染规则覆盖为带稳定类名 + 原文降级
   md.use(katexPlugin, { throwOnError: true })

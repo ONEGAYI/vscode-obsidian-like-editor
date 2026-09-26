@@ -2,7 +2,7 @@
 // reportPath：把本次宿主运行的完整 stdout/stderr 与退出码落盘为报告文件
 // （跑一次 = 留一份证据，复核与统计读文件、不重跑）；打开失败仅告警降级。
 import { spawn } from 'node:child_process'
-import { closeSync, mkdirSync, openSync, writeSync } from 'node:fs'
+import { closeSync, mkdirSync, mkdtempSync, openSync, rmSync, writeSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -43,6 +43,37 @@ export function buildTestHostArgs({ workspaceDir, testsPath, extensionPath, exte
     `--user-data-dir=${userDataDir}`,
     workspaceDir,
   ]
+}
+
+export function createPortableShardHost(baseDir, shard, env = process.env) {
+  if (!Number.isInteger(shard) || shard < 1) {
+    throw new Error(`分片序号须为正整数：${shard}`)
+  }
+  const portableDir = mkdtempSync(path.join(path.resolve(baseDir), `portable-s${shard}-`))
+  return {
+    portableDir,
+    extensionsDir: path.join(portableDir, 'extensions'),
+    userDataDir: path.join(portableDir, 'user-data'),
+    // VSCode 便携模式优先于 --user-data-dir；显式指定每片独立目录才能隔离 main IPC。
+    env: { ...env, VSCODE_PORTABLE: portableDir },
+  }
+}
+
+export function cleanupTestDirs(dirs, parent, remove = rmSync) {
+  const failures = []
+  const allowedParent = path.resolve(parent)
+  for (const dir of dirs) {
+    if (path.dirname(path.resolve(dir)) !== allowedParent) {
+      failures.push(`拒绝清理越界目录：${dir}`)
+      continue
+    }
+    try {
+      remove(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+    } catch (error) {
+      failures.push(`清理 ${dir} 失败：${String(error)}`)
+    }
+  }
+  return failures
 }
 
 export function resolveTestHostMode(platform = process.platform, env = process.env) {

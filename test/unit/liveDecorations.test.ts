@@ -95,9 +95,9 @@ function coveredTexts(set: DecorationSet, cls: string, doc: string): string[] {
   })
 }
 
-function build(doc: string | Text, selection = { anchor: 0 }): DecorationSet {
+function build(doc: string | Text, selection: { anchor: number; head?: number } = { anchor: 0 }): DecorationSet {
   const text = typeof doc === 'string' ? Text.of(doc.split('\n')) : doc
-  return buildLivePreviewDecorations(text, EditorSelection.single(selection.anchor))
+  return buildLivePreviewDecorations(text, EditorSelection.single(selection.anchor, selection.head ?? selection.anchor))
 }
 
 function stateWithDoc(doc: string, selection?: { anchor: number; head?: number }) {
@@ -377,6 +377,73 @@ describe('mark 作用域显形', () => {
   })
 })
 
+describe('高亮 ==text==（#105）：#29 行内标记组语义', () => {
+  it('光标离开：内容 span 常显高亮底色类、两端 == 定界符隐藏', () => {
+    const doc = '正文 ==高亮== 文本'
+    const set = build(doc, { anchor: doc.indexOf('文本') })
+    expect(coveredTexts(set, 'vsidian-highlight', doc)).toEqual(['高亮'])
+    const first = doc.indexOf('==')
+    const second = doc.indexOf('==', first + 2)
+    const hidden = hiddenRanges(set)
+    expect(hidden).toContainEqual([first, first + 2])
+    expect(hidden).toContainEqual([second, second + 2])
+  })
+
+  it('光标触及高亮范围（含两端边界）时 == 显形可编辑', () => {
+    const doc = '正文 ==高亮== 文本'
+    const first = doc.indexOf('==')
+    const second = doc.indexOf('==', first + 2)
+    // 控制域 = 高亮范围含两端边界：内容、开 mark 前（from）、闭 mark 后（to）
+    for (const pos of [first, doc.indexOf('高亮'), second + 2]) {
+      const hidden = hiddenRanges(build(doc, { anchor: pos }))
+      expect(hidden, `光标在 ${pos}`).not.toContainEqual([first, first + 2])
+      expect(hidden, `光标在 ${pos}`).not.toContainEqual([second, second + 2])
+    }
+  })
+
+  it('同一行不同标记互不连带：高亮显形不影响粗体隐藏，反之亦然', () => {
+    const doc = '**粗体** 与 ==高亮== 共行'
+    const strong = doc.indexOf('**')
+    const hl = doc.indexOf('==')
+    const inHighlight = hiddenRanges(build(doc, { anchor: doc.indexOf('高亮') }))
+    expect(inHighlight).toContainEqual([strong, strong + 2])
+    expect(inHighlight).not.toContainEqual([hl, hl + 2])
+    const inStrong = hiddenRanges(build(doc, { anchor: doc.indexOf('粗体') }))
+    expect(inStrong).not.toContainEqual([strong, strong + 2])
+    expect(inStrong).toContainEqual([hl, hl + 2])
+  })
+
+  it('残缺与空格紧贴形态：无装饰无隐藏（源码降级，源文不丢）', () => {
+    for (const doc of ['a == b == c', '==未闭合']) {
+      const set = build(doc, { anchor: 0 })
+      expect(coveredTexts(set, 'vsidian-highlight', doc)).toEqual([])
+      expect(hiddenRanges(set)).toEqual([])
+    }
+  })
+
+  it('空内容 ==== 不隐藏定界符（无字面内容的形态按源码呈现）', () => {
+    const doc = 'a ===='
+    const set = build(doc, { anchor: 0 })
+    expect(hiddenRanges(set)).toEqual([])
+    expect(coveredTexts(set, 'vsidian-highlight', doc)).toEqual([])
+  })
+
+  it('行内代码内的 == 不产高亮装饰；表格单元格内照常装饰', () => {
+    expect(coveredTexts(build('`==x==`', { anchor: 0 }), 'vsidian-highlight', '`==x==`')).toEqual([])
+    const table = '| A | B |\n| --- | --- |\n| ==x== | y |'
+    expect(coveredTexts(build(table, { anchor: 0 }), 'vsidian-highlight', table)).toEqual(['x'])
+  })
+
+  it('光标移动切换显隐：增量装饰与全量对拍一致（零写回）', () => {
+    const doc = '- 正文 ==强调== 和 `代码`'
+    let state = stateWithDoc(doc, { anchor: doc.indexOf('正文') })
+    for (const pos of [doc.indexOf('强调'), doc.indexOf('=='), doc.length, 0]) {
+      state = state.update({ selection: EditorSelection.single(pos) }).state
+      expect(setsEqual(state, buildLivePreviewDecorations(state.doc, state.selection))).toBe(true)
+    }
+  })
+})
+
 describe('边界输入：转义、未闭合、嵌套', () => {
   it('转义标记不产生粗斜体装饰', () => {
     const doc = '转义 \\*不斜体\\* 文本\n'
@@ -572,6 +639,75 @@ describe('buildViewportLiveDecorations：间接装饰（纯数据输入）', () 
   })
 })
 
+describe('分割线渲染态（#106）：源文隐藏 + 横线 widget + 触及显形', () => {
+  /** 分割线渲染 widget（replace 带 widget）的区间 */
+  function hrWidgets(set: DecorationSet): Array<{ from: number; to: number }> {
+    return collect(set)
+      .filter((i) => i.widget !== undefined && i.widget.startsWith('HorizontalRuleWidget:'))
+      .map((i) => ({ from: i.from, to: i.to }))
+  }
+
+  it('CommonMark 全形态：未触及时源文区间替换为横线 widget（含空格变体与行尾空格）', () => {
+    const doc = '前文\n\n---\n\n***\n\n___\n\n * * *\n\n- - -\n\n---   \n\n后文'
+    const set = build(doc, { anchor: 0 })
+    const widgets = hrWidgets(set)
+    expect(widgets).toHaveLength(6)
+    for (const marker of ['---', '***', '___', '* * *', '- - -', '---   ']) {
+      const at = doc.indexOf(marker)
+      expect(widgets).toContainEqual({ from: at, to: at + marker.length })
+    }
+  })
+
+  it('光标进入该行（含两端边界）源码显形：widget 不发射；相邻行不显形', () => {
+    const doc = '前文\n\n---\n\n后文'
+    const from = doc.indexOf('---')
+    for (const pos of [from, from + 1, from + 2, from + 3]) {
+      expect(hrWidgets(build(doc, { anchor: pos })), `光标在 ${pos}`).toHaveLength(0)
+      // 行级类保留（源码态着色），不因显形丢行身份
+      expect(coveredTexts(build(doc, { anchor: pos }), LIVE_CLASS_NAMES.hrLine, doc)).toEqual(['---'])
+    }
+    // 相邻空行行尾与后行行首：控制域是该行区间，未进入则保持渲染态
+    expect(hrWidgets(build(doc, { anchor: from - 1 }))).toHaveLength(1)
+    expect(hrWidgets(build(doc, { anchor: from + 4 }))).toHaveLength(1)
+    // 非空选区跨入该行：相交即显形
+    expect(hrWidgets(build(doc, { anchor: from - 2, head: from + 1 }))).toHaveLength(0)
+  })
+
+  it('光标移入移出分割线行：增量装饰与全量结果一致（零写回路径）', () => {
+    const doc = '前文\n\n---\n\n后文'
+    let state = stateWithDoc(doc, { anchor: 0 })
+    expect(hrWidgets(state.field(liveDecorationsField).decos)).toHaveLength(1)
+    for (const pos of [doc.indexOf('-'), doc.indexOf('-') + 3, 0]) {
+      state = state.update({ selection: EditorSelection.single(pos) }).state
+      expect(setsEqual(state, buildLivePreviewDecorations(state.doc, state.selection))).toBe(true)
+    }
+  })
+
+  it('解析边界回归：Setext 下划线与 frontmatter 分隔线不判为分割线', () => {
+    // 段落下一行的 ---/=== 是 Setext 下划线，不是分割线
+    expect(hrWidgets(build('主题行\n---\n正文', { anchor: 0 }))).toHaveLength(0)
+    expect(hrWidgets(build('主题行\n===\n正文', { anchor: 0 }))).toHaveLength(0)
+    expect(coveredTexts(build('主题行\n---\n正文', { anchor: 0 }), LIVE_CLASS_NAMES.hrLine, '主题行\n---\n正文'))
+      .toEqual([])
+    // frontmatter 头块的两条 --- 不产生渲染态（按源码呈现）；正文中的真分割线照常
+    const fmDoc = '---\ntitle: 元\n---\n\n正文段落\n\n---\n\n尾段'
+    const set = build(fmDoc, { anchor: 0 })
+    const real = fmDoc.indexOf('\n---', fmDoc.indexOf('正文'))
+    expect(hrWidgets(set)).toEqual([{ from: real + 1, to: real + 4 }])
+  })
+
+  it('引用与列表内的分割线只隐藏自身节点区间（容器前缀不受影响）', () => {
+    const quoteDoc = '> 引用行\n\n> ---\n\n尾段'
+    const quoteSet = build(quoteDoc, { anchor: 0 })
+    const at = quoteDoc.indexOf('---')
+    expect(hrWidgets(quoteSet)).toEqual([{ from: at, to: at + 3 }])
+    const listDoc = '- 列表项\n\n  ---\n\n尾段'
+    const listSet = build(listDoc, { anchor: 0 })
+    const listAt = listDoc.indexOf('---')
+    expect(hrWidgets(listSet)).toEqual([{ from: listAt, to: listAt + 3 }])
+  })
+})
+
 describe('稳定类名常量（#8 样式契约入口）', () => {
   it('live 侧新增类名与既有 #5 标题类名并存', () => {
     expect(HEADING_CLASS_NAMES.line).toBe('vsidian-heading-line')
@@ -585,6 +721,7 @@ describe('稳定类名常量（#8 样式契约入口）', () => {
     expect(LIVE_CLASS_NAMES.taskCheckbox).toBe('vsidian-task-checkbox')
     expect(LIVE_CLASS_NAMES.taskChecked).toBe('vsidian-task-checked')
     expect(LIVE_CLASS_NAMES.hrLine).toBe('vsidian-hr-line')
+    expect(LIVE_CLASS_NAMES.hrRule).toBe('vsidian-hr')
     expect(LIVE_CLASS_NAMES.frontmatterLine).toBe('vsidian-frontmatter-line')
   })
 })

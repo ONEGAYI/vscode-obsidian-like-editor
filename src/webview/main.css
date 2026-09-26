@@ -52,6 +52,22 @@ body {
   --vsidian-heading-color-4: var(--vscode-editor-foreground);
   --vsidian-heading-color-5: var(--vscode-editor-foreground);
   --vsidian-heading-color-6: var(--vscode-editor-foreground);
+  /* ---- #106 分割线颜色：Live 渲染态横线与阅读 <hr> 同一来源，两处规则
+     共同消费本变量。视觉实测 panel-border 在浅色主题仅约 1.14:1 近乎
+     不可见，改按编辑器前景色 35% 派生（明暗主题均为可辨识灰线） */
+  --vsidian-hr-color: color-mix(in srgb, var(--vscode-editor-foreground, #808080) 35%, transparent);
+  /* ---- #105 高亮底色变量：live 正文 span / 阅读 mark / 大纲条目共用同一
+     变量（三侧同源，选择器映射表登记）。两轮视觉验收实测主题变量
+     （editorWordHighlightBackground、findMatchHighlightBackground）在
+     用户主题下对比度均仅约 1.15–1.45:1 不可见——主题跟随路线证伪，
+     按用户决议切 Obsidian 式固定荧光黄，明暗主题各自调校（浅色由
+     body.vscode-light 分支覆盖为不透明黄） */
+  --vsidian-highlight-background: rgba(255, 208, 0, 0.35);
+}
+
+/* #105 浅色主题高亮覆盖：白底上提高浓度与饱和度保证目视可辨 */
+body.vscode-light #app {
+  --vsidian-highlight-background: #ffe066;
 }
 
 #app .cm-editor {
@@ -407,6 +423,7 @@ body {
 #app .vsidian-quick-actions [data-icon='bold'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-bold.svg'); }
 #app .vsidian-quick-actions [data-icon='italic'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-italic.svg'); }
 #app .vsidian-quick-actions [data-icon='strikethrough'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-strikethrough.svg'); }
+#app .vsidian-quick-actions [data-icon='highlight'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-highlight.svg'); }
 #app .vsidian-quick-actions [data-icon='inlineCode'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-inlineCode.svg'); }
 #app .vsidian-quick-actions [data-icon='heading'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-heading.svg'); }
 #app .vsidian-quick-actions [data-icon='bulletList'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-bulletList.svg'); }
@@ -419,6 +436,7 @@ body {
 #app .vsidian-quick-actions [data-icon='table'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-table.svg'); }
 #app .vsidian-quick-actions [data-icon='inlineMath'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-inlineMath.svg'); }
 #app .vsidian-quick-actions [data-icon='blockMath'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-blockMath.svg'); }
+#app .vsidian-quick-actions [data-icon='horizontalRule'] { --vsidian-quick-icon: url('../../media/quick-actions/light/light-horizontalRule.svg'); }
 
 body.vscode-dark #app .vsidian-quick-actions [data-icon='bold'],
 body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='bold'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-bold.svg'); }
@@ -426,6 +444,8 @@ body.vscode-dark #app .vsidian-quick-actions [data-icon='italic'],
 body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='italic'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-italic.svg'); }
 body.vscode-dark #app .vsidian-quick-actions [data-icon='strikethrough'],
 body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='strikethrough'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-strikethrough.svg'); }
+body.vscode-dark #app .vsidian-quick-actions [data-icon='highlight'],
+body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='highlight'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-highlight.svg'); }
 body.vscode-dark #app .vsidian-quick-actions [data-icon='inlineCode'],
 body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='inlineCode'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-inlineCode.svg'); }
 body.vscode-dark #app .vsidian-quick-actions [data-icon='heading'],
@@ -450,6 +470,8 @@ body.vscode-dark #app .vsidian-quick-actions [data-icon='inlineMath'],
 body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='inlineMath'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-inlineMath.svg'); }
 body.vscode-dark #app .vsidian-quick-actions [data-icon='blockMath'],
 body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='blockMath'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-blockMath.svg'); }
+body.vscode-dark #app .vsidian-quick-actions [data-icon='horizontalRule'],
+body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='horizontalRule'] { --vsidian-quick-icon: url('../../media/quick-actions/dark/dark-horizontalRule.svg'); }
 
 #app .vsidian-quick-actions button:hover,
 #app .vsidian-quick-actions button:focus-visible {
@@ -653,6 +675,12 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='blockMath'] { 
 
 .vsidian-sidebar .vsidian-outline-item .vsidian-outline-strike {
   text-decoration: line-through;
+}
+
+/* #105 高亮透传：底色与正文同源变量（强调语义只认显式 == 标记） */
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-highlight {
+  background-color: var(--vsidian-highlight-background);
+  border-radius: 2px;
 }
 
 /* 空态占位：无标题文档的弱化反馈（保持面板可读内容与高度语义） */
@@ -1145,6 +1173,29 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='blockMath'] { 
   color: var(--vscode-inputValidation-infoBorder, rgba(128, 128, 128, 0.6));
 }
 
+/* #106 分割线渲染态：未触及该行时源文被 replace 隐藏，本元素呈现真横线。
+   必须保持行内（inline-block）：CM6 在 replace widget 前后各插一个
+   img.cm-widgetBuffer（光标停靠点），display:block 会截断行内流、把
+   行高撑到约两倍（实测 49px vs 21px）。inline-block 高度恒等于正文
+   行高（字号×行高同源变量同一公式），行号间距不受影响；横线以居中
+   渐变画在行的正中（与行号中心对齐，Obsidian 观感），颜色与阅读
+   <hr> 同源变量，契约测试钉住 */
+#app .cm-editor .cm-scroller .vsidian-hr {
+  display: inline-block;
+  vertical-align: top;
+  width: 100%;
+  height: calc(var(--vsidian-content-font-size) * var(--vsidian-content-line-height));
+  box-sizing: border-box;
+  background-image: linear-gradient(
+    to bottom,
+    transparent calc(50% - 1px),
+    var(--vsidian-hr-color) calc(50% - 1px),
+    var(--vsidian-hr-color) calc(50% + 1px),
+    transparent calc(50% + 1px)
+  );
+  margin: 0;
+}
+
 #app .cm-editor .cm-scroller .vsidian-frontmatter-line {
   font-family: var(--vscode-editor-font-family, monospace);
   opacity: 0.75;
@@ -1306,6 +1357,13 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='blockMath'] { 
   background-color: var(--vsidian-live-code-background, rgba(128, 128, 128, 0.14));
   border-radius: 3px;
   padding: 0 2px;
+}
+
+/* #105 高亮内容 span：常显主题色高亮底（== 定界符显隐由装饰控制，见
+   liveDecorations 的 HighlightMark；Obsidian 对应 .cm-highlight） */
+#app .cm-editor .cm-scroller .vsidian-highlight {
+  background-color: var(--vsidian-highlight-background);
+  border-radius: 2px;
 }
 
 /* 任务 checkbox（#9 可交互：input[type=checkbox] 替换 [ ]/[x] 标记）。
@@ -1765,6 +1823,15 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='blockMath'] { 
   padding: 0 3px;
 }
 
+/* #105 高亮 mark：重置浏览器默认黄底黑字，底色与 live 侧 .vsidian-highlight
+   同源变量（观感两模式一致；色彩本身没有语义，颜色继承正文） */
+#app .vsidian-view-reading .vsidian-reading-block mark {
+  background-color: var(--vsidian-highlight-background);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0;
+}
+
 #app .vsidian-view-reading .vsidian-reading-block blockquote {
   margin: 0.4em 0;
   padding: 0.1em 0.9em;
@@ -1790,8 +1857,9 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='blockMath'] { 
 
 #app .vsidian-view-reading .vsidian-reading-hr hr {
   border: none;
-  border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.45));
-  margin: 0.8em 0;
+  border-top: 2px solid var(--vsidian-hr-color);
+  line-height: 0;
+  margin: 0.45em 0;
 }
 
 /* 表格块（#12）：markdown-it 渲染的真实 table（只读呈现；GFM 列对齐保留在

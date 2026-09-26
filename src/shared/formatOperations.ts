@@ -8,6 +8,7 @@ export const FORMAT_OPERATIONS = [
   { id: 'italic', command: 'onegayi.vsidian.format.italic', titleKey: 'format.italic', mode: 'live', writes: true, defaultKey: null },
   { id: 'strikethrough', command: 'onegayi.vsidian.format.strikethrough', titleKey: 'format.strikethrough', mode: 'live', writes: true, defaultKey: null },
   { id: 'inlineCode', command: 'onegayi.vsidian.format.inlineCode', titleKey: 'format.inlineCode', mode: 'live', writes: true, defaultKey: null },
+  { id: 'highlight', command: 'onegayi.vsidian.format.highlight', titleKey: 'format.highlight', mode: 'live', writes: true, defaultKey: null },
   { id: 'heading1', command: 'onegayi.vsidian.format.heading1', titleKey: 'format.heading1', mode: 'live', writes: true, defaultKey: 'ctrl+1' },
   { id: 'heading2', command: 'onegayi.vsidian.format.heading2', titleKey: 'format.heading2', mode: 'live', writes: true, defaultKey: 'ctrl+2' },
   { id: 'heading3', command: 'onegayi.vsidian.format.heading3', titleKey: 'format.heading3', mode: 'live', writes: true, defaultKey: 'ctrl+3' },
@@ -25,6 +26,7 @@ export const FORMAT_OPERATIONS = [
   { id: 'inlineMath', command: 'onegayi.vsidian.insert.inlineMath', titleKey: 'format.inlineMath', mode: 'live', writes: true, defaultKey: null },
   { id: 'blockMath', command: 'onegayi.vsidian.insert.blockMath', titleKey: 'format.blockMath', mode: 'live', writes: true, defaultKey: null },
   { id: 'wikilink', command: 'onegayi.vsidian.insert.wikilink', titleKey: 'format.wikilink', mode: 'live', writes: true, defaultKey: null },
+  { id: 'horizontalRule', command: 'onegayi.vsidian.insert.horizontalRule', titleKey: 'format.horizontalRule', mode: 'live', writes: true, defaultKey: null },
 ] as const satisfies readonly ({ titleKey: MessageKey } & Record<string, unknown>)[]
 
 export type FormatOperationId = (typeof FORMAT_OPERATIONS)[number]['id']

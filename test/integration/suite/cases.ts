@@ -15,6 +15,7 @@ const CMD = {
   injectMessage: 'onegayi.vsidian._test.injectWebviewMessage',
   postToPanel: 'onegayi.vsidian._test.postToPanel',
   viewState: 'onegayi.vsidian._test.requestViewState',
+  cachedViewState: 'onegayi.vsidian._test.getCachedViewState',
   conflictState: 'onegayi.vsidian._test.getConflictState',
   closedInput: 'onegayi.vsidian._test.getLastClosedInput',
   viewStateCache: 'onegayi.vsidian._test.getPanelViewStateCache',
@@ -92,6 +93,20 @@ const MODE_DOC_TEXT = [
   '',
   '结尾段落。',
   '',
+].join('\n')
+
+/** #105 高亮 fixture（与 fixtures.mjs 的 HIGHLIGHT_DOC 一致）：== 只出现在
+ *  成对高亮定界符中（live delimitersHidden 探针的文本口径依据） */
+const HIGHLIGHT_DOC_TEXT = [
+  '# 高亮样例',
+  '',
+  '正文 ==高亮文字== 与 **粗体** 同行。',
+  '',
+  '## 嵌套 ==**粗亮**== 标题',
+  '',
+  '- 列表项 ==列表高亮==',
+  '',
+  '普通段落。',
 ].join('\n')
 
 function wsUri(name: string): vscode.Uri {
@@ -447,6 +462,22 @@ interface ViewState {
       rendered: number
       error: number
       count: number
+    }
+    /** #106 分割线绘制：当前激活视图内首个渲染态横线的可见性与计数 */
+    hr?: {
+      visible: boolean
+      display: string | null
+      backgroundImage: string | null
+      borderTopWidth: string | null
+      count: number
+    }
+    /** #105 高亮绘制：当前激活视图内首个高亮的实际可见性、底色与定界符隐藏 */
+    highlight?: {
+      visible: boolean
+      display: string | null
+      backgroundColor: string | null
+      count: number
+      delimitersHidden: boolean | null
     }
     /** #111 图形化代码块按钮组与图表弹窗绘制 */
     graphic?: {
@@ -982,15 +1013,20 @@ export const cases: Array<[string, () => Promise<void>]> = [
       CMD.viewStateCache, syntaxUri,
     )) as { found: boolean; viewMode?: string }
     assert(keptLive.found && keptLive.viewMode === 'live', '非活动的 syntax 面板应保留自身状态')
+    const beforeResume = (await vscode.commands.executeCommand(
+      CMD.cachedViewState, syntaxUri,
+    )) as ViewState | undefined
 
     // 重显 syntax 面板使其活动（openWith 对已开面板是重显，不新建 tab），
     // toReading 只作用于 syntax；原生 mode 标签不受影响。不可见期间面板
-    // 可能经卸载重载：先以 0 轮探针（纯往返，不动文档）等待 webview 恢复
-    // 响应再下发模式命令，避免命令发给重载中的 webview 而丢失
+    // 可能经卸载重载：等待新 view.state 回报（与隐藏前缓存对象不同），
+    // 再下发模式命令，避免发给重载中的 webview 而丢失
     await vscode.commands.executeCommand('vscode.openWith', wsUri('syntax.md'), VIEW_TYPE)
     await waitActiveCustomTab('syntax.md')
-    await vscode.commands.executeCommand(
-      CMD.perfProbe, syntaxUri, { typingRounds: 0, scrollRounds: 0 })
+    await poll('重显面板恢复响应', async () => {
+      const current = (await vscode.commands.executeCommand(CMD.viewState, syntaxUri)) as ViewState | undefined
+      return current && current !== beforeResume ? true : undefined
+    })
     await vscode.commands.executeCommand('onegayi.vsidian.mode.toReading', wsUri('syntax.md'))
     await waitViewState('syntax.md', (v) => v.viewMode === 'reading')
     const backToMode = await vscode.window.showTextDocument(modeDoc)
@@ -6403,5 +6439,198 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await waitViewState('code-card.md', (v) =>
       v.paint?.code?.foldedCount === 0 && v.paint.code.cardLineCount === 7, 0, 60000)
     assert(await readDisk('code-card.md') === diskBefore, '阅读卡片交互不得改写源文')
+  }],
+
+  // ---- 工单 #106：分割线渲染态与插入操作 ----
+
+  ['live 分割线渲染与绘制层：全形态隐藏源文、真横线绘制（#106）', async () => {
+    await openWithEditor('hr.md')
+    await waitSessionReady('hr.md')
+    const uri = wsUri('hr.md').toString()
+    const diskBefore = await readDisk('hr.md')
+    // 光标停在结尾段落（远离全部分割线行）：三条真分割线进入渲染态；
+    // frontmatter 两条 --- 与 Setext 下划线（=== 与段落后的 ---）不计数
+    const tailAnchor = diskBefore.indexOf('结尾段落')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: tailAnchor,
+    })
+    const state = await waitViewState('hr.md', (v) =>
+      v.selectionOffset === tailAnchor && v.paint?.hr?.count === 3)
+    // 绘制层断言（AGENTS 视觉层断言约定）：横线真的画出来（rect 有面积 +
+    // elementFromPoint 命中）且以居中渐变落笔（live 态横线绘制通道）
+    assert(state.paint?.hr?.visible === true,
+      `分割线应真实绘制（paint.hr.visible=${String(state.paint?.hr?.visible)}，` +
+        `display=${String(state.paint?.hr?.display)}）`)
+    assert(state.paint?.hr?.display !== 'none', '分割线元素不得 display:none')
+    assert((state.paint?.hr?.backgroundImage ?? '').includes('linear-gradient'),
+      `live 分割线须以居中渐变实际落笔：${String(state.paint?.hr?.backgroundImage)}`)
+    assert(state.text === diskBefore, '渲染不得改写源文')
+  }],
+
+  ['live 光标进出分割线行显隐零写回：进入显源码、离开恢复渲染（#106）', async () => {
+    await openWithEditor('hr.md')
+    await waitSessionReady('hr.md')
+    const uri = wsUri('hr.md').toString()
+    const diskBefore = await readDisk('hr.md')
+    const tailAnchor = diskBefore.indexOf('结尾段落')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: tailAnchor,
+    })
+    await waitViewState('hr.md', (v) => v.paint?.hr?.count === 3)
+    // 光标移入首条分割线行内 → 该线退出渲染态显源码（其余两条保持渲染）
+    const hrAt = diskBefore.indexOf('\n---', diskBefore.indexOf('分割线前的段落文字')) + 1
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: hrAt + 1,
+    })
+    const editing = await waitViewState('hr.md', (v) => v.paint?.hr?.count === 2)
+    const editOffset = editing.selectionOffset ?? -1
+    assert(editOffset >= hrAt && editOffset <= hrAt + 3,
+      `光标应落在分割线行区间（实际 ${editOffset}，期望 ${hrAt}..${hrAt + 3}）`)
+    // 离开（回到文档首，分割线外）→ 恢复渲染：3 条的完整往返
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: 0,
+    })
+    const restored = await waitViewState('hr.md', (v) => v.paint?.hr?.count === 3)
+    assert(restored.paint?.hr?.count === 3,
+      `光标离开分割线行后应恢复 3 条渲染，实际 ${restored.paint?.hr?.count}`)
+    // 纯视图交互零写回：磁盘不变（显隐切换不产生编辑事务，也不进撤销历史）
+    assert(await readDisk('hr.md') === diskBefore, '分割线显隐交互不得改写源文')
+  }],
+
+  ['分割线插入操作：光标处成段插入并规整空行，阅读模式同源（#106）', async () => {
+    await openWithEditor('hr.md')
+    await waitSessionReady('hr.md')
+    const uri = wsUri('hr.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('hr.md'))
+    const diskBefore = await readDisk('hr.md')
+    const anchor = diskBefore.indexOf('插入锚点在此行中')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: anchor,
+    })
+    await waitViewState('hr.md', (v) => v.selectionOffset === anchor)
+    // 命令面板/快速操作条同源命令：行内光标处左右文字各自成段，分割线
+    // 前后空行规整（该行原本无相邻空行 → 两侧各补一空行）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'format.command', op: 'horizontalRule' })
+    const inserted = diskBefore.replace(
+      '结尾段落，分割线插入锚点在此行中。',
+      '结尾段落，分割线\n\n---\n\n插入锚点在此行中。')
+    await poll('分割线插入写回', () => (doc.getText() === inserted ? true : undefined))
+    const edited = await waitViewState('hr.md', (v) => v.text === inserted)
+    // 光标落在新分割线行尾：该行是控制域（触及显源码），计数暂保持 3
+    assert(edited.selectionOffset === anchor + 5,
+      `插入后光标应在新分割线行尾（期望 ${anchor + 5}，实际 ${edited.selectionOffset}）`)
+    assert(edited.paint?.hr?.count === 3,
+      `光标在新分割线行上时该线显源码不渲染（期望 3，实际 ${edited.paint?.hr?.count}）`)
+    // 光标移到后段文字 → 新分割线恢复渲染
+    const after = inserted.indexOf('插入锚点在此行中')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: after,
+    })
+    const rendered = await waitViewState('hr.md', (v) =>
+      v.selectionOffset === after && v.paint?.hr?.count === 4)
+    assert(rendered.paint?.hr?.visible === true, '新分割线应真实绘制')
+    // 阅读模式：<hr> 原生渲染、数量与 Live 对齐（颜色与 Live 同源变量）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const reading = await waitViewState('hr.md', (v) =>
+      v.viewMode === 'reading' && v.paint?.hr?.count === 4)
+    assert(reading.paint?.hr?.visible === true, '阅读模式分割线应真实绘制（rect + elementFromPoint）')
+    assert(Number.parseFloat(reading.paint?.hr?.borderTopWidth ?? '') > 0,
+      `阅读分割线须以 border-top 实际落笔：${String(reading.paint?.hr?.borderTopWidth)}`)
+  }],
+
+  // ---- 工单 #105：高亮 ==text== 双模式渲染、显隐与大纲透传 ----
+
+  ['live 高亮渲染与绘制层：底色真实画出、定界符显隐随光标、零写回（#105）', async () => {
+    await resetLastMode()
+    await openWithEditor('highlight.md')
+    await waitSessionReady('highlight.md')
+    const uri = wsUri('highlight.md').toString()
+    const diskBefore = await readDisk('highlight.md')
+    // 光标在文档头（不触及任何高亮）：三处高亮常显底色（正文/标题/列表），
+    // 绘制层断言（AGENTS 视觉层约定）：rect 有面积 + elementFromPoint 命中 +
+    // computed 底色非透明——样式注入失效时 DOM 存在性照样通过，此三层不可
+    const idle = await waitViewState('highlight.md', (v) =>
+      v.paint?.highlight?.count === 3 && v.paint.highlight.delimitersHidden === true)
+    assert(idle.paint!.highlight!.visible === true,
+      `高亮应真实绘制（paint.highlight.visible=${String(idle.paint?.highlight?.visible)}，` +
+        `display=${String(idle.paint?.highlight?.display)}）`)
+    assert((idle.paint!.highlight!.backgroundColor ?? '') !== 'rgba(0, 0, 0, 0)' &&
+      (idle.paint!.highlight!.backgroundColor ?? '') !== '',
+      `高亮底色应真实画出（非透明），实际 ${idle.paint?.highlight?.backgroundColor}`)
+    assert(idle.paint!.highlight!.display !== 'none', '高亮 span 不得 display:none')
+    // 大纲透传：嵌套标题的 spans 含 highlight（含内层 strong，同区间双类型）
+    const nested = idle.outline?.items.find((item) => item.text.includes('嵌套'))
+    const kinds = (nested?.spans ?? []).filter((span) => span.end - span.start === 2)
+      .map((span) => span.kind).sort()
+    assert(JSON.stringify(kinds) === JSON.stringify(['highlight', 'strong']),
+      `嵌套标题透传应含 highlight+strong 同区间双类型，实际 ${JSON.stringify(nested?.spans)}`)
+    assert(nested?.plainText.includes('粗亮') === true, '大纲剥标记可见文本应含高亮内容')
+    // 光标进入正文高亮内：== 显形可编辑（文本口径：定界符回到视口文本）
+    const inHighlight = HIGHLIGHT_DOC_TEXT.indexOf('高亮文字') + 2
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.crossSelect', anchor: inHighlight, head: inHighlight })
+    await waitViewState('highlight.md', (v) => v.paint?.highlight?.delimitersHidden === false)
+    // 光标移开：定界符回到隐藏（内容底色常显不受影响）
+    const away = HIGHLIGHT_DOC_TEXT.indexOf('普通段落')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.crossSelect', anchor: away, head: away })
+    const restored = await waitViewState('highlight.md', (v) =>
+      v.paint?.highlight?.delimitersHidden === true && v.paint.highlight.count === 3)
+    assert(restored.paint!.highlight!.backgroundColor === idle.paint!.highlight!.backgroundColor,
+      '光标离开后高亮底色应保持（内容 span 常显）')
+    // 阅读模式：== 渲染为 mark 语义元素，底色与 live 同源；无定界符概念
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toReading', wsUri('highlight.md'))
+    const reading = await waitViewState('highlight.md', (v) =>
+      v.viewMode === 'reading' && v.paint?.highlight?.count === 3)
+    assert(reading.paint!.highlight!.visible === true, '阅读 mark 应真实绘制')
+    assert((reading.paint!.highlight!.backgroundColor ?? '') !== 'rgba(0, 0, 0, 0)' &&
+      (reading.paint!.highlight!.backgroundColor ?? '') !== '',
+      `阅读 mark 底色应真实画出（非透明），实际 ${reading.paint?.highlight?.backgroundColor}`)
+    assert(reading.paint!.highlight!.delimitersHidden === null, '阅读态定界符探针应为 null')
+    // 光标移动与模式切换全程零写回
+    assert(await readDisk('highlight.md') === diskBefore, '高亮显隐与模式切换不得写磁盘')
+  }],
+
+  ['高亮格式命令真实链路：命令面板包裹与两态取消（#105）', async () => {
+    await resetLastMode()
+    await openWithEditor('highlight.md')
+    await waitSessionReady('highlight.md')
+    // 上一用例把同文件面板留在阅读态（openWith 对同 uri 单例 reveal）：
+    // 显式切回 live 再继续（格式命令只作用于活动 Live 面板）
+    await vscode.commands.executeCommand('onegayi.vsidian.mode.toLive', wsUri('highlight.md'))
+    await waitViewState('highlight.md', (v) => v.viewMode === 'live')
+    const uri = wsUri('highlight.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('highlight.md'))
+    const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    // 选区包裹 ==普通段落==（宿主命令入口与用户命令面板同链路）。无选区
+    // 扩词的中文分词口径（Intl.Segmenter 词级，如「普通|段落」各自成词）
+    // 由 #88 格式命令用例与 unit 层 formatOperations 测试钉住，此处用
+    // 显式选区钉确定性写回——期望值不落在具体分词结果上
+    const wordFrom = HIGHLIGHT_DOC_TEXT.indexOf('普通段落')
+    const wordTo = wordFrom + '普通段落'.length
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.crossSelect', anchor: wordFrom, head: wordTo })
+    await waitViewState('highlight.md', (v) =>
+      v.selectionOffset === wordFrom && v.selectionHead === wordTo)
+    assert(await vscode.commands.executeCommand('onegayi.vsidian.format.highlight') === true,
+      '高亮命令应命中活动 Live 面板')
+    await poll('高亮选区包裹写回权威文档', () =>
+      doc.getText() === HIGHLIGHT_DOC_TEXT.replace('普通段落。', '==普通段落==。') ? true : undefined)
+    // 光标进高亮内再触发：取消整段
+    const wrapped = HIGHLIGHT_DOC_TEXT.replace('普通段落。', '==普通段落==。')
+    const inside = wrapped.indexOf('普通段落') + 1
+    await vscode.commands.executeCommand(CMD.postToPanel, uri,
+      { kind: 'table.test.crossSelect', anchor: inside, head: inside })
+    await waitViewState('highlight.md', (v) => v.selectionOffset === inside && v.selectionHead === inside)
+    assert(await vscode.commands.executeCommand('onegayi.vsidian.format.highlight') === true,
+      '围栏内再触发应命中活动 Live 面板')
+    await poll('高亮两态取消写回', () => doc.getText() === HIGHLIGHT_DOC_TEXT ? true : undefined)
+    const after = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
+    assert(after.appliedEdits - before.appliedEdits === 2,
+      `包裹与取消各一笔写回，实际 ${after.appliedEdits - before.appliedEdits}`)
+    if (doc.isDirty) {
+      await doc.save()
+    }
   }],
 ]

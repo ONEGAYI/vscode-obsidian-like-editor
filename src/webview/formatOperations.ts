@@ -1,6 +1,6 @@
-import { markdownLanguage } from '@codemirror/lang-markdown'
 import type { SyntaxNode } from '@lezer/common'
 import type { FormatOperationId } from '../shared/formatOperations'
+import { markdownTreeParser } from './markdownDoc'
 import { parseTableDelimiter, tableRowCellsForColumns } from './tableCells'
 import type { TableRegion } from './tableRegion'
 
@@ -12,11 +12,15 @@ export interface FormatPlan {
 }
 export type FormatAction = 'toggle' | 'add' | 'remove'
 
-const INLINE: Partial<Record<FormatOperationId, { mark: string; node: string }>> = {
+/** 行内围栏单一登记表（#103 两处登记约定）：包裹规划在此消费，
+ *  quickActionState 的节点名、mark 字符与包裹判定也一律从本表派生——
+ *  新增围栏只登记此处 + shared 注册表，即自动继承全部行为 */
+export const INLINE: Partial<Record<FormatOperationId, { mark: string; node: string }>> = {
   bold: { mark: '**', node: 'StrongEmphasis' },
   italic: { mark: '*', node: 'Emphasis' },
   strikethrough: { mark: '~~', node: 'Strikethrough' },
   inlineCode: { mark: '`', node: 'InlineCode' },
+  highlight: { mark: '==', node: 'Highlight' },
 }
 
 function nodesAt(root: SyntaxNode, pos: number): SyntaxNode[] {
@@ -444,13 +448,41 @@ function fencePlan(text: string, op: 'codeBlock' | 'blockMath', range: FormatSel
     ...(content ? {} : { selection: { anchor: from + leftBreak.length + marker.length + 1 } }) }
 }
 
+/** 分割线插入（#106）：块级插入、无两态语义。光标所在行的左右文字各自
+ *  成段，分割线前后各留一空行（已有空行不叠加，口径对齐 tableCreate）；
+ *  选区折叠到起点——选区内容（含跨行选区的中间行）保留在分割线之后，
+ *  与 fencePlan 等兄弟插入操作的保留口径一致；光标落在分割线行尾——
+ *  该行是控制域（触及显源码），插入后立即可续改。 */
+function horizontalRulePlan(text: string, range: FormatSelection): FormatPlan {
+  const lineStart = text.lastIndexOf('\n', range.from - 1) + 1
+  const nextBreak = text.indexOf('\n', range.to)
+  const lineEnd = nextBreak < 0 ? text.length : nextBreak
+  const before = text.slice(0, lineStart)
+  const after = text.slice(lineEnd)
+  const left = text.slice(lineStart, range.from)
+  const right = text.slice(range.from, lineEnd)
+  const leftText = left.trim() ? left : ''
+  const rightText = right.trim() ? right : ''
+  const previousLine = before.endsWith('\n') ? before.slice(0, -1).split('\n').at(-1) ?? '' : ''
+  const nextLine = after.startsWith('\n') ? after.slice(1).split('\n', 1)[0] ?? '' : ''
+  const prefix = leftText ? `${leftText}\n\n` : previousLine.trim() ? '\n' : ''
+  const suffix = rightText ? `\n\n${rightText}` : nextLine.trim() ? '\n' : ''
+  const marker = '---'
+  return {
+    changes: [{ from: lineStart, to: lineEnd, insert: prefix + marker + suffix }],
+    selection: { anchor: lineStart + prefix.length + marker.length },
+  }
+}
+
 /** 纯文本规划：所有 changes 按原文 UTF-16 坐标，调用方一次 CM6 事务提交。 */
 export function planFormatOperation(
   text: string, op: FormatOperationId, range: FormatSelection, region?: TableRegion | null,
   action: FormatAction = 'toggle',
 ): FormatPlan | null {
   if (range.from < 0 || range.to < range.from || range.to > text.length) return null
-  const root = markdownLanguage.parser.parse(text).topNode
+  // 与 liveDecorations/outline 同一解析器（markdownTreeParser 含 #105
+  // Highlight 扩展）：两态切换按节点命中依赖同一语义源
+  const root = markdownTreeParser.parse(text).topNode
   if (region) {
     if (!INLINE[op] && op !== 'clearInline' && op !== 'link' && op !== 'inlineMath' && op !== 'wikilink') return null
     const offsets: number[] = []
@@ -492,6 +524,7 @@ export function planFormatOperation(
   if (INLINE[op]) return inlinePlan(text, op, range, root, action)
   if (op === 'clearInline') return clearInlinePlan(text, range, root)
   if (op === 'codeBlock' || op === 'blockMath') return fencePlan(text, op, range, root)
+  if (op === 'horizontalRule') return horizontalRulePlan(text, range)
   if (op.startsWith('heading')) {
     const setext = nodesAt(root, range.from).find((node) => /^SetextHeading[12]$/u.test(node.name))
     if (setext && (range.from === range.to || range.to <= setext.to)) {

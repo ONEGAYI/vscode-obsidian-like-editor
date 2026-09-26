@@ -1,6 +1,8 @@
 # 快速操作图标
 
-`contact-sheet.png` 是唯一栅格总览：15 列按下表顺序排列，首行为浅色主题，次行为深色主题。每格 96×96 像素，透明背景。`light/` 和 `dark/` 内的 PNG 从总览逐格原样裁切；同名 SVG 再由 VTracer 对该 PNG 描摹生成，内含真实 `<path>`，不嵌入位图。
+`contact-sheet.png` 是栅格总览：17 列按下表顺序排列，首行为浅色主题，次行为深色主题。每格 96×96 像素，透明背景。`light/` 和 `dark/` 内的 PNG 从总览逐格原样裁切；同名 SVG 再由 VTracer 对该 PNG 描摹生成，内含真实 `<path>`，不嵌入位图。
+
+`highlight-horizontal-rule-ai-board.png` 保留了参考既有图标生成的单张原图。`highlight-horizontal-rule-source.png` 是从原图底部两格裁切、二值化后的透明单色源图（192×96）：左格为高亮笔，右格为分割线。重建脚本按格裁切源图的 alpha，分别着浅色或深色主题色，再纳入总览及 VTracer 描摹流程；既有 15 枚仍由脚本绘制。
 
 | 列 | 图标 key | 列 | 图标 key | 列 | 图标 key |
 | --- | --- | --- | --- | --- | --- |
@@ -9,6 +11,7 @@
 | 3 | `strikethrough` | 8 | `taskList` | 13 | `table` |
 | 4 | `inlineCode` | 9 | `quote` | 14 | `inlineMath` |
 | 5 | `heading` | 10 | `codeBlock` | 15 | `blockMath` |
+| 16 | `highlight` | 17 | `horizontalRule` | | |
 
 重建命令：
 

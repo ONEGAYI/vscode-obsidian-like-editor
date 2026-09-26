@@ -6,7 +6,7 @@
 //   node scripts/genNls.mjs --check  # 不写盘：产物与磁盘内容不一致即退出码 1
 //
 // 映射规则（「command id → 字典键」）：
-// - 工具条可见 21 条命令复用 FORMAT_OPERATIONS 的 titleKey（format.* 既有
+// - 工具条可见 23 条命令复用 FORMAT_OPERATIONS 的 titleKey（format.* 既有
 //   键，快捷键页与命令面板同源，无第二套文案）；
 // - 其余命令按 id 推导：onegayi.vsidian.<suffix> → command.<suffix>.title
 //   （既有唯一键 command.table.create.title 天然吻合该规则，单轨收编）；

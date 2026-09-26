@@ -82,6 +82,18 @@ describe('格式命令生产链路', () => {
     expect(sent.filter((m) => m.kind === 'edit.request')).toHaveLength(1)
   })
 
+  it('分割线插入经同一命令链路：单事务写回、光标落行尾（#106）', () => {
+    const { controller, sent, view } = setup('上文\n下文')
+    view.dispatch({ selection: { anchor: 2 } })
+    controller.handleHostMessage({ kind: 'format.command', op: 'horizontalRule' })
+    expect(view.state.doc.toString()).toBe('上文\n\n---\n\n下文')
+    expect(sent.filter((m) => m.kind === 'edit.request')).toHaveLength(1)
+    expect(sent.at(-1)).toMatchObject({ kind: 'edit.request', changes: [
+      { offset: 0, length: 2, text: '上文\n\n---\n' },
+    ] })
+    expect(view.state.selection.main.anchor).toBe(7)
+  })
+
   it('清单覆盖全部操作，写操作只在 Live，约定默认键位准确', () => {
     const manifest = JSON.parse(readFileSync('package.json', 'utf8')) as {
       contributes: { commands: Array<{ command: string }> }
@@ -95,5 +107,33 @@ describe('格式命令生产链路', () => {
     expect(bindings.map((item) => item.id)).toEqual([
       'bold', 'heading1', 'heading2', 'heading3', 'heading4', 'heading5', 'heading6', 'headingNone',
     ])
+  })
+
+  it('行内围栏两态往返：光标在围栏内再触发即取消整段（显式枚举，#105 起含高亮）', () => {
+    const cases: ReadonlyArray<[typeof FORMAT_OPERATIONS[number]['id'], string]> = [
+      ['bold', '**文字**'],
+      ['italic', '*文字*'],
+      ['strikethrough', '~~文字~~'],
+      ['inlineCode', '`文字`'],
+      ['highlight', '==文字=='],
+    ]
+    for (const [op, text] of cases) {
+      const { controller, view } = setup(text)
+      view.dispatch({ selection: { anchor: text.indexOf('文字') } })
+      controller.handleHostMessage({ kind: 'format.command', op })
+      expect(view.state.doc.toString(), `操作 ${op}`).toBe('文字')
+      controller.dispose()
+    }
+  })
+
+  it('高亮命令走 CM6 单事务写回（与 bold 同链路）', () => {
+    const { controller, sent, view } = setup('中文 English')
+    view.dispatch({ selection: { anchor: 0 } })
+    controller.handleHostMessage({ kind: 'format.command', op: 'highlight' })
+    expect(view.state.doc.toString()).toBe('==中文== English')
+    expect(sent.filter((m) => m.kind === 'edit.request')).toHaveLength(1)
+    expect(sent.at(-1)).toMatchObject({ kind: 'edit.request', changes: [
+      { offset: 0, length: 2, text: '==中文==' },
+    ] })
   })
 })

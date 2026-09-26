@@ -376,6 +376,20 @@ const OUTLINE_DRAG_DOC = [
   '戊内容。',
 ].join('\n')
 
+// #105 高亮样例：正文/标题/列表三处 ==高亮==（含嵌套粗体）；文档中 ==
+// 字符只出现在成对高亮定界符中（live delimitersHidden 探针的文本口径依据）
+const HIGHLIGHT_DOC = [
+  '# 高亮样例',
+  '',
+  '正文 ==高亮文字== 与 **粗体** 同行。',
+  '',
+  '## 嵌套 ==**粗亮**== 标题',
+  '',
+  '- 列表项 ==列表高亮==',
+  '',
+  '普通段落。',
+].join('\n')
+
 // #11 双链样例：合法四形态（按名/显式路径/别名/标题）+ 降级形态
 // （嵌入/块引用/残缺）+ 代码上下文（围栏与行内代码内不解析）
 const WIKILINKS_DOC = [
@@ -506,6 +520,36 @@ const MERMAID_EDGE_DOC = [
   '',
 ].join('\n')
 
+// #106 分割线样例：frontmatter 头块的两条 --- 与 Setext 标题下划线（=== 与
+// 紧跟段落的 ---）都不判为分割线，正文真分割线三条（---/***/___ 各一）。
+// 计数断言口径：paint.hr.count = 3（frontmatter/Setext 均不计数）。
+const HR_DOC = [
+  '---',
+  'title: 分割线样例',
+  '---',
+  '',
+  '分割线前的段落文字。',
+  '',
+  '---',
+  '',
+  '星号形态段落。',
+  '',
+  '***',
+  '',
+  '下划线形态段落。',
+  '',
+  '___',
+  '',
+  'Setext 标题正文',
+  '===',
+  '',
+  '次级 Setext 标题正文',
+  '---',
+  '',
+  '结尾段落，分割线插入锚点在此行中。',
+  '',
+].join('\n')
+
 /**
  * 向目录写入全部集成测试 fixture（字节由脚本直接生成，不经 git 检出，
  * 避免 autocrlf 干扰断言）。返回 { largeDocLines } 供启动器注入环境变量。
@@ -546,6 +590,7 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   // 边界样例（普通围栏与伪围栏不误渲染）
   writeFileSync(path.join(wsDir, 'mermaid.md'), MERMAID_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'mermaid-edge.md'), MERMAID_EDGE_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'hr.md'), HR_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'code-card.md'), CODE_CARD_DOC, 'utf8')
   // #60 图表密集性能样例（generateMermaidDenseSample 可选注入；缺省跳过）
   if (generateMermaidDenseSample) {
@@ -574,6 +619,7 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   writeFileSync(path.join(wsDir, 'outline-style.md'), OUTLINE_STYLE_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'outline-menu.md'), OUTLINE_MENU_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'outline-drag.md'), OUTLINE_DRAG_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'highlight.md'), HIGHLIGHT_DOC, 'utf8')
   writeFileSync(path.join(wsDir, '链接目标.md'), '# 链接目标\n中文目标文档内容。\n', 'utf8')
   writeFileSync(path.join(wsDir, '无扩展名目标.md'), '# 无扩展名目标\n省略扩展名解析目标。\n', 'utf8')
   mkdirSync(path.join(wsDir, '子 目录'), { recursive: true })
