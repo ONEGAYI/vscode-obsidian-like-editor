@@ -165,6 +165,7 @@ vsidian/
 │       ├── graphicBlockChrome.ts   # 图形化块右上角按钮组
 │       ├── graphicRenderers.ts     # 图形化渲染器注册表
 │       ├── imageResource.ts        # 图片资源状态机（#10）
+│       ├── indentEditing.ts        # Tab 通用行缩进处理器（#120）
 │       ├── keybindingRouter.ts     # 编辑器按键分发器
 │       ├── keybindingSettings.ts   # 快捷键设置分页
 │       ├── listEditing.ts          # Enter 延续与退格清层（#119）
