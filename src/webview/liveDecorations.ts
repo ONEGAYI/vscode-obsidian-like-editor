@@ -869,7 +869,8 @@ function isGridLineClass(specClass: string | undefined): boolean {
 }
 
 /** 从行装饰提取区间内的网格行段：行首点装饰带网格类的行号聚合成连续段
- *  （段端含行尾换行，与 between 的闭端口径一致）。光标停分隔行时该行
+ *  （段端为该行 Line.to，不含行尾换行；行号连续的行在同一次提取内
+ *  已并段）。光标停分隔行时该行
  *  装饰被撤下，段会暂时少这一行——该行本就无类可分类，不影响分类结果；
  *  光标离开后重建区间重提取，段自然并回。 */
 function deriveGridSegments(
@@ -914,7 +915,9 @@ function mapGridSegments(segments: readonly GridTableSegment[], changes: ChangeS
   return out
 }
 
-/** 排序归并：重叠或贴邻（段端换行使贴邻 = 行号连续）合并 */
+/** 排序归并：仅位置重叠（或零隙相接）的段合并；段端不含行尾换行，
+ *  行号相邻而来自不同提取的段各自保留——各多一次 between 扫描，
+ *  后续任一段被触及重建即重新归并，无正确性影响 */
 function mergeGridSegments(list: readonly GridTableSegment[]): GridTableSegment[] {
   const sorted = [...list].sort((a, b) => a.from - b.from || a.to - b.to)
   const out: GridTableSegment[] = []
