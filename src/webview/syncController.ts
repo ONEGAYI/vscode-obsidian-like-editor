@@ -858,6 +858,10 @@ export class WebviewSyncController {
       })
     })
     this.hostDarkApplied = isVscodeDarkBody()
+    // #110：初始播种 mermaid 明暗态——MutationObserver 只在 class 变化时
+    // 触发，暗色环境从打开起 class 不变，不播种则首渲染按浅色主题出图
+    // （浅色墨水叠暗底不可读）
+    setMermaidDarkTheme(this.hostDarkApplied)
     this.applyModeDom(this.viewMode)
     // #94 语言切换：常驻文本就地换词（首帧装配不触发，installLocale 才通知）
     this.unsubscribeLocale = onLocaleChanged(() => this.applyEditorLocale())

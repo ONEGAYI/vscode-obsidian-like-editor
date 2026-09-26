@@ -603,6 +603,17 @@ review-loops 审查循环第 4 轮（2026-09-26，分支 `feature/65-70-outline-
   2. **市场字段双语**：扩展列表中 displayName 与 description 按宿主语言显示（中文环境「类 Obsidian 的 Markdown 编辑体验：实时预览 + 阅读双视图」，英文环境 "Obsidian-like Markdown editing: live preview + reading views"）——原中英混排单串已拆分双语。
   3. **打开方式入口**：`.md` 的「打开方式…」列表中 customEditors 的 displayName 显示正常（Vsidian，不透出 `%manifest.displayName%` 原文——contributes 字段按 VSCode manifest nls 机制解析，仍以真实宿主目视为准）。
 - 操作入口评估：manifest 层由 VSCode 按宿主显示语言解析，不随扩展语言设置联动（两层语言模型），无扩展侧操作入口。
+## #110 Mermaid 暗色主题可读性（2026-09-26）
+
+- 病根与修复：暗色环境打开文档时 webview 从未播种 mermaid 明暗态——MutationObserver 只在 body class 变化时触发，暗色起步 class 从不变，首渲染按浅色 default 主题出图，#333 墨水叠暗底对比度约 1.1:1（连线、箭头、时序图消息文字功能性不可见；用户截图实测复现）。修复：mount 时播种明暗态；暗色分支注入对齐正文的 themeVariables（取 `--vscode-editor-foreground` / `--vscode-editor-background` / `--vscode-editorWidget-background` / `--vscode-editorWidget-border` 计算值，缺失回退 Dark Modern 量级兜底），并直接覆写 `mainBkg` 防止 mermaid dark 基底把 primaryColor 压暗约 35% 造成节点与画布零色差。亮色分支维持 #60 现状不注入。
+- 自动化已证实：暗色 initialize 携带 themeVariables、亮色不携带的装配契约与主题切换/竞态既有回归（单测，mock mermaid）；映射纯函数空色板全兜底、注入值直通、WCAG 对比度下限（连线/文字对画布 ≥4.5:1、节点文字对节点底 ≥4.5:1）；真实 Chromium 加载真实 mermaid 11.12.2 产物的样图探针——修复前节点 #ECECFF、墨水 #333（与用户截图一致），修复后节点 #313131、描边/文字/连线 #cccccc（对暗色面板约 9:1）；开发态真实 1.86.2 宿主集成全过（含 #60 mermaid 全套用例）。
+- 人工待验：
+  1. **暗色起步首渲染即为暗色主题**（本轮回归点）：暗色 VSCode 下直接打开含 mermaid 围栏的文档，不做任何主题切换——连线、箭头、时序图消息文字应清晰可读。
+  2. **观感**：节点体块与描边在常用暗色与高对比主题下的辨识度（不同主题的 `--vscode-*` 取值不同，以实际主题观感为准）。
+  3. **运行中明暗切换**：图表即时重渲染、无旧主题残留（既有联动路径的回归确认）。
+  4. **亮色不变**：亮色主题下观感与 #60 交付时一致（不注入新变量）。
+- 操作入口评估：主题随宿主明暗自动跟随，无用户操作入口。
+
 ## #111 图形化代码块交互（2026-09-26）
 
 - 自动化已证实：注册表契约（共享标签表与 webview 管线表键集一致、假想第二渲染器登记即继承、无管线语言稳定降级源码+卡片）；弹窗几何纯函数（contain-fit、锚点缩放、钳制）；SVG 序列化（剥 max-width、尺寸固化、根 id 保留）与导出载荷校验（白名单/上限/严格 base64/文件名清洗）；控制器级交互（禁点击、edit 迁移、弹窗开闭/刷新/导出消息、阅读 popup-only 形态、PNG 不可用降级提示）；CSS 契约（按钮显隐与渲染态联动、浮层定位）；浏览器原生键鼠（悬停显隐、点击图形不落光标、edit 进入源码、滚轮锚点缩放/拖拽平移/键盘/Esc/焦点、SVG/PNG 导出消息、PNG 光栅化产出——CSP `img-src data:` 放行实证，保真度探针唯一色 38/31KB）；真宿主集成（live/reading 按钮形态、弹窗装载、零写回）。
