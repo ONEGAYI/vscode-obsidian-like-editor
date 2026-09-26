@@ -5841,14 +5841,15 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await poll('真实 webview 中文分词写回', () =>
       doc.getText() === '**中文**' + before.slice(2) ? true : undefined)
 
-    await openWithEditor('crlf.md')
-    await waitSessionReady('crlf.md')
-    const crlfUri = wsUri('crlf.md').toString()
-    const crlf = await vscode.workspace.openTextDocument(wsUri('crlf.md'))
+    await openWithEditor('format-crlf.md')
+    await waitSessionReady('format-crlf.md')
+    const crlfUri = wsUri('format-crlf.md').toString()
+    const crlf = await vscode.workspace.openTextDocument(wsUri('format-crlf.md'))
     const crlfBefore = crlf.getText()
+    assert(crlfBefore === CRLF_DOC, '格式命令应从独立 CRLF 原始样本开始')
     await vscode.commands.executeCommand(CMD.postToPanel, crlfUri,
       { kind: 'table.test.crossSelect', anchor: 4, head: 6 })
-    await waitViewState('crlf.md', (v) => v.selectionOffset === 4 && v.selectionHead === 6)
+    await waitViewState('format-crlf.md', (v) => v.selectionOffset === 4 && v.selectionHead === 6)
     assert(await vscode.commands.executeCommand('onegayi.vsidian.format.bold') === true,
       'CRLF 文档的活动 Live 面板应接受格式命令')
     await poll('CRLF 格式写回', () =>
@@ -5857,27 +5858,28 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await poll('CRLF 格式撤销', () => crlf.getText() === crlfBefore ? true : undefined)
   }],
   ['快速操作条：流内绘制、选区按钮与标题菜单写回（#89）', async () => {
-    await openWithEditor('crlf.md')
-    await waitSessionReady('crlf.md')
-    const uri = wsUri('crlf.md').toString()
-    const doc = await vscode.workspace.openTextDocument(wsUri('crlf.md'))
+    await openWithEditor('quick-actions-crlf.md')
+    await waitSessionReady('quick-actions-crlf.md')
+    const uri = wsUri('quick-actions-crlf.md').toString()
+    const doc = await vscode.workspace.openTextDocument(wsUri('quick-actions-crlf.md'))
     const before = doc.getText()
-    const initial = await waitViewState('crlf.md', (v) => v.paint?.quickActions !== undefined)
+    assert(before === CRLF_DOC, '操作条应从独立 CRLF 原始样本开始')
+    const initial = await waitViewState('quick-actions-crlf.md', (v) => v.paint?.quickActions !== undefined)
     if (!initial.paint!.quickActions!.open) {
       await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'quick.test.click', action: 'toggle' })
     }
-    const opened = await waitViewState('crlf.md', (v) => v.paint?.quickActions?.barPainted === true)
+    const opened = await waitViewState('quick-actions-crlf.md', (v) => v.paint?.quickActions?.barPainted === true)
     const bar = opened.paint!.quickActions!
     assert(bar.togglePainted && bar.boldPainted && bar.barBelowToolbar && bar.editorBelowBar,
       `快速操作条和正文应在各自流内真实绘制：${JSON.stringify(bar)}`)
 
     await vscode.commands.executeCommand(CMD.postToPanel, uri,
       { kind: 'table.test.crossSelect', anchor: 4, head: 6 })
-    await waitViewState('crlf.md', (v) => v.selectionOffset === 4 && v.selectionHead === 6)
+    await waitViewState('quick-actions-crlf.md', (v) => v.selectionOffset === 4 && v.selectionHead === 6)
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'quick.test.click', action: 'bold' })
     await poll('操作条粗体写回', () =>
       doc.getText() === '标题一\r\n**正文** A 行\r\n正文 B 行\r\n' ? true : undefined)
-    const active = await waitViewState('crlf.md', (v) => v.paint?.quickActions?.activePainted === true)
+    const active = await waitViewState('quick-actions-crlf.md', (v) => v.paint?.quickActions?.activePainted === true)
     assert(active.paint?.quickActions?.activePainted === true,
       '粗体已应用态应有真实绘制的主题背景')
     await vscode.commands.executeCommand(CMD.injectMessage, uri, { kind: 'history.request', op: 'undo' })
@@ -5886,7 +5888,7 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await vscode.commands.executeCommand(CMD.postToPanel, uri,
       { kind: 'table.test.crossSelect', anchor: 0, head: 0 })
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'quick.test.click', action: 'heading' })
-    const popup = await waitViewState('crlf.md', (v) => v.paint?.quickActions?.menuPainted === true)
+    const popup = await waitViewState('quick-actions-crlf.md', (v) => v.paint?.quickActions?.menuPainted === true)
     assert(popup.paint?.quickActions?.menuPainted === true, '标题 popup 应真实绘制')
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'quick.test.click', action: 'heading1' })
     await poll('标题菜单写回', () => doc.getText().startsWith('# 标题一\r\n') ? true : undefined)

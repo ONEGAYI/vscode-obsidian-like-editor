@@ -32,6 +32,9 @@ try {
   }
   const mode = resolveTestHostMode()
   console.log(`[runTest] 测试宿主模式：${mode}`)
+  if (process.env.VSIDIAN_TEST_CASES) {
+    console.log(`[runTest] 用例筛选：${JSON.stringify(process.env.VSIDIAN_TEST_CASES)}`)
+  }
   const code = await runTestHost({
     executable,
     args,

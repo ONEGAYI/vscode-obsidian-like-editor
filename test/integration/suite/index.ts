@@ -20,10 +20,13 @@ export async function run(): Promise<void> {
   // 定向重跑：VSIDIAN_TEST_CASES=子串（逗号分隔任一命中即跑）只跑匹配
   // 用例（开发调试用；缺省跑全量）
   const filter = process.env['VSIDIAN_TEST_CASES']
-  for (const [name, fn] of cases) {
-    if (filter && !filter.split(',').some((part) => name.includes(part.trim()))) {
-      continue
-    }
+  const parts = filter?.split(',').map((part) => part.trim()).filter(Boolean) ?? []
+  const selected = filter ? cases.filter(([name]) => parts.some((part) => name.includes(part))) : cases
+  if (filter && (!parts.length || !selected.length)) {
+    throw new Error(`VSIDIAN_TEST_CASES 未命中用例：${JSON.stringify(filter)}`)
+  }
+  console.log(`[集成测试] 执行 ${selected.length}/${cases.length} 项${filter ? `（筛选 ${JSON.stringify(filter)}）` : ''}`)
+  for (const [name, fn] of selected) {
     try {
       // #38：全局模式记忆（globalState）在同一集成进程内跨用例共享——
       // reading 记忆会让后续用例的新面板被恢复成阅读模式、source 记忆会
