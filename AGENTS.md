@@ -51,7 +51,8 @@ VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 vsidian/
 ├── .agents/               # agent 技能与本地配置
 │   └── skills/ # 已部署 agent 技能
-│       └── file-tree/ # file-tree 技能部署实例
+│       ├── ai-icon-sheet-to-svg/ # AI单图图标转SVG技能
+│       └── file-tree/            # file-tree 技能部署实例
 ├── .github/               # GitHub 平台配置
 │   └── workflows/ # Actions 工作流目录
 │       ├── ci.yml      # GitHub CI 工作流

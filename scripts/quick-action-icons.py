@@ -1,4 +1,4 @@
-"""Build the 15 light/dark quick-action icons from one raster contact sheet.
+"""Build the 17 light/dark quick-action icons from one raster contact sheet.
 
 Run: python scripts/quick-action-icons.py
 Requires Pillow and the VTracer CLI (`vtracer` on PATH). SVG paths are traced
@@ -17,10 +17,13 @@ from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / "media" / "quick-actions"
+AI_ICON_SOURCE = ASSETS / "highlight-horizontal-rule-source.png"
+AI_ICON_KEYS = ("highlight", "horizontalRule")
 KEYS = (
     "bold", "italic", "strikethrough", "inlineCode", "heading",
     "bulletList", "orderedList", "taskList", "quote", "codeBlock",
     "link", "clearInline", "table", "inlineMath", "blockMath",
+    "highlight", "horizontalRule",
 )
 COLORS = {"light": (54, 60, 70), "dark": (210, 218, 229)}
 CELL = 96
@@ -77,6 +80,15 @@ class Pen:
 
 
 def draw_icon(key: str, rgb: tuple[int, int, int]) -> Image.Image:
+    if key in AI_ICON_KEYS:
+        with Image.open(AI_ICON_SOURCE) as sheet:
+            if sheet.size != (CELL * len(AI_ICON_KEYS), CELL) or sheet.mode != "RGBA":
+                raise ValueError(f"Wrong AI icon source geometry or mode: {AI_ICON_SOURCE}")
+            index = AI_ICON_KEYS.index(key)
+            alpha = sheet.crop((index * CELL, 0, (index + 1) * CELL, CELL)).getchannel("A")
+        result = Image.new("RGBA", (CELL, CELL), rgb + (0,))
+        result.putalpha(alpha)
+        return result
     p = Pen()
     if key == "bold":
         p.line([(7, 5), (7, 19)], 2.35)
