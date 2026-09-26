@@ -63,8 +63,15 @@ export function estimateBlockHeightPx(
   const scale =
     block.kind === 'heading' ? (HEADING_HEIGHT_SCALES[block.level ?? 1] ?? 1) : 1
   const margin =
-    block.kind === 'heading' ? MARGIN_PX.heading : block.kind === 'code-block' ? MARGIN_PX.code : MARGIN_PX.block
-  return Math.max(1, Math.round(lines * calib.lineHeightPx * scale) + margin)
+    block.kind === 'heading' ? MARGIN_PX.heading : block.kind === 'code-block' || block.kind === 'mermaid' ? MARGIN_PX.code : MARGIN_PX.block
+  // #59：display 数学的实际高度通常高于等行数文本（上下标展开与 display
+  // 间距），初始估计放大 1.5 倍降低首次挂载的滚动条跳动；挂载后由
+  // ResizeObserver 实测回填（与图片加载先例同路径）
+  const mathScale = block.kind === 'math' ? 1.5 : 1
+  // #60：mermaid 渲染成 SVG 后的高度远超源行数（节点/箭头展开 + 内边距），
+  // 同为初始估计放大（2 倍），挂载后实测回填同路径
+  const mermaidScale = block.kind === 'mermaid' ? 2 : 1
+  return Math.max(1, Math.round(lines * calib.lineHeightPx * scale * mathScale * mermaidScale) + margin)
 }
 
 /** 全部块的初始高度估计（setDocument 时一次计算） */

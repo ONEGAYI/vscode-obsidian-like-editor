@@ -37,6 +37,10 @@ export const READING_CLASS_NAMES = {
   taskCheckbox: 'vsidian-reading-task-checkbox',
   /** #12 表格块（内含 markdown-it 渲染的真实 table/thead/tbody 标签） */
   tableBlock: 'vsidian-reading-table',
+  /** #59 公式块（行首 $$ 独立成块；内含 KaTeX display 渲染） */
+  mathBlock: 'vsidian-reading-math',
+  /** #60 Mermaid 围栏块（内含挂载后渲染的 .vsidian-mermaid 容器） */
+  mermaidBlock: 'vsidian-reading-mermaid',
   /** #7 视口占位 spacer（屏外块的高度占位，非内容节点） */
   spacer: 'vsidian-reading-spacer',
   spacerTop: 'vsidian-reading-spacer-top',
@@ -79,6 +83,12 @@ function blockClassNames(block: ReadingBlock): string[] {
       break
     case 'table':
       names.push(READING_CLASS_NAMES.tableBlock)
+      break
+    case 'math':
+      names.push(READING_CLASS_NAMES.mathBlock)
+      break
+    case 'mermaid':
+      names.push(READING_CLASS_NAMES.mermaidBlock)
       break
   }
   return names

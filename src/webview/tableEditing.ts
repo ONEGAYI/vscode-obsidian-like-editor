@@ -16,21 +16,24 @@
 //   增删行列以单笔 CM6 事务派发 = 单笔 edit.request = 宿主撤销一次
 // - #43 悬停控件由 tableControls.ts 只按可见 DOM 行构建；拖排行的纯规划
 //   在 tableStructure.ts，松手时仍经本模块单笔 CM6 事务写回
-import { EditorSelection, EditorState, StateEffect, StateField, Transaction } from '@codemirror/state'
+import { Annotation, EditorSelection, EditorState, StateEffect, StateField, Transaction, type TransactionSpec } from '@codemirror/state'
 import { EditorView, ViewPlugin, keymap, type ViewUpdate } from '@codemirror/view'
 import type { Command } from '@codemirror/view'
 import { deleteCharBackward } from '@codemirror/commands'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import type { TableEditOp } from '../shared/protocol'
-import { liveDecorationsField, LIVE_CLASS_NAMES, tableCompositionPreview } from './liveDecorations'
+import { liveDecorationsField, LIVE_CLASS_NAMES, snapGridSelectionHead, tableCompositionPreview } from './liveDecorations'
 import { chainAt } from './markdownDoc'
-import { needsPipeEscapeAt, parseTableDelimiter, planBlankRowCellInput, tableRowCellsForColumns, tableCellBreaks } from './tableCells'
-import { planTableEdit, planTableRowMove, tableCellNavTarget, type TableRowInfo } from './tableStructure'
+import { escapeCellText, needsPipeEscapeAt, parseTableDelimiter, planBlankRowCellInput, tableRowCellsForColumns, tableCellBreaks } from './tableCells'
+import { planTableColumnMove, planTableEdit, planTableRowMove, tableCellNavTarget, type TableRowInfo } from './tableStructure'
 import { createTableControls } from './tableControls'
 import { planCreateTable } from './tableCreate'
+import { planTableRegionDelete, planTableRegionReplace, serializeTableRegion } from './tableRegion'
+import { createTableRegionPointer, setTableRegion, tableRegionField } from './tableRegionSelection'
 
 /** 表格行身份的解析树节点名（分隔行整体是一个 TableDelimiter 节点） */
 const TABLE_LINE_NODE_NAMES = new Set(['TableHeader', 'TableRow', 'TableDelimiter'])
+const tableRegionReplacement = Annotation.define<boolean>()
 
 /** 判定 pos 所在行是否为表格行（表头/数据/分隔行；依据解析树，前序下降） */
 function isTableRowLine(state: EditorState, pos: number, tree: Tree): boolean {
@@ -232,80 +235,272 @@ function editableGridCellAt(state: EditorState, pos: number) {
   return { ...cell, cells, line }
 }
 
-/** 从当前网格装饰识别选区最先碰到的安全表格，避免局部缓存遗漏未改表。
- *  反向拖选从锚点附近分段回查，长表格中不遍历整张表的每一行。 */
-function gridTableAcross(state: EditorState, from: number, to: number, reverse = false) {
+/** 选区（或其越格部分）覆盖的安全表格全集，按文档序去重。
+ *  行级装饰在行首零宽放置：扫描从选区首行的行首起（选区整体落在
+ *  某表格行内部时也要命中该行），再按与选区区间相交过滤。内容行行首
+ *  挂 tableGridRow、分隔行行首挂 tableGridDelimiter——两者都认：选区
+ *  两端都在分隔行内时不触及任何内容行行首装饰，漏判会放行原生删除
+ *  直接破坏分隔声明（#57 评审 B-2）。 */
+function gridTablesUnder(state: EditorState, from: number, to: number): SyntaxNode[] {
   const field = state.field(liveDecorationsField, false)
-  if (!field || from >= to) return null
-  const scan = (start: number, end: number): { from: number; to: number } | null => {
-    let found: { from: number; to: number } | null = null
-    let lastTableEnd = -1
-    field.decos.between(start, end, (at, next, deco) => {
-      if (at < lastTableEnd || at !== next ||
-          !deco.spec.class?.split(' ').includes(LIVE_CLASS_NAMES.tableGridRow)) return
-      const table = chainAt(field.tree, Math.min(at + 1, state.doc.length))
-        .find((node) => node.name === 'Table')
-      if (table) {
-        found = { from: table.from, to: table.to }
-        lastTableEnd = table.to
-        if (!reverse) return false
-      }
-    })
-    return found
-  }
-  if (!reverse) return scan(from, to)
-  for (let end = to; end > from;) {
-    const start = Math.max(from, end - 4096)
-    const found = scan(start, end)
-    if (found) return found
-    end = start
-  }
-  return null
+  if (!field || from >= to) return []
+  const tables: SyntaxNode[] = []
+  let lastTableEnd = -1
+  const scanFrom = state.doc.lineAt(from).from
+  field.decos.between(scanFrom, Math.min(to + 1, state.doc.length), (at, next, deco) => {
+    if (at < lastTableEnd || at !== next) return
+    const cls = deco.spec.class?.split(' ') ?? []
+    if (!cls.includes(LIVE_CLASS_NAMES.tableGridRow) && !cls.includes(LIVE_CLASS_NAMES.tableGridDelimiter)) {
+      return
+    }
+    const table = chainAt(field.tree, Math.min(at + 1, state.doc.length))
+      .find((node) => node.name === 'Table')
+    if (table && table.from > lastTableEnd && table.from <= to && table.to >= from) {
+      tables.push(table)
+      lastTableEnd = table.to
+    }
+  })
+  return tables
 }
 
-/** 鼠标从表格外跨行拖选时停在网格边界。隐藏的 `| --- |` 仍在
- * CM6 源文档里；若让选区跨进去，按 Delete 会删掉表格结构。 */
+interface GridSelectionPlan {
+  changes: Array<{ from: number; to: number; insert: string }>
+  selection: number
+}
+
+/** 应用一段 changes 到文本；与 [base, base+text.length) 不相交的变更跳过
+ *  （格区间判空等局部计算需跳过区间外的行内其他变更） */
+function applySpans(text: string, base: number, changes: Array<{ from: number; to: number; insert: string }>): string {
+  let out = text
+  for (const change of [...changes].reverse()) {
+    if (change.to <= base || change.from >= base + out.length) continue
+    out = out.slice(0, change.from - base) + change.insert + out.slice(change.to - base)
+  }
+  return out
+}
+
+/**
+ * #57 跨格 / 整表选区的编辑规划：删除作用范围与可见选区解耦。
+ * - 选区完整包含表格块（首行首 .. 末行尾）：作为普通段删除，整表随选区
+ *   一次移除（与原生「选中即所删」同口径）；
+ * - 选区覆盖表格全部可见内容（首格内容首 .. 末格内容尾）：删除扩展到
+ *   表格块边界——从首格拖到末格的一次删除即可移除整张表；
+ * - 部分覆盖：只删选区与各格可见内容的交集（格删空保留填充空格；
+ *   省略边界管道的行经 canonical 重写保列数，仍不能保持则拒绝），
+ *   表块前后的换行区受保护，避免表前/后文本并进行破坏解析；
+ * - 插入文本（键入 / 粘贴替换选区）落在格内时换行持久化为 `<br>`，
+ *   落在表内隐藏结构上时丢弃（防结构破坏）。
+ * 返回 null = 选区不触及安全表格（透传）；'reject' = 结构无法保持。
+ */
+function planGridSelectionEdit(
+  state: EditorState,
+  range: { from: number; to: number },
+  insert: string,
+): GridSelectionPlan | null | 'reject' {
+  const tables = gridTablesUnder(state, range.from, range.to)
+  if (!tables.length) return null
+  const doc = state.doc
+  const field = state.field(liveDecorationsField)!
+  const changes: Array<{ from: number; to: number; insert: string }> = []
+  let cursor = range.from
+  for (const table of tables) {
+    const rows = tableRowsAt(state, table.from, field.tree)
+    if (!rows) continue
+    const columns = field.gridPlans.get(table.from)?.columns
+    if (!columns) continue
+    const contentRows = rows.filter((row) => row.kind !== 'delimiter')
+    if (!contentRows.length) continue
+    const blockFrom = rows[0]!.lineFrom
+    const blockTo = rows[rows.length - 1]!.lineTo
+    const firstCells = tableRowCellsForColumns(doc.lineAt(contentRows[0]!.lineFrom).text,
+      contentRows[0]!.lineFrom, columns)
+    const lastCells = tableRowCellsForColumns(doc.lineAt(contentRows[contentRows.length - 1]!.lineFrom).text,
+      contentRows[contentRows.length - 1]!.lineFrom, columns)
+    if (!firstCells?.length || !lastCells?.length) continue
+    const firstBoundary = firstCells[0]!.contentFrom
+    const lastBoundary = lastCells[lastCells.length - 1]!.contentTo
+    if (range.from <= blockFrom && range.to >= blockTo) {
+      // 整块在选区内：源字符全在选区中，并入普通段删除（整表随选区移除）
+      changes.push({ from: cursor, to: blockTo, insert: '' })
+      cursor = blockTo
+      continue
+    }
+    if (range.from <= firstBoundary && range.to >= lastBoundary) {
+      // 覆盖全部可见内容：删除扩展到表格块边界，一次移除整张表
+      if (cursor < blockFrom) changes.push({ from: cursor, to: blockFrom, insert: '' })
+      changes.push({ from: blockFrom, to: blockTo, insert: '' })
+      cursor = blockTo
+      continue
+    }
+    // 部分覆盖：表前换行区保护（表格解析需要表首前的完整空行）
+    let padStart = blockFrom
+    while (padStart > 0 && doc.sliceString(padStart - 1, padStart) === '\n') padStart -= 1
+    if (cursor < padStart) changes.push({ from: cursor, to: padStart, insert: '' })
+    for (const row of contentRows) {
+      if (row.lineTo < range.from || row.lineFrom > range.to) continue
+      const cells = tableRowCellsForColumns(doc.lineAt(row.lineFrom).text, row.lineFrom, columns)
+      if (!cells?.length) continue
+      let rowChanges: Array<{ from: number; to: number; insert: string }> = []
+      for (const cell of cells) {
+        const from = Math.max(range.from, cell.contentFrom)
+        const to = Math.min(range.to, cell.contentTo)
+        if (to > from) rowChanges.push({ from, to, insert: '' })
+      }
+      if (!rowChanges.length) continue
+      // 格区间应用后全空的格保留一个填充空格（原生输入/IME 文字节点）
+      for (const cell of cells) {
+        if (cell.to <= cell.from) continue
+        const remaining = applySpans(doc.sliceString(cell.from, cell.to), cell.from, rowChanges)
+        if (remaining.length === 0) {
+          rowChanges = rowChanges.filter((change) => change.to <= cell.from || change.from >= cell.to)
+          rowChanges.push({ from: cell.from, to: cell.to, insert: ' ' })
+        }
+      }
+      rowChanges.sort((a, b) => a.from - b.from)
+      // 表头全部格内容删空后 lezer 不再将其解析为表格（全空白表头行），
+      // 整表会静默降级为源码——拒绝这笔删除，保持防护语义
+      const editedLine = applySpans(doc.sliceString(row.lineFrom, row.lineTo), row.lineFrom, rowChanges)
+      if (row.kind === 'header' && !/[^\s|]/.test(editedLine)) return 'reject'
+      // 删除转义符等暴露格内管道时，canonical 重写保列数；仍失败则拒绝
+      if (!tableRowCellsForColumns(editedLine, row.lineFrom, columns)) {
+        const parts = cells.map((cell) => {
+          const text = applySpans(doc.sliceString(cell.from, cell.to), cell.from, rowChanges)
+          return text.length === 0 && cell.to > cell.from ? ' ' : text
+        })
+        const canonical = '|' + parts.join('|') + '|'
+        if (!tableRowCellsForColumns(canonical, row.lineFrom, columns)) return 'reject'
+        rowChanges = [{ from: row.lineFrom, to: row.lineTo, insert: canonical }]
+      }
+      changes.push(...rowChanges)
+    }
+    // 表后换行区保护：删掉末行换行会把后文并进表格行；表内交集删除不
+    // 推进 cursor——表外末段只从换行区之后（或选区尾，取更小者）开始
+    let padEndEnd = blockTo
+    while (padEndEnd < doc.length && doc.sliceString(padEndEnd, padEndEnd + 1) === '\n') padEndEnd += 1
+    cursor = Math.max(cursor, Math.min(padEndEnd, range.to))
+  }
+  if (cursor < range.to) changes.push({ from: cursor, to: range.to, insert: '' })
+  let selection = range.from
+  if (insert) {
+    // 插入点语义：格内换行持久化为 <br>、裸管道转义；表内隐藏结构上
+    // 丢弃（防结构破坏）。分隔行文本 `| --- |` 也能被切成与列数相等
+    // 的「格」，必须显式排除（#57 评审 B-1）——否则替换输入写进分隔行，
+    // 分隔声明不再匹配分隔模式、整表静默降级为源码
+    let text: string | null = insert
+    const line = doc.lineAt(range.from)
+    const table = tables.find((table) => range.from >= table.from && range.from <= table.to)
+    if (table) {
+      const plan = field.gridPlans.get(table.from)
+      const onDelimiter = plan != null && line.number === plan.delimiterLine
+      const columns = plan?.columns
+      const cells = columns ? tableRowCellsForColumns(line.text, line.from, columns) : null
+      const cell = cells?.find((item) => range.from >= item.from && range.from <= item.to) ?? null
+      text = cell && !onDelimiter ? escapeCellText(insert) : null
+    }
+    if (text !== null) {
+      const merged = changes.find((change) => change.from === range.from && change.insert === '')
+      if (merged) merged.insert = text
+      else changes.push({ from: range.from, to: range.from, insert: text })
+      changes.sort((a, b) => a.from - b.from || (a.to - a.from) - (b.to - b.from))
+      selection = range.from + text.length
+    }
+  }
+  return { changes, selection }
+}
+
+/** 选区级事务重写：单 change 事务（选区替换 / 删除的常态）按规划重写，
+ *  多段变更（理论不可达）与结构无法保持的规划一律拒绝，保持防护语义。
+ *  拒绝时 console.warn 记录原因与选区范围（#57 评审 C9：最小观测面，
+ *  不引入 UI 打扰）。 */
+function warnDroppedSelectionEdit(tr: Transaction, range: { from: number; to: number }, reason: string): void {
+  console.warn(`[vsidian] 跨格选区编辑被拒绝（${reason}）: ` + JSON.stringify({
+    from: range.from,
+    to: range.to,
+    event: tr.annotation(Transaction.userEvent) ?? 'unknown',
+  }))
+}
+
+function planSelectionRewrite(tr: Transaction, range: { from: number; to: number }): TransactionSpec | 'skip' | 'drop' {
+  let insert = ''
+  let count = 0
+  tr.changes.iterChanges((_from, _to, _fromB, _toB, text) => {
+    count += 1
+    insert = text.toString()
+  })
+  if (count > 1) {
+    warnDroppedSelectionEdit(tr, range, '多段变更')
+    return 'drop'
+  }
+  const plan = planGridSelectionEdit(tr.startState, range, insert)
+  if (plan === null) return 'skip'
+  if (plan === 'reject' || !plan.changes.length) {
+    warnDroppedSelectionEdit(tr, range, plan === 'reject' ? '结构无法保持' : '选区无可见表格内容交集')
+    return 'drop'
+  }
+  const event = tr.annotation(Transaction.userEvent)
+  return {
+    changes: plan.changes,
+    selection: { anchor: plan.selection },
+    annotations: event ? Transaction.userEvent.of(event) : undefined,
+    scrollIntoView: tr.scrollIntoView,
+  }
+}
+
+/** pointer 选区的端点落在安全表格的隐藏结构（管道 / 分隔行 / 格间空白）
+ * 上时收缩到最近的可见内容边界（#57）：表外发起的拖选由此可以进入表格，
+ * 选区反馈与实际可见内容一致；折叠选区透传（点击分隔行进入源码编辑态
+ * 的既有入口不受影响）。跨格选区的删除防护由 protectGridCellContent
+ * 的选区级规划承担，隐藏的 `| --- |` 不会被选区删除破坏。 */
 const protectGridPointerSelection = EditorState.transactionFilter.of((tr) => {
   if (tr.docChanged || tr.selection === undefined || !tr.isUserEvent('select.pointer') ||
       tr.newSelection.ranges.length !== 1) return tr
   const range = tr.newSelection.main
   if (range.empty) return tr
-  const forward = range.anchor < range.head
-  const table = gridTableAcross(tr.startState, range.from, range.to, !forward)
-  const boundary = table && (forward
-    ? range.anchor < table.from && range.head > table.from ? table.from : null
-    : range.anchor > table.to && range.head < table.to ? table.to : null)
-  if (boundary === null) return tr
+  // snap 方向口径（#57 评审 B-5，与 snapGridSelectionHead 注释一致）：
+  // forward = 端点是选区的文档序右端（head 在 anchor 右 → head 右端；
+  // anchor 在 head 右 → anchor 右端），两端各自向选区内侧收缩
+  const head = snapGridSelectionHead(tr.startState, range.head, range.anchor < range.head) ?? range.head
+  const anchor = snapGridSelectionHead(tr.startState, range.anchor, range.head < range.anchor) ?? range.anchor
+  if (head === range.head && anchor === range.anchor) return tr
   return {
-    selection: EditorSelection.single(range.anchor, boundary),
+    selection: EditorSelection.single(anchor, head),
     annotations: Transaction.userEvent.of('select.pointer'),
     scrollIntoView: tr.scrollIntoView,
   }
 })
 
 /** 原生删除命令可跨过隐藏源码。格内开始的编辑只修改这一格的可见内容；
- * 过滤器同时覆盖键盘删除与浏览器 DOM observer 回报的输入事务。 */
+ * 过滤器同时覆盖键盘删除与浏览器 DOM observer 回报的输入事务。
+ * #57：跨格 / 整表选区的删除与替换经 planGridSelectionEdit 与可见选区
+ * 解耦——整表覆盖删整块，部分覆盖只删各格内容交集，隐藏结构始终保留。 */
 const protectGridCellContent = EditorState.transactionFilter.of((tr) => {
+  if (tr.annotation(tableRegionReplacement)) return tr
   if (!tr.docChanged || (!tr.isUserEvent('delete') && !tr.isUserEvent('input'))) return tr
   const ranges = tr.startState.selection.ranges
   if (ranges.length !== 1) return tr
-  const cell = editableGridCellAt(tr.startState, ranges[0]!.anchor)
-  if (!cell) {
-    const range = ranges[0]!
-    if (!range.empty && !(range.from === 0 && range.to === tr.startState.doc.length) &&
-        gridTableAcross(tr.startState, range.from, range.to)) {
-      return [] // 键盘扩选等非鼠标路径也不能删除隐藏的安全表格源码。
-    }
+  const range = ranges[0]!
+  const cell = editableGridCellAt(tr.startState, range.anchor)
+  // 空选区（单光标编辑）不属选区级规划，保持既有格内/透传语义
+  const crossing = !range.empty && (cell
+    ? range.from < cell.from || range.to > cell.to
+    : !(range.from === 0 && range.to === tr.startState.doc.length) &&
+      gridTablesUnder(tr.startState, range.from, range.to).length > 0)
+  if (crossing) {
+    const rewrite = planSelectionRewrite(tr, range)
+    if (rewrite === 'drop') return []
+    if (rewrite !== 'skip') return rewrite
     return tr
   }
+  if (!cell) return tr
   // 边界取管道内侧；普通空白可删除，但删到零长度时保留一个 Markdown
   // 填充空格作为原生输入节点。纯 `||` 没有文字节点，浏览器会把输入/IME
   // 附着到相邻格或不可编辑 widget；这个空格在装饰层须保持视觉透明。
   const lower = cell.from
   const upper = cell.to
   // 格内粘贴的多行文本持久化为格内换行标记（与 Enter 的格内换行同一
-  // 语义）：换行原样入源文会拆散表格源行、整表降级为源码显示。
-  const cellInsert = (text: string): string => text.replace(/\r?\n/g, '<br>')
+  // 语义）：换行原样入源文会拆散表格源行、整表降级为源码；裸管道同样
+  // 转义（B-3：与键入 | 的 tablePipeKeyHandler 同防护，粘贴路径补齐）。
+  const cellInsert = escapeCellText
   const changes: Array<{ from: number; to: number; insert: string }> = []
   let clipped = false
   tr.changes.iterChanges((from, to, _fromB, _toB, insert) => {
@@ -380,6 +575,30 @@ const protectGridCellContent = EditorState.transactionFilter.of((tr) => {
     annotations: event ? Transaction.userEvent.of(event) : undefined,
     scrollIntoView: tr.scrollIntoView,
   }
+})
+
+/** 原生键入、粘贴与 IME 候选的首笔输入均替换整片格区。
+ * 后续 IME 候选只更新左上格；宿主组合缓冲将全过程合成一次写回。 */
+const replaceTableRegionInput = EditorState.transactionFilter.of((tr) => {
+  if (!tr.docChanged || !tr.isUserEvent('input') || tr.isUserEvent('input.type.compose')) return tr
+  const region = tr.startState.field(tableRegionField, false)
+  const field = tr.startState.field(liveDecorationsField, false)
+  if (!region || !field) return tr
+  const rows = tableRowsAt(tr.startState, region.tableFrom, field.tree)
+  if (!rows?.length) return tr
+  let text = ''
+  let count = 0
+  tr.changes.iterChanges((_from, _to, _fromB, _toB, inserted) => {
+    count++
+    text = inserted.toString()
+  })
+  if (count !== 1 || !text) return tr
+  const plan = planTableRegionReplace(tr.startState.doc.toString(), rows, region, text)
+  if (!plan) return tr
+  return { changes: plan.changes, selection: { anchor: plan.selection },
+    annotations: [tableRegionReplacement.of(true),
+      Transaction.userEvent.of(tr.annotation(Transaction.userEvent) ?? 'input.type')],
+    scrollIntoView: tr.scrollIntoView }
 })
 
 /** 浏览器输入默认生成 assoc=0 的光标。格尾紧邻隐藏管道时，这会把原生
@@ -660,8 +879,10 @@ function prepareGridInputPadding(view: EditorView): void {
   if (!caret.empty) return
   const cell = editableGridCellAt(view.state, caret.head)
   if (!cell || caret.head !== cell.to || (cell.to > cell.from && view.state.sliceDoc(cell.to - 1, cell.to) === ' ')) return
+  const region = view.state.field(tableRegionField, false)
   view.dispatch({ changes: { from: cell.to, insert: ' ' },
-    selection: EditorSelection.create([EditorSelection.cursor(caret.head, cell.from === cell.to ? 1 : -1)]) })
+    selection: EditorSelection.create([EditorSelection.cursor(caret.head, cell.from === cell.to ? 1 : -1)]),
+    effects: region ? setTableRegion.of(region) : undefined })
 }
 
 /** 普通键入、粘贴在空白行首笔规范化；IME 候选过程可能多次替换同一区间，
@@ -767,7 +988,7 @@ export function runCreateTable(view: EditorView): boolean {
  * 执行一次表格结构操作（增删行列；宿主 table.command 命令与测试共用）。
  * 单笔 CM6 事务（多行变更合一）→ 单笔 edit.request → 宿主撤销一次；
  * 光标落点由 planTableEdit 给出（新行首格 / 相邻行同列格）。
- * 上下文不符（表格外、删分隔行、最小表格删表头、选区中）返回 false 零变更。
+ * 上下文不符（表格外、单独删分隔行、选区中）返回 false 零变更。
  */
 export function runTableEdit(view: EditorView, op: TableEditOp): boolean {
   const sel = view.state.selection.main
@@ -824,15 +1045,74 @@ export function runTableRowMove(view: EditorView, sourcePos: number, slot: numbe
   return true
 }
 
-const tableControls = createTableControls({ tableRowsAt, runTableEditAt, runTableRowMove })
+export function runTableColumnMove(view: EditorView, tableFrom: number, source: number, slot: number): boolean {
+  if (view.compositionStarted) return false
+  const field = view.state.field(liveDecorationsField, false)
+  if (!field) return false
+  const rows = tableRowsAt(view.state, tableFrom, field.tree)
+  if (rows?.[0]?.lineFrom !== tableFrom) return false
+  const plan = planTableColumnMove(view.state.doc.toString(), rows, source, slot)
+  if (!plan) return false
+  view.dispatch({ changes: plan.changes })
+  return true
+}
+
+const tableControls = createTableControls({ tableRowsAt, runTableEditAt, runTableRowMove, runTableColumnMove })
+
+const tableRegionPointer = createTableRegionPointer((view, pos, tree) => tableRowsAt(view.state, pos, tree))
+
+function selectedRegionRows(view: EditorView) {
+  const region = view.state.field(tableRegionField)
+  const tree = view.state.field(liveDecorationsField, false)?.tree
+  if (!region || !tree) return null
+  const rows = tableRowsAt(view.state, region.tableFrom, tree)
+  return rows?.[0]?.lineFrom === region.tableFrom ? { region, rows } : null
+}
+
+/** 空内容行首格起点退格按结构删行，单笔事务走宿主撤销链路。 */
+const deleteEmptyGridRow: Command = (view) => {
+  if (view.compositionStarted || !view.state.selection.main.empty) return false
+  const head = view.state.selection.main.head
+  const cell = editableGridCellAt(view.state, head)
+  if (!cell || cell.from !== cell.cells[0]?.from || head !== cell.contentFrom ||
+      cell.cells.some((entry) => view.state.sliceDoc(entry.contentFrom, entry.contentTo).length > 0)) return false
+  const field = view.state.field(liveDecorationsField, false)
+  const rows = field && tableRowsAt(view.state, head, field.tree)
+  if (!rows) return false
+  const plan = planTableEdit(view.state.doc.toString(), rows, head, 'deleteRow')
+  if (!plan) return false
+  view.dispatch({ changes: plan.changes, selection: { anchor: plan.selection }, scrollIntoView: true })
+  return true
+}
+
+const deleteSelectedRegion: Command = (view) => {
+  if (view.compositionStarted) return false
+  const selected = selectedRegionRows(view)
+  if (!selected) return false
+  const plan = planTableRegionDelete(view.state.doc.toString(), selected.rows, selected.region)
+  if (plan) view.dispatch({ changes: plan.changes, selection: { anchor: plan.selection }, scrollIntoView: true })
+  return true
+}
 
 /** 装配扩展：键盘编辑、导航及可见表格控件共用 CM6 文本事务 */
 export const tableEditing = [
   tableComposition,
   tableCompositionCleanup,
+  tableRegionField,
+  tableRegionPointer,
   EditorView.domEventHandlers({
+    copy: (event, view) => {
+      const selected = selectedRegionRows(view)
+      if (!selected || !event.clipboardData) return false
+      const text = serializeTableRegion(view.state.doc.toString(), selected.rows, selected.region)
+      if (text === null) return false
+      event.clipboardData.setData('text/plain', text)
+      event.preventDefault()
+      return true
+    },
     beforeinput: (event, view) => {
-      if (event.inputType === 'insertText' && !event.isComposing && !view.compositionStarted) prepareGridInputPadding(view)
+      if (event.inputType === 'insertText' && !event.isComposing && !view.compositionStarted &&
+          !view.state.field(tableRegionField)) prepareGridInputPadding(view)
     },
     compositionstart: (_event, view) => {
       // 既有文件可能含 || 零宽格。候选开始前提供文字节点，避免浏览器
@@ -866,9 +1146,12 @@ export const tableEditing = [
   markTableCompositionInput,
   normalizeBlankRowInput,
   protectGridPointerSelection,
+  replaceTableRegionInput,
   protectGridCellContent,
   keepGridInputCaretInsideCell,
   stabilizeGridCaretAfterInput,
+  keymap.of([{ key: 'Backspace', run: deleteSelectedRegion }, { key: 'Delete', run: deleteSelectedRegion }]),
+  keymap.of([{ key: 'Backspace', run: deleteEmptyGridRow }]),
   keymap.of([
     { key: 'Enter', run: insertGridCellBreak, shift: insertGridCellBreak },
     { key: 'ArrowLeft', run: (view) => moveAcrossGridCell(view, false) },

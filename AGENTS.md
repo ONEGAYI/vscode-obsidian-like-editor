@@ -2,9 +2,7 @@
 
 VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 
-> 当前状态：**MVP 主要功能已实施，整体验收未结；二期大纲面板已实施待验收**。双视图编辑器、增量写回、任务、链接与图片、双链、表格和查找已落地；#32 统一两模式基础排版基线，#33 独立设置页，#34 实时预览源文件行号（设置页可开关）；#38 落地标题栏三态切换（实时预览 → 阅读 → 源码编辑器循环）、`.md` 默认编辑器接管、全局模式记忆（globalState）与 diff 语境防御；本联合分支整合 #45 后台集成宿主、#44 IME 同步修复、#42 表格逐格编辑网格、#43 表格控件与拖排和双语建表命令；#52–#55 联合分支落地兜底确认权威版本推导（旁观面板不再丢暂存增量）、顶栏齿轮入口与右侧栏布局、右侧栏大纲面板、标题左缘竖线移除。**#65–#70 联合分支落地大纲面板二期**：行内样式透传与主题色同源（设计哲学见「约定」节）、点击跳转与常驻控制域高亮、六档折叠滑块与手动折叠（滚动自动展开）、工具条（跳末/重置/搜索）、右键菜单（结构命令/五项复制/调级/重命名/删除）、拖拽排序（控制域原子搬移，单事务撤销）——写操作走既有 edit.request 管线，控制域边界纯函数为右键与拖拽共用单一事实源。#21–#25、#28、#30 跟进规格票验收缺口，#26–#27 等人工与跨环境事项仍按验证清单跟进。第 2–3 轮审查修复的用户可见口径：拖拽越界释放（`pointerup` 不送达 webview，如释放在窗口原生 chrome 或另一窗口）留下的残留会话与「吞一次 click」标志，在任何按下时先清理复位——上一次手势不再污染下一次点击与写回；拖拽会话只认起始指针（`pointerId`）的移动与释放，**按键判据（`button`/`buttons` 位掩码）不限指针类型**——鼠标右/中键与笔的 barrel 键同判、按下即结束手势，仅主键释放执行落点写回（笔的 barrel 键不再绕过守卫），触屏接触态（`button=0`/`buttons=1`）照常启动、由浏览器接管滚动收尾；`buttons=0` 的悬停与面板外的按下同样收尾；多点触控的次指针（`isPrimary=false`）不启动、不覆盖进行中的会话，也不误杀它；「标题链接」复制的标题片段是标题原文（含行内标记），与宿主 `findHeadingOffset` 的匹配语义（trim + 空白折叠 + 大小写不敏感的 ATX 标题行，返回**首个**匹配行）同源；标题自身含 `[`/`]`/`#`/`^` 或为空（`[[笔记#]]`）时整条 `[[…]]` 不构成合法双链（按原文显示、单击不跳转），容器内标题（引用块/列表内的标题）与 Setext 标题则形态合法但只打开文件、不定位；**含 `|` 的标题会被首个 `|` 当作别名分割而截断**——落到截断后的标题，若文档内另有能匹配该截断串的标题便**静默跳过去**（危险面大于「找不到」；均属 wikilink 形态学与一期匹配规则的已知限制，完整枚举见人工验证清单 A29）；折叠迁移在标题序列编辑距离超 256 时熔断回退当前档位集并留 `[vsidian]` 控制台诊断（同一次刷新最多两行——主展开集与搜索快照各调一次迁移）；触屏排序不在支持面——按住移动被浏览器接管为面板滚动并按取消处理（零写回），该机制已由 CDP 触摸仿真在真 Chromium 上实测、并由浏览器回归场景 K 钉住零写回与无拖拽指示，真机触屏手感与不同设备、触控板及浏览器接管滚动的时机差异仍待用户验收（口径见人工验证清单 A30 与「已知限制」）。
->
-> 自动化套件为 1451 项 Vitest 单测、21 项 node --test 契约测试（集成启动器 11 + 发布脚本 10）、72 项原生浏览器输入回归（表格 31，大纲跳转 4、折叠 6、搜索 7、菜单 8、拖拽 13、拖拽边界 3），以及开发态与 VSIX 安装态共用的 118 项真实 VSCode 1.86.2 宿主集成用例（另有空窗口激活实测路径）。单元格删除边界、跨行拖选标记保护、中格退格后的网格绘制、Tab 可见行导航、格内粘贴换行、多表行号、中文候选写回、侧栏两态绘制与大纲层级保真（含伪标题排除、长大纲可滚动、图标尺寸与去抖取消路径），以及大纲二期的透传绘制证据、档位语义、折叠迁移存活、快照回放、写回零误伤（权威文档全文全等对拍）、单事务撤销、容器与缩进标题（含 Unicode 空白与容器内 Setext）的标题区几何、按键判据与触屏接管的零写回、搜索整串折叠与「标题链接」复制—定位往返均有回归保护，执行记录见人工验证清单；这不代表真实 IME、物理鼠标和视觉效果已由用户验收。发布基建（双语 README、CHANGELOG、VSIX 体积闸、发布脚本与 CI 自动发布）已落地，见「打包与发布」。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；性能数据与待验项见 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md) 和 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)。本文件是项目级 agent 规则的**单一事实源**。
+> 当前状态：**MVP 主要功能已实施，整体验收未结**。一期双视图编辑、增量写回、任务、链接图片、双链、表格、查找、三态切换、独立设置页与源文件行号，二期公式渲染、Mermaid 图表、表格交互重做（[#72 规格](docs/specs/table-interaction-rework.md)）与大纲面板二期（#65–#70，样式透传、跳转高亮、折叠滑块、工具条搜索、右键菜单、拖拽排序）均已落地；自动化通过不等于真实 IME、物理鼠标与视觉观感已由用户验收。功能范围见 [docs/specs/mvp.md](docs/specs/mvp.md)；待验项与历轮执行记录见 [docs/specs/manual-verification.md](docs/specs/manual-verification.md)；用户可见变更见 [CHANGELOG.md](CHANGELOG.md)。本文件是项目级 agent 规则的**单一事实源**。
 
 ## 约定
 
@@ -15,19 +13,19 @@ VSCode 扩展：在 VSCode 中提供类 Obsidian 的 Markdown 编辑体验。
 
 ## 技术栈与构建（工单 #2 确立）
 
-- **运行时**：TypeScript + CodeMirror 6（`@codemirror/state`、`@codemirror/view`、`@codemirror/commands`，单包组合，不用 `codemirror` 聚合包与 basicSetup/history——撤销栈归宿主文本管线）。阅读模式将用 markdown-it（后续工单引入）。
+- **运行时**：TypeScript + CodeMirror 6（`@codemirror/state`、`@codemirror/view`、`@codemirror/commands`，单包组合，不用 `codemirror` 聚合包与 basicSetup/history——撤销栈归宿主文本管线）。阅读模式用 markdown-it（#8 起）；公式渲染 KaTeX 0.16.47 + `@vscode/markdown-it-katex` 1.1.2（#59，仅随包 woff2 字体）；Mermaid 11.12.2 独立产物按需懒加载（#60）。
 - **宿主端**（`src/extension.ts`、`src/host/`）：`CustomTextEditorProvider`，保存/dirty/Hot Exit 由 VSCode 文本管线自动处理；`TextDocument` 为权威文本，编辑经 `WorkspaceEdit` 写回。
 - **webview 端**（`src/webview/`）：CM6 EditorView + `acquireVsCodeApi` 消息桥；`src/shared/` 为两端共享的消息协议单一事实源（不依赖 vscode/DOM）。协议约定 webview 全程 LF 坐标（CM6 内部把 `\r\n` 规范化为 `\n`，宿主侧 `NewlineCoordinator` 负责双向坐标与文本转换）。
 - **构建**：esbuild 多产物——宿主 `out/extension.js`（node18/cjs/external vscode）、编辑器 webview `out/webview/main.js` 与设置页 webview `out/webview/settings.js`（#33；chrome118/iife，CSS 随 import 打包为同名 `.css`）；`npm run compile` 另跑 `tsc --noEmit` 做类型检查（esbuild 不查类型）。
 - **测试**：`npm run test:unit`（vitest + `node --test` 启动器契约，纯逻辑 + jsdom 的 webview 控制器，无 VSCode 宿主依赖；`VSIDIAN_TEST_HOST_MODE=foreground` 时跳过独立桌面探针）；`npm run test:browser`（Playwright headless Chromium，用原生键盘/IME 驱动生产控制器验证表格光标与输入回流——keydown 注入测不到 `input.type` 回流路径，**涉及 webview 输入/光标行为的变更合并前必跑**，首次需 `npx playwright install chromium`；CI 的 browser job 在 Linux runner 上跑同一脚本并缓存浏览器二进制，通道同为 Playwright chromium，与本地默认一致，`VSIDIAN_TEST_BROWSER_CHANNEL=msedge` 仅本机借系统 Edge 调试用，不进 CI）；`npm run test:integration`（1.86.2 真宿主，fixture 由 `test/integration/fixtures.mjs` 统一生成，开发态 `runTest.mjs` 与安装态 `runInstalled.mjs` 及空窗口激活 `runSettingsActivation.mjs` 三条路径共用 `testHost.mjs` 启动策略：Windows 默认独立桌面不抢前台，`VSIDIAN_TEST_HOST_MODE=foreground` 切前台）。扩展注册 `onegayi.vsidian._test.*` 辅助命令供集成测试观测/注入（仅 `VSIDIAN_TEST_HOOKS=1` 时注册）。测试消息通道是**宿主侧门控、webview 侧被动接收**的分层设计：`_test.*` 注入命令（含向 webview 转发 `table.test.key`/`task.test.click`/`reading.test.image` 等）在宿主侧受 `VSIDIAN_TEST_HOOKS` 门控；webview 侧这些消息分支不做二次门控——webview 面板的消息源只有扩展自身（`panel.webview.postMessage`），封住注入源即封住入口，勿误判为 webview 未设防。
 - **打包与安装态回归（#15）**：`npx @vscode/vsce package --no-dependencies` 产出 VSIX（esbuild bundle 自包含，不带 node_modules；`.vscodeignore` 排除 src/test/docs）。`node test/integration/runInstalled.mjs` 把 VSIX 经 `--install-extension` 装入隔离 profile 的 1.86.2 便携宿主（安装注册链路真实走通；1.86 测试模式要求 `--extensionTestsPath` 依赖 `--extensionDevelopmentPath` 同时存在，故 dev path 指向安装解压目录——加载代码仍是 VSIX 产物而非仓库源码树）后跑同一集成套件。
 - **性能测量**：`node test/perf/runPerf.mjs`（1千/1万/10万行、10 KB/100 KB/1 MB、超长行、图片密集与大围栏；报告写 `docs/perf/data/perf-report.json`）；档位数据与解读汇总在 [docs/perf/2026-09-mvp-performance-summary.md](docs/perf/2026-09-mvp-performance-summary.md)。
-- **版本锁定**：依赖一律精确版本（无 `^`），提交 lockfile；`engines.vscode ^1.86.0` 与 `@types/vscode 1.86.0` 对齐。`@types/node` 锁 22.x（vitest 5 的 vite peer 要求数 >=20.19，类型不进产物，宿主代码仍按 Node 18 API 面编码）。版本依据探索笔记（orch 仓库 exploration/01）。
+- **版本锁定**：依赖一律精确版本（无 `^`），提交 lockfile；`engines.vscode ^1.86.0` 与 `@types/vscode 1.86.0` 对齐。`@types/node` 锁 22.x（vitest 5 的 vite peer 要求数 >=20.19，类型不进产物，宿主代码仍按 Node 18 API 面编码）。
 
 ## 打包与发布
 
-- **体积红线**：VSIX 解压总量警告 1.5 MB / 上限 2.5 MB，一般单文件警告 700 KB / 上限 1 MB，图标上限 100 KB（256×256）。阈值定义在 `scripts/release.mjs` 的 `SIZE_LIMITS`；修改阈值视同变更本约定，需同步本节。
-- **双重防线**：`.vscodeignore` 挡打包输入，`scripts/release.mjs` 的 `inspectVsixEntries` 检查最终产物（必需清单 + 禁止模式 + 体积阈值），每次发布前必跑（`npm run release:check`，或随 `npm run release` / CI 自动执行）。新增运行时资产时两处同步维护：`.vscodeignore` 放行 + `REQUIRED_EXTENSION` 登记；漏登记会被发布检查拦下（`.github/` 混入包内即此类事故，实测发生过）。
+- **体积红线**：VSIX 解压总量警告 4.5 MB / 上限 5.5 MB，一般单文件警告 3 MB / 上限 4 MB，图标上限 100 KB（256×256）。阈值定义在 `scripts/release.mjs` 的 `SIZE_LIMITS`；修改阈值视同变更本约定，需同步本节。#60 起基线含 mermaid 独立产物 `out/webview/mermaid.js`（minify 后约 2.6 MB，刻意 vendored 的按需懒加载渲染器，单文件与总量阈值据此上调；主 bundle main.js 约 0.80 MB 随之不再触发单文件警告，其增长由总量线约束——属已接受取舍）。
+- **双重防线**：`.vscodeignore` 挡打包输入，`scripts/release.mjs` 的 `inspectVsixEntries` 检查最终产物（必需清单 + `out/` 白名单 + 禁止模式 + 体积阈值），每次发布前必跑（`npm run release:check`，或随 `npm run release` / CI 自动执行）。新增运行时资产时两处同步维护：`.vscodeignore` 放行 + `REQUIRED_EXTENSION` 登记；漏登记（缺失）与 out/ 未登记产物（多余，如调试遗留）都会被发布检查拦下（`.github/` 混入包内即此类事故，实测发生过）。字体只随包 woff2（chrome118 目标足够），`.woff`/`.ttf` 混入即硬错误——它是字体裁剪失效的信号。
 - **图标**：`media/vsidian-icon.png` 为原图（1254×1254），仅存仓库溯源、**不进 VSIX**；打包用 `media/vsidian-icon-256.png`（package.json `icon` 指向它）。替换图标时重新生成 256 版（PIL LANCZOS + optimize 即可），保持两文件同名关系。
 - **发布流程**：`CHANGELOG.md` 最新 `## <版本> - <日期>` 段落必须与 package.json `version` 一致（`scripts/release.mjs` 强校验，并以该段落作为 GitHub Release 说明）。发版步骤：升 `version` + 新建 CHANGELOG 段落 → 提交 → `npm run release:check` 本地过检查 → `git tag v<版本>` → `npm run release`（或推 tag 由 CI 执行）。
 - **CI 自动发布**：`.github/workflows/release.yml` 由 `v*` 标签触发。`release` job 跑 `npm run release`（检查失败即中止，不产出 Release）；`marketplace` job 从 Release 下载同一 VSIX 发布到 Marketplace（上市场的与 Release 附带的是同一份字节），需先配置仓库 secret `VSCE_PAT`（Azure DevOps PAT：Organization 选 All accessible organizations，Scope 选 Marketplace → Manage）并将 variable `MARKETPLACE_PUBLISH` 设为 `true`——两道开关配置前，推 tag 只产出 GitHub Release。
@@ -57,7 +55,6 @@ vsidian/
 │       ├── ci.yml      # GitHub CI 工作流
 │       └── release.yml # v* 标签触发的发布工作流
 ├── .gitignore             # Git 忽略规则
-├── .scratch/              # MVP 开票草稿，临时目录
 ├── .vscode/               # VSCode 工作区配置
 │   ├── launch.json # F5 扩展宿主启动配置
 │   └── tasks.json  # 调试前编译任务
@@ -81,6 +78,8 @@ vsidian/
 │   │   └── obsidian-selector-map.md # Obsidian 选择器映射表
 │   ├── perf/     # 性能实测数据与测量工具说明
 │   │   ├── 2026-09-live-syntax-decorations.md   # 语法树装饰与大围栏细分实测（#8）
+│   │   ├── 2026-09-math-rendering.md            # 公式渲染性能实测（#59）
+│   │   ├── 2026-09-mermaid-rendering.md         # Mermaid 性能与边界（#60）
 │   │   ├── 2026-09-mvp-performance-summary.md   # MVP 性能档位汇总
 │   │   ├── 2026-09-reading-viewport-mount.md    # 阅读按需挂载实测数据
 │   │   ├── 2026-09-table-cell-editing.md        # 表格单元格编辑性能实测（#12）
@@ -91,9 +90,10 @@ vsidian/
 │   │   ├── obsidian-live-preview-editor.md # Obsidian 技术栈与选型调研
 │   │   └── obsidian-viewport-rendering.md  # 视口渲染性能补充调研
 │   └── specs/    # 产品规格
-│       ├── manual-verification.md # 人工验证清单
-│       ├── mvp-issues.md          # MVP GitHub Issue 索引
-│       └── mvp.md                 # MVP 规格主文档
+│       ├── manual-verification.md      # 人工验证清单
+│       ├── mvp-issues.md               # MVP GitHub Issue 索引
+│       ├── mvp.md                      # MVP 规格主文档
+│       └── table-interaction-rework.md # 表格交互重做规格
 ├── esbuild.mjs            # esbuild 多产物构建脚本
 ├── LICENSE                # MIT 许可证全文
 ├── media/                 # 随扩展打包的静态资源
@@ -120,140 +120,54 @@ vsidian/
 │   │   └── wikilinkTarget.ts     # 宿主侧双链目标解析纯逻辑（#11）
 │   ├── shared/      # 两端共享纯逻辑
 │   │   ├── changeMapping.ts # 变更重定位纯函数
+│   │   ├── math.ts          # 公式形态学纯函数（#59）
+│   │   ├── mermaid.ts       # Mermaid 围栏形态学（#60）
 │   │   ├── newline.ts       # CRLF/LF 换行协调器
 │   │   ├── protocol.ts      # 消息协议单一事实源
 │   │   ├── settings.ts      # 设置定义与读写纯逻辑
 │   │   └── wikilink.ts      # 双链形态学单一事实源（#11）
 │   └── webview/     # webview 端实现
-│       ├── css.d.ts              # CSS 导入类型声明
-│       ├── findSession.ts        # 查找匹配纯函数（#14）
-│       ├── imageResource.ts      # 图片资源状态机（#10）
-│       ├── liveDecorations.ts    # 语法树驱动 Live 装饰（#8）
-│       ├── liveLineNumbers.ts    # 表格段首行号与绘制探针
-│       ├── liveLinks.ts          # live 链接装饰与跳转（#10）
-│       ├── main.css              # webview 全局布局样式
-│       ├── main.ts               # webview 启动入口
-│       ├── markdownDoc.ts        # Markdown 文档工具与树查询
-│       ├── outline.ts            # 大纲全文解析与面板装配
-│       ├── outlineCollapse.ts    # 大纲折叠状态机纯函数
-│       ├── outlineDrag.ts        # 大纲拖拽移动计划纯函数
-│       ├── outlineLocate.ts      # 大纲定位纯函数
-│       ├── outlineMenu.ts        # 大纲右键菜单模型纯逻辑
-│       ├── outlineSearch.ts      # 大纲标题搜索纯函数
-│       ├── outlineSection.ts     # 大纲控制域纯函数
-│       ├── perfProbe.ts          # webview 性能探针（#5）
-│       ├── readingBlocks.ts      # markdown-it 阅读块切分
-│       ├── readingMarkdown.ts    # markdown-it 安全渲染层
-│       ├── readingProbe.ts       # 阅读视图性能探针
-│       ├── readingView.ts        # 阅读视图 DOM 构建与锚点定位
-│       ├── readingViewport.ts    # 阅读视口挂载窗口纯函数
-│       ├── readingVirtualView.ts # 阅读视图虚拟化装配层
-│       ├── settingsMain.ts       # 设置页 webview 入口
-│       ├── settingsPage.css      # 设置页样式
-│       ├── settingsPageView.ts   # 设置页 webview 视图
-│       ├── syncController.ts     # CM6 同步控制器
-│       ├── tableCells.ts         # 表格单元格边界、换行与转义
-│       ├── tableControls.ts      # 表格可见行控件与拖动
-│       ├── tableCreate.ts        # 光标处建表规划纯函数
-│       ├── tableEditing.ts       # 表格输入钩子（#12）
-│       ├── tableStructure.ts     # 表格导航与增删行列纯函数（#13）
-│       └── taskToggle.ts         # 任务勾选解析纯函数（#9）
-├── test/                  # 测试根
-│   ├── browser/     # 浏览器原生输入回归
-│   │   ├── outlineCollapse.mjs       # 大纲折叠原生浏览器回归
-│   │   ├── outlineCollapseFixture.ts # 折叠回归生产控制器装配
-│   │   ├── outlineDrag.mjs           # 大纲拖拽原生浏览器回归
-│   │   ├── outlineDragBoundary.mjs   # 拖拽跨帧边界原生回归
-│   │   ├── outlineDragFixture.ts     # 拖拽回归生产控制器装配
-│   │   ├── outlineJump.mjs           # 大纲跳转原生浏览器回归
-│   │   ├── outlineJumpFixture.ts     # 跳转回归生产控制器装配
-│   │   ├── outlineMenu.mjs           # 大纲菜单原生浏览器回归
-│   │   ├── outlineMenuFixture.ts     # 菜单回归生产控制器装配
-│   │   ├── outlineSearch.mjs         # 大纲搜索原生浏览器回归
-│   │   ├── outlineSearchFixture.ts   # 搜索回归生产控制器装配
-│   │   ├── tableCaret.mjs            # 表格原生键盘与IME回归
-│   │   └── tableCaretFixture.ts      # 原生输入测试生产控制器装配
-│   ├── integration/ # 真宿主集成测试
-│   │   ├── fixtures.mjs              # 集成测试 fixture 单一事实源
-│   │   ├── hiddenDesktop.ps1         # Windows 独立桌面启动器
-│   │   ├── runInstalled.mjs          # VSIX 安装态集成回归启动器
-│   │   ├── runSettingsActivation.mjs # 空窗口激活实测启动器
-│   │   ├── runTest.mjs               # 集成测试启动器
-│   │   ├── settingsActivation/       # 空窗口命令激活实测套件（#33）
-│   │   │   └── index.ts # 空窗口命令激活实测套件
-│   │   ├── suite/                    # 集成测试套件
-│   │   │   ├── cases.ts # 集成测试用例
-│   │   │   └── index.ts # 集成测试入口 runner
-│   │   ├── testHost.mjs              # 集成宿主启动策略
-│   │   └── testHost.test.mjs         # 集成宿主启动契约测试
-│   ├── perf/        # 性能测量脚本与套件（#5）
-│   │   ├── gen-sample.mjs # 性能样例生成器（#5）
-│   │   ├── runPerf.mjs    # 性能测量启动器（#5）
-│   │   └── suite.ts       # 性能测量套件（#5）
-│   ├── release/     # 发布脚本契约测试目录
-│   │   └── release.test.mjs # 发布脚本纯函数契约测试
-│   └── unit/        # vitest 单元契约测试
-│       ├── appliedUnackedRace.test.ts       # 已应用未确认竞态契约测试
-│       ├── changeMapping.test.ts            # 变更重定位契约
-│       ├── compositionBuffer.test.ts        # 组合期间缓冲契约测试
-│       ├── conflictRetention.test.ts        # 冲突保留与暂停契约测试
-│       ├── documentSession.test.ts          # 文档会话契约
-│       ├── editorChromeCssContract.test.ts  # 编辑器铬件主题适配契约测试
-│       ├── find.test.ts                     # 查找会话契约测试（#14）
-│       ├── findSession.test.ts              # 查找匹配语义测试（#14）
-│       ├── headingPaintCssContract.test.ts  # 标题绘制样式契约测试
-│       ├── historyForwarding.test.ts        # 撤销重做转发契约测试
-│       ├── imageResource.test.ts            # 图片资源管理器契约测试
-│       ├── lineNumberCssContract.test.ts    # 行号公式与 CSS 双写钉子测试
-│       ├── lineNumbers.test.ts              # 行号装配契约测试（#34）
-│       ├── linkInteraction.test.ts          # 链接交互契约测试（#10）
-│       ├── linkTarget.test.ts               # 链接目标分类契约测试
-│       ├── liveDecorations.test.ts          # Live 装饰契约测试
-│       ├── liveTable.test.ts                # live 表格装饰测试（#12）
-│       ├── markdownDoc.test.ts              # 文档工具契约测试
-│       ├── newline.test.ts                  # 换行协调契约
-│       ├── outline.test.ts                  # 大纲标题提取契约测试
-│       ├── outlineCollapse.test.ts          # 大纲折叠状态机契约测试
-│       ├── outlineCssContract.test.ts       # 大纲绘制样式契约测试
-│       ├── outlineDrag.test.ts              # 大纲拖拽计划契约测试
-│       ├── outlineDragPanel.test.ts         # 大纲拖拽面板交互契约测试
-│       ├── outlineJump.test.ts              # 大纲跳转与高亮契约测试
-│       ├── outlineLocate.test.ts            # 大纲定位纯函数契约测试
-│       ├── outlineMenu.test.ts              # 大纲菜单模型契约测试
-│       ├── outlineMenuPanel.test.ts         # 大纲菜单面板交互契约测试
-│       ├── outlinePanel.test.ts             # 大纲面板交互契约测试
-│       ├── outlineSearch.test.ts            # 大纲搜索纯函数契约测试
-│       ├── outlineSearchPanel.test.ts       # 大纲搜索面板交互契约测试
-│       ├── outlineSection.test.ts           # 大纲控制域契约测试
-│       ├── perfProbe.test.ts                # 性能探针契约测试
-│       ├── protocol.test.ts                 # 消息协议校验契约
-│       ├── readingBlocks.test.ts            # 阅读块切分契约测试
-│       ├── readingMarkdown.test.ts          # 渲染层契约测试
-│       ├── readingTable.test.ts             # 阅读表格契约测试（#12）
-│       ├── readingView.test.ts              # 阅读视图 DOM 契约测试
-│       ├── readingViewport.test.ts          # 视口窗口纯函数契约测试
-│       ├── readingVirtualView.test.ts       # 虚拟化装配契约测试
-│       ├── settings.test.ts                 # 设置纯逻辑契约测试
-│       ├── settingsInteraction.test.ts      # 设置交互契约测试
-│       ├── settingsPage.test.ts             # 设置页 UI 契约测试
-│       ├── settingsPageHost.test.ts         # 设置页宿主生命周期测试
-│       ├── settingsService.test.ts          # 设置服务契约测试
-│       ├── sidebarLayout.test.ts            # 右侧栏布局契约测试
-│       ├── sidebarLayoutCssContract.test.ts # 右侧栏样式契约测试
-│       ├── suspendResume.test.ts            # 暂停恢复契约测试
-│       ├── tableCells.test.ts               # 单元格拆分契约测试（#12）
-│       ├── tableCreate.test.ts              # 建表与本地化契约测试
-│       ├── tableOps.test.ts                 # 表格导航与结构命令链路契约（#13）
-│       ├── tablePaintCssContract.test.ts    # 表格绘制样式契约测试
-│       ├── tableStructure.test.ts           # 表格结构操作纯函数契约（#13）
-│       ├── taskInteraction.test.ts          # 任务勾选交互契约测试（#9）
-│       ├── taskToggle.test.ts               # 任务勾选解析纯函数契约测试
-│       ├── viewCycle.test.ts                # 三态视图编排契约测试
-│       ├── viewMode.test.ts                 # 模式切换状态机契约测试
-│       ├── webviewSync.test.ts              # webview 同步契约
-│       ├── wikilinkInteraction.test.ts      # 双链交互契约测试（#11）
-│       ├── wikilinkParse.test.ts            # 双链形态学契约测试（#11）
-│       └── wikilinkTarget.test.ts           # 双链目标解析契约测试（#11）
+│       ├── css.d.ts                # CSS 导入类型声明
+│       ├── findSession.ts          # 查找匹配纯函数（#14）
+│       ├── imageResource.ts        # 图片资源状态机（#10）
+│       ├── liveDecorations.ts      # 语法树驱动 Live 装饰（#8）
+│       ├── liveLineNumbers.ts      # 表格段首行号与绘制探针
+│       ├── liveLinks.ts            # live 链接装饰与跳转（#10）
+│       ├── liveMath.ts             # 行内与块级公式 live 装饰（#59）
+│       ├── liveMermaid.ts          # Mermaid live 装饰（#60）
+│       ├── main.css                # webview 全局布局样式
+│       ├── main.ts                 # webview 启动入口
+│       ├── markdownDoc.ts          # Markdown 文档工具与树查询
+│       ├── mathRenderCache.ts      # KaTeX 渲染 LRU 缓存共享模块
+│       ├── mermaidEntry.ts         # Mermaid 独立产物入口（#60）
+│       ├── mermaidRender.ts        # Mermaid 渲染管线（#60）
+│       ├── outline.ts              # 大纲全文解析与面板装配
+│       ├── outlineCollapse.ts      # 大纲折叠状态机纯函数
+│       ├── outlineDrag.ts          # 大纲拖拽移动计划纯函数
+│       ├── outlineLocate.ts        # 大纲定位纯函数
+│       ├── outlineMenu.ts          # 大纲右键菜单模型纯逻辑
+│       ├── outlineSearch.ts        # 大纲标题搜索纯函数
+│       ├── outlineSection.ts       # 大纲控制域纯函数
+│       ├── perfProbe.ts            # webview 性能探针（#5）
+│       ├── readingBlocks.ts        # markdown-it 阅读块切分
+│       ├── readingMarkdown.ts      # markdown-it 安全渲染层
+│       ├── readingProbe.ts         # 阅读视图性能探针
+│       ├── readingView.ts          # 阅读视图 DOM 构建与锚点定位
+│       ├── readingViewport.ts      # 阅读视口挂载窗口纯函数
+│       ├── readingVirtualView.ts   # 阅读视图虚拟化装配层
+│       ├── settingsMain.ts         # 设置页 webview 入口
+│       ├── settingsPage.css        # 设置页样式
+│       ├── settingsPageView.ts     # 设置页 webview 视图
+│       ├── syncController.ts       # CM6 同步控制器
+│       ├── tableCells.ts           # 表格单元格边界、换行与转义
+│       ├── tableControls.ts        # 表格可见行控件与拖动
+│       ├── tableCreate.ts          # 光标处建表规划纯函数
+│       ├── tableEditing.ts         # 表格输入钩子（#12）
+│       ├── tableRegion.ts          # 表格矩形选区与结构规划
+│       ├── tableRegionSelection.ts # 表格格区状态与指针绘制
+│       ├── tableStructure.ts       # 表格导航与增删行列纯函数（#13）
+│       └── taskToggle.ts           # 任务勾选解析纯函数（#9）
+├── test/…                 # 测试根
 ├── tsconfig.json          # TypeScript 类型检查配置
 └── vitest.config.ts       # vitest 单元测试配置
 <!-- file-tree:tree:end -->

@@ -24,7 +24,7 @@
 //   （不再发送 edit.request、忽略 doc.changed）；doc.resync 兼作恢复信号
 // - seq 持久化：经 bridge.setState 保存，webview 重载（retainContextWhenHidden
 //   关闭导致的状态重建）后继续编号，宿主按 seq 幂等去重
-import { Annotation, ChangeSet, Compartment, EditorSelection, EditorState, type Extension, type Text } from '@codemirror/state'
+import { Annotation, ChangeSet, Compartment, EditorSelection, EditorState, Prec, type Extension, type Text } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { liveLineNumbers, paintedLineNumbers } from './liveLineNumbers'
 import {
@@ -58,6 +58,11 @@ import {
 } from './findSession'
 import { liveDecorationsField, livePreviewDecorations, LIVE_CLASS_NAMES, tableCompositionSettled } from './liveDecorations'
 import { createLinkInteractions, WIKILINK_CLASS_NAMES } from './liveLinks'
+import { liveMath } from './liveMath'
+import { MATH_CLASS_NAMES } from '../shared/math'
+import { liveMermaid } from './liveMermaid'
+import { renderMermaidIn, setMermaidDarkTheme } from './mermaidRender'
+import { MERMAID_CLASS_NAMES, MERMAID_STATE_ATTR } from '../shared/mermaid'
 import { ImageResourceManager } from './imageResource'
 import { runPerfProbe } from './perfProbe'
 import { runReadingPerfProbe } from './readingProbe'
@@ -121,7 +126,10 @@ import {
 import { locateOutlineIndex } from './outlineLocate'
 import { resolveStaleTaskToggle } from './taskToggle'
 import { VirtualReadingView } from './readingVirtualView'
-import { blankRowInputPlan, runCreateTable, runTableEdit, tableEditing } from './tableEditing'
+import { blankRowInputPlan, runCreateTable, runTableEdit, tableEditing, tableRowsAt } from './tableEditing'
+import { selectTableRegion, tableRegionField } from './tableRegionSelection'
+import { planTableRegionReplace, type TableRegion } from './tableRegion'
+import { splitTableRowCells } from './tableCells'
 
 /** rAF 不可用环境（旧 jsdom）退化为短超时（与 readingVirtualView 同款） */
 function scheduleFrame(fn: () => void): void {
@@ -554,8 +562,9 @@ export class WebviewSyncController {
   // ---- IME 组合缓冲状态 ----
   /** 组合进行中（DOM compositionstart..compositionend） */
   private composing = false
-  /** 仅空白网格格子的组合暂缓：CM6 可更新候选，宿主只接收结束后的净变更。 */
-  private blankComposition: { startState: EditorState; changes: ChangeSet | null } | null = null
+  /** 空白格或矩形区域的组合暂缓：宿主只接收结束后的净变更。 */
+  private blankComposition: { startState: EditorState; changes: ChangeSet | null; region?: TableRegion } | null = null
+  private compositionCommittedText: string | null = null
   /** 组合期间到达、待 flush 的外部增量（按到达序） */
   private pendingExternal: BufferedIncremental[] = []
   /** 组合期间到达、待 flush 的全文消息（覆盖增量形态）。source 记录来源
@@ -614,7 +623,13 @@ export class WebviewSyncController {
     })
     this.readingView = new VirtualReadingView(this.readingContainer, {
       // #10 图片生命周期：块挂载预备装载，卸载释放（src 清空、条目回收）
-      onBlockMounted: (el) => this.images && prepareReadingImages(el, this.images),
+      // #60 Mermaid：挂载即渲染 pending 容器（DOM 随块卸载 el.remove 释放）
+      onBlockMounted: (el) => {
+        if (this.images) {
+          prepareReadingImages(el, this.images)
+        }
+        renderMermaidIn(el)
+      },
       onBlockUnmounted: (el) => this.images?.detachWithin(el),
     })
     // 阅读滚动更新锚点（用户滚动即改变"当前位置"语义；短文档滚不动时
@@ -1417,6 +1432,20 @@ export class WebviewSyncController {
       liveWikilinkCount: content
         ? content.querySelectorAll(`.${WIKILINK_CLASS_NAMES.wikilink}`).length
         : 0,
+      // #59 公式观测（live：视口内 KaTeX widget/降级 span；reading：挂载块内）
+      liveMathCount: content
+        ? content.querySelectorAll(`.${MATH_CLASS_NAMES.math}, .${MATH_CLASS_NAMES.mathError}`).length
+        : 0,
+      readingMathCount: readingActive
+        ? this.readingContainer!.querySelectorAll(`.${MATH_CLASS_NAMES.math}, .${MATH_CLASS_NAMES.mathError}`).length
+        : 0,
+      // #60 Mermaid 观测（live：视口内渲染 widget/降级容器；reading：挂载块内）
+      liveMermaidCount: content
+        ? content.querySelectorAll(`.${MERMAID_CLASS_NAMES.diagram}`).length
+        : 0,
+      readingMermaidCount: readingActive
+        ? this.readingContainer!.querySelectorAll(`.${MERMAID_CLASS_NAMES.diagram}`).length
+        : 0,
       readingLinkCount: readingActive
         ? this.readingContainer!.querySelectorAll('a').length
         : 0,
@@ -1576,6 +1605,7 @@ export class WebviewSyncController {
     // review-loops B3：命令面板切模式不经鼠标路径（无 pointercancel），
     // 拖拽会话若残留会跨模式存活（落点判定随视图重算漂移）——统一取消
     this.cancelOutlineDrag()
+    if (this.view) selectTableRegion(this.view, null)
     if (next === 'reading') {
       // 锚点 = live 光标主位（选区最小 from）；阅读视图按当前 CM6 文本渲染
       // （含未确认输入），不依赖宿主权威。锚点随即规范化为块 start——
@@ -1726,6 +1756,8 @@ export class WebviewSyncController {
       this.reassertReadingAnchor(start, 2)
     } else {
       this.modeAnchor = pos
+      // #57：定位离开表格选区语境时清选区（view.locate 与大纲跳转共用）
+      if (this.view) selectTableRegion(this.view, null)
       // 聚焦编辑器（#66，QO「jump + 聚焦」语义）：未聚焦时 CM6 不把选区
       // 同步到 DOM Selection，用户看不到光标落位；点击大纲即完成导航，
       // 焦点归还正文（继续输入/滚动）
@@ -1817,6 +1849,12 @@ export class WebviewSyncController {
     const readingWikilink = this.readingContainer?.querySelector(
       `.vsidian-reading-block a.${WIKILINK_CLASS_NAMES.wikilink}`,
     ) ?? null
+    // #59 公式字体观测：katex.min.css 生效时 .katex 的 computed font-family
+    // 含 KaTeX 字体族（CSP/样式注入失效时回落 body 字体——集成断言依据）
+    const liveMathKatex = this.liveWrapper?.querySelector('.vsidian-math .katex') ?? null
+    const readingMathKatex = this.readingContainer?.querySelector('.vsidian-reading-block .katex') ?? null
+    const readFont = (el: Element | null): string | null =>
+      el ? getComputedStyle(el).fontFamily || null : null
     const read = (el: Element | null): string | null =>
       el ? getComputedStyle(el).textDecorationColor : null
     let readingVarProbe: string | null = null
@@ -1845,6 +1883,9 @@ export class WebviewSyncController {
       // #11 双链样式入口探针（live widget/mark / reading a）
       liveWikilinkDecorationColor: read(liveWikilink),
       readingWikilinkDecorationColor: read(readingWikilink),
+      // #59 公式字体探针（live widget / reading 块内的 KaTeX 层）
+      liveMathFontFamily: readFont(liveMathKatex),
+      readingMathFontFamily: readFont(readingMathKatex),
     }
   }
 
@@ -3534,6 +3575,7 @@ export class WebviewSyncController {
         }, 0)
       })
     } else {
+      if (this.view) selectTableRegion(this.view, null)
       this.view?.dispatch({
         selection: { anchor: cur.from, head: cur.to },
         effects: EditorView.scrollIntoView(cur.from, { y: 'center' }),
@@ -3803,8 +3845,11 @@ export class WebviewSyncController {
     if (this.blankComposition || this.viewMode !== 'live' || !this.view) return
     const state = this.view.state
     const selection = state.selection.main
-    if (!selection.empty || !blankRowInputPlan(state, selection.from, selection.to, 'x')) return
-    this.blankComposition = { startState: state, changes: null }
+    if (!selection.empty || (!blankRowInputPlan(state, selection.from, selection.to, 'x') &&
+        !state.field(tableRegionField, false))) return
+    this.blankComposition = { startState: state, changes: null,
+      region: state.field(tableRegionField, false) ?? undefined }
+    this.compositionCommittedText = null
     this.reportBlankCompositionSnapshot(true)
   }
 
@@ -3825,6 +3870,43 @@ export class WebviewSyncController {
       initial.push({ offset: from, length: to - from, text: inserted.sliceString(0, inserted.length) })
     })
     let normalized = false
+    if (pending.region) {
+      const start = pending.startState
+      const field = start.field(liveDecorationsField, false)
+      const rows = field && tableRowsAt(start, pending.region.tableFrom, field.tree)
+      const header = start.doc.lineAt(pending.region.tableFrom)
+      const lineNumber = header.number + pending.region.rowFrom + (pending.region.rowFrom > 0 ? 1 : 0)
+      const initialLine = lineNumber <= start.doc.lines ? start.doc.line(lineNumber) : null
+      const currentLine = lineNumber <= view.state.doc.lines ? view.state.doc.line(lineNumber) : null
+      const initialCell = initialLine && splitTableRowCells(initialLine.text, initialLine.from)[pending.region.columnFrom]
+      const currentCell = currentLine && splitTableRowCells(currentLine.text, currentLine.from)[pending.region.columnFrom]
+      if (rows && initialCell && currentCell) {
+        const oldContent = start.doc.sliceString(initialCell.contentFrom, initialCell.contentTo)
+        const newContent = view.state.doc.sliceString(currentCell.contentFrom, currentCell.contentTo)
+        const typed = this.compositionCommittedText ??
+          (newContent.endsWith(oldContent) ? newContent.slice(0, newContent.length - oldContent.length) : newContent)
+        const plan = typed ? planTableRegionReplace(start.doc.toString(), rows, pending.region, typed) : null
+        if (plan || !typed) {
+          const desired = plan ? [...plan.changes].reverse().reduce((doc, change) =>
+            doc.slice(0, change.from) + change.insert + doc.slice(change.to), start.doc.toString())
+            : start.doc.toString()
+          const current = view.state.doc.toString()
+          if (desired !== current) {
+            let prefix = 0
+            while (prefix < current.length && prefix < desired.length && current[prefix] === desired[prefix]) prefix++
+            let suffix = 0
+            while (suffix < current.length - prefix && suffix < desired.length - prefix &&
+              current[current.length - 1 - suffix] === desired[desired.length - 1 - suffix]) suffix++
+            view.dispatch({ changes: { from: prefix, to: current.length - suffix,
+              insert: desired.slice(prefix, desired.length - suffix) },
+              selection: { anchor: plan?.selection ?? initialCell.contentFrom },
+              annotations: tableCompositionSettled.of(true) })
+            net = pending.changes
+          }
+          normalized = true
+        }
+      }
+    }
     if (initial.length === 1 && initial[0]!.length === 0 && initial[0]!.text) {
       const edit = initial[0]!
       const plan = blankRowInputPlan(pending.startState, edit.offset, edit.offset, edit.text)
@@ -3839,6 +3921,7 @@ export class WebviewSyncController {
       }
     }
     this.blankComposition = null
+    this.compositionCommittedText = null
     const changes: SerChange[] = []
     net!.iterChanges((from, to, _fromB, _toB, inserted) => {
       changes.push({ offset: from, length: to - from, text: inserted.sliceString(0, inserted.length) })
@@ -4099,6 +4182,10 @@ export class WebviewSyncController {
     const selectedColumnCell = view.contentDOM.querySelector<HTMLElement>(
       '.vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-selected',
     )
+    const regionCells = view.contentDOM.querySelectorAll<HTMLElement>(
+      '.vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-region-cell',
+    )
+    const regionCell = regionCells[0] ?? null
     const columnFirst = view.contentDOM.querySelector<HTMLElement>(
       '.vsidian-table-grid-row > .vsidian-table-grid-cell.vsidian-table-column-first',
     )
@@ -4192,6 +4279,7 @@ export class WebviewSyncController {
     const columnStyle = selectedColumnCell ? getComputedStyle(selectedColumnCell) : null
     const columnFirstStyle = columnFirst ? getComputedStyle(columnFirst) : null
     const columnLastStyle = columnLast ? getComputedStyle(columnLast) : null
+    const regionStyle = regionCell ? getComputedStyle(regionCell) : null
     // #55 标题行左缘绘制观测：视口内标题行（.vsidian-heading-inview）的
     // computed box-shadow / border-left-width distinct 集合——标题行不得
     // 绘制左缘竖线（真宿主应分别为 'none' / '0px'）；无挂载标题行为 null
@@ -4226,6 +4314,77 @@ export class WebviewSyncController {
     } catch {
       caretColor = null
     }
+    // #59 公式绘制探针：按当前激活视图取首个公式元素（隐藏侧 display:none
+    // 的 rect 全 0 不作依据）；rect 有面积且 elementFromPoint 命中才算画出来
+    const mathScope = this.viewMode === 'reading' ? this.readingContainer : view.contentDOM
+    const mathEl = mathScope?.querySelector<HTMLElement>(
+      `.${MATH_CLASS_NAMES.math}, .${MATH_CLASS_NAMES.mathError}`,
+    ) ?? null
+    let mathVisible = false
+    let mathDisplay: string | null = null
+    if (mathEl) {
+      mathDisplay = getComputedStyle(mathEl).display
+      try {
+        const rect = mathEl.getBoundingClientRect()
+        if (rect.width > 0 && rect.height > 0) {
+          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+          if (hit && mathEl.contains(hit)) {
+            mathVisible = true
+          }
+        }
+      } catch {
+        // jsdom 无布局与 elementFromPoint；真宿主才能证明实际可见。
+      }
+    }
+    const math = mathEl
+      ? {
+          visible: mathVisible,
+          display: mathDisplay,
+          count: mathScope
+            ? mathScope.querySelectorAll(
+                `.${MATH_CLASS_NAMES.math}, .${MATH_CLASS_NAMES.mathError}`,
+              ).length
+            : 0,
+        }
+      : undefined
+    // #60 Mermaid 绘制探针：按当前激活视图取图表容器（分态计数）；
+    // 可见性优先取已渲染 SVG 的 rect + elementFromPoint 命中（错误降级
+    // 容器同样可命中——可见 ≠ 语法有效，语义由 rendered/error 分开断言）
+    const mermaidScope = this.viewMode === 'reading' ? this.readingContainer : view.contentDOM
+    const mermaidEl = mermaidScope?.querySelector<HTMLElement>(
+      `.${MERMAID_CLASS_NAMES.diagram}`,
+    ) ?? null
+    const mermaidSvg = mermaidEl?.querySelector('svg') ?? mermaidEl
+    let mermaidVisible = false
+    let mermaidDisplay: string | null = null
+    if (mermaidEl) {
+      mermaidDisplay = getComputedStyle(mermaidEl).display
+      try {
+        const rect = mermaidSvg!.getBoundingClientRect()
+        if (rect.width > 0 && rect.height > 0) {
+          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+          if (hit && mermaidEl.contains(hit)) {
+            mermaidVisible = true
+          }
+        }
+      } catch {
+        // jsdom 无布局与 elementFromPoint；真宿主才能证明实际可见。
+      }
+    }
+    const mermaidCounts = mermaidScope
+      ? {
+          rendered: mermaidScope.querySelectorAll(
+            `.${MERMAID_CLASS_NAMES.diagram}[${MERMAID_STATE_ATTR}="rendered"]`,
+          ).length,
+          error: mermaidScope.querySelectorAll(
+            `.${MERMAID_CLASS_NAMES.diagram}[${MERMAID_STATE_ATTR}="error"]`,
+          ).length,
+          count: mermaidScope.querySelectorAll(`.${MERMAID_CLASS_NAMES.diagram}`).length,
+        }
+      : { rendered: 0, error: 0, count: 0 }
+    const mermaid = mermaidEl
+      ? { visible: mermaidVisible, display: mermaidDisplay, ...mermaidCounts }
+      : undefined
     return {
       textVisible,
       scrollerDisplay: view.scrollDOM ? getComputedStyle(view.scrollDOM).display : null,
@@ -4253,7 +4412,13 @@ export class WebviewSyncController {
         columnTopBorderWidth: columnFirstStyle?.borderTopWidth ?? null,
         columnBottomBorderWidth: columnLastStyle?.borderBottomWidth ?? null,
         columnBackgroundColor: columnStyle?.backgroundColor ?? null,
+        regionCellCount: regionCells.length,
+        regionBackgroundColor: regionStyle?.backgroundColor ?? null,
+        regionTopBorderWidth: regionStyle?.borderTopWidth ?? null,
+        regionLeftBorderWidth: regionStyle?.borderLeftWidth ?? null,
       },
+      math,
+      mermaid,
       heading: headingPaint,
     }
   }
@@ -4585,13 +4750,15 @@ export class WebviewSyncController {
     }
   }
 
-  /** 宿主明暗主题跟随：body class 变化时热重配 dark 声明（等值跳过） */
+  /** 宿主明暗主题跟随：body class 变化时热重配 dark 声明（等值跳过）；
+   *  #60：Mermaid 主题联动（缓存清空 + 在文档容器重渲染，等值跳过） */
   private applyHostTheme(): void {
     const dark = isVscodeDarkBody()
     if (dark === this.hostDarkApplied || !this.view) {
       return
     }
     this.hostDarkApplied = dark
+    setMermaidDarkTheme(dark)
     this.view.dispatch({
       effects: this.darkCompartment.reconfigure(EditorView.darkTheme.of(dark)),
     })
@@ -4639,6 +4806,12 @@ export class WebviewSyncController {
         },
         images: this.images!,
       }),
+      // #59 公式：跨行块表（StateField 增量）+ 视口装饰（光标进入显源码、
+      // 离开恢复 KaTeX 排版；渲染与装饰实例均按源文缓存）
+      liveMath,
+      // #60 Mermaid：围栏表 + 跨行块 replace 装饰（光标进入围栏显源码、
+      // 离开恢复渲染图；渲染容器与阅读侧共用 mermaidRender 管线）
+      liveMermaid,
       // 表格单元格输入钩子（#12）：表格行内键入 | 转义写回 \|；
       // 编辑面即 CM6 源文本行，同步链路复用本控制器的标准出站路径
       tableEditing,
@@ -4700,7 +4873,7 @@ export class WebviewSyncController {
         { key: 'Mod-y', run: () => this.requestHistory('redo') },
       ]),
       // IME 组合状态跟踪：compositionend 后调度缓冲 flush
-      EditorView.domEventHandlers({
+      Prec.highest(EditorView.domEventHandlers({
         compositionstart: () => {
           this.composing = true
           this.beginBlankComposition()
@@ -4709,11 +4882,12 @@ export class WebviewSyncController {
           this.composing = true
           this.beginBlankComposition()
         },
-        compositionend: () => {
+        compositionend: (event) => {
+          this.compositionCommittedText = event.data || null
           this.composing = false
           this.scheduleFlush()
         },
-      }),
+      })),
     ]
   }
 }

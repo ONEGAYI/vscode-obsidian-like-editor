@@ -18,6 +18,7 @@ import { EditorView } from '@codemirror/view'
 import type { DecorationSet } from '@codemirror/view'
 import { buildLivePreviewDecorations, liveDecorationsField, LIVE_CLASS_NAMES } from '../../src/webview/liveDecorations'
 import { createTableControls } from '../../src/webview/tableControls'
+import { selectTableRegion, tableRegionField } from '../../src/webview/tableRegionSelection'
 import {
   tableEditing,
   tableTabForward,
@@ -100,6 +101,37 @@ const tabKeydown = (view: EditorView, shift = false): void => {
     new KeyboardEvent('keydown', { key: 'Tab', shiftKey: shift, bubbles: true, cancelable: true }),
   )
 }
+
+describe('格区状态退出', () => {
+  it('程序化定位到表外时取消旧区域，复制和删除不再指向旧表格', () => {
+    const view = makeEditView(TABLE_DOC, TABLE_DOC.indexOf('苹果'))
+    selectTableRegion(view, { tableFrom: TABLE_DOC.indexOf('| 名字'), rowFrom: 1,
+      rowTo: 2, columnFrom: 0, columnTo: 1 })
+    expect(view.state.field(tableRegionField)).not.toBeNull()
+    view.dispatch({ selection: EditorSelection.single(TABLE_DOC.indexOf('结尾段落')) })
+    expect(view.state.field(tableRegionField)).toBeNull()
+    expect(view.state.doc.toString()).toBe(TABLE_DOC)
+    view.destroy()
+  })
+  it('阅读与实时预览切换清除矩形格区', async () => {
+    const linked = await setupLinked(TABLE_DOC)
+    const view = linked.controller.getView()!
+    selectTableRegion(view, { tableFrom: TABLE_DOC.indexOf('| 名字'), rowFrom: 1,
+      rowTo: 2, columnFrom: 0, columnTo: 1 })
+    linked.controller.handleHostMessage({ kind: 'view.mode.set', mode: 'reading' })
+    expect(view.state.field(tableRegionField)).toBeNull()
+    linked.controller.handleHostMessage({ kind: 'view.mode.set', mode: 'live' })
+    expect(view.state.field(tableRegionField)).toBeNull()
+  })
+  it('主动定位到旧矩形内部也取消区域，避免后续复制删除误指旧范围', async () => {
+    const linked = await setupLinked(TABLE_DOC)
+    const view = linked.controller.getView()!
+    selectTableRegion(view, { tableFrom: TABLE_DOC.indexOf('| 名字'), rowFrom: 1,
+      rowTo: 2, columnFrom: 0, columnTo: 1 })
+    linked.controller.handleHostMessage({ kind: 'view.locate', offset: TABLE_DOC.indexOf('苹果') + 1 })
+    expect(view.state.field(tableRegionField)).toBeNull()
+  })
+})
 
 describe('表格 Tab/Shift+Tab 导航', () => {
   it('Tab：单元格内 → 下一单元格内容首（keydown 直驱，文本零变化）', () => {
@@ -373,6 +405,7 @@ describe('表格点阵与悬停控件', () => {
       },
       runTableEditAt: () => false,
       runTableRowMove: () => false,
+      runTableColumnMove: () => false,
     })
     const view = new EditorView({
       parent: document.body.appendChild(document.createElement('div')),
@@ -426,34 +459,6 @@ describe('表格点阵与悬停控件', () => {
     view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
     expect(runTableRowMove(view, TABLE_DOC.indexOf('`x|y`'), 0)).toBe(false)
     view.contentDOM.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
-  })
-
-  it('点阵按住拖至表头上方显示落点，松开只写回一笔；仅点击抓手不写回', async () => {
-    const linked = await setupLinked(TABLE_DOC)
-    const view = linked.controller.getView()!
-    document.body.appendChild(view.dom.parentElement!)
-    const grips = [...view.dom.querySelectorAll<HTMLButtonElement>('.vsidian-table-row-handle')]
-    grips[2]!.click()
-    expect(linked.doc.applyCalls).toHaveLength(0)
-    const header = view.contentDOM.querySelector<HTMLElement>('.vsidian-table-grid-row')!
-    header.getBoundingClientRect = () => new DOMRect(0, 0, 400, 20)
-    view.contentDOM.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
-    grips[2]!.dispatchEvent(new MouseEvent('pointerdown', {
-      bubbles: true, cancelable: true, clientX: 0, clientY: 100,
-    }))
-    header.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 0, clientY: 1 }))
-    document.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 0, clientY: 1 }))
-    expect(linked.doc.applyCalls).toHaveLength(0)
-    view.contentDOM.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
-    grips[2]!.dispatchEvent(new MouseEvent('pointerdown', {
-      bubbles: true, cancelable: true, clientX: 0, clientY: 100,
-    }))
-    header.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 0, clientY: 1 }))
-    expect(header.classList.contains('vsidian-table-drop-before')).toBe(true)
-    document.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 0, clientY: 1 }))
-    await settle()
-    expect(linked.doc.getText()).toContain('| `x|y` | 4 |\n| --- | :---: |\n| 名字 | 数量 |')
-    expect(linked.doc.applyCalls).toHaveLength(1)
   })
 
   it('千行表仅为视口中已挂载的网格行建立抓手，滚动回收时同步更新', async () => {

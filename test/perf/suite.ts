@@ -268,7 +268,14 @@ export async function run(): Promise<void> {
   // #23：超长行与图片密集文档分别测两种视图。两类不是同构短行档，
   // 数据单列，避免把大块布局例外混入 1k/10k/100k 的 DOM 比率比较。
   const boundaryShapes: Record<string, unknown> = {}
-  for (const [shape, file] of [['longLine', 'perf-longline.md'], ['imageDense', 'perf-images.md']]) {
+  for (const [shape, file] of [
+    ['longLine', 'perf-longline.md'],
+    ['imageDense', 'perf-images.md'],
+    // #59 公式密集档：与图片档同构的两种视图探针（渲染缓存的宿主车道数据）
+    ['mathDense', 'perf-math.md'],
+    // #60 图表密集档：懒加载/串行渲染/缓存克隆与挂载回收的宿主车道数据
+    ['mermaidDense', 'perf-mermaid.md'],
+  ]) {
     const { uri, view, byteSize, openToReadyMs, openToEditableMs, openToFirstInputMs, pollIntervalMs } = await openWithTiming(file)
     const liveReport = (await vscode.commands.executeCommand(CMD.perfProbe, uri.toString(),
       { typingRounds: 10, scrollRounds: 6 })) as PerfReport | undefined

@@ -389,12 +389,94 @@ const WIKILINK_CRLF_TARGET_DOC = (() => {
   out.push('## CRLF 深处小节', '', '小节内容。', '')
   return out.join('\r\n')
 })()
+// #59 公式样例：混排段落、相邻行内公式、段内 $$、跨行块、普通美元、
+// 行内代码/围栏排除、非法公式降级
+const MATH_DOC = [
+  '# 公式样例',
+  '',
+  '质量能量关系 $E=mc^2$ 出现在行内，段内块 $$a^2+b^2=c^2$$ 紧随其后。',
+  '',
+  '相邻公式 $x_1$ 与 $x_2$ 互不影响，普通价格 $5 与 $10 不是公式。',
+  '',
+  '$$',
+  '\\int_0^1 x^2 \\, dx = \\frac{1}{3}',
+  '$$',
+  '',
+  '非法公式 $\\notdefined{x}$ 显示原文降级。',
+  '',
+  '`行内代码 $不渲染$` 与正文公式 $y=kx+b$。',
+  '',
+  '```text',
+  '围栏内 $不渲染$',
+  '```',
+  '',
+  '结尾段落。',
+  '',
+].join('\n')
+
+// #60 Mermaid 主样例：流程图、时序图、相邻（含同源）多图、无效语法降级。
+// live 侧围栏装饰 5 个（第 3 个语法无效——装饰照常发射，渲染层降级 error 态）；
+// 计数断言口径：liveMermaidCount = 5、paint.mermaid.rendered = 4、error = 1。
+// 紧凑排版（30 行内）保证默认视口可完整物化全部 widget。
+const MERMAID_DOC = [
+  '# Mermaid 图表样例',
+  '',
+  '```mermaid',
+  'graph TD',
+  'A[开始]-->B{判断}',
+  'B-->|是| C[结束]',
+  '```',
+  '',
+  '正文段落，图表之间保持可读文本。',
+  '',
+  '```mermaid',
+  'sequenceDiagram',
+  'Alice->>Bob: 你好',
+  'Bob-->>Alice: 很好',
+  '```',
+  '',
+  '```mermaid',
+  '这不是合法的 mermaid 语法',
+  '```',
+  '',
+  '```mermaid',
+  'flowchart LR',
+  'X-->Y',
+  '```',
+  '',
+  '```mermaid',
+  'flowchart LR',
+  'X-->Y',
+  '```',
+  '',
+  '结尾段落保持可用。',
+  '',
+].join('\n')
+
+// #60 Mermaid 边界样例：普通代码围栏与外层长围栏内的伪 mermaid 围栏都不
+// 得渲染图表（liveMermaidCount = 0），后续正文不受影响。
+const MERMAID_EDGE_DOC = [
+  '# 边界样例',
+  '',
+  '```js',
+  'let a = 1',
+  '```',
+  '',
+  '````md',
+  '```mermaid',
+  'A-->B',
+  '```',
+  '````',
+  '',
+  '结尾段落保持可用。',
+  '',
+].join('\n')
 
 /**
  * 向目录写入全部集成测试 fixture（字节由脚本直接生成，不经 git 检出，
  * 避免 autocrlf 干扰断言）。返回 { largeDocLines } 供启动器注入环境变量。
  */
-export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample }) {
+export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample, generateMermaidDenseSample }) {
   writeFileSync(path.join(wsDir, 'lf.md'), LF_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'find.md'), FIND_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'untouched.md'), '未触碰文档\n保持原样\n', 'utf8')
@@ -422,6 +504,15 @@ export function writeFixtures(wsDir, { generatePerfSample, generateReadingSample
   writeFileSync(path.join(wsDir, 'table13.md'), TABLE13_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'table43-crlf.md'), TABLE43_CRLF_DOC, 'utf8')
   writeFileSync(path.join(wsDir, 'table-create-crlf.md'), TABLE_CREATE_CRLF_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'math.md'), MATH_DOC, 'utf8')
+  // #60 Mermaid 样例：主样例（流程图/时序图/相邻同源多图/无效降级）与
+  // 边界样例（普通围栏与伪围栏不误渲染）
+  writeFileSync(path.join(wsDir, 'mermaid.md'), MERMAID_DOC, 'utf8')
+  writeFileSync(path.join(wsDir, 'mermaid-edge.md'), MERMAID_EDGE_DOC, 'utf8')
+  // #60 图表密集性能样例（generateMermaidDenseSample 可选注入；缺省跳过）
+  if (generateMermaidDenseSample) {
+    writeFileSync(path.join(wsDir, 'perf-mermaid.md'), generateMermaidDenseSample(), 'utf8')
+  }
   const largeLines = Array.from({ length: LARGE_DOC_LINES }, (_, i) => `第 ${i + 1} 行 ——固定宽度填充文本，用于长文档视口渲染验证——`)
   writeFileSync(path.join(wsDir, 'large.md'), largeLines.join('\n') + '\n', 'utf8')
   // 性能体量对比样例（#5）：同构普通段落 + 每 50 行一个二级标题

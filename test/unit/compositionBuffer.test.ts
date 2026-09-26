@@ -10,6 +10,7 @@
 // - 组合期间到达的全文消息（doc.resync / ack 失败附全文）以全文形态缓冲，
 //   flush 时直接采用全文
 import { describe, it, expect } from 'vitest'
+import { selectTableRegion } from '../../src/webview/tableRegionSelection'
 import { WebviewSyncController, type VsCodeBridge } from '../../src/webview/syncController'
 import type { WebviewToHost } from '../../src/shared/protocol'
 
@@ -67,6 +68,42 @@ function commitCompositionText(c: WebviewSyncController, from: number, insert: s
 const waitFlush = () => new Promise<void>((r) => setTimeout(r, 20))
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+describe('矩形格区 IME 写回', () => {
+  it('零宽首格开始组合后取消，不清区域内容且不写回', async () => {
+    const { bridge, sent } = makeBridge()
+    const c = mount(bridge)
+    const source = '|H1|H2|\n|---|---|\n||B2|\n|C1|C2|'
+    init(c, source)
+    const view = c.getView()!
+    selectTableRegion(view, { tableFrom: 0, rowFrom: 1, rowTo: 1, columnFrom: 0, columnTo: 1 })
+    startComposition(c)
+    endComposition(c)
+    await waitFlush()
+    expect(view.state.doc.toString()).toBe(source)
+    expect(sent.filter((message) => message.kind === 'edit.request')).toHaveLength(0)
+  })
+  it('组合候选与清除区域合并为一次宿主 edit.request', async () => {
+    const { bridge, sent } = makeBridge()
+    const c = mount(bridge)
+    const source = '| H1 | H2 |\n| --- | --- |\n| B1 | B2 |\n| C1 | C2 |'
+    init(c, source)
+    const view = c.getView()!
+    const from = source.indexOf('B1')
+    view.dispatch({ selection: { anchor: from } })
+    selectTableRegion(view, { tableFrom: 0, rowFrom: 1, rowTo: 2, columnFrom: 0, columnTo: 1 })
+    startComposition(c)
+    view.dispatch({ changes: { from, insert: 'ni' }, userEvent: 'input.type.compose' })
+    expect(sent.filter((message) => message.kind === 'edit.request')).toHaveLength(0)
+    const candidateAt = view.state.doc.toString().indexOf('ni')
+    view.dispatch({ changes: { from: candidateAt, to: candidateAt + 2, insert: '你好' },
+      userEvent: 'input.type.compose' })
+    endComposition(c)
+    await waitFlush()
+    expect(view.state.doc.toString()).toContain('| 你好 |  |\n|  |  |')
+    expect(sent.filter((message) => message.kind === 'edit.request')).toHaveLength(1)
+  })
+})
 
 describe('组合期间外部增量缓冲', () => {
   it('组合中 doc.changed 不立即应用；compositionend 后 flush 应用且不回发', async () => {

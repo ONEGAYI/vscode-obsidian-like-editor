@@ -11,8 +11,8 @@
 // - 插入行：数据行前/后插入空数据行（格数 = 分隔行列数）；表头/分隔行上
 //   的插入统一落到分隔行之后（表头上方或表头与分隔行之间插数据行会拆表）
 // - 删除行：数据行直接删（光标落相邻行同列格）；删表头 = 首个数据行升格
-//   为新表头、分隔行随移到升格行之后（对齐信息保留）；最小表格删表头与
-//   单独删分隔行均拒绝（返回 null，零变更）
+//   为新表头、分隔行随移到升格行之后（对齐信息保留）；只剩表头时删整表；
+//   单独删分隔行拒绝（返回 null，零变更）
 // - 插入/删除列：最小插入/删除法（不重建行）——既有单元格文本（含转义
 //   管道与行内代码）逐字节保留；分隔行同步增删对应段（对齐信息随列走）；
 //   缺该列的行不动；边界管道省略的行（a | b 形态）同样正确
@@ -77,6 +77,31 @@ export function planTableRowMove(
     }
   }
   return changes.length > 0 ? { changes } : null
+}
+
+/** 将整列插入到目标槽位，分隔行对齐段与各内容行一同移动。 */
+export function planTableColumnMove(
+  doc: string,
+  rows: TableRowInfo[],
+  source: number,
+  slot: number,
+): Pick<PlannedTableEdit, 'changes'> | null {
+  if (rows[0]?.kind !== 'header' || rows[1]?.kind !== 'delimiter') return null
+  const columns = parseTableDelimiter(doc.slice(rows[1].lineFrom, rows[1].lineTo))?.length
+  if (!columns || !Number.isInteger(source) || !Number.isInteger(slot) || source < 0 ||
+      source >= columns || slot < 0 || slot > columns || slot === source || slot === source + 1) return null
+  const changes: PlannedTableEdit['changes'] = []
+  for (const row of rows) {
+    const text = doc.slice(row.lineFrom, row.lineTo)
+    const cells = tableRowCellsForColumns(text, row.lineFrom, columns)
+    if (!cells || cells.length !== columns) return null
+    const values = cells.map((cell) => doc.slice(cell.from, cell.to))
+    const [moved] = values.splice(source, 1)
+    values.splice(slot > source ? slot - 1 : slot, 0, moved!)
+    const insert = '|' + values.join('|') + '|'
+    if (insert !== text) changes.push({ from: row.lineFrom, to: row.lineTo, insert })
+  }
+  return changes.length ? { changes } : null
 }
 
 /** pos 所在行（区间含端点）；未命中返回 -1 */
@@ -171,7 +196,7 @@ function emptyRowText(n: number): string {
 
 /**
  * 规划一次表格结构操作。返回 null = 该上下文不可操作（零变更）：
- * 光标不在表格行上、删分隔行、最小表格删表头等。
+ * 光标不在表格行上、单独删分隔行等。
  */
 export function planTableEdit(
   doc: string,
@@ -220,7 +245,8 @@ export function planTableEdit(
       }
       if (row.kind === 'header') {
         if (rows.length <= delimIdx + 1) {
-          return null // 最小表格无数据行可升格，拒绝
+          return { changes: [{ from: rows[0]!.lineFrom, to: rows[rows.length - 1]!.lineTo, insert: '' }],
+            selection: rows[0]!.lineFrom }
         }
         // 删表头 = 首个数据行升为新表头：GFM 要求分隔行紧跟表头，升格须把
         // 分隔行移到升格行之后（对齐信息随分隔行文本原样保留）——单纯删除
@@ -295,10 +321,10 @@ export function planTableEdit(
       return focus >= 0 ? { changes, selection: focus } : null
     }
     case 'deleteColumn': {
-      // 唯一列保护（与最小表格删表头同口径）：删空唯一列会留下三行裸管道
-      // （表格解体为残缺文本），拒绝（零变更）
+      // 唯一列删除整表，避免留下裸管道构成残缺源码。
       if (rowCells(rows[delimIdx]!).length <= 1) {
-        return null
+        return { changes: [{ from: rows[0]!.lineFrom, to: rows[rows.length - 1]!.lineTo, insert: '' }],
+          selection: rows[0]!.lineFrom }
       }
       const changes: PlannedTableEdit['changes'] = []
       let focus = -1

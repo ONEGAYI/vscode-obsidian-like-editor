@@ -16,13 +16,18 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const SIZE_LIMITS = {
-  // 解压总体积：当前基线约 0.75 MB（CM6 主 bundle 约 0.55 MB 为大头），
-  // 警告与失败线留足功能增长余量，防"意外塞进大文件"而非卡正常演进。
-  totalWarnBytes: 1.5 * 1024 * 1024,
-  totalMaxBytes: 2.5 * 1024 * 1024,
-  // 一般单文件（主 bundle 除外同样适用）：minify 后 main.js 约 0.55 MB。
-  fileWarnBytes: 700 * 1024,
-  fileMaxBytes: 1024 * 1024,
+  // 解压总体积：#59 KaTeX 后基线约 1.05 MB，#60 加入 mermaid.js 独立产物
+  // （约 2.60 MB）后基线约 4.1 MB（实测见 AGENTS.md「打包与发布」）——
+  // 警告与失败线为基线 + 功能增长余量，防"意外塞进大文件"而非卡正常演进。
+  totalWarnBytes: 4.5 * 1024 * 1024,
+  totalMaxBytes: 5.5 * 1024 * 1024,
+  // 一般单文件：mermaid.js（刻意 vendored 的独立产物，minify 后实测
+  // 2,727,077 B ≈ 2.60 MB）是最大单项，警告线 3 MB 在其上留小余量、
+  // 失败线 4 MB 拦截意外超大文件（如误升 mermaid 12.x 的 5.3 MB 产物）。
+  // 主 bundle（main.js 约 0.80 MB，含 CM6 + KaTeX）随之不再触发单文件
+  // 警告——其增长由总量线约束，属本阈值调整的已接受取舍。
+  fileWarnBytes: 3 * 1024 * 1024,
+  fileMaxBytes: 4 * 1024 * 1024,
   // 图标专项：Marketplace 展示只需 256×256，35 KB 已足够，百 KB 级即异常。
   iconMaxBytes: 100 * 1024,
 }
@@ -43,8 +48,39 @@ const REQUIRED_EXTENSION = [
   'out/webview/main.css',
   'out/webview/settings.js',
   'out/webview/settings.css',
+  // #60 Mermaid 独立产物（按需懒加载的渲染器；缺失时图表降级为错误态）
+  'out/webview/mermaid.js',
   'media/css-contract-probe.css',
 ]
+
+// #59 KaTeX 字体（仅 woff2，esbuild assetNames 稳定命名无 hash）：缺失任一
+// 都会导致公式回落系统字体，逐文件登记精确拦截。
+const KATEX_FONT_FAMILIES = [
+  'KaTeX_AMS-Regular',
+  'KaTeX_Caligraphic-Bold',
+  'KaTeX_Caligraphic-Regular',
+  'KaTeX_Fraktur-Bold',
+  'KaTeX_Fraktur-Regular',
+  'KaTeX_Main-Bold',
+  'KaTeX_Main-BoldItalic',
+  'KaTeX_Main-Italic',
+  'KaTeX_Main-Regular',
+  'KaTeX_Math-BoldItalic',
+  'KaTeX_Math-Italic',
+  'KaTeX_SansSerif-Bold',
+  'KaTeX_SansSerif-Italic',
+  'KaTeX_SansSerif-Regular',
+  'KaTeX_Script-Regular',
+  'KaTeX_Size1-Regular',
+  'KaTeX_Size2-Regular',
+  'KaTeX_Size3-Regular',
+  'KaTeX_Size4-Regular',
+  'KaTeX_Typewriter-Regular',
+]
+const REQUIRED_KATEX_FONTS = KATEX_FONT_FAMILIES.map(
+  (family) => `out/webview/assets/${family}.woff2`,
+)
+const REQUIRED_EXTENSION_WITH_FONTS = [...REQUIRED_EXTENSION, ...REQUIRED_KATEX_FONTS]
 
 // 禁止模式：仓库管理与开发文件一律不得进入 VSIX（大小写不敏感）。
 const FORBIDDEN_PATTERNS = [
@@ -60,6 +96,11 @@ const FORBIDDEN_PATTERNS = [
   [/package-lock\.json$/, 'npm lockfile'],
   [/readme\.en\.md$/, '英文 README（仅 GitHub 展示）'],
   [/\.vsix$/, 'VSIX 嵌套'],
+  // 评审 C7：webview 目标 chrome118 只需 woff2——出现 woff/ttf 即字体
+  // 裁剪失效（如 katex 升级改动 CSS src 格式使裁剪正则失配），体积闸
+  // 只给警告不可靠，硬错误拦截。
+  [/\.woff$/, '非 woff2 字体（字体裁剪失效，webview 仅需 woff2）'],
+  [/\.ttf$/, 'TTF 字体（字体裁剪失效，webview 仅需 woff2）'],
 ]
 
 /** 解析 `unzip -l` 输出为条目列表（name 含 `extension/` 前缀）。 */
@@ -135,12 +176,24 @@ export function inspectVsixEntries(entries, options = {}) {
   for (const root of REQUIRED_ROOT) {
     if (!lowerNames.includes(root)) errors.push(`缺少结构文件 ${root}`)
   }
-  for (const rel of REQUIRED_EXTENSION) {
+  for (const rel of REQUIRED_EXTENSION_WITH_FONTS) {
     if (rel === 'license') {
       const hit = lowerNames.some((n) => /^extension\/license(\.txt)?$/.test(n))
       if (!hit) errors.push('缺少 LICENSE（打包后应为 extension/LICENSE*）')
-    } else if (!lowerNames.includes(`extension/${rel}`)) {
+    } else if (!lowerNames.includes(`extension/${rel.toLowerCase()}`)) {
       errors.push(`缺少运行时资产 extension/${rel}`)
+    }
+  }
+
+  // out/ 白名单（评审 C1）：上面只拦「缺」，这里拦「多」——out/ 下任何
+  // 未登记文件（调试遗留、构建实验产物、裁剪失效的重复字体）一律拒绝，
+  // 避免「REQUIRED 不含即静默混入包内」（v0.1.0 后曾实测发生 out/ 杂物
+  // 混入打包输入且旧检查不拦）。新增运行时产物须同步登记 REQUIRED_EXTENSION。
+  const allowedOut = new Set(REQUIRED_EXTENSION_WITH_FONTS.map((rel) => `extension/${rel.toLowerCase()}`))
+  for (const e of entries) {
+    const lower = e.name.toLowerCase()
+    if (lower.startsWith('extension/out/') && !allowedOut.has(lower)) {
+      errors.push(`out/ 未登记产物 ${e.name}（新资产须登记 REQUIRED_EXTENSION）`)
     }
   }
 
