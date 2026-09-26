@@ -2429,6 +2429,12 @@ export class WebviewSyncController {
     this.quickHeadingBtn!.disabled = !editable || headingOptions.every((item) =>
       (item as HTMLButtonElement).disabled)
     bar.querySelector<HTMLButtonElement>('.vsidian-quick-table')!.disabled = !editable
+    // 选区变化可禁用当前 roving Tab 入口（如行内代码内的粗体）。
+    // 保留仍可用的入口；否则转移到首个可用按钮，且全条只留一个 Tab 停靠点。
+    const actions = [...bar.querySelectorAll<HTMLButtonElement>('.vsidian-quick-action-group button')]
+    const tabStop = actions.find((action) => !action.disabled && action.tabIndex === 0) ??
+      actions.find((action) => !action.disabled)
+    actions.forEach((action) => { action.tabIndex = action === tabStop ? 0 : -1 })
   }
 
   /** 主编辑区顶栏（#53 图标化）：左端齿轮设置按钮（打开宿主级 Vsidian

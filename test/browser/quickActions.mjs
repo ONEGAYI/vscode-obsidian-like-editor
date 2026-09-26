@@ -118,6 +118,30 @@ try {
     assert.deepEqual(errors, [], '页面不能有未捕获异常')
     await page.close()
   }
+  // 原生 Tab：光标进入行内代码后粗体禁用，工具条仍须有唯一可用入口。
+  const tabPage = await browser.newPage({ viewport: { width: 720, height: 480 } })
+  await tabPage.setContent('<html><body><div id="app"></div></body></html>')
+  await tabPage.addStyleTag({ path: output.replace(/\.js$/, '.css') })
+  await tabPage.addScriptTag({ path: output })
+  await tabPage.evaluate(() => window.initQuick('`word`'))
+  await tabPage.locator('.vsidian-quick-toggle').click()
+  await tabPage.evaluate(() => window.controller.getView().dispatch({ selection: { anchor: 2 } }))
+  const tabBar = tabPage.locator('.vsidian-quick-actions')
+  assert.equal(await tabBar.locator('[data-op="bold"]').isDisabled(), true)
+  assert.equal(await tabBar.locator('[data-op="inlineCode"]').isEnabled(), true)
+  assert.deepEqual(await tabBar.locator('.vsidian-quick-action-group button').evaluateAll((buttons) =>
+    buttons.filter((button) => !button.disabled && button.tabIndex === 0)
+      .map((button) => button.dataset.op ?? button.dataset.icon)), ['inlineCode'],
+  '禁用原入口后应转移到唯一可用按钮')
+  await tabPage.locator('.vsidian-sidebar-toggle').focus()
+  await tabPage.keyboard.press('Tab')
+  assert.equal(await tabBar.locator('[data-op="inlineCode"]').evaluate((button) =>
+    document.activeElement === button), true, '原生 Tab 应进入可用格式按钮')
+  await tabPage.keyboard.press('ArrowRight')
+  assert.equal(await tabBar.locator('.vsidian-quick-table').evaluate((button) =>
+    document.activeElement === button && button.tabIndex === 0), true,
+  '方向键应从回退入口继续 roving 到下一个可用按钮')
+  await tabPage.close()
   const formulaPage = await browser.newPage({ viewport: { width: 720, height: 480 } })
   await formulaPage.setContent('<html><body><div id="app"></div></body></html>')
   await formulaPage.addStyleTag({ path: output.replace(/\.js$/, '.css') })
