@@ -159,7 +159,7 @@ const highlightDeco = Decoration.mark({ class: LIVE_CLASS_NAMES.highlight })
  * 空格键依赖浏览器原生激活（checkbox 上按 Space 触发 click），不另行
  * 拦截，避免与原生行为双重切换。
  */
-class TaskCheckboxWidget extends WidgetType {
+export class TaskCheckboxWidget extends WidgetType {
   constructor(readonly checked: boolean) {
     super()
   }

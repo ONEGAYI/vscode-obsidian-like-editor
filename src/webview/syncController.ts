@@ -72,7 +72,7 @@ import {
   setFindMatches,
   type FindMatch,
 } from './findSession'
-import { liveDecorationsField, livePreviewDecorations, LIVE_CLASS_NAMES, tableCompositionSettled } from './liveDecorations'
+import { liveDecorationsField, livePreviewDecorations, LIVE_CLASS_NAMES, tableCompositionSettled, TaskCheckboxWidget } from './liveDecorations'
 import { createLinkInteractions, WIKILINK_CLASS_NAMES } from './liveLinks'
 import { liveMath } from './liveMath'
 import { MATH_CLASS_NAMES } from '../shared/math'
@@ -2155,7 +2155,9 @@ export class WebviewSyncController {
               // 行级类包含全部表格行；cellHeader/align 修饰行已在前序命中
               counts.tableLines += 1
             }
-          } else if (spec.widget !== undefined) {
+          } else if (spec.widget instanceof TaskCheckboxWidget) {
+            // 任务字形只数任务 checkbox widget——#106 起分割线渲染
+            // （HorizontalRuleWidget）同为 replace widget，不得混入计数
             counts.taskGlyphs += 1
             if (spec.widget.checked === true) {
               counts.taskChecked += 1
@@ -4951,11 +4953,14 @@ export class WebviewSyncController {
       : undefined
     // #106 分割线绘制探针：live 态取渲染 widget（光标触及该行时源码显形、
     // widget 不在场，计数随之归零），reading 态取阅读块内原生 <hr>。可见性 =
-    // rect 有面积且 elementFromPoint 命中（jsdom 无布局恒 false，只作真宿主
-    // 集成断言依据）。无分割线时整个字段缺省
+    // rect 有面积且 elementFromPoint 命中，口径为任一候选命中即视为绘制
+    // （与 #60 Mermaid 同款；首个候选可能滚出视口——hr.md 插入用例实测
+    // 新分割线已绘制而首条在上文滚出，取首条会误判不可见。jsdom 无布局
+    // 恒 false，只作真宿主集成断言依据）。无分割线时整个字段缺省
     const hrScope = this.viewMode === 'reading' ? this.readingContainer : view.contentDOM
     const hrSelector = `.${LIVE_CLASS_NAMES.hrRule}, .${READING_CLASS_NAMES.hr} hr`
-    const hrEl = hrScope?.querySelector<HTMLElement>(hrSelector) ?? null
+    const hrEls = hrScope ? Array.from(hrScope.querySelectorAll<HTMLElement>(hrSelector)) : []
+    const hrEl = firstPaintedOf(hrEls)
     let hrVisible = false
     let hrDisplay: string | null = null
     let hrBorderTopWidth: string | null = null
@@ -4972,7 +4977,7 @@ export class WebviewSyncController {
           visible: hrVisible,
           display: hrDisplay,
           borderTopWidth: hrBorderTopWidth,
-          count: hrScope ? hrScope.querySelectorAll(hrSelector).length : 0,
+          count: hrEls.length,
         }
       : undefined
     // #60 Mermaid 绘制探针：按当前激活视图取图表容器（分态计数）；
@@ -5014,10 +5019,15 @@ export class WebviewSyncController {
     // #105 高亮绘制探针：live 态取 .vsidian-highlight span、reading 态取
     // mark；底色 computed 证明真实画出（透明 = 样式注入失效信号）。
     // delimitersHidden 用激活视口文本口径（不依赖布局）：唯一 == 定界符
-    // 不在文本中即隐藏成功——光标触及显形时为 false
+    // 不在文本中即隐藏成功——光标触及显形时为 false。可见性口径为任一
+    // 候选命中即视为绘制（firstPaintedOf，与 #106 hr 探针同款——首个
+    // 候选可能滚出视口，不代表样式失效）
     const highlightSelector = this.viewMode === 'reading' ? 'mark' : '.vsidian-highlight'
-    const highlightEl = (this.viewMode === 'reading' ? this.readingContainer : view.contentDOM)
-      ?.querySelector<HTMLElement>(highlightSelector) ?? null
+    const highlightScopeEl = this.viewMode === 'reading' ? this.readingContainer : view.contentDOM
+    const highlightEls = highlightScopeEl
+      ? Array.from(highlightScopeEl.querySelectorAll<HTMLElement>(highlightSelector))
+      : []
+    const highlightEl = firstPaintedOf(highlightEls)
     let highlightVisible = false
     let highlightBackgroundColor: string | null = null
     let highlightDisplay: string | null = null
@@ -5029,15 +5039,12 @@ export class WebviewSyncController {
       // 命中自身；jsdom 无布局恒 false，只作真宿主集成断言依据）
       highlightVisible = hitPaintedElement(highlightEl)
     }
-    const highlightScopeEl = this.viewMode === 'reading' ? this.readingContainer : view.contentDOM
     const highlight = highlightEl
       ? {
         visible: highlightVisible,
         display: highlightDisplay,
         backgroundColor: highlightBackgroundColor,
-        count: highlightScopeEl
-          ? highlightScopeEl.querySelectorAll(highlightSelector).length
-          : 0,
+        count: highlightEls.length,
         delimitersHidden: this.viewMode === 'reading' ? null
           : !(highlightScopeEl?.textContent ?? '').includes('=='),
       }
@@ -5742,6 +5749,21 @@ function hitPaintedElement(
   } catch {
     return false
   }
+}
+
+/** 多候选绘制探针的代表元素选择（#105/#106）：返回首个真实命中
+ *  （hitPaintedElement）的候选——多元素场景下首个候选可能滚出视口
+ *  （hr.md 插入用例实测：新分割线在视口内已绘制，首条在上文滚出，
+ *  elementFromPoint 对视口外坐标返回 null，取首条会误判不可见）；
+ *  全不命中时回退首条（display/computed 字段仍可观测，visible 语义
+ *  由调用方按命中与否给出）；空候选返回 null */
+export function firstPaintedOf(els: HTMLElement[]): HTMLElement | null {
+  for (const el of els) {
+    if (hitPaintedElement(el)) {
+      return el
+    }
+  }
+  return els[0] ?? null
 }
 
 /** #66/#67 绘制层证据共用口径：中心点 elementFromPoint 命中自身（真实

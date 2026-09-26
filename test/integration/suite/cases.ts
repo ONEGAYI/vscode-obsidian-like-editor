@@ -6405,16 +6405,21 @@ export const cases: Array<[string, () => Promise<void>]> = [
     const uri = wsUri('highlight.md').toString()
     const doc = await vscode.workspace.openTextDocument(wsUri('highlight.md'))
     const before = (await vscode.commands.executeCommand(CMD.sessionState, uri)) as SessionState
-    const plain = HIGHLIGHT_DOC_TEXT.indexOf('普通段落') + 1
+    // 选区包裹 ==普通段落==（宿主命令入口与用户命令面板同链路）。无选区
+    // 扩词的中文分词口径（Intl.Segmenter 词级，如「普通|段落」各自成词）
+    // 由 #88 格式命令用例与 unit 层 formatOperations 测试钉住，此处用
+    // 显式选区钉确定性写回——期望值不落在具体分词结果上
+    const wordFrom = HIGHLIGHT_DOC_TEXT.indexOf('普通段落')
+    const wordTo = wordFrom + '普通段落'.length
     await vscode.commands.executeCommand(CMD.postToPanel, uri,
-      { kind: 'table.test.crossSelect', anchor: plain, head: plain })
-    await waitViewState('highlight.md', (v) => v.selectionOffset === plain && v.selectionHead === plain)
-    // 光标在词中：扩词包裹 ==普通段落==（宿主命令入口与用户命令面板同链路）
+      { kind: 'table.test.crossSelect', anchor: wordFrom, head: wordTo })
+    await waitViewState('highlight.md', (v) =>
+      v.selectionOffset === wordFrom && v.selectionHead === wordTo)
     assert(await vscode.commands.executeCommand('onegayi.vsidian.format.highlight') === true,
       '高亮命令应命中活动 Live 面板')
-    await poll('高亮扩词写回权威文档', () =>
+    await poll('高亮选区包裹写回权威文档', () =>
       doc.getText() === HIGHLIGHT_DOC_TEXT.replace('普通段落。', '==普通段落==。') ? true : undefined)
-    // 光标进围栏内再触发：取消整段
+    // 光标进高亮内再触发：取消整段
     const wrapped = HIGHLIGHT_DOC_TEXT.replace('普通段落。', '==普通段落==。')
     const inside = wrapped.indexOf('普通段落') + 1
     await vscode.commands.executeCommand(CMD.postToPanel, uri,
