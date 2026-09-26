@@ -19,6 +19,7 @@ import { EditorSelection, EditorState } from '@codemirror/state'
 import type { Extension } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { liveDecorationsField } from '../../src/webview/liveDecorations'
+import { mathBlocksField } from '../../src/webview/liveMath'
 import { tableEditing } from '../../src/webview/tableEditing'
 import {
   indentEditing,
@@ -47,7 +48,7 @@ function makeEditView(
     parent,
     state: EditorState.create({
       doc,
-      extensions: [liveDecorationsField, tableEditing, indentEditing, ...extra],
+      extensions: [liveDecorationsField, mathBlocksField, tableEditing, indentEditing, ...extra],
       selection: sel,
     }),
   })
@@ -116,6 +117,25 @@ describe('Tab 无选区光标行缩进', () => {
     const doc = '```js\n1. code\n```'
     const at = doc.indexOf('1.') + 1
     expect(typed(makeEditView(doc, at))).toEqual({ text: '```js\n  1. code\n```', from: at + 2, to: at + 2 })
+  })
+
+  it('块级公式内：普通行语义，不做列表智能对齐', () => {
+    const doc = '$$\n10. a\n$$'
+    expect(typed(makeEditView(doc, doc.indexOf('a') + 1)))
+      .toEqual({ text: '$$\n  10. a\n$$', from: doc.indexOf('a') + 3, to: doc.indexOf('a') + 3 })
+  })
+
+  it('公式块内 Shift+Tab 按普通行删行首空白', () => {
+    const doc = '$$\n  10. a\n$$'
+    expect(typed(makeEditView(doc, doc.indexOf('a') + 1), true))
+      .toEqual({ text: '$$\n10. a\n$$', from: doc.indexOf('a') - 1, to: doc.indexOf('a') - 1 })
+  })
+
+  it('缩进代码块内：普通行语义，不做列表智能对齐', () => {
+    const doc = 'para\n\n    10. code'
+    const at = doc.indexOf('10.')
+    expect(typed(makeEditView(doc, at + 3)))
+      .toEqual({ text: 'para\n\n      10. code', from: at + 5, to: at + 5 })
   })
 
   it('嵌套列表再缩进一级：从 2 格到 4 格', () => {

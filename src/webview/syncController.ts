@@ -5961,9 +5961,10 @@ export class WebviewSyncController {
           this.recordLocalChangeSet(tr.changes, changes)
         }
       }),
-      // 撤销/重做转发 keymap：置于数组末尾（CM6 扩展数组靠后者优先级高），
-      // 先于调用方传入的 defaultKeymap（其本地 undo/redo 绑定在未装 history
-      // 扩展时为 no-op）匹配
+      // 撤销/重做转发 keymap：置于数组末尾——CM6 同优先级 keymap 按数组
+      // 先后依次尝试（先者先匹配），调用方传入的 defaultKeymap（其本地
+      // undo/redo 绑定在未装 history 扩展时返回 false）先于本转发落穿，
+      // 之后才轮到转发请求宿主权威栈
       keymap.of([
         { key: 'Mod-z', run: () => this.requestHistory('undo') },
         { key: 'Shift-Mod-z', run: () => this.requestHistory('redo') },

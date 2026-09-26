@@ -4,7 +4,8 @@
 // 行为（缩进单位的单一事实源在 shared/listPrefix.ts）：
 // - Tab：每受影响行在缩进落点插入一级宽度；Shift+Tab 从落点删除至多
 //   一级宽度的连续空白（不足全删）。列表行一级宽度取标记总宽（对齐
-//   父项内容起点），普通行（含纯引用行、代码块围栏内）固定 2 空格
+//   父项内容起点），普通行（含纯引用行、代码围栏、缩进代码块与块级
+//   公式内）固定 2 空格
 // - 光标/选区随缩进平移（锚点与头均向右关联映射，对齐 CM6 命令）
 // - 不自动携带子孙项；整体移动由用户用选区覆盖表达
 // - 不接管（return false 交默认）：表格行——Tab/Shift+Tab 归
@@ -22,6 +23,7 @@ import { keymap } from '@codemirror/view'
 import type { Command, EditorView } from '@codemirror/view'
 import { dedentCutOf, indentUnitOf, parseLinePrefix } from '../shared/listPrefix'
 import { liveDecorationsField } from './liveDecorations'
+import { mathBlocksField } from './liveMath'
 import { chainAt } from './markdownDoc'
 
 /** 表格节点：行落在其中即不接管（单元格导航优先；边界放行不缩进表格行） */
@@ -48,14 +50,19 @@ function indentByDirection(view: EditorView, dir: 1 | -1): boolean {
     }
   }
   const changes: { from: number; to?: number; insert?: string }[] = []
+  const mathBlocks = state.field(mathBlocksField, false)
   for (const num of [...lineNumbers].sort((a, b) => a - b)) {
     const line = state.doc.line(num)
     const fm = field.fm
     if (fm && line.from < fm.end && line.to > fm.start) return false
-    // 行内探测点（行首后一字符，空行取行首）的容器链判定上下文
-    const chain = chainAt(field.tree, Math.min(line.to, line.from + 1))
+    // 行内首个非空白字符处探测容器链（空行取行首）：缩进代码块的节点
+    // 起点在内容列，行首探测永远落在缩进空白上（CodeBlock 成死条目）
+    const lead = /^\s*/u.exec(line.text)![0].length
+    const chain = chainAt(field.tree, Math.min(line.to, line.from + lead))
     if (chain.some((node) => TABLE_NODES.has(node.name))) return false
-    const plain = chain.some((node) => CODE_NODES.has(node.name))
+    // 块级公式内的列表形态行同代码块口径：普通行语义，不做智能对齐
+    const plain = (mathBlocks?.some((b) => line.from < b.to && line.to > b.from) ?? false)
+      || chain.some((node) => CODE_NODES.has(node.name))
     const unit = indentUnitOf(plain ? null : parseLinePrefix(line.text))
     if (dir > 0) {
       changes.push({ from: line.from + unit.offset, insert: ' '.repeat(unit.width) })

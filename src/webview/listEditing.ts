@@ -10,6 +10,7 @@
 //   先升一级（缩进对齐父项标记列，父项信息取自语法树）、顶级一次清
 //   整段标记（保留引用前缀）、纯引用行逐层剥除；任务标记与列表标记
 //   是一个单元。其余位置（前缀中间、选区、多光标、IME 组合中）不接管
+// - 不接管：块级公式内（源码字面编辑）、表格、代码围栏、frontmatter
 //
 // 装配顺序约定：置于 tableEditing 之后、defaultKeymap（extraExtensions）
 // 之前——表格上下文优先（格内 Enter 仍为 <br> 语义），且先于通用键位
@@ -27,6 +28,7 @@ import {
   type LinePrefix,
 } from '../shared/listPrefix'
 import { liveDecorationsField } from './liveDecorations'
+import { mathBlocksField } from './liveMath'
 import { chainAt } from './markdownDoc'
 
 /** 键位不接管的表格/代码上下文节点名（树判定，含独立装配无 tableEditing 的兜底） */
@@ -45,7 +47,7 @@ interface ListKeyContext {
   lineTo: number
 }
 
-/** 键位上下文：frontmatter/表格/代码上下文与无结构前缀的行返回 null */
+/** 键位上下文：frontmatter/块级公式/表格/代码上下文与无结构前缀的行返回 null */
 function listKeyContext(state: EditorState, pos: number): ListKeyContext | null {
   const field = state.field(liveDecorationsField, false)
   if (!field) {
@@ -55,6 +57,12 @@ function listKeyContext(state: EditorState, pos: number): ListKeyContext | null 
   const fm = field.fm
   if (fm && line.from < fm.end && line.to > fm.start) {
     return null // frontmatter 按源码呈现，不参与列表语义
+  }
+  // 块级公式内的列表形态行（GFM 树里 `- a` 可打断 `$$` 段落成真列表）按
+  // 源码字面编辑——结构化改写会破坏 KaTeX 渲染内容
+  const mathBlocks = state.field(mathBlocksField, false)
+  if (mathBlocks?.some((b) => line.from < b.to && line.to > b.from)) {
+    return null
   }
   const chain = chainAt(field.tree, pos)
   if (chain.some((node) => NON_LIST_CONTEXT_NODES.has(node.name))) {

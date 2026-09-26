@@ -19,6 +19,7 @@ import { EditorSelection, EditorState } from '@codemirror/state'
 import type { Extension } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { liveDecorationsField } from '../../src/webview/liveDecorations'
+import { mathBlocksField } from '../../src/webview/liveMath'
 import { tableEditing } from '../../src/webview/tableEditing'
 import { listEditing, continueListMarkup, stripListLayer } from '../../src/webview/listEditing'
 
@@ -36,7 +37,7 @@ function makeEditView(doc: string, anchor: number, extra: Extension[] = []): Edi
     parent,
     state: EditorState.create({
       doc,
-      extensions: [liveDecorationsField, listEditing, ...extra],
+      extensions: [liveDecorationsField, mathBlocksField, listEditing, ...extra],
       selection: EditorSelection.single(anchor),
     }),
   })
@@ -272,6 +273,28 @@ describe('退格不触发条件（交默认逐字符删除）', () => {
     const doc = '| a | b |\n| --- | --- |\n| 1 | 2 |\n'
     const view = makeEditView(doc, doc.indexOf('1') + 1)
     expect(continueListMarkup(view)).toBe(false)
+    view.destroy()
+  })
+})
+
+// ---- 块级公式内不接管（按源码字面编辑） ----
+
+describe('块级公式内不接管', () => {
+  it('公式块内的列表形态行 Enter 不延续', () => {
+    // `$$` 块内 `- a` 会被 GFM 树解析为真 BulletList（无序可打断段落），
+    // 公式源码仍按字面编辑，不做结构语义
+    const doc = '$$\n- a\n$$\n'
+    const view = makeEditView(doc, doc.indexOf('a') + 1)
+    expect(continueListMarkup(view)).toBe(false)
+    expect(view.state.doc.toString()).toBe(doc)
+    view.destroy()
+  })
+
+  it('公式块内退格不剥层（返回 false 交默认逐字符删除）', () => {
+    const doc = '$$\n- a\n$$\n'
+    const view = makeEditView(doc, doc.indexOf('a'))
+    expect(stripListLayer(view)).toBe(false)
+    expect(view.state.doc.toString()).toBe(doc)
     view.destroy()
   })
 })
