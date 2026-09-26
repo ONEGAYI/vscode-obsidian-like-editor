@@ -1,13 +1,18 @@
 // 设置页生产入口的真实浏览器集成：原生输入、绘制属性、主题与窄屏。
+// #96 起注入 zh-cn 语言数据岛（与真实宿主 HTML 生成点一致——设置页首帧
+// 文案来自数据岛），导航默认选中「常规」分组。
 import assert from 'node:assert/strict'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { mkdir } from 'node:fs/promises'
 import { build } from 'esbuild'
 import { chromium } from 'playwright'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const output = path.join(root, 'out/test/browser/settingsPage.js')
 await build({ entryPoints: [path.join(root, 'src/webview/settingsMain.ts')], bundle: true, outfile: output, format: 'iife' })
+const dictOut = path.join(root, 'out/test/browser/settingsPageLocales.mjs')
+await build({ entryPoints: [path.join(root, 'src/shared/locales/index.ts')], bundle: true, outfile: dictOut, format: 'esm' })
+const { LOCALE_MESSAGES } = await import(pathToFileURL(dictOut).href)
 const artifacts = path.join(root, 'out/task90')
 await mkdir(artifacts, { recursive: true })
 const browser = await chromium.launch({ headless: true, channel: process.env.VSIDIAN_TEST_BROWSER_CHANNEL || undefined })
@@ -16,7 +21,8 @@ try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 720 } })
     const errors = []
     page.on('pageerror', (err) => errors.push(err.message))
-    await page.setContent('<html lang="zh-CN"><body><div id="app"></div></body></html>')
+    const islandJson = JSON.stringify({ lang: 'zh-cn', messages: LOCALE_MESSAGES['zh-cn'] }).replace(/</g, '\\u003c')
+    await page.setContent(`<html lang="zh-cn"><body><div id="app"></div><script type="application/json" id="vsidian-locale">${islandJson}</script></body></html>`)
     const palette = theme === 'light' ? ['#ffffff','#30343b','#f5f6f8','#59616d','#e0e4eb','#26313e','#ffffff','#d7dce3'] : ['#1e1e1e','#dddddd','#252526','#aaaaaa','#373d49','#ffffff','#313136','#474750']
     await page.addStyleTag({ content: `:root { --vscode-font-family: "Segoe UI", "Microsoft YaHei", sans-serif; --vscode-editor-background:${palette[0]}; --vscode-editor-foreground:${palette[1]}; --vscode-sideBar-background:${palette[2]}; --vscode-descriptionForeground:${palette[3]}; --vscode-list-activeSelectionBackground:${palette[4]}; --vscode-list-activeSelectionForeground:${palette[5]}; --vscode-input-background:${palette[6]}; --vscode-input-foreground:${palette[1]}; --vscode-panel-border:${palette[7]}; --vscode-focusBorder:#2687d4; }` })
     await page.addStyleTag({ path: output.replace(/\.js$/, '.css') })
@@ -32,8 +38,11 @@ try {
       } })
     })
     await page.addScriptTag({ path: output })
-    const nav = page.getByRole('button', { name: '编辑器', exact: true })
+    // #96 默认选中分组为「常规」（首个分类）——选中态绘制断言取第一个
+    // 导航按钮；「编辑器」按钮仍存在（下一行 exact 匹配保证）
+    const nav = page.locator('.vsidian-settings-nav-item').first()
     await nav.waitFor()
+    await page.getByRole('button', { name: '编辑器', exact: true }).waitFor()
     const paint = await nav.evaluate(el => {
       const cs = getComputedStyle(el)
       const svg = getComputedStyle(el.querySelector('svg'))

@@ -87,6 +87,11 @@ export const CJK_LITERALS_WHITELIST: Readonly<Record<string, readonly string[]>>
     "复制按钮",
     "显示行号",
     "语法高亮",
+    // #96 语言设置项（迁移期：#95 键化 titleKey/descriptionKey 后接字典
+    // setting.language* 键并清除以下三条）
+    "界面语言",
+    "界面文案的显示语言。选择「自动」时跟随 VS Code 显示语言（中文环境显示简体中文，其余显示英文）；显式选择后不再跟随。更改立即生效。",
+    "简体中文",
   ],
   'src/webview/imageResource.ts': [
     "未知原因",

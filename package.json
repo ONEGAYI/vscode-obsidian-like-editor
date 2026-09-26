@@ -286,7 +286,7 @@
     "typecheck": "tsc --noEmit",
     "test:unit": "vitest run && node --test test/integration/testHost.test.mjs test/release/release.test.mjs",
     "test:integration": "node esbuild.mjs && node ./test/integration/runTest.mjs",
-    "test:browser": "node test/browser/tableCaret.mjs && node test/browser/outlineJump.mjs && node test/browser/outlineCollapse.mjs && node test/browser/outlineSearch.mjs && node test/browser/outlineMenu.mjs && node test/browser/outlineDrag.mjs && node test/browser/outlineDragBoundary.mjs && node test/browser/settingsPage.mjs && node test/browser/quickActions.mjs && node test/browser/mermaidPaint.mjs && node test/browser/keybindings.mjs && node test/browser/keybindingEditor.mjs",
+    "test:browser": "node test/browser/tableCaret.mjs && node test/browser/outlineJump.mjs && node test/browser/outlineCollapse.mjs && node test/browser/outlineSearch.mjs && node test/browser/outlineMenu.mjs && node test/browser/outlineDrag.mjs && node test/browser/outlineDragBoundary.mjs && node test/browser/settingsPage.mjs && node test/browser/languageSwitch.mjs && node test/browser/quickActions.mjs && node test/browser/mermaidPaint.mjs && node test/browser/keybindings.mjs && node test/browser/keybindingEditor.mjs",
     "test:keybindings-host": "node test/browser/keybindingsHost.mjs",
     "release:check": "node scripts/release.mjs",
     "release": "node scripts/release.mjs --upload",

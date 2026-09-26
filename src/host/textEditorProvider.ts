@@ -50,7 +50,7 @@ import type { SettingsService } from './settingsService'
 import type { KeybindingService } from './keybindingService'
 import type { SettingsPageHandle } from './settingsPage'
 import { LANGUAGE_KEY } from '../shared/settings'
-import { LOCALE_MESSAGES, resolveLocale, type LocaleCode } from '../shared/locales'
+import { installHostLocale, LOCALE_MESSAGES, resolveLocale, type LocaleCode } from '../shared/locales'
 import { buildLocaleIslandHtml } from '../shared/locales/island'
 
 export const VIEW_TYPE = 'onegayi.vsidian.editor'
@@ -844,6 +844,13 @@ export function createTextEditorProvider(
   // Vsidian 编辑器面板（复用 toggleViewMode 的全 session 遍历样板）。
   // #34 起消费方按需读取关心的键（如 editor.lineNumbers 热重配 CM6）----
   if (settings) {
+    // #96 语言变化检测基线：与 activate 的宿主装配同式计算（读快照偏好按
+    // 宿主显示语言解析）。解析结果不变的偏好变化（如 en 宿主下 auto→en）
+    // 不触发换包——界面语言实际未变
+    let lastLocale = resolveLocale(
+      settings.service.getSnapshot()[LANGUAGE_KEY],
+      vscode.env.language,
+    )
     const offSettings = settings.service.onChange((values) => {
       for (const entry of sessions.values()) {
         for (const panel of entry.session.getInfo().panels) {
@@ -851,6 +858,27 @@ export function createTextEditorProvider(
             entry.session.postToPanel(panel.sessionId, { kind: 'settings.changed', values })
           }
         }
+      }
+      // #96 切换即生效：检测到生效语言变化 → 宿主先换包（后续通知/确认框
+      // 即时取新词），再向全部 ready 编辑器面板与设置页广播 locale.changed
+      // （携完整新语言包，webview 原子换包 + 重渲染常驻文本 + <html lang>）。
+      // 不提供重载窗口降级；设置页标题由 notifyLocaleChanged 同步
+      const locale = resolveLocale(values[LANGUAGE_KEY], vscode.env.language)
+      if (locale !== lastLocale) {
+        lastLocale = locale
+        installHostLocale(locale)
+        for (const entry of sessions.values()) {
+          for (const panel of entry.session.getInfo().panels) {
+            if (panel.ready) {
+              entry.session.postToPanel(panel.sessionId, {
+                kind: 'locale.changed',
+                lang: locale,
+                messages: LOCALE_MESSAGES[locale],
+              })
+            }
+          }
+        }
+        settings.page.notifyLocaleChanged(locale)
       }
     })
     context.subscriptions.push({ dispose: () => offSettings() })

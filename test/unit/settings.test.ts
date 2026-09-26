@@ -23,10 +23,14 @@ const FIXTURE_DEFS: readonly SettingDefinition[] = [
 ]
 
 describe('生产注册表（#34 起含实际设置项）', () => {
+  // #96 起注册表追加 general.language（string 枚举）——按 key 查找断言，
+  // 不依赖注册顺序（分组渲染见 settingsPageView 的 general.* 前缀规则）
+  const byKey = (key: string): SettingDefinition =>
+    PRODUCTION_SETTING_DEFINITIONS.find((d) => d.key === key)!
+
   it('注册「显示行号」：键 editor.lineNumbers、boolean、默认开启', () => {
     // #34：首个实际设置项接入，设置页不再是空状态（#33 设计的预期演进）
-    const def = PRODUCTION_SETTING_DEFINITIONS[0]
-    expect(def.key).toBe('editor.lineNumbers')
+    const def = byKey('editor.lineNumbers')
     expect(def.type).toBe('boolean')
     expect(def.default).toBe(true)
     expect(def.title).toBe('显示行号')
@@ -34,8 +38,7 @@ describe('生产注册表（#34 起含实际设置项）', () => {
   })
 
   it('注册「代码块卡片」：键 codeblock.card、boolean、默认开启（#79）', () => {
-    const def = PRODUCTION_SETTING_DEFINITIONS[1]
-    expect(def.key).toBe('codeblock.card')
+    const def = byKey('codeblock.card')
     expect(def.type).toBe('boolean')
     expect(def.default).toBe(true)
     expect(def.title).toBe('代码块卡片')
@@ -43,8 +46,7 @@ describe('生产注册表（#34 起含实际设置项）', () => {
   })
 
   it('注册「卡内行号」：键 codeblock.lineNumbers、boolean、默认开启（#80）', () => {
-    const def = PRODUCTION_SETTING_DEFINITIONS[2]
-    expect(def.key).toBe('codeblock.lineNumbers')
+    const def = byKey('codeblock.lineNumbers')
     expect(def.type).toBe('boolean')
     expect(def.default).toBe(true)
     expect(def.title).toBe('卡内行号')
@@ -52,8 +54,7 @@ describe('生产注册表（#34 起含实际设置项）', () => {
   })
 
   it('注册「复制按钮」：键 codeblock.copyButton、boolean、默认开启（#81）', () => {
-    const def = PRODUCTION_SETTING_DEFINITIONS[3]
-    expect(def.key).toBe('codeblock.copyButton')
+    const def = byKey('codeblock.copyButton')
     expect(def.type).toBe('boolean')
     expect(def.default).toBe(true)
     expect(def.title).toBe('复制按钮')
@@ -61,8 +62,7 @@ describe('生产注册表（#34 起含实际设置项）', () => {
   })
 
   it('注册「语法高亮」：键 codeblock.highlight、boolean、默认开启（#83）', () => {
-    const def = PRODUCTION_SETTING_DEFINITIONS[4]
-    expect(def.key).toBe('codeblock.highlight')
+    const def = byKey('codeblock.highlight')
     expect(def.type).toBe('boolean')
     expect(def.default).toBe(true)
     expect(def.title).toBe('语法高亮')

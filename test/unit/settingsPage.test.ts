@@ -58,14 +58,22 @@ describe('页面结构（#33 归属与空状态）', () => {
 
   it('生产注册表（#34 起）渲染真实开关：显示行号、默认勾选', () => {
     // #34：首个实际设置项接入后设置页不再是空状态——注册表追加定义即
-    // 出现开关（#33 设计的预期演进），此处以生产定义直测渲染结果
+    // 出现开关（#33 设计的预期演进），此处以生产定义直测渲染结果。
+    // #96 起注册表含「界面语言」（string 枚举），设置页新增「常规」分组
+    // 且默认显示之——开关断言先切到「编辑器」分组
     expect(PRODUCTION_SETTING_DEFINITIONS.length).toBeGreaterThan(0)
     const { parent } = makeView(PRODUCTION_SETTING_DEFINITIONS)
     expect(parent.querySelector(`.${SETTINGS_PAGE_CLASS_NAMES.empty}`)).toBeNull()
+    // 默认分组 = 常规（首个分类）：语言项可见，无开关
+    expect(parent.querySelector(`select.${SETTINGS_PAGE_CLASS_NAMES.select}`)).toBeTruthy()
+    const editorNav = [...parent.querySelectorAll<HTMLButtonElement>('.vsidian-settings-nav-item')]
+      .find((b) => b.textContent === '编辑器')!
+    editorNav.click()
+    const booleanDefs = PRODUCTION_SETTING_DEFINITIONS.filter((d) => d.type === 'boolean')
     const boxes = parent.querySelectorAll<HTMLInputElement>(
       `input.${SETTINGS_PAGE_CLASS_NAMES.checkbox}`,
     )
-    expect(boxes).toHaveLength(PRODUCTION_SETTING_DEFINITIONS.length)
+    expect(boxes).toHaveLength(booleanDefs.length)
     const first = parent.querySelector(`.${SETTINGS_PAGE_CLASS_NAMES.itemTitle}`)
     expect(first?.textContent).toBe('显示行号')
     expect(boxes[0]!.checked).toBe(true) // 默认开启

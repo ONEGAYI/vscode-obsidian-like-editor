@@ -169,13 +169,18 @@ describe('设置页下拉控件渲染与交互', () => {
   })
 
   it('boolean 定义仍渲染复选框（schema 扩展不回归既有控件）', () => {
+    // #96 起 general.* 键渲染进「常规」分组且为默认分组——混合定义下两组
+    // 各自渲染各自控件（默认常规组见下拉，切「编辑器」组见开关）
     const { parent } = mountView([
       ENUM_DEFS[0],
       { key: 'editor.flag', type: 'boolean', default: true, title: '开关' },
     ])
+    expect(parent.querySelectorAll(`select.${SETTINGS_PAGE_CLASS_NAMES.select}`)).toHaveLength(1)
+    const editorNav = [...parent.querySelectorAll<HTMLButtonElement>('.vsidian-settings-nav-item')]
+      .find((b) => b.textContent === '编辑器')!
+    editorNav.click()
     expect(
       parent.querySelectorAll(`input.${SETTINGS_PAGE_CLASS_NAMES.checkbox}`),
     ).toHaveLength(1)
-    expect(parent.querySelectorAll(`select.${SETTINGS_PAGE_CLASS_NAMES.select}`)).toHaveLength(1)
   })
 })

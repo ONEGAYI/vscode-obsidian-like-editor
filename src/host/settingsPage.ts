@@ -45,6 +45,12 @@ export interface SettingsPageHandle {
   getInfo(): SettingsPageInfo
   /** 经正式处理入口注入设置页 webview → 宿主消息（测试钩子通道） */
   injectMessage(message: unknown): void
+  /**
+   * 语言切换通知（#96）：设置页自身面板同步换包（locale.changed 携完整
+   * 新语言包）并更新面板标题（宿主侧 t() 已由调用方先换包，标题取词即时
+   * 为新语言）。面板未开时为 no-op（下次 open 按新快照语言生成 HTML）
+   */
+  notifyLocaleChanged(lang: LocaleCode): void
 }
 
 export function createSettingsPage(
@@ -150,8 +156,21 @@ export function createSettingsPage(
       panel?.dispose()
     },
     isOpen: () => panel !== undefined,
-    getInfo: () => ({ open: panel !== undefined, ready, title: settingsPageTitle() }),
+    // #96 title 优先读真实面板标题（面板开着时即用户在 VSCode 标签上看到
+    // 的文字）；未开时按当前装配语言计算（与下次 open 的标题一致）
+    getInfo: () => ({ open: panel !== undefined, ready, title: panel?.title ?? settingsPageTitle() }),
     injectMessage: handleMessage,
+    notifyLocaleChanged: (lang: LocaleCode) => {
+      if (!panel) {
+        return
+      }
+      void panel.webview.postMessage({
+        kind: 'locale.changed',
+        lang,
+        messages: LOCALE_MESSAGES[lang],
+      })
+      panel.title = settingsPageTitle()
+    },
   }
 }
 

@@ -34,12 +34,13 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, tex
   if (text) el.textContent = text
   return el
 }
-function icon(kind: 'editor' | 'keyboard' | 'search'): SVGSVGElement {
+function icon(kind: 'editor' | 'keyboard' | 'search' | 'general'): SVGSVGElement {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
   svg.setAttribute('viewBox', '0 0 24 24')
   svg.setAttribute('aria-hidden', 'true')
   const path = document.createElementNS(svg.namespaceURI, 'path')
-  path.setAttribute('d', kind === 'search' ? 'M21 21l-5-5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0' : kind === 'keyboard' ? 'M3 5h18v14H3zM6 9h1m3 0h1m3 0h1m3 0h1M6 12h1m3 0h1m3 0h1m3 0h1M7 16h10' : 'M14 4l6 6M3 21l5-1L21 7a2 2 0 0 0-4-4L4 16z')
+  // general（#96「常规」分组）：地球——语言设置的通用意象（lucide globe 形）
+  path.setAttribute('d', kind === 'search' ? 'M21 21l-5-5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0' : kind === 'keyboard' ? 'M3 5h18v14H3zM6 9h1m3 0h1m3 0h1m3 0h1M6 12h1m3 0h1m3 0h1m3 0h1M7 16h10' : kind === 'general' ? 'M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10' : 'M14 4l6 6M3 21l5-1L21 7a2 2 0 0 0-4-4L4 16z')
   svg.append(path)
   return svg
 }
@@ -51,7 +52,8 @@ export class SettingsPageView {
   private nav: HTMLElement | undefined
   private status: HTMLElement | undefined
   private titleEl: HTMLElement | undefined
-  private active = 'editor'
+  /** 当前分组；undefined = 尚未选择（回落首个分类，#96 general 组置顶） */
+  private active: string | undefined
   private pending = 0
   private saveFailed = false
   private disposeSection: (() => void) | undefined
@@ -143,19 +145,37 @@ export class SettingsPageView {
     }
     return typeof raw === 'string' && def.enum.includes(raw) ? raw : def.default
   }
+  /** #96 分组规则：键前缀 general.* 的定义归属 general 分组（标题经 t()
+   * 取词），其余归编辑器分组 */
+  private generalDefs(): readonly SettingDefinition[] {
+    return this.defs.filter((d) => d.key.startsWith('general.'))
+  }
+  private editorDefs(): readonly SettingDefinition[] {
+    return this.defs.filter((d) => !d.key.startsWith('general.'))
+  }
   private categories() {
-    return [{ id: 'editor', title: '编辑器', icon: 'editor' as const }, ...this.sections]
+    const builtIn: Array<{ id: string; title: string; icon: 'general' | 'editor' }> = []
+    if (this.generalDefs().length > 0) {
+      // 常规组标题经 t() 取词（换包重渲染随语言更新）；「编辑器」为存量
+      // 中文标题，随 #95 设置页迁移工单入字典
+      builtIn.push({ id: 'general', title: t('settings.generalSection'), icon: 'general' })
+    }
+    builtIn.push({ id: 'editor', title: '编辑器', icon: 'editor' })
+    return [...builtIn, ...this.sections]
   }
   private render(focusEntry?: string): void {
     if (!this.listEl) return
     this.disposeSection?.()
     this.disposeSection = undefined
     const query = this.search?.value.trim().toLocaleLowerCase() ?? ''
+    // #96 默认分组 = 首个分类（有常规定义时即「常规」）；active 指向已
+    // 消失的分类时回落首个（定义表运行时可变：测试 fixture 注册/注销）
+    const active = this.categories().find((c) => c.id === this.active) ?? this.categories()[0]
     this.nav?.replaceChildren()
     for (const category of this.categories()) {
       const button = element('button', 'vsidian-settings-nav-item')
       button.type = 'button'
-      button.setAttribute('aria-current', !query && this.active === category.id ? 'page' : 'false')
+      button.setAttribute('aria-current', !query && active?.id === category.id ? 'page' : 'false')
       button.append(icon(category.icon), document.createTextNode(category.title))
       button.addEventListener('click', () => {
         this.active = category.id
@@ -169,7 +189,11 @@ export class SettingsPageView {
     list.replaceChildren()
     if (query) {
       list.append(element('h2', 'vsidian-settings-heading', '搜索结果'))
-      const groups = [{ id: 'editor', title: '编辑器', entries: this.defs.map((d) => ({ id: d.key, ...d })) }, ...this.sections]
+      const groups = [
+        { id: 'general', title: t('settings.generalSection'), entries: this.generalDefs().map((d) => ({ id: d.key, ...d })) },
+        { id: 'editor', title: '编辑器', entries: this.editorDefs().map((d) => ({ id: d.key, ...d })) },
+        ...this.sections,
+      ]
       let count = 0
       for (const group of groups) for (const entry of group.entries) {
         if (!`${entry.title} ${entry.description ?? ''}`.toLocaleLowerCase().includes(query)) continue
@@ -190,27 +214,46 @@ export class SettingsPageView {
       list.insertBefore(summary, list.children[1] ?? null)
       return
     }
-    const section = this.sections.find((s) => s.id === this.active)
-    list.append(element('h2', 'vsidian-settings-heading', section?.title ?? '编辑器'),
-      element('p', SETTINGS_PAGE_CLASS_NAMES.subtitle, section?.description ?? '调整实时预览的显示方式。更改会自动保存。'))
+    if (!active) {
+      list.append(element('p', SETTINGS_PAGE_CLASS_NAMES.empty, '暂无可配置项。'))
+      return
+    }
+    const section = this.sections.find((s) => s.id === active.id)
     if (section) {
+      list.append(element('h2', 'vsidian-settings-heading', section.title),
+        element('p', SETTINGS_PAGE_CLASS_NAMES.subtitle, section.description))
       const content = element('div', 'vsidian-settings-section-content')
       list.append(content)
       this.disposeSection = section.mount(content, focusEntry) ?? undefined
       return
     }
-    if (!this.defs.length) {
+    // 内建分组：general（#96，标题与副文案随语言）与 editor（存量文案）
+    if (active.id === 'general') {
+      list.append(element('h2', 'vsidian-settings-heading', t('settings.generalSection')),
+        element('p', SETTINGS_PAGE_CLASS_NAMES.subtitle, t('settings.generalSectionDescription')))
+      this.renderDefItems(list, this.generalDefs(), focusEntry)
+      return
+    }
+    list.append(element('h2', 'vsidian-settings-heading', '编辑器'),
+      element('p', SETTINGS_PAGE_CLASS_NAMES.subtitle, '调整实时预览的显示方式。更改会自动保存。'))
+    const defs = this.editorDefs()
+    if (!defs.length) {
       list.append(element('p', SETTINGS_PAGE_CLASS_NAMES.empty, '暂无可配置项。'))
       return
     }
     list.append(element('h3', 'vsidian-settings-group-title', '显示'))
-    for (const def of this.defs) {
+    this.renderDefItems(list, defs, focusEntry)
+  }
+
+  /** 设置项行渲染（editor / general 两组共用：标题、说明与控件装配） */
+  private renderDefItems(list: HTMLElement, defs: readonly SettingDefinition[], focusEntry?: string): void {
+    for (const def of defs) {
       const item = element('div', SETTINGS_PAGE_CLASS_NAMES.item)
       const label = element('label', 'vsidian-settings-item-label')
       const text = element('span', 'vsidian-settings-item-copy')
       text.append(element('span', SETTINGS_PAGE_CLASS_NAMES.itemTitle, def.title))
       // #93 控件分流：boolean → 复选开关；string 枚举 → 下拉（enum 顺序即
-      // 选项顺序，optionLabels 缺省显示原值）
+      // 选项顺序，显示名见 optionLabel 的三级回退）
       const control: HTMLInputElement | HTMLSelectElement = def.type === 'string'
         ? this.buildSelect(def)
         : this.buildCheckbox(def)
@@ -246,11 +289,25 @@ export class SettingsPageView {
     return box
   }
 
+  /**
+   * 枚举选项显示名（#96 三级回退）：optionLabels 静态显示名（语言自名等
+   * 不随界面语言变化者）> optionLabelKeys 消息键（经 t() 取词，随当前语言
+   * 变化，如语言设置 auto 档「自动 / Auto」）> 枚举原值
+   */
+  private optionLabel(def: StringEnumSettingDefinitionLike, value: string): string {
+    const staticLabel = def.optionLabels?.[value]
+    if (staticLabel !== undefined) {
+      return staticLabel
+    }
+    const key = def.optionLabelKeys?.[value]
+    return key !== undefined ? t(key) : value
+  }
+
   private buildSelect(def: StringEnumSettingDefinitionLike): HTMLSelectElement {
     const select = element('select', SETTINGS_PAGE_CLASS_NAMES.select)
     const current = String(this.value(def))
     for (const value of def.enum) {
-      const option = element('option', '', def.optionLabels?.[value] ?? value)
+      const option = element('option', '', this.optionLabel(def, value))
       option.value = value
       if (value === current) {
         option.selected = true

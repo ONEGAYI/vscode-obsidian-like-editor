@@ -9,6 +9,18 @@
 export const en = {
   /** 设置页面板标题（宿主 createWebviewPanel 标题与页面 h1 同源） */
   'settings.pageTitle': 'Vsidian Settings',
+  /** 设置页「常规」分组标题（#96 general.* 设置项的归属分组） */
+  'settings.generalSection': 'General',
+  /** 设置页「常规」分组副文案（对齐「编辑器」分组的说明句式） */
+  'settings.generalSectionDescription':
+    'Adjust basic Vsidian behavior. Changes save automatically.',
+  /** 设置项「界面语言」标题（#96 general.language；定义 title 键化由 #95 接管） */
+  'setting.language': 'Interface language',
+  /** 设置项「界面语言」说明（auto 语义与切换即生效） */
+  'setting.languageDescription':
+    'The display language for interface text. Auto follows the VS Code display language (Simplified Chinese in Chinese environments, English otherwise); an explicit choice no longer follows it. Changes take effect immediately.',
+  /** 语言下拉 auto 档显示名（随当前语言取词；具体语言为静态自名不自译） */
+  'setting.languageAuto': 'Auto',
 } as const satisfies Record<string, string>
 
 /** 字典键：点分扁平键，以本包为类型基准（编译期检查 t() 取词键） */
