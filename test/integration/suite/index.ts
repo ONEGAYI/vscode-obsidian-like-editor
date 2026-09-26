@@ -47,6 +47,7 @@ export async function run(): Promise<void> {
   }
   console.log(`[集成测试] 执行 ${sharded.length}/${cases.length} 项${filter ? `（筛选 ${JSON.stringify(filter)}）` : ''}${shardLabel}`)
   for (const [name, fn] of sharded) {
+    const caseStarted = Date.now()
     try {
       // #38：全局模式记忆（globalState）在同一集成进程内跨用例共享——
       // reading 记忆会让后续用例的新面板被恢复成阅读模式、source 记忆会
@@ -135,6 +136,7 @@ export async function run(): Promise<void> {
       } catch {
         // 忽略清理失败
       }
+      console.log(`[集成测试][TIME] ${Date.now() - caseStarted}ms ${name}`)
     }
   }
   if (failures.length > 0) {
