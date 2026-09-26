@@ -162,6 +162,7 @@ export const en = {
   'sidebar.quickActions': 'Quick actions',
   'sidebar.collapse': 'Collapse sidebar',
   'sidebar.expand': 'Expand sidebar',
+  'sidebar.resize': 'Drag to resize sidebar',
 
   /** 查找控件 */
   'find.placeholder': 'Find',

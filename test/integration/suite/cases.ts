@@ -489,6 +489,7 @@ interface ViewState {
     toggleFrameStrokeWidth: string | null
     mainWidthPx: number | null
     sidebarWidthPx: number | null
+    resizerPainted: boolean
     toggleAriaLabel: string | null
     settingsAriaLabel: string | null
   }
@@ -4558,6 +4559,61 @@ export const cases: Array<[string, () => Promise<void>]> = [
       `收起回归后名称应回「${editorMessages()['sidebar.expand']}」，实际 ${String(recollapsed.sidebar!.toggleAriaLabel)}`)
     assert(Math.abs((recollapsed.sidebar!.mainWidthPx ?? 0) - collapsedMainWidth) < 2,
       `收起回归后主编辑区宽度应复原（${collapsedMainWidth} → ${String(recollapsed.sidebar!.mainWidthPx)}）`)
+  }],
+
+  ['右侧栏拖拽调宽：真实句柄事件序列、区间钳制与宽度记忆', async () => {
+    // 绘制层断言口径（视觉层断言必查）：宽度经布局度量（sidebarWidthPx 是
+    // 侧栏元素实宽——CSS 变量或样式失效时不呈现目标宽度）；句柄真实可见经
+    // elementFromPoint 命中（resizerPainted，收起态热区被裁切时命中失败）。
+    // DOM 存在性与逻辑坐标不能替代这些证据。
+    await openWithEditor('lf.md')
+    await waitSessionReady('lf.md')
+    const uri = wsUri('lf.md').toString()
+
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    const opened = await waitViewState('lf.md', (v) => v.sidebar?.open === true &&
+      v.sidebar.sidebarToolbarPainted === true && (v.sidebar.sidebarWidthPx ?? 0) > 200)
+    const baseWidth = opened.sidebar!.sidebarWidthPx ?? 0
+    assert(baseWidth > 200, `初始侧栏宽度应约 280px，实际 ${baseWidth}`)
+    assert(opened.sidebar!.resizerPainted === true,
+      `拖宽句柄应真实可见（命中测试失败：${JSON.stringify(opened.sidebar)}`)
+
+    // 向左拖 120px：宽度增加且主编辑区相应收缩（宽度真实参与布局）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.resize', delta: 120 })
+    const widened = await waitViewState('lf.md', (v) =>
+      Math.abs((v.sidebar?.sidebarWidthPx ?? -1) - (baseWidth + 120)) < 3)
+    const widenedWidth = widened.sidebar!.sidebarWidthPx ?? 0
+    assert(Math.abs(widenedWidth - (baseWidth + 120)) < 3,
+      `左拖 120px 后宽度应约 ${baseWidth + 120}，实际 ${widenedWidth}`)
+    assert((widened.sidebar!.mainWidthPx ?? 0) < (opened.sidebar!.mainWidthPx ?? Infinity) - 100,
+      `主编辑区应随侧栏增宽收缩（${opened.sidebar!.mainWidthPx} → ${widened.sidebar!.mainWidthPx}）`)
+
+    // 向右拖回 60px：收窄走同一链路
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.resize', delta: -60 })
+    await waitViewState('lf.md', (v) =>
+      Math.abs((v.sidebar?.sidebarWidthPx ?? -1) - (widenedWidth - 60)) < 3)
+
+    // 大力左拖钳到上限 720（再大力不越界）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.resize', delta: 5000 })
+    const capped = await waitViewState('lf.md', (v) => Math.abs((v.sidebar?.sidebarWidthPx ?? -1) - 720) < 3)
+    assert(Math.abs((capped.sidebar!.sidebarWidthPx ?? 0) - 720) < 3,
+      `钳制上限应为 720，实际 ${capped.sidebar!.sidebarWidthPx}`)
+
+    // 收起再展开：宽度记忆保持（PersistedState 链路）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('lf.md', (v) => v.sidebar?.open === false)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    const reopened = await waitViewState('lf.md', (v) => v.sidebar?.open === true &&
+      v.sidebar.sidebarToolbarPainted === true &&
+      Math.abs((v.sidebar.sidebarWidthPx ?? -1) - 720) < 3)
+    assert(Math.abs((reopened.sidebar!.sidebarWidthPx ?? 0) - 720) < 3,
+      `收起再展开后宽度应保持 720，实际 ${reopened.sidebar!.sidebarWidthPx}`)
+
+    // 清理：拖回默认宽度并收起侧栏，恢复后续用例的基线布局
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.resize', delta: -(720 - 280) })
+    await waitViewState('lf.md', (v) => Math.abs((v.sidebar?.sidebarWidthPx ?? -1) - 280) < 3)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'sidebar.test.click' })
+    await waitViewState('lf.md', (v) => v.sidebar?.open === false)
   }],
 
   ['右侧栏与模式切换正交：两模式共用布局、零撤销记录、正文可编辑（#53）', async () => {

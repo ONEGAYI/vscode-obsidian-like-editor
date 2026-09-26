@@ -75,6 +75,34 @@ describe('侧栏布局骨架 CSS 契约（#53）', () => {
     expect(rule('.vsidian-toolbar .vsidian-sidebar-toggle')).toMatch(/margin-left:\s*auto/)
   })
 
+  it('拖宽句柄热区就位：左缘定位、col-resize 光标、触屏不被滚动劫持', () => {
+    const handle = rule('#app .vsidian-sidebar .vsidian-sidebar-resizer')
+    expect(handle).toMatch(/position:\s*absolute/)
+    expect(handle).toMatch(/cursor:\s*col-resize/)
+    expect(handle).toMatch(/touch-action:\s*none/)
+    expect(handle).toMatch(/width:\s*10px/)
+    expect(handle).toMatch(/left:\s*0/)
+    // hover/拖拽中的 2px 高亮竖条（VSCode sash 风格，颜色跟随主题变量；
+    // 多选择器列表以末项锚定，与 tablePaintCssContract 的 control-hover 同口径）
+    expect(rule('#app .vsidian-sidebar.vsidian-sidebar-resizing .vsidian-sidebar-resizer::before'))
+      .toMatch(/background:\s*var\(--vscode-sash-hoverBorder/)
+    // 键盘微调可达的聚焦轮廓（focus-visible，非鼠标点击态）
+    expect(rule('#app .vsidian-sidebar .vsidian-sidebar-resizer:focus-visible'))
+      .toMatch(/outline:/)
+    // 收起态句柄不可聚焦：width:0 + overflow:hidden 只裁掉视觉与命中，tab 序
+    // 仍可达——visibility:hidden 让真实浏览器把句柄移出 tab 序（JS 侧 keydown
+    // 另有 sidebarOpen 语义守卫双保险）
+    expect(rule('#app .vsidian-body:not(.vsidian-sidebar-open) .vsidian-sidebar-resizer'))
+      .toMatch(/visibility:\s*hidden/)
+  })
+
+  it('拖拽期间禁用宽度过渡（resizing 类），侧栏全域锁定调整光标', () => {
+    // 0.15s 宽度过渡是展开/收起动画；拖宽逐帧写变量时必须旁路，否则滞后不跟手
+    expect(rule('#app .vsidian-sidebar.vsidian-sidebar-resizing')).toMatch(/transition:\s*none/)
+    expect(css, '拖拽全域光标规则应存在')
+      .toMatch(/\.vsidian-sidebar-resizing[\s\S]{0,120}?cursor:\s*col-resize/)
+  })
+
   it('正文容器成为主编辑区 flex 成员（顶栏扣减由 flex 分配取代）', () => {
     expect(rule('#app .vsidian-view-live')).toMatch(/flex:\s*1 1 auto/)
     expect(rule('#app .vsidian-view-live')).toMatch(/min-height:\s*0/)

@@ -124,6 +124,12 @@ export type HostToWebview =
    *  处理器（纯视图状态翻转，零写回）。宿主测试无法向 webview 派发真实鼠标
    *  事件，以此通道验证真实宿主内的布局切换与绘制 */
   | { kind: 'sidebar.test.click' }
+  /** 测试钩子：向真实拖宽句柄派发 pointer 事件序列（pointerdown → 超阈值
+   *  move 进入拖拽态 → 左移 delta px 的 move → pointerup 落定），驱动与
+   *  用户拖拽同一处理器链。delta 为水平位移（正=向左=增宽，负=向右=收窄，
+   *  均受钳制）。宿主测试无法向 webview 派发真实鼠标事件，以此通道验证
+   *  真实宿主内的拖宽链路 */
+  | { kind: 'sidebar.test.resize'; delta: number }
   /** #89 测试钩子：点击真实快速操作控件，走用户同一路径。 */
   | { kind: 'quick.test.click'; action: 'toggle' | 'heading' | 'bold' | 'heading1' | 'headingNone' }
   /** 测试钩子（#54）：点击侧栏顶栏的大纲按钮，驱动与用户点击同一处理器
@@ -734,6 +740,8 @@ export interface SidebarProbe {
   mainWidthPx: number | null
   /** 侧栏宽度 px（收起时元素不占位为 0）；无布局为 null */
   sidebarWidthPx: number | null
+  /** 拖宽句柄中心点命中自身（左缘热区真实可见可拖；收起态被裁切时命中失败） */
+  resizerPainted: boolean
   /** 切换按钮可访问名称（状态一致性观测：随收起/展开变化） */
   toggleAriaLabel: string | null
   /** 齿轮设置按钮可访问名称 */
@@ -1635,6 +1643,8 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return isNonNegativeInt(v.sourceIndex) && isNonNegativeInt(v.targetSlot)
     case 'sidebar.test.click':
       return true
+    case 'sidebar.test.resize':
+      return typeof v.delta === 'number' && Number.isFinite(v.delta)
     case 'quick.test.click':
       return v.action === 'toggle' || v.action === 'heading' || v.action === 'bold' ||
         v.action === 'heading1' || v.action === 'headingNone'

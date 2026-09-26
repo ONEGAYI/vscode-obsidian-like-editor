@@ -145,6 +145,7 @@ export const zhCn: Record<MessageKey, string> = {
   'sidebar.quickActions': '快速操作条',
   'sidebar.collapse': '收起右侧栏',
   'sidebar.expand': '展开右侧栏',
+  'sidebar.resize': '拖拽调整侧栏宽度',
 
   'find.placeholder': '查找',
   'find.label': '在文档中查找',
