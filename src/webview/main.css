@@ -245,6 +245,87 @@ body {
   padding: 0 6px;
 }
 
+/* #89 快速操作条是主编辑区的普通 flex 行，展开时向下分配高度。 */
+#app .vsidian-quick-actions {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+  box-sizing: border-box;
+  padding: 3px 6px;
+  color: var(--vscode-editor-foreground);
+  background: var(--vscode-editor-background);
+  border-bottom: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.3));
+}
+
+#app .vsidian-quick-actions[hidden] {
+  display: none;
+}
+
+#app .vsidian-quick-actions button {
+  min-width: 28px;
+  height: 26px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+#app .vsidian-quick-actions button:hover,
+#app .vsidian-quick-actions button:focus-visible {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
+}
+
+#app .vsidian-quick-actions button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #4fc1ff);
+  outline-offset: 1px;
+}
+
+#app .vsidian-quick-actions button[data-format-state='active'] {
+  color: var(--vscode-button-foreground, #fff);
+  background: var(--vscode-button-background, #0e639c);
+}
+
+#app .vsidian-quick-actions button[data-format-state='mixed'] {
+  border-color: var(--vscode-focusBorder, #4fc1ff);
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
+}
+
+#app .vsidian-quick-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+#app .vsidian-quick-actions .vsidian-quick-heading-menu {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% - 1px);
+  left: 6px;
+  display: flex;
+  flex-direction: column;
+  min-width: 116px;
+  padding: 3px;
+  border: 1px solid var(--vscode-menu-border, var(--vscode-editorWidget-border));
+  border-radius: 5px;
+  background: var(--vscode-menu-background, var(--vscode-editor-background));
+  color: var(--vscode-menu-foreground, var(--vscode-editor-foreground));
+  box-shadow: 0 3px 10px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.25));
+}
+
+#app .vsidian-quick-heading-menu button {
+  width: 100%;
+  text-align: left;
+}
+
+#app .vsidian-quick-actions .vsidian-quick-heading-menu[hidden] {
+  display: none;
+}
+
 /* 顶栏图标按钮：透明底、悬停高亮跟随 VSCode 工具栏变量（与文字按钮
    时代 secondary 按钮形态的 #33 样式解耦） */
 .vsidian-toolbar button {

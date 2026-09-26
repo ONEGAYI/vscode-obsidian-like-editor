@@ -152,6 +152,7 @@ vsidian/
 │       ├── outlineSearch.ts        # 大纲标题搜索纯函数
 │       ├── outlineSection.ts       # 大纲控制域纯函数
 │       ├── perfProbe.ts            # webview 性能探针（#5）
+│       ├── quickActionState.ts     # 快速操作状态判定
 │       ├── readingBlocks.ts        # markdown-it 阅读块切分
 │       ├── readingMarkdown.ts      # markdown-it 安全渲染层
 │       ├── readingProbe.ts         # 阅读视图性能探针
