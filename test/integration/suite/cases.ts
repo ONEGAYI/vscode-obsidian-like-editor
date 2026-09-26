@@ -391,12 +391,14 @@ interface ViewState {
   }
   /** #33 设置快照缓存（宿主 snapshot/changed 下发后非空） */
   settings?: Record<string, unknown>
-  /** #34 行号栏观测（first/last 为视口内首/末行号单元格文本） */
+  /** #34 行号栏观测（first/last 为视口内首/末行号单元格文本）；
+   *  #116 alignment 为行号-正文行基线偏差采样（无布局环境为 null） */
   lineGutter?: {
     on: boolean
     count: number
     first: string | null
     last: string | null
+    alignment?: Array<{ num: string; deltaBottom: number }> | null
   }
   /** 绘制层探针（P0 回归）：正文可见性 / CM6 注入样式存活 / 行号禁选 / 明暗声明与光标实值 */
   paint?: {
@@ -2706,6 +2708,30 @@ export const cases: Array<[string, () => Promise<void>]> = [
     await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.locate', offset: 0 })
     await waitViewState(name, (v) => v.selectionOffset === 0)
     await assertFirstTableNumbers()
+  }],
+
+  ['双表文档行号与所属正文行基线偏差 ≤1px（#116 绘制层几何断言）', async () => {
+    const name = 'table-gutter-align.md'
+    const source = '首行\n\n| A | B |\n| --- | --- |\n| 甲 | 乙 |\n\n中段一\n中段二\n\n' +
+      '| C | D |\n| --- | --- |\n| 丙 | 丁 |\n\n尾段\n'
+    await vscode.workspace.fs.writeFile(wsUri(name), Buffer.from(source))
+    await openWithEditor(name)
+    await waitSessionReady(name)
+    await vscode.commands.executeCommand(CMD.setSettings, { 'editor.lineNumbers': true })
+    // 几何探针在真实 webview 布局下采集：轮询直至全部可见行号达标
+    //（绘制稳定后计——measure 循环收敛后的采样值即稳态值）
+    const state = await waitViewState(name, (v) => {
+      const alignment = v.lineGutter?.alignment
+      if (!alignment || alignment.length < 4) return false
+      return alignment.every((item) => Math.abs(item.deltaBottom) <= 1)
+    })
+    // 覆盖面防御：采样必须包含两表段首行号（3/10）与表后行号（7/14），
+    // 防止探针退化成只采恰好达标的行
+    const nums = state.lineGutter!.alignment!.map((item) => item.num)
+    for (const expected of ['3', '7', '10', '14']) {
+      assert(nums.includes(expected),
+        `对齐采样应覆盖表段首（${expected}）与表后行：${JSON.stringify(state.lineGutter!.alignment)}`)
+    }
   }],
 
   ['实时预览活动格保留网格与抓手，格内输入经 CM6 写回（#42）', async () => {
