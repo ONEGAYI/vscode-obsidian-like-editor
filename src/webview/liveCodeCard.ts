@@ -62,7 +62,7 @@ export const CODE_CARD_CLASS_NAMES = {
   headerActions: 'vsidian-code-card-header-actions',
   /** 卡内行号（#80：代码行行首 widget，每块从 1，围栏行不占号） */
   linenumber: 'vsidian-code-card-linenumber',
-  /** 复制按钮（#81：悬停显现，点击复制代码体；编辑态不发射） */
+  /** 复制按钮（#81：悬停显现，点击复制代码体；两态常驻，收起态不发射） */
   copy: 'vsidian-code-card-copy',
   /** 复制按钮 ✓ 反馈修饰（点击后约 1.2s） */
   copyDone: 'vsidian-code-card-copy-done',
@@ -114,8 +114,9 @@ const CODE_LANG_ICONS: Readonly<Record<string, { text: string; color: string }>>
 /**
  * 头部横带 widget：语言标签 + 右侧按钮区（复制按钮 #81；折叠 chevron #82）。
  * ignoreEvent=false 交给 CM6 定位；复制按钮自行拦截 mousedown 防 CM6 落选区
- * 进块（进入即切编辑态撤走按钮）。copy=false（编辑态或设置关闭）时不渲染
- * 按钮——eq 含 copy/code，状态切换时 CM6 重建 DOM。
+ * 进块。copy=false（收起态或设置关闭）时不渲染按钮——eq 含 copy/code，
+ * 状态切换时 CM6 重建 DOM。编辑态同样常驻按钮（渲染型围栏只有编辑态
+ * 卡片，复制不能有死角）。
  */
 export class CodeCardHeaderWidget extends WidgetType {
   constructor(
@@ -408,7 +409,9 @@ export function buildCodeCardDecorations(
     // 标签从 RENDERED_FENCE_LABELS 取；其余未知语言原样显示 info
     const label = lang?.displayName
       ?? (trimmed === '' ? 'Plain text' : RENDERED_FENCE_LABELS[trimmed] ?? trimmed)
-    const copy = config.copyButton && !editing && !isFolded
+    // 复制按钮两态常驻（编辑态同样发射——渲染型围栏只有编辑态卡片）；
+    // 收起态不发射（规格）
+    const copy = config.copyButton && !isFolded
     out.push(headerDeco(label, lang?.id ?? null, copy, fence.code, isFolded).range(fence.from, fence.from))
     if (isFolded) {
       // 整块收起：replace 覆盖开围栏行行首到闭围栏行行尾含换行（行完全

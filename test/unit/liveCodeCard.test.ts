@@ -322,13 +322,13 @@ describe('复制按钮（#81）', () => {
     expect(w.code).toBe('let a = 1\n\nconst b = 2')
   })
 
-  it('编辑态（光标在块内）：按钮不发射（隐藏）', () => {
+  it('编辑态（光标在块内）：按钮同样发射（渲染型围栏只有编辑态卡片，复制不能有死角）', () => {
     for (const at of [FENCE_FROM, FENCE_FROM + 5, lineOf(DOC, CLOSE_LINE).from + 1]) {
-      expect(decos(DOC, at).find((i) => i.widget)!.widget!.copy, `at=${at}`).toBe(false)
+      expect(decos(DOC, at).find((i) => i.widget)!.widget!.copy, `at=${at}`).toBe(true)
     }
   })
 
-  it('非空选区与块相交：同单光标，按钮不发射', () => {
+  it('非空选区与块相交：同单光标，按钮发射', () => {
     const state = EditorState.create({
       doc: DOC,
       extensions: [
@@ -339,7 +339,7 @@ describe('复制按钮（#81）', () => {
       ],
       selection: EditorSelection.range(0, FENCE_FROM + 1),
     })
-    expect(itemsOf(state.field(codeCardDecorations)).find((i) => i.widget)!.widget!.copy).toBe(false)
+    expect(itemsOf(state.field(codeCardDecorations)).find((i) => i.widget)!.widget!.copy).toBe(true)
   })
 
   it('复制子开关关闭：两态均不发射按钮', () => {
@@ -347,11 +347,11 @@ describe('复制按钮（#81）', () => {
     expect(decos(DOC, FENCE_FROM + 4, { copyButton: false }).find((i) => i.widget)!.widget!.copy).toBe(false)
   })
 
-  it('多块独立：光标在第一块内，其余块按钮保留', () => {
+  it('多块独立：光标在第一块内，两块按钮都在场（编辑态常驻）', () => {
     const text = '```js\na\n```\n\n```py\nx\n```'
     const items = decos(text, text.indexOf('a'))
     const widgets = items.filter((i) => i.widget).map((i) => i.widget!)
-    expect(widgets.map((w) => w.copy)).toEqual([false, true])
+    expect(widgets.map((w) => w.copy)).toEqual([true, true])
   })
 })
 

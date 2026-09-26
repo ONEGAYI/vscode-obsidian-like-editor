@@ -4907,14 +4907,15 @@ export const cases: Array<[string, () => Promise<void>]> = [
     // #83 默认高亮：js 块产出 tok-* token
     assert((present.paint?.code?.tokenCount ?? 0) > 0,
       `默认高亮应产出 tok token，实际 ${present.paint?.code?.tokenCount}`)
-    // 编辑态：光标进入首块代码体 → 头部与卡片行保留，该块复制按钮隐藏
+    // 编辑态：光标进入首块代码体 → 头部与卡片行保留，复制按钮常驻
+    //（渲染型围栏只有编辑态卡片——复制不能有死角）
     const body = present.text.indexOf('const a = 1')
     await vscode.commands.executeCommand(CMD.postToPanel, uri, {
       kind: 'view.locate', offset: body + 2,
     })
     const editing = await waitViewState('code-card.md', (v) =>
       (v.selectionOffset ?? -1) >= body && (v.selectionOffset ?? -1) <= body + 6 &&
-      v.paint?.code?.copyCount === 3)
+      v.paint?.code?.copyCount === 4)
     assert(editing.paint?.code?.headerCount === 4, `编辑态卡片头部应保留，实际 ${editing.paint?.code?.headerCount}`)
     // 离开恢复呈现态；纯视图交互零写回
     await vscode.commands.executeCommand(CMD.postToPanel, uri, {
@@ -5033,8 +5034,8 @@ export const cases: Array<[string, () => Promise<void>]> = [
       `编辑态应出现 Mermaid 标签头部，实际 ${JSON.stringify(mEdit.paint?.code?.labels)}`)
     assert(mEdit.paint?.code?.cardLineCount === 19,
       `编辑态卡片行 15+4=19，实际 ${mEdit.paint?.code?.cardLineCount}`)
-    assert(mEdit.paint?.code?.copyCount === 4,
-      `mermaid 编辑态块无复制按钮（其余四张呈现态共 4），实际 ${mEdit.paint?.code?.copyCount}`)
+    assert(mEdit.paint?.code?.copyCount === 5,
+      `mermaid 编辑态块同样常驻复制按钮（四张呈现态 + mermaid 编辑态），实际 ${mEdit.paint?.code?.copyCount}`)
     assert(await readDisk('code-card.md') === diskBefore, '渲染型围栏显隐交互不得改写源文')
     await vscode.commands.executeCommand(CMD.postToPanel, uri, {
       kind: 'codecard.test.fold', index: 4,
