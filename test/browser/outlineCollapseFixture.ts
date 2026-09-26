@@ -35,6 +35,30 @@ function readOutline() {
     locatedVisibleInPanel: visibleRect(located)?.within ?? null,
     dotBg: (n: number) => getComputedStyle(dots[n]!).backgroundColor,
     chevronCount: panel.querySelectorAll('.vsidian-outline-chevron').length,
+    /** #99 层级对齐引导线观测（itemIndex 行的第 guideIndex 条线；null =
+     *  该行无此序号的线）。断言用户看到的东西：computed 背景非全透明
+     *  （样式失效时无线可捕获）、1px 宽；visible 用 offsetParent 判定
+     *  （display 不继承，祖先 display:none 子树内的 computed display 仍
+     *  为 block，但 offsetParent 为 null——不参与布局即不可见） */
+    guideOf: (itemIndex: number, guideIndex: number) => {
+      const guides = items[itemIndex]!.querySelectorAll<HTMLElement>('.vsidian-outline-guide')
+      const guide = guides[guideIndex]
+      if (!guide) return null
+      const cs = getComputedStyle(guide)
+      return { bg: cs.backgroundColor, display: cs.display, width: cs.width, left: guide.style.left,
+        visible: guide.offsetParent !== null }
+    },
+    /** #99 能量条填充条宽度（::after computed，px；样式失效时为 0） */
+    fillPx: () => {
+      const slider = document.querySelector<HTMLElement>('.vsidian-outline-slider')
+      return slider ? Number.parseFloat(getComputedStyle(slider, '::after').width) : 0
+    },
+    /** 轨道全长（row 内容宽 - 两端让位 30px×2 = padding 24px + 珠半径
+     *  6px；填充条宽度的换算基数，#99 加粗珠 12px 后同步） */
+    trackPx: () => {
+      const slider = document.querySelector<HTMLElement>('.vsidian-outline-slider')
+      return slider ? slider.clientWidth - 60 : 0
+    },
   }
 }
 

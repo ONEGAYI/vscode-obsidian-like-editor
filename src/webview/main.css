@@ -501,8 +501,12 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='blockMath'] { 
   font-weight: 400;
   font-size: var(--vsidian-outline-font-size, 12px);
   line-height: 22px;
-  cursor: default;
+  /* #99 整行可点语义：条目整行是点击跳转命中区（事件委托 closest 命中），
+     光标须预告可点；折叠箭头等子元素另有各自 pointer 规则 */
+  cursor: pointer;
   user-select: none;
+  /* #99 层级对齐引导线的定位锚（guide span 按祖先 chevron 中心 left 定位） */
+  position: relative;
 }
 
 .vsidian-sidebar .vsidian-outline-item.vsidian-outline-level-1 {
@@ -571,12 +575,35 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='blockMath'] { 
 
 /* #66 常驻高亮横条：当前控制域条目（视口顶部行向上最近标题）的半透明
    覆盖背景。类切换（vsidian-outline-located）是两态差异唯一来源——非
-   located 条目无背景规则；颜色跟随 VSCode 变量（无变量主题回退半透明
-   灰），样式失效时无横条可被 computed 断言捕获。这是常亮位置指示器，
-   非滚动瞬时反馈 */
+   located 条目的基础规则无背景（悬停浅档见下条 #99 规则）；颜色跟随
+   VSCode 变量（无变量主题回退半透明灰），样式失效时无横条可被 computed
+   断言捕获。这是常亮位置指示器，非滚动瞬时反馈 */
 .vsidian-sidebar .vsidian-outline-item.vsidian-outline-located {
   background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.14));
   border-radius: 4px;
+}
+
+/* #99 悬停行高亮：跟随光标悬停的大纲标题行，比 located 浅一档（color-mix
+   对同一变量取 50% 透明度，主题换悬停色时浅档自动跟随）。:not(.located)
+   排除重合——悬停行恰为 located 行时保持 located 底色不叠加（最多两条
+   高亮、最少一条）；悬停互斥于单行、移出即恢复透明，纯 CSS 无 JS 状态 */
+.vsidian-sidebar .vsidian-outline-item:not(.vsidian-outline-located):hover {
+  background: color-mix(in srgb, var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.14)) 50%, transparent);
+  border-radius: 4px;
+}
+
+/* #99 层级对齐引导线：父级 chevron 中心的 1px 竖线，逐行线段连成整条
+   包住子树（Obsidian 口径，实测亮色主题约 12% 黑）。颜色跟随 VSCode
+   缩进引导变量（暗色主题自动适配）；span 是纯装饰——aria-hidden、
+   pointer-events:none 不吞条目点击；线绘制于 located/hover 背景之上
+   （子元素晚于背景绘制），穿过高亮行仍可见 */
+.vsidian-sidebar .vsidian-outline-item .vsidian-outline-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--vscode-editorIndentGuide-background, rgba(128, 128, 128, 0.25));
+  pointer-events: none;
 }
 
 /* ---- #68 大纲工具条行（侧栏顶栏与滑块行之间：跳转到末尾、重置、搜索框）----
@@ -669,13 +696,15 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='blockMath'] { 
   font-size: var(--vsidian-outline-font-size, 12px);
 }
 
-/* ---- #67 折叠滑块行（结绳记事：六圆点 + 横线串联）----
+/* ---- #67 折叠滑块行（结绳记事：六圆点 + 横线串联；#99 能量条呈现）----
    显隐唯一开关是侧栏容器的 outline-active 类（与面板同模式）。六档：
    0=No-Expand（全部折叠只露顶层）、1–5=展开到 H1–H5（展开所有 level≤n
-   且有子项的父节点）。当前档与空闲档的用户可见差异唯一来源是圆点的
-   active 类规则（空闲珠=透明面描边圆环、当前珠=实心），样式失效时
-   六珠同态可被集成 computed 断言捕获。横线由行容器的 ::before 绘制
-   （贯穿珠心，珠面相对定位盖线）。可访问口径：role=group 六按钮组 */
+   且有子项的父节点）。实心珠与空闲珠的用户可见差异唯一来源是实心组
+   类规则（空闲珠=透明面描边圆环；当前珠 active 类 + 沿途珠 filled 类
+   同态实心），样式失效时六珠同态可被集成 computed 断言捕获。横线由行
+   容器的 ::before 绘制（贯穿珠心，珠面相对定位盖线）；#99 起另有
+   ::after 填充条从左端铺到当前档（宽度由 --vsidian-outline-slider-fill
+   驱动）。可访问口径：role=group 六按钮组 */
 #app .vsidian-sidebar .vsidian-outline-slider {
   display: none;
 }
@@ -693,26 +722,28 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='blockMath'] { 
   padding: 0 24px;
 }
 
-/* 串珠横线：绝对定位贯穿行中心（行高 22px，珠心 11px；线高 2px 居中） */
+/* 串珠横线：绝对定位贯穿行中心（行高 22px，珠心 11px；#99 加粗 3px 居中） */
 .vsidian-sidebar .vsidian-outline-slider::before {
   content: '';
   position: absolute;
-  left: 28px;
-  right: 28px;
-  top: 10px;
-  height: 2px;
-  border-radius: 1px;
+  left: 30px;
+  right: 30px;
+  top: calc(50% - 1.5px);
+  height: 3px;
+  border-radius: 1.5px;
   background: var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.4));
 }
 
-/* 圆点（珠）：8px 正圆；空闲珠空心（透明面 + 描边圆环，主题侧栏背景
-   透明时绳线穿珠可见——结绳意象），当前珠实心。珠面相对定位抬到线之上 */
+/* 圆点（珠）：12px 正圆（#99 可点性加粗）；空闲珠空心（透明面 + 描边
+   圆环，主题侧栏背景透明时绳线穿珠可见——结绳意象），当前珠实心。
+   珠面相对定位抬到线之上；珠心距行缘 = padding 24px + 珠半径 6px = 30px，
+   与横线/填充条的两端让位对齐 */
 .vsidian-sidebar .vsidian-outline-slider-dot {
   display: block;
   position: relative;
   z-index: 1;
-  width: 8px;
-  height: 8px;
+  width: 12px;
+  height: 12px;
   box-sizing: border-box;
   padding: 0;
   border-radius: 50%;
@@ -721,13 +752,41 @@ body.vscode-high-contrast #app .vsidian-quick-actions [data-icon='blockMath'] { 
   cursor: pointer;
 }
 
+/* 热区放大（#99 可点性）：透明伪元素外扩 5px 出 22×22 圆形命中区
+   （约满 22px 行高）——12px 视觉珠直击目标过小（用户反馈不好点击）；
+   absolute 不占布局，space-between 珠距 32px 下互不重叠 */
+.vsidian-sidebar .vsidian-outline-slider-dot::before {
+  content: '';
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+}
+
 .vsidian-sidebar .vsidian-outline-slider-dot:focus-visible {
   outline: 1px solid var(--vscode-focusBorder, #4fc1ff);
   outline-offset: 2px;
 }
 
-.vsidian-sidebar .vsidian-outline-slider-dot.vsidian-outline-slider-active {
+/* 实心珠（#99 能量条口径）：当前档珠（active）与沿途珠（filled，
+   0..当前档）同态实心——"充到哪、珠实到哪"，当前档由最右实心珠表达；
+   空闲珠（两类皆无）保持空心。珠面相对定位抬到线之上 */
+.vsidian-sidebar .vsidian-outline-slider-dot:is(.vsidian-outline-slider-active, .vsidian-outline-slider-filled) {
   border-color: var(--vscode-button-background, #0e639c);
+  background: var(--vscode-button-background, #0e639c);
+}
+
+/* #99 能量条填充条：从左端铺到当前档珠心（::before 已被灰轨道占用，
+   填充走 ::after——声明序在后，同层绘制在灰线之上；珠面 z-index 更高，
+   交界被珠盖住）。宽度 = 轨道全长 × 填充比例（TS 侧 applyOutlineSliderState
+   写入 --vsidian-outline-slider-fill，值 = 档位/最大档；0 档归零） */
+.vsidian-sidebar .vsidian-outline-slider::after {
+  content: '';
+  position: absolute;
+  left: 30px;
+  top: calc(50% - 1.5px);
+  height: 3px;
+  border-radius: 1.5px;
+  width: calc((100% - 60px) * var(--vsidian-outline-slider-fill, 0));
   background: var(--vscode-button-background, #0e639c);
 }
 
