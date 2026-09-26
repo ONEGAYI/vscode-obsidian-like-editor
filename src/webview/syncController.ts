@@ -2852,7 +2852,7 @@ export class WebviewSyncController {
     sidebar.appendChild(toolbar.row)
     sidebar.appendChild(slider.row)
     sidebar.appendChild(panelHost)
-    // 拖宽句柄：左缘 6px 热区（样式见 main.css），侧栏收起时随 width:0 +
+    // 拖宽句柄：左缘热区（宽度与悬停高亮见 main.css），侧栏收起时随 width:0 +
     // overflow:hidden 裁切（不可交互）。拖拽照折叠滑块模式（#67）：主键
     // pointerdown 武装起点 → 超 4px 进拖拽态捕获指针 → move 换算宽度 →
     // up 落定持久化；Escape/pointercancel 回滚拖前宽度不持久化；双击重置

@@ -80,7 +80,7 @@ describe('侧栏布局骨架 CSS 契约（#53）', () => {
     expect(handle).toMatch(/position:\s*absolute/)
     expect(handle).toMatch(/cursor:\s*col-resize/)
     expect(handle).toMatch(/touch-action:\s*none/)
-    expect(handle).toMatch(/width:\s*8px/)
+    expect(handle).toMatch(/width:\s*10px/)
     expect(handle).toMatch(/left:\s*0/)
     // hover/拖拽中的 2px 高亮竖条（VSCode sash 风格，颜色跟随主题变量；
     // 多选择器列表以末项锚定，与 tablePaintCssContract 的 control-hover 同口径）

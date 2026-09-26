@@ -314,8 +314,8 @@ describe('sidebar.test.resize 测试钩子（宿主注入通道，真实事件�
   it('经真实句柄 pointer 序列拖宽并持久化（delta 正 = 增宽）', () => {
     const h = makeBridge()
     const { c, parent } = mountResize(h)
-    // jsdom 无布局：stub 句柄矩形（左缘 700，热区宽 6）
-    resizerEl(parent).getBoundingClientRect = () => new DOMRect(700, 0, 6, 400)
+    // jsdom 无布局：stub 句柄矩形（左缘 700，热区宽 10——宽度任意，钩子只取中心）
+    resizerEl(parent).getBoundingClientRect = () => new DOMRect(700, 0, 10, 400)
     c.handleHostMessage({ kind: 'sidebar.test.resize', delta: 100 })
     expect(widthVar(parent)).toBe(380)
     expect((h.saved() as { sidebarWidth?: number }).sidebarWidth).toBe(380)
@@ -324,7 +324,7 @@ describe('sidebar.test.resize 测试钩子（宿主注入通道，真实事件�
   it('delta 负值收窄，同链路钳制', () => {
     const h = makeBridge()
     const { c, parent } = mountResize(h)
-    resizerEl(parent).getBoundingClientRect = () => new DOMRect(700, 0, 6, 400)
+    resizerEl(parent).getBoundingClientRect = () => new DOMRect(700, 0, 10, 400)
     c.handleHostMessage({ kind: 'sidebar.test.resize', delta: -40 })
     expect(widthVar(parent)).toBe(240)
   })

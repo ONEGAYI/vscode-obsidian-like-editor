@@ -236,18 +236,18 @@ body {
   overflow: hidden;
 }
 
-/* 侧栏拖宽句柄：左缘全高 8px 热区（悬停显示 col-resize，hover/拖拽中
+/* 侧栏拖宽句柄：左缘全高 10px 热区（悬停显示 col-resize，hover/拖拽中
    经 ::before 显 2px 高亮竖条，VSCode sash 风格）；触屏拖宽不被滚动
    劫持（touch-action:none）；聚焦键盘微调（ArrowLeft/Right ±16px）显示
    轮廓。热区须贴 left:0——侧栏 overflow:hidden 会裁掉负偏移外伸部分；
-   侧栏内容（工具条/面板条目）左内边距 12px，8px 热区不遮交互内容；
+   侧栏内容（工具条/面板条目）左内边距 12px，10px 热区不遮交互内容；
    收起态热区随 width:0 + overflow:hidden 裁切归零，不可交互 */
 #app .vsidian-sidebar .vsidian-sidebar-resizer {
   position: absolute;
   top: 0;
   bottom: 0;
   left: 0;
-  width: 8px;
+  width: 10px;
   cursor: col-resize;
   touch-action: none;
   user-select: none;
