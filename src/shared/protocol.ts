@@ -7,6 +7,7 @@
 
 import type { SettingsPayload } from './settings'
 import { isFormatOperationId, type FormatOperationId } from './formatOperations'
+import { isKeybindingOperationId, isUiOperationId, type KeybindingOverrides, type UiOperationId } from './keybindings'
 
 /** 设置快照类型随协议消息透出（载荷单一事实源仍在 shared/settings） */
 export type { SettingsPayload }
@@ -99,6 +100,7 @@ export type HostToWebview =
   | { kind: 'table.create' }
   /** 格式命令在 Live 光标/选区处执行，单个 CM6 事务经宿主写回。 */
   | { kind: 'format.command'; op: FormatOperationId }
+  | { kind: 'ui.command'; op: UiOperationId }
   /** 测试钩子（#13）：向真实编辑器派发 Tab/Shift+Tab keydown（与用户按键
    *  同一 keymap 链路；纯选区导航，零写回）。宿主测试无法向 webview 派发
    *  真实键盘事件，以此通道验证导航装配 */
@@ -175,6 +177,7 @@ export type HostToWebview =
    *  编辑器面板与设置页（含变更发起页面）。values 仍为全量快照；消费方按
    *  需读取关心的键（#34 场景：editor.lineNumbers 触发 CM6 扩展热重配） */
   | { kind: 'settings.changed'; values: SettingsPayload }
+  | { kind: 'keybindings.snapshot' | 'keybindings.changed'; overrides: KeybindingOverrides; requestId?: number; ok?: boolean; reason?: 'invalid' | 'conflict' | 'storage'; conflicts?: string[] }
 
 /** webview → 宿主消息 */
 export type WebviewToHost =
@@ -183,6 +186,11 @@ export type WebviewToHost =
    *  会被未 ready 面板丢弃——装载以 init 全文为准，内容不丢；仅当窗口内
    *  版本推进且 init 竞态落后时理论可见，宿主按事件序串行发送可缓解 */
   | { kind: 'ready' }
+  | { kind: 'keybindings.get' }
+  | { kind: 'keybindings.set'; id: string; bindings: string[]; replaceConflicts: boolean; requestId: number }
+  | { kind: 'keybindings.reset'; id: string; replaceConflicts: boolean; requestId: number }
+  | { kind: 'keybindings.resetAll'; requestId: number }
+  | { kind: 'keybindings.execute'; id: string }
   /** 编辑请求：seq 会话内单调递增；baseVersion 为发送方自认的权威版本 */
   | {
       kind: 'edit.request'
@@ -1266,6 +1274,19 @@ export function isWebviewToHost(v: unknown): v is WebviewToHost {
   switch (v.kind) {
     case 'ready':
       return true
+    case 'keybindings.get':
+      return true
+    case 'keybindings.set':
+      return isKeybindingOperationId(v.id) && Array.isArray(v.bindings) &&
+        v.bindings.every(isString) &&
+        typeof v.replaceConflicts === 'boolean' && isPositiveInt(v.requestId)
+    case 'keybindings.reset':
+      return isKeybindingOperationId(v.id) && typeof v.replaceConflicts === 'boolean' &&
+        isPositiveInt(v.requestId)
+    case 'keybindings.resetAll':
+      return isPositiveInt(v.requestId)
+    case 'keybindings.execute':
+      return isKeybindingOperationId(v.id)
     case 'edit.request':
       return (
         isString(v.sessionId) &&
@@ -1434,6 +1455,14 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
     return false
   }
   switch (v.kind) {
+    case 'keybindings.snapshot':
+    case 'keybindings.changed':
+      return isObject(v.overrides) && Object.values(v.overrides).every((value) =>
+        Array.isArray(value) && value.every(isString)) &&
+        (v.requestId === undefined || isPositiveInt(v.requestId)) &&
+        (v.ok === undefined || typeof v.ok === 'boolean') &&
+        (v.reason === undefined || v.reason === 'invalid' || v.reason === 'conflict' || v.reason === 'storage') &&
+        (v.conflicts === undefined || (Array.isArray(v.conflicts) && v.conflicts.every(isString)))
     case 'init':
       return (
         isString(v.sessionId) &&
@@ -1519,6 +1548,8 @@ export function isHostToWebview(v: unknown): v is HostToWebview {
       return true
     case 'format.command':
       return isFormatOperationId(v.op)
+    case 'ui.command':
+      return isUiOperationId(v.op)
     case 'table.test.key':
       return v.key === 'tab' || v.key === 'shift-tab' || v.key === 'select-all' || v.key === 'enter' ||
         v.key === 'backspace' || v.key === 'delete'

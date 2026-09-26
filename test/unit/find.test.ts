@@ -371,7 +371,8 @@ describe('只读契约：查找不修改文本、不产生出站变更', () => {
     // 除 mount 的 ready、诊断回报与 init 后的设置快照拉取（#33，只读）
     // 外零出站（查找全程只读）
     const kinds = new Set(h.sent.map((m) => m.kind))
-    expect([...kinds].filter((k) => k !== 'view.state' && k !== 'ready' && k !== 'settings.get')).toEqual([])
+    expect([...kinds].filter((k) => k !== 'view.state' && k !== 'ready' &&
+      k !== 'settings.get' && k !== 'keybindings.get')).toEqual([])
   })
 
   it('查找会话期间的宿主 undo 不受查找影响（无新历史条目产生）', () => {

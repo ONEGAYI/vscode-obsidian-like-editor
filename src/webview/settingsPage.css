@@ -63,6 +63,36 @@ button:focus-visible, input:focus-visible {
 .vsidian-settings-result { display: block; width: 100%; text-align: left; padding: 18px; margin: 0 0 12px; border: 1px solid var(--vscode-panel-border, #d9dde3); border-radius: 8px; background: transparent; color: inherit; }
 .vsidian-settings-result:hover { background: var(--vscode-list-hoverBackground, #e9ebef); }
 .vsidian-settings-result-category { display: block; font-size: 12px; margin-bottom: 7px; color: var(--vscode-descriptionForeground, #666); }
+.vsidian-keybindings-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
+.vsidian-keybindings-toolbar input { flex: 1 1 180px; min-width: 0; }
+.vsidian-keybindings-key-search { display: flex; flex: 1 1 220px; min-width: 0; align-items: center; gap: 8px; }
+.vsidian-keybindings-key-search-caption { flex: none; color: var(--vscode-descriptionForeground, #666); font-size: 12px; white-space: nowrap; }
+.vsidian-keybindings-key-search input { flex: 1 1 auto; min-width: 0; }
+.vsidian-keybindings-toolbar input, .vsidian-keybindings-editor input {
+  min-height: 36px; padding: 7px 10px; border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, #cbd0d8));
+  border-radius: 6px; color: var(--vscode-input-foreground, #333); background: var(--vscode-input-background, #fff);
+}
+.vsidian-keybindings-toolbar button, .vsidian-keybindings-actions button, .vsidian-keybindings-editor button, .vsidian-keybindings-conflict button {
+  min-height: 32px; padding: 6px 10px; border: 1px solid var(--vscode-button-border, var(--vscode-panel-border, #cbd0d8));
+  border-radius: 6px; color: var(--vscode-button-secondaryForeground, inherit);
+  background: var(--vscode-button-secondaryBackground, transparent);
+}
+.vsidian-keybindings-toolbar button:hover, .vsidian-keybindings-actions button:hover, .vsidian-keybindings-editor button:hover, .vsidian-keybindings-conflict button:hover {
+  background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground, #e9ebef));
+}
+.vsidian-keybindings-status { min-height: 20px; color: var(--vscode-descriptionForeground, #666); }
+.vsidian-keybindings-row { padding: 16px 0; border-bottom: 1px solid var(--vscode-panel-border, #d9dde3); }
+.vsidian-keybindings-row-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.vsidian-keybindings-mode, .vsidian-keybindings-unbound { color: var(--vscode-descriptionForeground, #666); font-size: 12px; }
+.vsidian-keybindings-tags, .vsidian-keybindings-actions, .vsidian-keybindings-editor { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.vsidian-keybindings-tag { display: inline-flex; align-items: center; gap: 5px; padding: 3px 5px 3px 9px; border-radius: 5px;
+  border: 1px solid var(--vscode-panel-border, #cbd0d8); background: var(--vscode-editorWidget-background, var(--vscode-editor-background, #fff)); }
+.vsidian-keybindings-tag kbd { color: var(--vscode-editorWidget-foreground, inherit); font-family: inherit; }
+.vsidian-keybindings-tag .vsidian-keybindings-remove { border: 0; background: transparent; color: inherit; min-width: 22px; cursor: pointer; }
+.vsidian-keybindings-editor input { flex: 1 1 220px; }
+.vsidian-keybindings-conflict { margin-top: 10px; padding: 10px; border-left: 3px solid var(--vscode-inputValidation-warningBorder, #cca700);
+  color: var(--vscode-inputValidation-warningForeground, inherit); background: var(--vscode-inputValidation-warningBackground, transparent); }
+.vsidian-keybindings-conflict button { margin-left: 10px; }
 @media (max-width: 600px) {
   .vsidian-settings { grid-template-columns: minmax(0, 1fr); align-content: start; }
   .vsidian-settings-sidebar { padding: 18px 20px; border-right: 0; border-bottom: 1px solid var(--vscode-panel-border, #d9dde3); }

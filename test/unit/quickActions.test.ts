@@ -97,4 +97,44 @@ describe('快速操作条', () => {
     h.controller.dispose()
     h.parent.remove()
   })
+
+  it('宿主快照与改绑、清空、重置同步操作条提示和正文按键', () => {
+    const h = setup('文字')
+    h.parent.querySelector<HTMLButtonElement>('.vsidian-quick-toggle')!.click()
+    const bold = h.parent.querySelector<HTMLButtonElement>('[data-op="bold"]')!
+    const press = (shiftKey = false) => {
+      h.view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'b', ctrlKey: true, shiftKey, bubbles: true, cancelable: true,
+      }))
+    }
+    const dispatched = () => h.messages.filter((message) =>
+      (message as { kind?: string; id?: string }).kind === 'keybindings.execute' &&
+      (message as { id?: string }).id === 'bold').length
+
+    h.controller.handleHostMessage({ kind: 'keybindings.snapshot', overrides: {} })
+    expect(bold.title).toContain('Ctrl+B')
+    press()
+    expect(dispatched()).toBe(1)
+
+    h.controller.handleHostMessage({ kind: 'keybindings.changed', overrides: { bold: ['ctrl+shift+b'] } })
+    expect(bold.title).toContain('Ctrl+Shift+B')
+    expect(bold.title).not.toContain('Ctrl+B)')
+    press()
+    expect(dispatched()).toBe(1)
+    press(true)
+    expect(dispatched()).toBe(2)
+
+    h.controller.handleHostMessage({ kind: 'keybindings.changed', overrides: { bold: [] } })
+    expect(bold.title).toBe('粗体')
+    expect(bold.hasAttribute('aria-description')).toBe(false)
+    press(true)
+    expect(dispatched()).toBe(2)
+
+    h.controller.handleHostMessage({ kind: 'keybindings.changed', overrides: {} })
+    expect(bold.title).toContain('Ctrl+B')
+    press()
+    expect(dispatched()).toBe(3)
+    h.controller.dispose()
+    h.parent.remove()
+  })
 })

@@ -24,6 +24,7 @@ import {
 import { parseWikilinkInner } from '../shared/wikilink'
 import { NewlineCoordinator } from '../shared/newline'
 import { FORMAT_OPERATIONS } from '../shared/formatOperations'
+import { KEYBINDING_OPERATIONS, UI_OPERATIONS } from '../shared/keybindings'
 import {
   isWebviewToHost,
   type HostToWebview,
@@ -46,6 +47,7 @@ import {
   type ViewSwitchPlan,
 } from './viewCycle'
 import type { SettingsService } from './settingsService'
+import type { KeybindingService } from './keybindingService'
 import type { SettingsPageHandle } from './settingsPage'
 
 export const VIEW_TYPE = 'onegayi.vsidian.editor'
@@ -57,6 +59,7 @@ export const VIEW_TYPE = 'onegayi.vsidian.editor'
  *  不再逐方法转发展开 */
 export interface SettingsWiring {
   service: SettingsService
+  keybindings: KeybindingService
   page: SettingsPageHandle
 }
 
@@ -749,6 +752,23 @@ export function createTextEditorProvider(
       }
 
       const messageSub = webviewPanel.webview.onDidReceiveMessage((message) => {
+        if (isWebviewToHost(message) && message.kind === 'keybindings.get') {
+          void webviewPanel.webview.postMessage({
+            kind: 'keybindings.snapshot', overrides: settings?.keybindings.getSnapshot() ?? {},
+          })
+          return
+        }
+        if (isWebviewToHost(message) && message.kind === 'keybindings.execute') {
+          const operation = KEYBINDING_OPERATIONS.find((op) => op.id === message.id)
+          const mode = entry.session.getViewState(sessionId)?.viewMode ?? 'live'
+          if (operation && webviewPanel.active &&
+            (operation.mode === 'both' || operation.mode === mode) &&
+            (!operation.writes || (mode === 'live' &&
+              vscode.workspace.fs.isWritableFileSystem(document.uri.scheme) !== false))) {
+            void vscode.commands.executeCommand(operation.command)
+          }
+          return
+        }
         if (process.env.VSIDIAN_TEST_HOOKS === '1' && isWebviewToHost(message) &&
           message.kind === 'sync.test.close' && message.sessionId === sessionId &&
           message.docUri === document.uri.toString()) {
@@ -822,6 +842,15 @@ export function createTextEditorProvider(
       }
     })
     context.subscriptions.push({ dispose: () => offSettings() })
+    const offKeys = settings.keybindings.onChange((overrides) => {
+      for (const entry of sessions.values()) {
+        for (const panel of entry.session.getInfo().panels) {
+          if (panel.ready) entry.session.postToPanel(panel.sessionId,
+            { kind: 'keybindings.changed', overrides })
+        }
+      }
+    })
+    context.subscriptions.push({ dispose: () => offKeys() })
   }
 
   // ---- 三态视图切换（#38）：标题栏三命令（toReading/toSource/toLive）与
@@ -1098,6 +1127,21 @@ export function createTextEditorProvider(
       return false
     }),
   )
+  for (const [command, direction] of [
+    ['onegayi.vsidian.find.next', 'next'],
+    ['onegayi.vsidian.find.previous', 'prev'],
+  ] as const) {
+    context.subscriptions.push(vscode.commands.registerCommand(command, (): boolean => {
+      for (const entry of sessions.values()) for (const [sessionId, panel] of entry.panels) {
+        if (panel.active && entry.session.getInfo().panels.some((p) =>
+          p.sessionId === sessionId && p.ready)) {
+          entry.session.postToPanel(sessionId, { kind: 'view.find.step', direction })
+          return true
+        }
+      }
+      return false
+    }))
+  }
 
   // ---- 表格结构命令（#13）：活动 tab 为本扩展 custom editor 时向其面板发送
   // table.command（webview 在光标处执行，走标准出站链路）。与模式切换/查找
@@ -1157,6 +1201,18 @@ export function createTextEditorProvider(
           if (entry.session.getViewState(sessionId)?.viewMode === 'reading') return false
           if (vscode.workspace.fs.isWritableFileSystem(entry.doc.uri.scheme) === false) return false
           entry.session.postToPanel(sessionId, { kind: 'format.command', op: operation.id })
+          return true
+        }
+      }
+      return false
+    }))
+  }
+  for (const operation of UI_OPERATIONS) {
+    context.subscriptions.push(vscode.commands.registerCommand(operation.command, (): boolean => {
+      for (const entry of sessions.values()) for (const [sessionId, panel] of entry.panels) {
+        if (panel.active && entry.session.getInfo().panels.some((p) =>
+          p.sessionId === sessionId && p.ready)) {
+          entry.session.postToPanel(sessionId, { kind: 'ui.command', op: operation.id })
           return true
         }
       }
@@ -1379,6 +1435,14 @@ export function createTextEditorProvider(
     vscode.commands.registerCommand('onegayi.vsidian._test.getSettings', () =>
       settings ? settings.service.getSnapshot() : {},
     ),
+    vscode.commands.registerCommand('onegayi.vsidian._test.getKeybindings', () =>
+      settings ? settings.keybindings.getSnapshot() : {},
+    ),
+    vscode.commands.registerCommand('onegayi.vsidian._test.setKeybindings',
+      (id: string, bindings: string[], replace = false) =>
+        settings?.keybindings.set(id, bindings, replace)),
+    vscode.commands.registerCommand('onegayi.vsidian._test.resetKeybindings',
+      () => settings?.keybindings.resetAll()),
     vscode.commands.registerCommand(
       'onegayi.vsidian._test.setSettings',
       async (values: unknown) =>

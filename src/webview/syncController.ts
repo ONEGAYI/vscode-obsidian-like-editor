@@ -29,6 +29,8 @@ import { EditorView, keymap } from '@codemirror/view'
 import { planFormatOperation } from './formatOperations'
 import { createQuickActionStateReader } from './quickActionState'
 import { FORMAT_OPERATIONS, type FormatOperationId } from '../shared/formatOperations'
+import { getEffectiveBindings } from '../shared/keybindings'
+import { KeybindingRouter } from './keybindingRouter'
 import { liveLineNumbers, paintedLineNumbers } from './liveLineNumbers'
 import {
   isHostToWebview,
@@ -525,6 +527,8 @@ export class WebviewSyncController {
   private findDoc: Text | null = null
   /** document 级键盘拦截（Mod-F 打开 / Esc 关闭），dispose 时移除 */
   private docKeydown: ((e: KeyboardEvent) => void) | undefined
+  private readonly keybindingRouter: KeybindingRouter
+  private readonly cancelKeybindingOnBlur = () => this.keybindingRouter.cancel()
 
   // ---- 设置状态（#33）----
   /** 宿主下发的当前设置快照缓存（#34 行号等设置的消费源）；webview 不
@@ -591,6 +595,12 @@ export class WebviewSyncController {
   private lastDocChangedVersion = 0
 
   constructor(private readonly bridge: VsCodeBridge) {
+    this.keybindingRouter = new KeybindingRouter({}, (id) => {
+      if (id === 'find') this.openFind()
+      else if (id === 'findNext') this.findStep('next')
+      else if (id === 'findPrevious') this.findStep('prev')
+      else this.bridge.postMessage({ kind: 'keybindings.execute', id })
+    })
     const saved = bridge.getState<PersistedState>()
     this.seq = typeof saved?.seq === 'number' && saved.seq >= 0 ? Math.floor(saved.seq) : 0
     this.conflictRevision = typeof saved?.conflictRevision === 'number' && saved.conflictRevision >= 0
@@ -616,6 +626,7 @@ export class WebviewSyncController {
     this.liveWrapper = document.createElement('div')
     this.liveWrapper.className = 'vsidian-view-live'
     this.readingContainer = createReadingContainer()
+    this.readingContainer.tabIndex = 0
     this.readingContainer.style.display = 'none'
     this.images = new ImageResourceManager({
       // http/https 图源直连（可加载性由 webview CSP 决定），其余经宿主解析
@@ -742,30 +753,35 @@ export class WebviewSyncController {
     // 大纲面板初始态（持久化恢复）落到侧栏容器类与按钮 aria-expanded
     this.applyOutlineDom()
     this.applyQuickActionsDom()
-    // webview 内键盘拦截（#14）：Mod-F 打开查找（custom editor webview 不可用
-    // VSCode 原生 find 控件）；Esc 关闭并归还焦点。capture 阶段先行处理
+    // document 捕获先于 VS Code webview 预加载脚本的 window 冒泡转发。
     this.docKeydown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && this.quickHeadingMenu && !this.quickHeadingMenu.hidden) {
         e.preventDefault()
+        e.stopPropagation()
+        this.keybindingRouter.cancel()
         this.closeQuickHeadingMenu(true)
         return
       }
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'f') {
-        e.preventDefault()
-        this.openFind()
-        return
-      }
+      const target = e.target instanceof Node ? e.target : null
+      const liveFocused = this.viewMode === 'live' && !!target &&
+        !!this.view?.contentDOM.contains(target) &&
+        !this.view.state.readOnly && this.view.state.facet(EditorView.editable) && !this.suspended
+      const readingFocused = this.viewMode === 'reading' && !!target &&
+        !!this.readingContainer?.contains(target) &&
+        !(target instanceof HTMLInputElement) && !(target instanceof HTMLTextAreaElement)
+      const withinEditor = !!target && (target === document ||
+        !!this.bodyEl?.contains(target) || !!this.findPanel?.contains(target))
+      if (this.keybindingRouter.handle(e, this.viewMode,
+        liveFocused || readingFocused || withinEditor, liveFocused)) return
       if (this.findOpen && e.key === 'Escape') {
         e.preventDefault()
+        e.stopPropagation()
         this.closeFind()
         return
       }
-      if (this.findOpen && e.key === 'F3') {
-        e.preventDefault()
-        this.findStep(e.shiftKey ? 'prev' : 'next')
-      }
     }
     document.addEventListener('keydown', this.docKeydown, true)
+    window.addEventListener('blur', this.cancelKeybindingOnBlur)
     // 宿主明暗主题热跟随：body class 由 VSCode 随主题实时更新
     this.hostThemeObserver = new MutationObserver(() => this.applyHostTheme())
     this.hostThemeObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] })
@@ -805,6 +821,8 @@ export class WebviewSyncController {
       document.removeEventListener('keydown', this.docKeydown, true)
       this.docKeydown = undefined
     }
+    window.removeEventListener('blur', this.cancelKeybindingOnBlur)
+    this.keybindingRouter.cancel()
     this.view?.destroy()
     this.view = undefined
     this.banner?.remove()
@@ -867,7 +885,15 @@ export class WebviewSyncController {
         // 拉取当前设置快照（#33）：权威在宿主，webview 不持久化——每次
         // 装载（含重载）都拉取；宿主以 settings.snapshot 响应
         this.bridge.postMessage({ kind: 'settings.get' })
+        this.bridge.postMessage({ kind: 'keybindings.get' })
         break
+      case 'keybindings.snapshot':
+      case 'keybindings.changed': {
+        const overrides = message.overrides
+        this.keybindingRouter.update(overrides)
+        this.setQuickActionBindingHints((id) => getEffectiveBindings(overrides, id))
+        break
+      }
       case 'settings.snapshot':
       case 'settings.changed':
         // 设置快照与变更广播共用同一处理（#33）：snapshot 为设置页请求-
@@ -1003,6 +1029,24 @@ export class WebviewSyncController {
         this.runFormatOperation(message.op)
         break
       }
+      case 'ui.command':
+        switch (message.op) {
+          case 'sidebarToggle': this.toggleSidebar(); break
+          case 'outlineToggle':
+            if (!this.sidebarOpen && !this.outlineActive) this.toggleSidebar()
+            this.toggleOutline()
+            break
+          case 'outlineSearch':
+            if (!this.sidebarOpen) this.toggleSidebar()
+            if (!this.outlineActive) this.toggleOutline()
+            this.outlineToolbar?.search.focus()
+            break
+          case 'outlineJumpBottom': this.outlineJumpToBottom(); break
+          case 'outlineReset': this.resetOutline(); break
+          case 'outlineCollapseAll': this.setOutlineExpandLevel(0); break
+          case 'outlineExpandAll': this.setOutlineExpandLevel(5); break
+        }
+        break
       case 'sidebar.test.click': {
         // 测试钩子（#53）：点击真实侧栏切换按钮（与用户点击同一处理器；
         // 纯视图状态翻转，零写回）
@@ -1634,6 +1678,7 @@ export class WebviewSyncController {
   /** 切换入口（宿主 view.mode.set 消息驱动；#38 起由宿主标题栏三态命令
    *  与命令面板命令编排，webview 工具栏已移除） */
   private setViewMode(target: 'live' | 'reading' | 'toggle'): void {
+    this.keybindingRouter.cancel()
     const next: ViewMode =
       target === 'toggle' ? (this.viewMode === 'live' ? 'reading' : 'live') : target
     if (next === this.viewMode) {
@@ -1645,6 +1690,7 @@ export class WebviewSyncController {
     this.cancelOutlineDrag()
     if (this.view) selectTableRegion(this.view, null)
     if (next === 'reading') {
+      const editorHadFocus = document.activeElement === this.view?.contentDOM
       // 锚点 = live 光标主位（选区最小 from）；阅读视图按当前 CM6 文本渲染
       // （含未确认输入），不依赖宿主权威。锚点随即规范化为块 start——
       // 短文档滚动无法表达目标时 modeAnchor 仍是权威锚点
@@ -1654,6 +1700,7 @@ export class WebviewSyncController {
         : this.modeAnchor ?? 0
       this.modeAnchor = cursor
       this.applyModeDom('reading') // 先更新模式（refreshReading 依赖它）
+      if (editorHadFocus) this.readingContainer?.focus()
       this.refreshReading()
       if (this.readingView) {
         const start = this.readingView.anchorStartFor(this.clampToDoc(cursor)) ?? cursor
@@ -1679,7 +1726,9 @@ export class WebviewSyncController {
         this.modeAnchor = mapped
       }
     }
+    const readingHadFocus = document.activeElement === this.readingContainer
     this.applyModeDom('live')
+    if (readingHadFocus) this.view?.focus()
     // 恢复光标到锚点并滚动到视口中部；事务不带 changes → 不产生编辑历史
     const pos = this.clampToDoc(this.modeAnchor ?? 0)
     this.view?.dispatch({

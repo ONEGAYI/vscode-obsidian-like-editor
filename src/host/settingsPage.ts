@@ -13,6 +13,7 @@ import * as vscode from 'vscode'
 import { randomUUID } from 'node:crypto'
 import { isWebviewToHost } from '../shared/protocol'
 import type { SettingsService } from './settingsService'
+import type { KeybindingService } from './keybindingService'
 
 /** 设置页面板 viewType（createWebviewPanel 无需清单声明，customEditors 才要求） */
 export const SETTINGS_VIEW_TYPE = 'onegayi.vsidian.settings'
@@ -41,6 +42,7 @@ export interface SettingsPageHandle {
 export function createSettingsPage(
   context: vscode.ExtensionContext,
   service: SettingsService,
+  keybindings: KeybindingService,
 ): SettingsPageHandle {
   let panel: vscode.WebviewPanel | undefined
   let ready = false
@@ -52,6 +54,28 @@ export function createSettingsPage(
     }
     const current = panel
     switch (message.kind) {
+      case 'keybindings.get':
+        void current?.webview.postMessage({ kind: 'keybindings.snapshot', overrides: keybindings.getSnapshot() })
+        return
+      case 'keybindings.set':
+      case 'keybindings.reset':
+      case 'keybindings.resetAll': {
+        const result = message.kind === 'keybindings.set'
+          ? keybindings.set(message.id, message.bindings, message.replaceConflicts)
+          : message.kind === 'keybindings.reset'
+            ? keybindings.reset(message.id, message.replaceConflicts)
+            : keybindings.resetAll()
+        void result.then((saved) => {
+          if (!current || panel !== current) return
+          void current.webview.postMessage({
+            kind: saved.ok ? 'keybindings.changed' : 'keybindings.snapshot',
+            overrides: saved.ok ? saved.overrides : keybindings.getSnapshot(),
+            requestId: message.requestId, ok: saved.ok,
+            ...(!saved.ok ? { reason: saved.reason, conflicts: saved.conflicts } : {}),
+          })
+        })
+        return
+      }
       case 'settings.get':
         ready = true
         void current?.webview.postMessage({

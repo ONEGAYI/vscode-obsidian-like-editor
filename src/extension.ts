@@ -10,15 +10,18 @@ import { createTextEditorProvider, VIEW_TYPE } from './host/textEditorProvider'
 import { SettingsService } from './host/settingsService'
 import { createSettingsPage } from './host/settingsPage'
 import { PRODUCTION_SETTING_DEFINITIONS } from './shared/settings'
+import { KeybindingService } from './host/keybindingService'
 
 export function activate(context: vscode.ExtensionContext): void {
   // 设置存储：context.globalState（用户级，跨窗口一致、重启保留）+ 纯代码
   // schema——不使用 workspace.getConfiguration、不声明 contributes.
   // configuration，与 VSCode 统一设置中心完全解耦（AGENTS.md「插件设置入口」）
   const settingsService = new SettingsService(context.globalState, PRODUCTION_SETTING_DEFINITIONS)
-  const settingsPage = createSettingsPage(context, settingsService)
+  const keybindingService = new KeybindingService(context.globalState)
+  const settingsPage = createSettingsPage(context, settingsService, keybindingService)
   const provider = createTextEditorProvider(context, {
     service: settingsService,
+    keybindings: keybindingService,
     page: settingsPage,
   })
   context.subscriptions.push(
