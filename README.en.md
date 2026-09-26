@@ -13,6 +13,7 @@ An Obsidian-like Markdown editing experience in VS Code: a source-text-based edi
 - **Links, images & wikilinks**: links and `[[wikilinks]]` reveal their source as the cursor enters, and open with a single click; wikilinks support `[[note]]`, `[[path/note]]`, `[[note|alias]]`, and `[[note#heading]]`; ambiguous names open a candidate picker, missing targets show a hint instead of silently creating files; local images load through a host channel, and dangerous schemes such as `file://` and `javascript:` are blocked.
 - **Math rendering**: inline `$…$` and block `$$…$$` LaTeX formulas render in live preview and reading mode (KaTeX bundled locally, no CDN); the cursor entering a formula reveals its source for direct editing, parse failures fall back to readable raw text, and plain dollar amounts, escapes, and code spans are never misread as math.
 - **Mermaid diagrams**: fenced code blocks tagged `mermaid` render as diagrams in live preview and reading mode (flowcharts, sequence diagrams, etc.; mermaid bundled locally and lazy-loaded, no CDN); the cursor entering a fence reveals its source for direct editing, syntax errors fall back to an error note with readable source that never swallows the rest of the document; light/dark themes are followed automatically, and links inside diagrams never navigate.
+- **Code block cards**: fenced code blocks collapse into cards once the cursor leaves — a language header band (colored badge + display name), in-card line numbers, a hover copy button (written with the document's line-ending style, so CRLF documents get CRLF), and a collapse chevron; a built-in highlight engine covers 17 languages (plus plain text, with aliases, dark/light VSCode-style palettes, and plain-text fallback for unrecognized languages), looking identical across live preview and reading; rendered fences such as mermaid show the same card shell and line numbers in the editing state.
 - **Task toggling**: click a checkbox in either view to write back to the source text, with undo support.
 - **Find**: Ctrl+F / Cmd+F inside the editor (when the Vsidian editor is active).
 - **Standalone settings page**: settings live in the extension's own settings page (not the VSCode Settings UI) — saved per user, restored on reopen, applied to open editors immediately.
@@ -43,15 +44,17 @@ Download the latest `vsidian-*.vsix` from [GitHub Releases](https://github.com/O
 | Find | Ctrl+F / Cmd+F |
 | Right sidebar / outline | Toolbar toggle on the right; once open, click "Outline" |
 | Outline interactions | Click an entry to jump; drag the slider for expansion depth; chevrons collapse; toolbar search & jump-to-end; right-click for the menu (copy / levels / rename / delete); drag entries to reorder sections |
+| Code block cards | Fences collapse into cards once the cursor leaves; hover the header to copy the whole block; click the chevron to collapse, cursor enters to expand |
 | Settings | "Vsidian: 打开设置", or the toolbar gear button |
 
-Current settings: **show line numbers** (on by default) — the live preview gutter shows source-file line numbers, and table segments show the first row's number; reading mode never shows line numbers.
+Current settings: **show line numbers** (on by default) — the live preview gutter shows source-file line numbers, and table segments show the first row's number; reading mode never shows line numbers. **Code block cards / in-card line numbers / copy button / syntax highlighting** (on by default) — the card appearance plus three sub-toggles; highlighting is independent of the card (plain fences stay colored with the card off).
 
 ## Known limitations
 
 - No support for Obsidian Canvas, whiteboards, the Obsidian plugin ecosystem, or note formats other than Markdown.
 - The CSP allows `img-src https:` — any https image source is reachable (a design trade-off for remote image hosting; in theory usable as a tracking pixel).
 - Tables with inconsistent column counts show as editable source instead of a grid.
+- Code block cards: fences longer than 4096 lines skip syntax coloring (falling back to a plain-text card); language badges are glyph badges, not vector logos.
 
 Please report issues at [Issues](https://github.com/ONEGAYI/vsidian/issues); see [CHANGELOG](CHANGELOG.md) for version history.
 

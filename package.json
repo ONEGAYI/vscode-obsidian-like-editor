@@ -3,7 +3,7 @@
   "displayName": "Vsidian",
   "icon": "media/vsidian-icon-256.png",
   "description": "类 Obsidian 的 Markdown 编辑体验：实时预览 + 阅读双视图 | Obsidian-like Markdown editing (live preview + reading)",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "onegayi",
   "license": "MIT",
   "keywords": [
