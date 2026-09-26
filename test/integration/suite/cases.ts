@@ -23,6 +23,8 @@ const CMD = {
   perfProbe: 'onegayi.vsidian._test.perfProbe',
   readingPerf: 'onegayi.vsidian._test.readingPerf',
   linkLog: 'onegayi.vsidian._test.getLinkLog',
+  // #111 图表导出消息日志（钩子模式下宿主短路另存为对话框并记录）
+  diagramExportLog: 'onegayi.vsidian._test.takeDiagramExportLog',
   // #38 三态记忆
   getLastMode: 'onegayi.vsidian._test.getLastMode',
   resetLastMode: 'onegayi.vsidian._test.resetLastMode',
@@ -444,6 +446,16 @@ interface ViewState {
       rendered: number
       error: number
       count: number
+    }
+    /** #111 图形化代码块按钮组与图表弹窗绘制 */
+    graphic?: {
+      frames: number
+      editButtons: number
+      popupButtons: number
+      overlay: boolean
+      /** 浮层实际遮蔽正文（真宿主 elementFromPoint 断言依据） */
+      overlayVisible: boolean
+      overlaySvg: boolean
     }
     quickActions?: {
       open: boolean
@@ -5911,6 +5923,97 @@ export const cases: Array<[string, () => Promise<void>]> = [
     assert(reading.paint?.mermaid?.error === 1, `无效语法应降级 1 个，实际 ${reading.paint?.mermaid?.error}`)
     // 大围栏豁免切片 + 降级不吞后续块：切块数合理且锚点块可定位
     assert((reading.readingTotalBlocks ?? 0) >= 5, `阅读切块应含全部图表块，实际 ${reading.readingTotalBlocks}`)
+  }],
+
+  ['图形化代码块按钮组与图表弹窗：live/reading 形态与浮层装载（#111）', async () => {
+    await openWithEditor('mermaid.md')
+    await waitSessionReady('mermaid.md')
+    const uri = wsUri('mermaid.md').toString()
+    const diskBefore = await readDisk('mermaid.md')
+    const tailAnchor = diskBefore.indexOf('结尾段落')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: tailAnchor,
+    })
+    // live：全部 frame 就位，edit+popup 成对（含无效降级块——按钮显隐由
+    // CSS 渲染态联动，DOM 在场是发射形态断言）
+    const live = await waitViewState('mermaid.md', (v) =>
+      (v.liveMermaidCount ?? -1) === 5 && v.paint?.graphic?.frames === 5, 0, 60000)
+    assert(live.paint?.graphic?.editButtons === 5,
+      `live 应有 5 枚 edit 按钮，实际 ${live.paint?.graphic?.editButtons}`)
+    assert(live.paint?.graphic?.popupButtons === 5,
+      `live 应有 5 枚 popup 按钮，实际 ${live.paint?.graphic?.popupButtons}`)
+    assert(live.paint?.graphic?.overlay === false, '初始不得有浮层')
+    // 经测试钩子驱动真实处理器链路打开弹窗：浮层在场且 SVG 装载（绘制层）
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'graphic.test.popup', view: 'live', index: 0,
+    })
+    const opened = await waitViewState('mermaid.md', (v) =>
+      v.paint?.graphic?.overlay === true && v.paint?.graphic?.overlaySvg === true, 0, 60000)
+    assert(opened.paint?.graphic?.overlaySvg === true, '图表弹窗内 SVG 应完成装载')
+    assert(opened.paint?.graphic?.overlayVisible === true,
+      '浮层应实际遮蔽正文（几何中心被浮层子树占据且可见）')
+    assert(await readDisk('mermaid.md') === diskBefore, '弹窗交互零写回')
+    // reading：edit 不发射（阅读无编辑入口）、popup 照常包 frame
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, { kind: 'view.mode.set', mode: 'reading' })
+    const readingChrome = await waitViewState('mermaid.md', (v) =>
+      v.viewMode === 'reading' && (v.readingMermaidCount ?? -1) === 5 &&
+      v.paint?.graphic?.frames === 5 && v.paint?.graphic?.editButtons === 0, 0, 60000)
+    assert(readingChrome.paint?.graphic?.popupButtons === 5,
+      `阅读应有 5 枚 popup 按钮，实际 ${readingChrome.paint?.graphic?.popupButtons}`)
+    assert(await readDisk('mermaid.md') === diskBefore, '模式切换不得触发磁盘写回')
+  }],
+
+  ['图表弹窗导出链路：webview→宿主消息形态（钩子模式短路另存为，#111）', async () => {
+    await openWithEditor('mermaid.md')
+    await waitSessionReady('mermaid.md')
+    const uri = wsUri('mermaid.md').toString()
+    const diskBefore = await readDisk('mermaid.md')
+    const tailAnchor = diskBefore.indexOf('结尾段落')
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'view.locate', offset: tailAnchor,
+    })
+    await waitViewState('mermaid.md', (v) => (v.liveMermaidCount ?? -1) === 5, 0, 60000)
+    // 打开弹窗并驱动导出按钮：宿主测试钩子模式不弹真实另存为对话框，
+    // 短路为记录消息形态 + cancelled 回报——以此断言完整 webview→宿主链路
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'graphic.test.popup', view: 'live', index: 0,
+    })
+    await waitViewState('mermaid.md', (v) =>
+      v.paint?.graphic?.overlay === true && v.paint?.graphic?.overlaySvg === true, 0, 60000)
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'graphic.test.popup', view: 'live', index: 0, action: 'export-svg',
+    })
+    let svgEntry: { format?: string; fileName?: string; reqId?: number; content?: string; docUri?: string } | undefined
+    for (let i = 0; i < 30 && svgEntry === undefined; i++) {
+      const log = (await vscode.commands.executeCommand(CMD.diagramExportLog, uri)) as
+        Array<{ format?: string; fileName?: string; reqId?: number; content?: string; docUri?: string }>
+      svgEntry = log.find((m) => m.format === 'svg')
+      if (svgEntry === undefined) {
+        await new Promise((r) => setTimeout(r, 200))
+      }
+    }
+    assert(svgEntry !== undefined, '宿主应收到 SVG 导出消息（钩子短路记录）')
+    assert(svgEntry!.fileName === 'mermaid-diagram.svg', `默认文件名应为 mermaid-diagram.svg，实际 ${svgEntry!.fileName}`)
+    assert(typeof svgEntry!.reqId === 'number' && svgEntry!.reqId! >= 1, 'reqId 应为正整数')
+    assert(svgEntry!.content!.includes('<svg'), 'SVG 导出内容应为序列化文档')
+    assert(svgEntry!.docUri === uri, '导出消息应携带来源文档 URI')
+    // PNG：真宿主 webview 为 Chromium，光栅化应产出非空 base64 载荷
+    await vscode.commands.executeCommand(CMD.postToPanel, uri, {
+      kind: 'graphic.test.popup', view: 'live', index: 0, action: 'export-png',
+    })
+    let pngEntry: { format?: string; content?: string } | undefined
+    for (let i = 0; i < 40 && pngEntry === undefined; i++) {
+      const log = (await vscode.commands.executeCommand(CMD.diagramExportLog, uri)) as
+        Array<{ format?: string; content?: string }>
+      pngEntry = log.find((m) => m.format === 'png')
+      if (pngEntry === undefined) {
+        await new Promise((r) => setTimeout(r, 250))
+      }
+    }
+    assert(pngEntry !== undefined, '宿主应收到 PNG 导出消息（真宿主内光栅化产出）')
+    assert(pngEntry!.content!.length > 100, `PNG base64 应为非平凡载荷，实际 ${pngEntry!.content?.length ?? 0} 字符`)
+    assert(/^[A-Za-z0-9+/]+={0,2}$/.test(pngEntry!.content!), 'PNG 内容应为严格 base64')
+    assert(await readDisk('mermaid.md') === diskBefore, '导出交互零写回')
   }],
 
   ['Mermaid 跨模式切换一致性：两模式计数对齐、文本不变、无写回（#60）', async () => {
